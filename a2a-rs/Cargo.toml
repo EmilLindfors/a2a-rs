@@ -1,0 +1,69 @@
+[package]
+name = "a2a-rs"
+version = "0.1.0"
+edition = "2021"
+authors = ["Emil Lindfors <emil@lindfors.no>"]
+description = "Rust implementation of the Agent-to-Agent (A2A) Protocol"
+license = "MIT"
+repository = "https://github.com/emillindfors/a2a-rs"
+readme = "README.md"
+keywords = ["agent", "protocol", "jsonrpc", "a2a"]
+categories = ["api-bindings", "network-programming"]
+
+[dependencies]
+# Core dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "1.0"
+uuid = { version = "1.4", features = ["v4", "serde"] }
+base64 = "0.21"
+url = { version = "2.4", features = ["serde"] }
+
+# Async foundation - optional
+tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"], optional = true }
+async-trait = { version = "0.1", optional = true }
+futures = { version = "0.3", optional = true }
+
+# HTTP client - optional
+reqwest = { version = "0.11", features = ["json"], optional = true }
+
+# WebSocket - optional
+tokio-tungstenite = { version = "0.20", optional = true }
+
+# HTTP server - optional
+axum = { version = "0.8", optional = true }
+
+# Logging - optional
+tracing = { version = "0.1", optional = true }
+
+[features]
+default = ["full"]
+client = ["dep:tokio", "dep:async-trait", "dep:futures"]
+http-client = ["client", "dep:reqwest"]
+ws-client = ["client", "dep:tokio-tungstenite"]
+server = ["dep:tokio", "dep:async-trait", "dep:futures"]
+http-server = ["server", "dep:axum"]
+ws-server = ["server", "dep:tokio-tungstenite"]
+full = ["http-client", "ws-client", "http-server", "ws-server", "dep:tracing"]
+
+
+[[example]]
+name = "http_server"
+path = "examples/http_server.rs"
+required-features = ["http-server"]
+
+[[example]]
+name = "websocket_server"
+path = "examples/websocket_server.rs"
+required-features = ["ws-server"]
+
+[[example]]
+name = "http_client"
+path = "examples/http_client.rs"
+required-features = ["http-client"]
+
+[[example]]
+name = "websocket_client"
+path = "examples/websocket_client.rs"
+required-features = ["ws-client"]

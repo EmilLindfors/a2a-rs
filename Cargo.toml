@@ -1,0 +1,3 @@
+[workspace]
+resolver = "2"
+members = ["a2a-rs", "a2a-agents"]
