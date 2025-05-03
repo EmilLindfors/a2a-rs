@@ -147,13 +147,13 @@ where
     A: AgentInfoProvider + Send + Sync + 'static,
     T: AsyncTaskHandler + Send + Sync + 'static,
 {
-    let addr = stream
-        .peer_addr()
-        .map_err(|e| WebSocketServerError::Connection(format!("Failed to get peer address: {}", e)))?;
+    let addr = stream.peer_addr().map_err(|e| {
+        WebSocketServerError::Connection(format!("Failed to get peer address: {}", e))
+    })?;
 
-    let ws_stream = accept_async(stream)
-        .await
-        .map_err(|e| WebSocketServerError::Connection(format!("Error during WebSocket handshake: {}", e)))?;
+    let ws_stream = accept_async(stream).await.map_err(|e| {
+        WebSocketServerError::Connection(format!("Error during WebSocket handshake: {}", e))
+    })?;
 
     println!("WebSocket connection established with: {}", addr);
 

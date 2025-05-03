@@ -86,9 +86,9 @@ impl WebSocketClient {
             url.query_pairs_mut().append_pair("token", token);
         }
 
-        let (ws_stream, _) = connect_async(url)
-            .await
-            .map_err(|e| WebSocketClientError::Connection(format!("WebSocket connection error: {}", e)))?;
+        let (ws_stream, _) = connect_async(url).await.map_err(|e| {
+            WebSocketClientError::Connection(format!("WebSocket connection error: {}", e))
+        })?;
 
         self.connection = Some(Arc::new(Mutex::new(ws_stream)));
         Ok(())
@@ -123,7 +123,11 @@ impl WebSocketClient {
 
             match result {
                 Some(Ok(msg)) => msg,
-                Some(Err(e)) => return Err(WebSocketClientError::Message(format!("WebSocket error: {}", e)).into()),
+                Some(Err(e)) => {
+                    return Err(
+                        WebSocketClientError::Message(format!("WebSocket error: {}", e)).into(),
+                    );
+                }
                 None => return Err(WebSocketClientError::Closed.into()),
             }
         };
@@ -368,15 +372,15 @@ impl AsyncA2AClient for WebSocketClient {
                     Some(Ok(msg)) => msg,
                     Some(Err(e)) => {
                         return Some((
-                            Err(WebSocketClientError::Message(format!("WebSocket error: {}", e)).into()),
+                            Err(
+                                WebSocketClientError::Message(format!("WebSocket error: {}", e))
+                                    .into(),
+                            ),
                             conn,
                         ));
                     }
                     None => {
-                        return Some((
-                            Err(WebSocketClientError::Closed.into()),
-                            conn,
-                        ));
+                        return Some((Err(WebSocketClientError::Closed.into()), conn));
                     }
                 };
 
@@ -432,14 +436,16 @@ impl AsyncA2AClient for WebSocketClient {
                                 Ok(StreamItem::ArtifactUpdate(artifact_update))
                             } else {
                                 Err(WebSocketClientError::Protocol(
-                                    "Failed to parse streaming response".to_string()
-                                ).into())
+                                    "Failed to parse streaming response".to_string(),
+                                )
+                                .into())
                             }
                         }
                     }
                     _ => Err(WebSocketClientError::Protocol(
-                        "Unexpected WebSocket message type".to_string()
-                    ).into()),
+                        "Unexpected WebSocket message type".to_string(),
+                    )
+                    .into()),
                 };
 
                 Some((result, conn))
@@ -496,15 +502,15 @@ impl AsyncA2AClient for WebSocketClient {
                     Some(Ok(msg)) => msg,
                     Some(Err(e)) => {
                         return Some((
-                            Err(WebSocketClientError::Message(format!("WebSocket error: {}", e)).into()),
+                            Err(
+                                WebSocketClientError::Message(format!("WebSocket error: {}", e))
+                                    .into(),
+                            ),
                             conn,
                         ));
                     }
                     None => {
-                        return Some((
-                            Err(WebSocketClientError::Closed.into()),
-                            conn,
-                        ));
+                        return Some((Err(WebSocketClientError::Closed.into()), conn));
                     }
                 };
 
@@ -559,14 +565,16 @@ impl AsyncA2AClient for WebSocketClient {
                                 Ok(StreamItem::ArtifactUpdate(artifact_update))
                             } else {
                                 Err(WebSocketClientError::Protocol(
-                                    "Failed to parse streaming response".to_string()
-                                ).into())
+                                    "Failed to parse streaming response".to_string(),
+                                )
+                                .into())
                             }
                         }
                     }
                     _ => Err(WebSocketClientError::Protocol(
-                        "Unexpected WebSocket message type".to_string()
-                    ).into()),
+                        "Unexpected WebSocket message type".to_string(),
+                    )
+                    .into()),
                 };
 
                 Some((result, conn))

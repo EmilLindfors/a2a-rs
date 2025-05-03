@@ -89,7 +89,9 @@ impl AsyncA2AClient for HttpClient {
             .map_err(|e| HttpClientError::Reqwest(e))?;
 
         if response.status().is_success() {
-            let body = response.text().await
+            let body = response
+                .text()
+                .await
                 .map_err(|e| HttpClientError::Reqwest(e))?;
             Ok(body)
         } else {
@@ -97,8 +99,9 @@ impl AsyncA2AClient for HttpClient {
             let body = response.text().await.unwrap_or_default();
             Err(HttpClientError::Response {
                 status: status.as_u16(),
-                message: body
-            }.into())
+                message: body,
+            }
+            .into())
         }
     }
 
