@@ -14,7 +14,10 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::{
-    adapter::server::auth::{Authenticator, NoopAuthenticator, with_auth},
+    adapter::server::{
+        auth::{Authenticator, NoopAuthenticator, with_auth},
+        error::HttpServerError,
+    },
     domain::A2AError,
     port::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
 };
@@ -94,11 +97,11 @@ where
 
         let listener = tokio::net::TcpListener::bind(&self.address)
             .await
-            .map_err(|e| A2AError::Internal(format!("Failed to bind to address: {}", e)))?;
+            .map_err(|e| HttpServerError::Io(e))?;
 
         axum::serve(listener, app)
             .await
-            .map_err(|e| A2AError::Internal(format!("Server error: {}", e)))?;
+            .map_err(|e| HttpServerError::Server(format!("Server error: {}", e)))?;
 
         Ok(())
     }

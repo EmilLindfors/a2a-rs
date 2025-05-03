@@ -11,6 +11,7 @@ use reqwest::{
 use std::{pin::Pin, time::Duration};
 
 use crate::{
+    adapter::client::HttpClientError,
     application::json_rpc::{self, A2ARequest, JSONRPCResponse, SendTaskRequest},
     domain::{
         A2AError, Message, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
@@ -84,18 +85,20 @@ impl AsyncA2AClient for HttpClient {
             .body(request.to_string())
             .timeout(Duration::from_secs(self.timeout))
             .send()
-            .await?;
+            .await
+            .map_err(|e| HttpClientError::Reqwest(e))?;
 
         if response.status().is_success() {
-            let body = response.text().await?;
+            let body = response.text().await
+                .map_err(|e| HttpClientError::Reqwest(e))?;
             Ok(body)
         } else {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            Err(A2AError::Internal(format!(
-                "HTTP error: {} - {}",
-                status, body
-            )))
+            Err(HttpClientError::Response {
+                status: status.as_u16(),
+                message: body
+            }.into())
         }
     }
 

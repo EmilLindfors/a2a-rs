@@ -50,14 +50,6 @@ pub enum A2AError {
     #[error("Internal error: {0}")]
     Internal(String),
 
-    #[error("HTTP client error: {0}")]
-    #[cfg(feature = "http-client")]
-    HttpClient(#[from] reqwest::Error),
-
-    #[error("WebSocket error: {0}")]
-    #[cfg(any(feature = "ws-client", feature = "ws-server"))]
-    WebSocket(String),
-
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
