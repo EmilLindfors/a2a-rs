@@ -40,6 +40,8 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<Vec<Artifact>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<Message>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
 
@@ -116,6 +118,7 @@ impl Task {
                 timestamp: Some(Utc::now()),
             },
             artifacts: None,
+            history: None,
             metadata: None,
         }
     }
@@ -131,17 +134,53 @@ impl Task {
                 timestamp: Some(Utc::now()),
             },
             artifacts: None,
+            history: None, 
             metadata: None,
         }
     }
 
     /// Update the task status
     pub fn update_status(&mut self, state: TaskState, message: Option<Message>) {
+        // Set the new status
         self.status = TaskStatus {
             state,
-            message,
+            message: message.clone(),
             timestamp: Some(Utc::now()),
         };
+        
+        // Add message to history if provided and state_transition_history is enabled
+        if let Some(msg) = message {
+            if let Some(history) = &mut self.history {
+                history.push(msg);
+            } else {
+                self.history = Some(vec![msg]);
+            }
+        }
+    }
+    
+    /// Get a copy of this task with history limited to the specified length
+    pub fn with_limited_history(&self, history_length: Option<u32>) -> Self {
+        // If no history limit specified or no history, return as is
+        if history_length.is_none() || self.history.is_none() {
+            return self.clone();
+        }
+        
+        let limit = history_length.unwrap() as usize;
+        let mut task_copy = self.clone();
+        
+        // Limit history if specified
+        if let Some(history) = &mut task_copy.history {
+            if limit == 0 {
+                // If limit is 0, remove history entirely
+                task_copy.history = None;
+            } else if history.len() > limit {
+                // If history is longer than limit, truncate it
+                // Keep the most recent messages by removing from the beginning
+                *history = history.iter().skip(history.len() - limit).cloned().collect();
+            }
+        }
+        
+        task_copy
     }
 
     /// Add an artifact to the task

@@ -8,12 +8,11 @@ use reqwest::{
     header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client,
 };
-use serde_json::json;
-use std::{pin::Pin, sync::Arc, time::Duration};
+use std::{pin::Pin, time::Duration};
 
 use crate::{
     application::json_rpc::{
-        self, A2ARequest, JSONRPCResponse, SendTaskRequest, SendTaskStreamingRequest,
+        self, A2ARequest, JSONRPCResponse, SendTaskRequest,
     },
     domain::{
         A2AError, Message, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,

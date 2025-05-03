@@ -104,7 +104,7 @@ impl SimpleAgentInfo {
         self
     }
 
-    /// Add a skill
+    /// Add a basic skill
     pub fn add_skill(mut self, id: String, name: String, description: Option<String>) -> Self {
         self.card.skills.push(AgentSkill {
             id,
@@ -117,11 +117,67 @@ impl SimpleAgentInfo {
         });
         self
     }
+    
+    /// Add a comprehensive skill with all details
+    pub fn add_comprehensive_skill(
+        mut self, 
+        id: String, 
+        name: String, 
+        description: Option<String>,
+        tags: Option<Vec<String>>,
+        examples: Option<Vec<String>>,
+        input_modes: Option<Vec<String>>,
+        output_modes: Option<Vec<String>>,
+    ) -> Self {
+        self.card.skills.push(AgentSkill {
+            id,
+            name,
+            description,
+            tags,
+            examples,
+            input_modes,
+            output_modes,
+        });
+        self
+    }
+    
+    /// Replace all skills with a new set
+    pub fn with_skills(mut self, skills: Vec<AgentSkill>) -> Self {
+        self.card.skills = skills;
+        self
+    }
+    
+    /// Get all currently defined skills
+    pub fn get_skills(&self) -> &Vec<AgentSkill> {
+        &self.card.skills
+    }
+    
+    /// Get a skill by ID
+    pub fn get_skill_by_id(&self, id: &str) -> Option<&AgentSkill> {
+        self.card.skills.iter().find(|skill| skill.id == id)
+    }
 }
 
 #[async_trait]
 impl AgentInfoProvider for SimpleAgentInfo {
     async fn get_agent_card(&self) -> Result<AgentCard, A2AError> {
         Ok(self.card.clone())
+    }
+    
+    // Override the default implementation for better performance
+    async fn get_skills(&self) -> Result<Vec<AgentSkill>, A2AError> {
+        Ok(self.card.skills.clone())
+    }
+    
+    // Override the default implementation for better performance
+    async fn get_skill_by_id(&self, id: &str) -> Result<Option<AgentSkill>, A2AError> {
+        Ok(self.card.skills.iter()
+            .find(|skill| skill.id == id)
+            .cloned())
+    }
+    
+    // Override the default implementation for better performance
+    async fn has_skill(&self, id: &str) -> Result<bool, A2AError> {
+        Ok(self.card.skills.iter().any(|skill| skill.id == id))
     }
 }

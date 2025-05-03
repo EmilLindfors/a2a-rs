@@ -1,16 +1,15 @@
 use std::sync::Arc;
 use async_trait::async_trait;
-use futures::stream::{Stream, StreamExt};
-use serde_json::{json, Value};
+use futures::stream::StreamExt;
 use tokio::sync::Mutex;
 
 use a2a_rs::domain::{
-    A2AError, Artifact, Message, Part, Task, TaskArtifactUpdateEvent, TaskIdParams,
-    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    A2AError, Artifact, Message, Part, Task, TaskArtifactUpdateEvent,
+    TaskPushNotificationConfig, TaskState, TaskStatus,
     TaskStatusUpdateEvent,
 };
 use a2a_rs::port::server::{AsyncTaskHandler, Subscriber};
-use crate::reimbursement_agent::agent::{ReimbursementAgent, StreamContent, StreamItem};
+use crate::reimbursement_agent::agent::ReimbursementAgent;
 
 /// Task manager that bridges the A2A protocol with the ReimbursementAgent
 #[derive(Clone)]

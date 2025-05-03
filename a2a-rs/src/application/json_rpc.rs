@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 use crate::domain::{
     error::A2AError, task::{Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, 

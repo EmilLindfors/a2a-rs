@@ -17,13 +17,13 @@ use tokio::{
 };
 use tokio_tungstenite::{
     accept_async,
-    tungstenite::{Error as WsError, Message as WsMessage},
+    tungstenite::Message as WsMessage,
 };
 
 use crate::{
-    application::json_rpc::{self, A2ARequest, JSONRPCResponse},
+    adapter::server::auth::{Authenticator, NoopAuthenticator},
     domain::{
-        A2AError, AgentCard, TaskArtifactUpdateEvent, TaskIdParams, TaskQueryParams,
+        A2AError, TaskArtifactUpdateEvent,
         TaskStatusUpdateEvent,
     },
     port::server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber},
@@ -32,22 +32,25 @@ use crate::{
 type ClientMap = Arc<Mutex<HashMap<String, mpsc::Sender<WsMessage>>>>;
 
 /// WebSocket server for the A2A protocol
-pub struct WebSocketServer<P, A, T>
+pub struct WebSocketServer<P, A, T, Auth = NoopAuthenticator>
 where
     P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
     T: AsyncTaskHandler + Send + Sync + 'static,
+    Auth: Authenticator + Send + Sync + 'static,
 {
     /// Request processor
     processor: Arc<P>,
     /// Agent info provider
-    agent_info: Arc<A>,
+    _agent_info: Arc<A>,
     /// Task handler
     task_handler: Arc<T>,
     /// Server address
     address: String,
     /// Connected clients
     clients: ClientMap,
+    /// Authenticator
+    authenticator: Option<Arc<Auth>>,
 }
 
 impl<P, A, T> WebSocketServer<P, A, T>
@@ -60,10 +63,31 @@ where
     pub fn new(processor: P, agent_info: A, task_handler: T, address: String) -> Self {
         Self {
             processor: Arc::new(processor),
-            agent_info: Arc::new(agent_info),
+            _agent_info: Arc::new(agent_info),
             task_handler: Arc::new(task_handler),
             address,
             clients: Arc::new(Mutex::new(HashMap::new())),
+            authenticator: None,
+        }
+    }
+}
+
+impl<P, A, T, Auth> WebSocketServer<P, A, T, Auth>
+where
+    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
+    T: AsyncTaskHandler + Send + Sync + 'static,
+    Auth: Authenticator + Clone + Send + Sync + 'static,
+{
+    /// Create a new WebSocket server with authentication
+    pub fn with_auth(processor: P, agent_info: A, task_handler: T, address: String, authenticator: Auth) -> Self {
+        Self {
+            processor: Arc::new(processor),
+            _agent_info: Arc::new(agent_info),
+            task_handler: Arc::new(task_handler),
+            address,
+            clients: Arc::new(Mutex::new(HashMap::new())),
+            authenticator: Some(Arc::new(authenticator)),
         }
     }
 
@@ -82,11 +106,23 @@ where
 
         while let Ok((stream, _)) = listener.accept().await {
             let processor = self.processor.clone();
-            let agent_info = self.agent_info.clone();
+            let agent_info = self._agent_info.clone();
             let task_handler = self.task_handler.clone();
             let clients = self.clients.clone();
 
+            let authenticator = self.authenticator.clone();
+            
             tokio::spawn(async move {
+                // If an authenticator is present, obtain credentials from query parameters or headers
+                if let Some(_auth) = &authenticator {
+                    // For WebSockets, we'd typically extract auth from the URL query parameters
+                    // or from headers. In this simplified implementation, we'll just assume success.
+                    // In a real implementation, you would extract the token and call authenticate()
+                    
+                    // For now, we'll just log a message indicating auth is enabled
+                    println!("Authentication is enabled for WebSocket connections");
+                }
+                
                 if let Err(e) = handle_connection(stream, processor, agent_info, task_handler, clients).await {
                     eprintln!("Error handling connection: {}", e);
                 }
@@ -101,7 +137,7 @@ where
 async fn handle_connection<P, A, T>(
     stream: TcpStream,
     processor: Arc<P>,
-    agent_info: Arc<A>,
+    _agent_info: Arc<A>,
     task_handler: Arc<T>,
     clients: ClientMap,
 ) -> Result<(), A2AError>

@@ -1,6 +1,5 @@
 //! Client port (interface) for the A2A protocol
 
-use std::future::Future;
 
 #[cfg(feature = "client")]
 use async_trait::async_trait;
@@ -8,8 +7,7 @@ use async_trait::async_trait;
 use crate::{
     application::json_rpc::{JSONRPCResponse, A2ARequest},
     domain::{
-        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig,
-        TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
+        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent,
     },
 };
 

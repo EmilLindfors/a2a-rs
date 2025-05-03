@@ -4,27 +4,27 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use axum::{
     extract::State,
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use serde_json::{json, Value};
 
 use crate::{
-    application::json_rpc::{self, A2ARequest, JSONRPCResponse},
-    domain::{A2AError, AgentCard},
+    adapter::server::auth::{Authenticator, NoopAuthenticator, with_auth},
+    domain::A2AError,
     port::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
 };
 
 /// HTTP server for the A2A protocol
-pub struct HttpServer<P, A>
+pub struct HttpServer<P, A, Auth = NoopAuthenticator>
 where
     P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
+    Auth: Authenticator + Send + Sync + 'static,
 {
     /// Request processor
     processor: Arc<P>,
@@ -32,6 +32,8 @@ where
     agent_info: Arc<A>,
     /// Server address
     address: String,
+    /// Authenticator
+    authenticator: Option<Arc<Auth>>,
 }
 
 impl<P, A> HttpServer<P, A>
@@ -45,6 +47,24 @@ where
             processor: Arc::new(processor),
             agent_info: Arc::new(agent_info),
             address,
+            authenticator: None,
+        }
+    }
+}
+
+impl<P, A, Auth> HttpServer<P, A, Auth>
+where
+    P: AsyncA2ARequestProcessor + Clone + Send + Sync + 'static,
+    A: AgentInfoProvider + Clone + Send + Sync + 'static,
+    Auth: Authenticator + Clone + Send + Sync + 'static,
+{
+    /// Create a new HTTP server with authentication
+    pub fn with_auth(processor: P, agent_info: A, address: String, authenticator: Auth) -> Self {
+        Self {
+            processor: Arc::new(processor),
+            agent_info: Arc::new(agent_info),
+            address,
+            authenticator: Some(Arc::new(authenticator)),
         }
     }
 
@@ -53,13 +73,24 @@ where
         let processor = self.processor.clone();
         let agent_info = self.agent_info.clone();
 
-        let app = Router::new()
+        let mut app = Router::new()
             .route("/", post(handle_request))
             .route("/agent-card", get(handle_agent_card))
+            .route("/skills", get(handle_skills))
+            .route("/skills/:id", get(handle_skill_by_id))
             .with_state(ServerState {
                 processor: processor.clone(),
                 agent_info: agent_info.clone(),
             });
+            
+        // Apply authentication if provided
+        if let Some(auth) = &self.authenticator {
+            // Clone the authenticator for the middleware
+            let auth_clone = auth.clone();
+            
+            // Create an auth router with the authenticator
+            app = with_auth(app, (*auth_clone).clone());
+        }
 
         let listener = tokio::net::TcpListener::bind(&self.address)
             .await
@@ -159,6 +190,62 @@ where
 {
     match state.agent_info.get_agent_card().await {
         Ok(card) => (StatusCode::OK, Json(card)).into_response(),
+        Err(e) => {
+            let error = e.to_jsonrpc_error();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": error
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Handle a request for all agent skills
+async fn handle_skills<P, A>(State(state): State<ServerState<P, A>>) -> impl IntoResponse
+where
+    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
+{
+    match state.agent_info.get_skills().await {
+        Ok(skills) => (StatusCode::OK, Json(skills)).into_response(),
+        Err(e) => {
+            let error = e.to_jsonrpc_error();
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({
+                    "jsonrpc": "2.0",
+                    "id": null,
+                    "error": error
+                })),
+            )
+                .into_response()
+        }
+    }
+}
+
+/// Handle a request for a specific agent skill by ID
+async fn handle_skill_by_id<P, A>(
+    State(state): State<ServerState<P, A>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse
+where
+    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
+{
+    match state.agent_info.get_skill_by_id(&id).await {
+        Ok(Some(skill)) => (StatusCode::OK, Json(skill)).into_response(),
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "error": format!("Skill with ID '{}' not found", id)
+            })),
+        )
+            .into_response(),
         Err(e) => {
             let error = e.to_jsonrpc_error();
             (

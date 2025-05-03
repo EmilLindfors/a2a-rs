@@ -4,11 +4,11 @@
 use async_trait::async_trait;
 
 use crate::{
-    application::json_rpc::{JSONRPCResponse, A2ARequest},
+    application::json_rpc::{A2ARequest, JSONRPCResponse},
     domain::{
-        A2AError, AgentCard, Message, Task, TaskArtifactUpdateEvent, TaskIdParams,
-        TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
-    },
+        A2AError, AgentCard, Message, Task, TaskArtifactUpdateEvent,
+        TaskPushNotificationConfig, TaskStatusUpdateEvent,
+    }, AgentSkill,
 };
 
 /// A trait defining the methods a task handler should implement
@@ -115,6 +115,27 @@ pub trait AsyncA2ARequestProcessor: Send + Sync {
 pub trait AgentInfoProvider: Send + Sync {
     /// Get the agent card
     async fn get_agent_card(&self) -> Result<AgentCard, A2AError>;
+    
+    /// Get all skills provided by the agent
+    async fn get_skills(&self) -> Result<Vec<AgentSkill>, A2AError> {
+        // Default implementation that gets skills from the agent card
+        let card = self.get_agent_card().await?;
+        Ok(card.skills)
+    }
+    
+    /// Get a specific skill by ID
+    async fn get_skill_by_id(&self, id: &str) -> Result<Option<AgentSkill>, A2AError> {
+        // Default implementation that finds the skill by ID
+        let skills = self.get_skills().await?;
+        Ok(skills.into_iter().find(|skill| skill.id == id))
+    }
+    
+    /// Check if the agent has a specific skill
+    async fn has_skill(&self, id: &str) -> Result<bool, A2AError> {
+        // Default implementation that checks if the skill exists
+        let skill = self.get_skill_by_id(id).await?;
+        Ok(skill.is_some())
+    }
 }
 
 #[cfg(feature = "server")]
