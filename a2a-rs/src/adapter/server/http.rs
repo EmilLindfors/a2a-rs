@@ -97,7 +97,7 @@ where
 
         let listener = tokio::net::TcpListener::bind(&self.address)
             .await
-            .map_err(|e| HttpServerError::Io(e))?;
+            .map_err(HttpServerError::Io)?;
 
         axum::serve(listener, app)
             .await

@@ -99,7 +99,7 @@ where
 
         let listener = TcpListener::bind(&addr)
             .await
-            .map_err(|e| WebSocketServerError::Io(e))?;
+            .map_err(WebSocketServerError::Io)?;
 
         println!("WebSocket server listening on: {}", addr);
 

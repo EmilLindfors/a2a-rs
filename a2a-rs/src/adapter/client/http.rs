@@ -86,13 +86,13 @@ impl AsyncA2AClient for HttpClient {
             .timeout(Duration::from_secs(self.timeout))
             .send()
             .await
-            .map_err(|e| HttpClientError::Reqwest(e))?;
+            .map_err(HttpClientError::Reqwest)?;
 
         if response.status().is_success() {
             let body = response
                 .text()
                 .await
-                .map_err(|e| HttpClientError::Reqwest(e))?;
+                .map_err(HttpClientError::Reqwest)?;
             Ok(body)
         } else {
             let status = response.status();
