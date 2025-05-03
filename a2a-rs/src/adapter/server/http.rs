@@ -80,7 +80,7 @@ where
             .route("/", post(handle_request))
             .route("/agent-card", get(handle_agent_card))
             .route("/skills", get(handle_skills))
-            .route("/skills/:id", get(handle_skill_by_id))
+            .route("/skills/{id}", get(handle_skill_by_id))
             .with_state(ServerState {
                 processor: processor.clone(),
                 agent_info: agent_info.clone(),

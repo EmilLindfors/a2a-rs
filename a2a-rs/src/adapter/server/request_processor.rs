@@ -193,7 +193,7 @@ where
     async fn process_request<'a>(
         &self,
         request: &'a A2ARequest,
-    ) -> Result<JSONRPCResponse, A2AError> {
+    ) -> Result<JSONRPCResponse, A2AError> {        
         match request {
             A2ARequest::SendTask(req) => self.process_send_task(req).await,
             A2ARequest::GetTask(req) => self.process_get_task(req).await,
