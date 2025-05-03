@@ -14,7 +14,10 @@ use tokio::{
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
 use crate::{
-    adapter::server::auth::{Authenticator, NoopAuthenticator},
+    adapter::server::{
+        auth::{Authenticator, NoopAuthenticator},
+        error::WebSocketServerError,
+    },
     domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent},
     port::server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber},
 };
@@ -92,11 +95,11 @@ where
         let addr = self
             .address
             .parse::<SocketAddr>()
-            .map_err(|e| A2AError::Internal(format!("Invalid address: {}", e)))?;
+            .map_err(|e| WebSocketServerError::Server(format!("Invalid address: {}", e)))?;
 
         let listener = TcpListener::bind(&addr)
             .await
-            .map_err(|e| A2AError::Internal(format!("Failed to bind to address: {}", e)))?;
+            .map_err(|e| WebSocketServerError::Io(e))?;
 
         println!("WebSocket server listening on: {}", addr);
 
@@ -146,11 +149,11 @@ where
 {
     let addr = stream
         .peer_addr()
-        .map_err(|e| A2AError::Internal(format!("Failed to get peer address: {}", e)))?;
+        .map_err(|e| WebSocketServerError::Connection(format!("Failed to get peer address: {}", e)))?;
 
     let ws_stream = accept_async(stream)
         .await
-        .map_err(|e| A2AError::Internal(format!("Error during WebSocket handshake: {}", e)))?;
+        .map_err(|e| WebSocketServerError::Connection(format!("Error during WebSocket handshake: {}", e)))?;
 
     println!("WebSocket connection established with: {}", addr);
 

@@ -19,6 +19,7 @@ use tokio_tungstenite::{
 use url::Url;
 
 use crate::{
+    adapter::client::WebSocketClientError,
     application::json_rpc::{
         self, A2ARequest, JSONRPCResponse, SendTaskRequest, SendTaskStreamingRequest,
         TaskResubscriptionRequest,
@@ -78,7 +79,7 @@ impl WebSocketClient {
         }
 
         let mut url = Url::parse(&self.base_url)
-            .map_err(|e| A2AError::Internal(format!("Invalid URL: {}", e)))?;
+            .map_err(|e| WebSocketClientError::Connection(format!("Invalid URL: {}", e)))?;
 
         // Add auth token to URL if present
         if let Some(token) = &self.auth_token {
@@ -87,7 +88,7 @@ impl WebSocketClient {
 
         let (ws_stream, _) = connect_async(url)
             .await
-            .map_err(|e| A2AError::Internal(format!("WebSocket connection error: {}", e)))?;
+            .map_err(|e| WebSocketClientError::Connection(format!("WebSocket connection error: {}", e)))?;
 
         self.connection = Some(Arc::new(Mutex::new(ws_stream)));
         Ok(())
@@ -100,7 +101,7 @@ impl WebSocketClient {
         let conn = self
             .connection
             .as_ref()
-            .ok_or_else(|| A2AError::Internal("No connection".to_string()))?;
+            .ok_or_else(|| WebSocketClientError::Connection("No connection".to_string()))?;
 
         // Send the message
         {
@@ -108,7 +109,7 @@ impl WebSocketClient {
             guard
                 .send(message)
                 .await
-                .map_err(|e| A2AError::Internal(format!("Send error: {}", e)))?;
+                .map_err(|e| WebSocketClientError::Message(format!("Send error: {}", e)))?;
         }
 
         // Receive the response
@@ -118,12 +119,12 @@ impl WebSocketClient {
             let timeout = Duration::from_secs(self.timeout);
             let result = tokio::time::timeout(timeout, guard.next())
                 .await
-                .map_err(|_| A2AError::Internal("WebSocket response timeout".to_string()))?;
+                .map_err(|_| WebSocketClientError::Timeout)?;
 
             match result {
                 Some(Ok(msg)) => msg,
-                Some(Err(e)) => return Err(A2AError::Internal(format!("WebSocket error: {}", e))),
-                None => return Err(A2AError::Internal("Connection closed".to_string())),
+                Some(Err(e)) => return Err(WebSocketClientError::Message(format!("WebSocket error: {}", e)).into()),
+                None => return Err(WebSocketClientError::Closed.into()),
             }
         };
 
@@ -341,7 +342,7 @@ impl AsyncA2AClient for WebSocketClient {
         let connection = client_clone
             .connection
             .as_ref()
-            .ok_or_else(|| A2AError::Internal("No connection".to_string()))?
+            .ok_or_else(|| WebSocketClientError::Connection("No connection".to_string()))?
             .clone();
 
         // Send the request
@@ -351,7 +352,7 @@ impl AsyncA2AClient for WebSocketClient {
             guard
                 .send(WsMessage::Text(json))
                 .await
-                .map_err(|e| A2AError::Internal(format!("Send error: {}", e)))?;
+                .map_err(|e| WebSocketClientError::Message(format!("Send error: {}", e)))?;
         }
 
         // Create a stream that will process incoming messages
@@ -367,13 +368,13 @@ impl AsyncA2AClient for WebSocketClient {
                     Some(Ok(msg)) => msg,
                     Some(Err(e)) => {
                         return Some((
-                            Err(A2AError::Internal(format!("WebSocket error: {}", e))),
+                            Err(WebSocketClientError::Message(format!("WebSocket error: {}", e)).into()),
                             conn,
                         ));
                     }
                     None => {
                         return Some((
-                            Err(A2AError::Internal("Connection closed".to_string())),
+                            Err(WebSocketClientError::Closed.into()),
                             conn,
                         ));
                     }
@@ -430,15 +431,15 @@ impl AsyncA2AClient for WebSocketClient {
                             {
                                 Ok(StreamItem::ArtifactUpdate(artifact_update))
                             } else {
-                                Err(A2AError::Internal(
-                                    "Failed to parse streaming response".to_string(),
-                                ))
+                                Err(WebSocketClientError::Protocol(
+                                    "Failed to parse streaming response".to_string()
+                                ).into())
                             }
                         }
                     }
-                    _ => Err(A2AError::Internal(
-                        "Unexpected WebSocket message type".to_string(),
-                    )),
+                    _ => Err(WebSocketClientError::Protocol(
+                        "Unexpected WebSocket message type".to_string()
+                    ).into()),
                 };
 
                 Some((result, conn))
@@ -470,7 +471,7 @@ impl AsyncA2AClient for WebSocketClient {
         let connection = client_clone
             .connection
             .as_ref()
-            .ok_or_else(|| A2AError::Internal("No connection".to_string()))?
+            .ok_or_else(|| WebSocketClientError::Connection("No connection".to_string()))?
             .clone();
 
         // Send the request
@@ -480,7 +481,7 @@ impl AsyncA2AClient for WebSocketClient {
             guard
                 .send(WsMessage::Text(json))
                 .await
-                .map_err(|e| A2AError::Internal(format!("Send error: {}", e)))?;
+                .map_err(|e| WebSocketClientError::Message(format!("Send error: {}", e)))?;
         }
 
         // Create a stream that will process incoming messages (same as in subscribe_to_task)
@@ -495,13 +496,13 @@ impl AsyncA2AClient for WebSocketClient {
                     Some(Ok(msg)) => msg,
                     Some(Err(e)) => {
                         return Some((
-                            Err(A2AError::Internal(format!("WebSocket error: {}", e))),
+                            Err(WebSocketClientError::Message(format!("WebSocket error: {}", e)).into()),
                             conn,
                         ));
                     }
                     None => {
                         return Some((
-                            Err(A2AError::Internal("Connection closed".to_string())),
+                            Err(WebSocketClientError::Closed.into()),
                             conn,
                         ));
                     }
@@ -557,15 +558,15 @@ impl AsyncA2AClient for WebSocketClient {
                             {
                                 Ok(StreamItem::ArtifactUpdate(artifact_update))
                             } else {
-                                Err(A2AError::Internal(
-                                    "Failed to parse streaming response".to_string(),
-                                ))
+                                Err(WebSocketClientError::Protocol(
+                                    "Failed to parse streaming response".to_string()
+                                ).into())
                             }
                         }
                     }
-                    _ => Err(A2AError::Internal(
-                        "Unexpected WebSocket message type".to_string(),
-                    )),
+                    _ => Err(WebSocketClientError::Protocol(
+                        "Unexpected WebSocket message type".to_string()
+                    ).into()),
                 };
 
                 Some((result, conn))

@@ -1,5 +1,7 @@
 //! Server adapters for the A2A protocol
 
+pub mod error;
+
 #[cfg(feature = "server")]
 pub mod agent_info;
 #[cfg(feature = "server")]
@@ -34,3 +36,9 @@ pub use request_processor::DefaultRequestProcessor;
 pub use task_storage::InMemoryTaskStorage;
 #[cfg(feature = "ws-server")]
 pub use ws::WebSocketServer;
+
+// Re-export error types
+#[cfg(feature = "http-server")]
+pub use error::HttpServerError;
+#[cfg(feature = "ws-server")]
+pub use error::WebSocketServerError;
