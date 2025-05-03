@@ -9,12 +9,7 @@ pub use client::A2AClient;
 #[cfg(feature = "client")]
 pub use client::{AsyncA2AClient, StreamItem};
 
-pub use server::{
-    A2ARequestProcessor,
-    TaskHandler,
-};
+pub use server::{A2ARequestProcessor, TaskHandler};
 
 #[cfg(feature = "server")]
-pub use server::{
-    AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber,
-};
+pub use server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber};

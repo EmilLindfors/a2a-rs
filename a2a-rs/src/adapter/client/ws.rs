@@ -1,11 +1,11 @@
 //! WebSocket client adapter for the A2A protocol
 
-#![cfg(feature = "ws-client")]
+// This module is already conditionally compiled with #[cfg(feature = "ws-client")] in mod.rs
 
 use async_trait::async_trait;
 use futures::{
-    stream::{Stream, StreamExt},
     SinkExt,
+    stream::{Stream, StreamExt},
 };
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
@@ -14,7 +14,7 @@ use tokio::{
     sync::Mutex, // Changed to tokio::sync::Mutex
 };
 use tokio_tungstenite::{
-    connect_async, tungstenite::protocol::Message as WsMessage, MaybeTlsStream, WebSocketStream,
+    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message as WsMessage,
 };
 use url::Url;
 
@@ -362,7 +362,7 @@ impl AsyncA2AClient for WebSocketClient {
                     let mut guard = conn.lock().await;
                     guard.next().await
                 }; // Lock is dropped here
-                   // Process result outside the lock scope
+                // Process result outside the lock scope
                 let message = match message_result {
                     Some(Ok(msg)) => msg,
                     Some(Err(e)) => {

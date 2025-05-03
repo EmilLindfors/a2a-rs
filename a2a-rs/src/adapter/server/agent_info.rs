@@ -1,6 +1,6 @@
 //! A simple agent info provider implementation
 
-#![cfg(feature = "server")]
+// This module is already conditionally compiled with #[cfg(feature = "server")] in mod.rs
 
 use async_trait::async_trait;
 
@@ -46,10 +46,7 @@ impl SimpleAgentInfo {
 
     /// Set the provider of the agent
     pub fn with_provider(mut self, organization: String, url: Option<String>) -> Self {
-        self.card.provider = Some(AgentProvider {
-            organization,
-            url,
-        });
+        self.card.provider = Some(AgentProvider { organization, url });
         self
     }
 
@@ -106,30 +103,29 @@ impl SimpleAgentInfo {
 
     /// Add a basic skill
     pub fn add_skill(mut self, id: String, name: String, description: Option<String>) -> Self {
-        self.card.skills.push(AgentSkill {
-            id,
-            name,
-            description,
-            tags: None,
-            examples: None,
-            input_modes: None,
-            output_modes: None,
-        });
+        let skill = if let Some(desc) = description {
+            AgentSkill::new(id, name).with_description(desc)
+        } else {
+            AgentSkill::new(id, name)
+        };
+
+        self.card.skills.push(skill);
         self
     }
-    
+
     /// Add a comprehensive skill with all details
+    #[allow(clippy::too_many_arguments)]
     pub fn add_comprehensive_skill(
-        mut self, 
-        id: String, 
-        name: String, 
+        mut self,
+        id: String,
+        name: String,
         description: Option<String>,
         tags: Option<Vec<String>>,
         examples: Option<Vec<String>>,
         input_modes: Option<Vec<String>>,
         output_modes: Option<Vec<String>>,
     ) -> Self {
-        self.card.skills.push(AgentSkill {
+        let skill = AgentSkill::comprehensive(
             id,
             name,
             description,
@@ -137,24 +133,95 @@ impl SimpleAgentInfo {
             examples,
             input_modes,
             output_modes,
-        });
+        );
+
+        self.card.skills.push(skill);
         self
     }
-    
+
+    /// Add a skill using the AgentSkill builder
+    pub fn add_skill_object(mut self, skill: AgentSkill) -> Self {
+        self.card.skills.push(skill);
+        self
+    }
+
     /// Replace all skills with a new set
     pub fn with_skills(mut self, skills: Vec<AgentSkill>) -> Self {
         self.card.skills = skills;
         self
     }
-    
+
     /// Get all currently defined skills
     pub fn get_skills(&self) -> &Vec<AgentSkill> {
         &self.card.skills
     }
-    
+
     /// Get a skill by ID
     pub fn get_skill_by_id(&self, id: &str) -> Option<&AgentSkill> {
         self.card.skills.iter().find(|skill| skill.id == id)
+    }
+
+    /// Add a new skill or update an existing one
+    pub fn add_or_update_skill(&mut self, skill: AgentSkill) -> &mut Self {
+        // Check if the skill with this ID already exists
+        if let Some(index) = self.card.skills.iter().position(|s| s.id == skill.id) {
+            // Update the existing skill
+            self.card.skills[index] = skill;
+        } else {
+            // Add a new skill
+            self.card.skills.push(skill);
+        }
+        self
+    }
+
+    /// Remove a skill by ID
+    pub fn remove_skill(&mut self, id: &str) -> bool {
+        let len_before = self.card.skills.len();
+        self.card.skills.retain(|skill| skill.id != id);
+        self.card.skills.len() < len_before
+    }
+
+    /// Update a skill's details
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_skill(
+        &mut self,
+        id: &str,
+        name: Option<String>,
+        description: Option<Option<String>>,
+        tags: Option<Option<Vec<String>>>,
+        examples: Option<Option<Vec<String>>>,
+        input_modes: Option<Option<Vec<String>>>,
+        output_modes: Option<Option<Vec<String>>>,
+    ) -> bool {
+        if let Some(skill) = self.card.skills.iter_mut().find(|s| s.id == id) {
+            if let Some(name_val) = name {
+                skill.name = name_val;
+            }
+
+            if let Some(desc) = description {
+                skill.description = desc;
+            }
+
+            if let Some(tags_val) = tags {
+                skill.tags = tags_val;
+            }
+
+            if let Some(examples_val) = examples {
+                skill.examples = examples_val;
+            }
+
+            if let Some(input_modes_val) = input_modes {
+                skill.input_modes = input_modes_val;
+            }
+
+            if let Some(output_modes_val) = output_modes {
+                skill.output_modes = output_modes_val;
+            }
+
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -163,19 +230,22 @@ impl AgentInfoProvider for SimpleAgentInfo {
     async fn get_agent_card(&self) -> Result<AgentCard, A2AError> {
         Ok(self.card.clone())
     }
-    
+
     // Override the default implementation for better performance
     async fn get_skills(&self) -> Result<Vec<AgentSkill>, A2AError> {
         Ok(self.card.skills.clone())
     }
-    
+
     // Override the default implementation for better performance
     async fn get_skill_by_id(&self, id: &str) -> Result<Option<AgentSkill>, A2AError> {
-        Ok(self.card.skills.iter()
+        Ok(self
+            .card
+            .skills
+            .iter()
             .find(|skill| skill.id == id)
             .cloned())
     }
-    
+
     // Override the default implementation for better performance
     async fn has_skill(&self, id: &str) -> Result<bool, A2AError> {
         Ok(self.card.skills.iter().any(|skill| skill.id == id))

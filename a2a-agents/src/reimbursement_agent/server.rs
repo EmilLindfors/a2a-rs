@@ -1,12 +1,17 @@
-
+use crate::reimbursement_agent::task_manager::AgentTaskManager;
 use a2a_rs::adapter::server::{DefaultRequestProcessor, HttpServer, WebSocketServer};
 use a2a_rs::domain::AgentCard;
-use crate::reimbursement_agent::task_manager::AgentTaskManager;
 
 /// A2A Server implementation that combines both HTTP and WebSocket servers
 pub struct A2AServer {
     http_server: Option<HttpServer<DefaultRequestProcessor<AgentTaskManager>, SimpleAgentInfo>>,
-    ws_server: Option<WebSocketServer<DefaultRequestProcessor<AgentTaskManager>, SimpleAgentInfo, AgentTaskManager>>,
+    ws_server: Option<
+        WebSocketServer<
+            DefaultRequestProcessor<AgentTaskManager>,
+            SimpleAgentInfo,
+            AgentTaskManager,
+        >,
+    >,
     host: String,
     port: u16,
 }
@@ -25,37 +30,40 @@ impl a2a_rs::port::server::AgentInfoProvider for SimpleAgentInfo {
 
 impl A2AServer {
     /// Create a new A2A server with the given agent card and task manager
-    pub fn new(agent_card: AgentCard, task_manager: AgentTaskManager, host: String, port: u16) -> Self {
-        let agent_info = SimpleAgentInfo {
-            card: agent_card,
-        };
-        
+    pub fn new(
+        agent_card: AgentCard,
+        task_manager: AgentTaskManager,
+        host: String,
+        port: u16,
+    ) -> Self {
+        let _agent_info = SimpleAgentInfo { card: agent_card };
+
         // Create the request processor
-        let processor = DefaultRequestProcessor::new(task_manager.clone());
-        
+        let _processor = DefaultRequestProcessor::new(task_manager.clone());
+
         // Create the HTTP server
         #[cfg(feature = "http-server")]
         let http_server = Some(HttpServer::new(
-            processor.clone(),
-            agent_info.clone(),
+            _processor.clone(),
+            _agent_info.clone(),
             format!("{}:{}", host, port),
         ));
-        
+
         #[cfg(not(feature = "http-server"))]
         let http_server = None;
-        
+
         // Create the WebSocket server
         #[cfg(feature = "ws-server")]
         let ws_server = Some(WebSocketServer::new(
-            processor,
-            agent_info,
+            _processor,
+            _agent_info,
             task_manager,
             format!("{}:{}", host, port),
         ));
-        
+
         #[cfg(not(feature = "ws-server"))]
         let ws_server = None;
-        
+
         Self {
             http_server,
             ws_server,
@@ -63,11 +71,11 @@ impl A2AServer {
             port,
         }
     }
-    
+
     /// Start the server
     pub async fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
         println!("Starting A2A server on {}:{}", self.host, self.port);
-        
+
         // Start the appropriate server based on which one is available
         if let Some(http_server) = &self.http_server {
             println!("Using HTTP server");
@@ -78,7 +86,7 @@ impl A2AServer {
         } else {
             return Err("No server implementation available. Enable either http-server or ws-server feature.".into());
         }
-        
+
         Ok(())
     }
 }

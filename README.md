@@ -4,13 +4,18 @@ A Rust implementation of the Agent-to-Agent (A2A) Protocol that follows idiomati
 
 ## Features
 
-- Complete implementation of the A2A protocol as specified in the JSON schema
+- Complete implementation of the A2A protocol as specified in the specification
 - Support for both client and server roles
 - Multiple transport options:
   - HTTP client and server
   - WebSocket client and server with streaming support
-- Async and sync interfaces
+- Comprehensive Agent Skills management
+- Task history tracking and management
+- Push notifications for task updates
+- Async interfaces with Tokio
 - Feature flags for optional dependencies
+- Built-in test suite and examples
+- Pure Rust TLS implementation with rustls
 
 ## Architecture
 
@@ -39,6 +44,60 @@ a2a-protocol = { version = "0.1.0", features = ["http-client"] }
 - `http-server`: HTTP server implementation
 - `ws-server`: WebSocket server implementation with streaming support
 - `full`: All available features
+
+## TLS Configuration
+
+This library uses `rustls` as its TLS backend rather than the more common `native-tls` or `openssl` crates. This eliminates the dependency on OpenSSL development libraries and simplifies cross-platform builds.
+
+### Benefits of rustls:
+
+1. **Pure Rust Implementation**: No need for system OpenSSL libraries
+2. **Security Focus**: Modern TLS implementation with security as a primary goal
+3. **Performance**: Often faster than OpenSSL-based solutions
+4. **Cross-Platform**: Easier to build on different platforms without system dependencies
+
+### Usage Notes:
+
+- All HTTP and WebSocket clients use `rustls` by default
+- No additional configuration is needed to use TLS connections
+- Standard certificate verification is automatically handled
+
+For custom certificate roots or client certificates, you can configure the reqwest or tungstenite clients directly and pass them to the library.
+
+## Examples and Testing
+
+The project includes several examples to help you get started:
+
+- `http_server.rs` - A simple HTTP server implementation
+- `http_client.rs` - A client that connects to the HTTP server
+- `websocket_server.rs` - A WebSocket server with streaming support
+- `websocket_client.rs` - A client that connects to the WebSocket server for streaming updates
+
+To run the examples:
+
+```bash
+# Start the HTTP server
+cargo run --example http_server --features http-server
+
+# In a different terminal, run the client
+cargo run --example http_client --features http-client
+
+# For WebSocket examples
+cargo run --example websocket_server --features ws-server
+cargo run --example websocket_client --features ws-client
+```
+
+The project also includes integration tests that verify compliance with the A2A specification:
+
+```bash
+# Run all tests
+cargo test --all-features
+
+# Run specific tests
+cargo test --test integration_test
+cargo test --test websocket_test
+cargo test --test push_notification_test
+```
 
 ## Usage Examples
 
@@ -245,6 +304,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+## Project Status
+
+This project is fully compliant with the A2A specification and includes:
+
+- ✅ Functional HTTP and WebSocket transports
+- ✅ Full task history tracking
+- ✅ Comprehensive skills management
+- ✅ Push notification support
+- ✅ File content handling and validation
+- ✅ Integration tests covering core functionality
+- ✅ Example implementations for both client and server
+
+### Implementation Note
+
+The codebase has been thoroughly refactored to improve compliance with the A2A specification. Recent improvements include:
+
+1. Migrated from OpenSSL to rustls for better cross-platform support
+2. Enhanced task history functionality to properly track state transitions
+3. Improved skills handling with comprehensive builder patterns
+4. Added robust push notification support with retry mechanisms
+5. Expanded test coverage including integration tests
+
+Check the `A2A_COMPLIANCE_ASSESSMENT.md` file for a detailed assessment of the implementation against the specification.
+
 ## License
 
 MIT
@@ -252,3 +335,5 @@ MIT
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+For more detailed implementation information, see the `IMPLEMENTATION_GUIDE.md` file in the a2a-rs directory.
