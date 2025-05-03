@@ -1,13 +1,13 @@
 //! Authentication middleware for server adapters
 
-#![cfg(feature = "server")]
+// This module is already conditionally compiled with #[cfg(feature = "server")] in mod.rs
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use axum::{
     extract::State,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
     middleware::Next,
     response::Response,
 };
@@ -19,7 +19,7 @@ use crate::domain::A2AError;
 pub trait Authenticator: Send + Sync {
     /// Authenticate a request based on the provided token
     async fn authenticate(&self, token: &str) -> Result<(), A2AError>;
-    
+
     /// Get the authentication scheme used by this authenticator
     fn scheme(&self) -> &str;
 }
@@ -41,7 +41,7 @@ impl TokenAuthenticator {
             scheme: "Bearer".to_string(),
         }
     }
-    
+
     /// Create a new token authenticator with a specific scheme
     pub fn with_scheme(tokens: Vec<String>, scheme: String) -> Self {
         Self { tokens, scheme }
@@ -54,10 +54,12 @@ impl Authenticator for TokenAuthenticator {
         if self.tokens.contains(&token.to_string()) {
             Ok(())
         } else {
-            Err(A2AError::Internal("Invalid authentication token".to_string()))
+            Err(A2AError::Internal(
+                "Invalid authentication token".to_string(),
+            ))
         }
     }
-    
+
     fn scheme(&self) -> &str {
         &self.scheme
     }
@@ -85,7 +87,7 @@ impl Authenticator for NoopAuthenticator {
     async fn authenticate(&self, _token: &str) -> Result<(), A2AError> {
         Ok(())
     }
-    
+
     fn scheme(&self) -> &str {
         "None"
     }
@@ -118,14 +120,14 @@ pub async fn http_auth_middleware(
         .headers()
         .get(header::AUTHORIZATION)
         .and_then(|header| header.to_str().ok());
-    
+
     if let Some(auth) = auth_header {
         // Split the scheme and token
         let parts: Vec<&str> = auth.splitn(2, ' ').collect();
         if parts.len() == 2 {
             let scheme = parts[0];
             let token = parts[1];
-            
+
             // Verify the scheme matches
             if scheme.to_lowercase() == state.authenticator.scheme().to_lowercase() {
                 // Authenticate the token
@@ -142,7 +144,7 @@ pub async fn http_auth_middleware(
             }
         }
     }
-    
+
     // No valid authentication header found
     Err(StatusCode::UNAUTHORIZED)
 }
@@ -154,10 +156,9 @@ where
 {
     let auth_state = AuthState::new(authenticator);
     let router = router.into();
-    
-    router
-        .layer(axum::middleware::from_fn_with_state(
-            auth_state,
-            http_auth_middleware,
-        ))
+
+    router.layer(axum::middleware::from_fn_with_state(
+        auth_state,
+        http_auth_middleware,
+    ))
 }

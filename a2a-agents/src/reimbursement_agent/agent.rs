@@ -1,12 +1,12 @@
-use std::collections::HashSet;
-use std::sync::Mutex;
+use futures::stream::Stream;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use tokio::sync::mpsc;
+use std::collections::HashSet;
 use std::fmt;
-use futures::stream::{Stream, StreamExt};
 use std::pin::Pin;
+use std::sync::Mutex;
 use std::task::{Context, Poll};
+use tokio::sync::mpsc;
 
 // In a real implementation, we'd use a proper database or storage service
 lazy_static::lazy_static! {
@@ -79,7 +79,9 @@ impl fmt::Display for StreamContent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             StreamContent::Text(text) => write!(f, "{}", text),
-            StreamContent::Data(data) => write!(f, "{}", serde_json::to_string(data).unwrap_or_default()),
+            StreamContent::Data(data) => {
+                write!(f, "{}", serde_json::to_string(data).unwrap_or_default())
+            }
         }
     }
 }
@@ -101,38 +103,55 @@ pub struct ReimbursementAgent {
     // In a real implementation, this would contain LLM client, etc.
 }
 
+impl Default for ReimbursementAgent {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReimbursementAgent {
     pub const SUPPORTED_CONTENT_TYPES: [&'static str; 2] = ["text", "text/plain"];
-    
+
     pub fn new() -> Self {
         Self {}
     }
 
     /// Create a request form with the given parameters
-    pub fn create_request_form(&self, date: Option<String>, amount: Option<String>, purpose: Option<String>) -> RequestForm {
+    pub fn create_request_form(
+        &self,
+        date: Option<String>,
+        amount: Option<String>,
+        purpose: Option<String>,
+    ) -> RequestForm {
         let mut rng = rand::thread_rng();
         let request_id = format!("request_id_{}", rng.gen_range(1000000..9999999));
-        
+
         // Add to the set of known request IDs
         REQUEST_IDS.lock().unwrap().insert(request_id.clone());
-        
+
         RequestForm {
             request_id,
             date: date.unwrap_or_else(|| "<transaction date>".to_string()),
             amount: amount.unwrap_or_else(|| "<transaction dollar amount>".to_string()),
-            purpose: purpose.unwrap_or_else(|| "<business justification/purpose of the transaction>".to_string()),
+            purpose: purpose.unwrap_or_else(|| {
+                "<business justification/purpose of the transaction>".to_string()
+            }),
         }
     }
 
     /// Generate a form response for the client
-    pub fn return_form(&self, form_request: RequestForm, instructions: Option<String>) -> FormResponse {
+    pub fn return_form(
+        &self,
+        form_request: RequestForm,
+        instructions: Option<String>,
+    ) -> FormResponse {
         let required_fields = vec![
             "request_id".to_string(),
-            "date".to_string(), 
-            "amount".to_string(), 
-            "purpose".to_string()
+            "date".to_string(),
+            "amount".to_string(),
+            "purpose".to_string(),
         ];
-        
+
         FormResponse {
             form_type: "form".to_string(),
             form: FormSchema {
@@ -173,14 +192,14 @@ impl ReimbursementAgent {
     /// Process a reimbursement request
     pub fn reimburse(&self, request_id: &str) -> ReimbursementResult {
         let valid = REQUEST_IDS.lock().unwrap().contains(request_id);
-        
+
         if !valid {
             return ReimbursementResult {
                 request_id: request_id.to_string(),
                 status: "Error: Invalid request_id.".to_string(),
             };
         }
-        
+
         ReimbursementResult {
             request_id: request_id.to_string(),
             status: "approved".to_string(),
@@ -189,15 +208,15 @@ impl ReimbursementAgent {
 
     /// Simulate the agent's synchronous response processing
     pub fn invoke(&self, query: &str, _session_id: &str) -> String {
-        // This is a simplified implementation - in the real world, 
+        // This is a simplified implementation - in the real world,
         // this would call an LLM or other AI agent
-        
+
         if query.contains("reimburse") {
             // Parse basic request details
             let date = None;
             let mut amount = None;
             let mut purpose = None;
-            
+
             if query.contains("$") {
                 // Simple extraction logic - in a real implementation,
                 // this would be handled by the LLM
@@ -209,36 +228,38 @@ impl ReimbursementAgent {
                     }
                 }
             }
-            
+
             if query.contains("for") {
                 let parts: Vec<&str> = query.split("for").collect();
                 if parts.len() > 1 {
                     purpose = Some(parts[1].trim().to_string());
                 }
             }
-            
+
             // Create a request form
             let form = self.create_request_form(date, amount, purpose);
-            
+
             // Return the form as JSON
             let form_response = self.return_form(form, None);
-            serde_json::to_string(&form_response).unwrap_or_else(|_| "Error creating form".to_string())
-        } 
-        else if query.contains("request_id") {
+            serde_json::to_string(&form_response)
+                .unwrap_or_else(|_| "Error creating form".to_string())
+        } else if query.contains("request_id") {
             // This would be a follow-up with a filled form
             // In a real implementation, this would parse the JSON and extract fields
-            
+
             // For demo purposes:
             if query.contains("MISSING_INFO") {
                 "The form is incomplete. Please provide all required information.".to_string()
             } else {
                 let reimburse_result = self.reimburse("request_id_1234567");
-                format!("Your reimbursement request has been {}. Request ID: {}", 
-                    reimburse_result.status, reimburse_result.request_id)
+                format!(
+                    "Your reimbursement request has been {}. Request ID: {}",
+                    reimburse_result.status, reimburse_result.request_id
+                )
             }
-        } 
-        else {
-            "I'm a reimbursement agent. How can I help you with your reimbursement request?".to_string()
+        } else {
+            "I'm a reimbursement agent. How can I help you with your reimbursement request?"
+                .to_string()
         }
     }
 
@@ -246,25 +267,29 @@ impl ReimbursementAgent {
     pub fn stream(&self, query: &str, _session_id: &str) -> AgentStream {
         let (sender, receiver) = mpsc::channel(10);
         let query = query.to_string();
-        
+
         // Spawn a task to simulate processing
         tokio::spawn(async move {
             // Send a processing message
-            let _ = sender.send(StreamItem {
-                is_task_complete: false,
-                content: StreamContent::Text("Processing the reimbursement request...".to_string()),
-            }).await;
-            
+            let _ = sender
+                .send(StreamItem {
+                    is_task_complete: false,
+                    content: StreamContent::Text(
+                        "Processing the reimbursement request...".to_string(),
+                    ),
+                })
+                .await;
+
             // Simulate some processing delay
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-            
+
             // Now send the final response
             let response = if query.contains("reimburse") {
                 // Parse basic request details (simplified)
-                let date = None;
-                let mut amount = None;
-                let mut purpose = None;
-                
+                // No need for date variable since we use a static string
+                let mut amount: Option<String> = None;
+                let mut purpose: Option<String> = None;
+
                 if query.contains("$") {
                     let parts: Vec<&str> = query.split("$").collect();
                     if parts.len() > 1 {
@@ -274,22 +299,24 @@ impl ReimbursementAgent {
                         }
                     }
                 }
-                
+
                 if query.contains("for") {
                     let parts: Vec<&str> = query.split("for").collect();
                     if parts.len() > 1 {
                         purpose = Some(parts[1].trim().to_string());
                     }
                 }
-                
+
                 // Create a request form
                 let form = RequestForm {
                     request_id: "request_id_1234567".to_string(),
-                    date: date.unwrap_or_else(|| "<transaction date>".to_string()),
-                    amount: amount.unwrap_or_else(|| "<transaction dollar amount>".to_string()),
-                    purpose: purpose.unwrap_or_else(|| "<business justification/purpose of the transaction>".to_string()),
+                    date: "<transaction date>".to_string(), // No need for unwrap_or_else on None
+                    amount: amount.unwrap_or("<transaction dollar amount>".to_string()),
+                    purpose: purpose.unwrap_or(
+                        "<business justification/purpose of the transaction>".to_string(),
+                    ),
                 };
-                
+
                 // Generate a form response
                 let form_response = FormResponse {
                     form_type: "form".to_string(),
@@ -321,17 +348,25 @@ impl ReimbursementAgent {
                                 title: "Request ID".to_string(),
                             },
                         },
-                        required: vec!["request_id".to_string(), "date".to_string(), "amount".to_string(), "purpose".to_string()],
+                        required: vec![
+                            "request_id".to_string(),
+                            "date".to_string(),
+                            "amount".to_string(),
+                            "purpose".to_string(),
+                        ],
                     },
                     form_data: form,
                     instructions: None,
                 };
-                
+
                 StreamContent::Data(serde_json::to_value(form_response).unwrap())
             } else if query.contains("request_id") {
                 // This would be a follow-up with a filled form
                 if query.contains("MISSING_INFO") {
-                    StreamContent::Text("The form is incomplete. Please provide all required information.".to_string())
+                    StreamContent::Text(
+                        "The form is incomplete. Please provide all required information."
+                            .to_string(),
+                    )
                 } else {
                     let result = ReimbursementResult {
                         request_id: "request_id_1234567".to_string(),
@@ -342,14 +377,16 @@ impl ReimbursementAgent {
             } else {
                 StreamContent::Text("I'm a reimbursement agent. How can I help you with your reimbursement request?".to_string())
             };
-            
+
             // Send the final response
-            let _ = sender.send(StreamItem {
-                is_task_complete: true,
-                content: response,
-            }).await;
+            let _ = sender
+                .send(StreamItem {
+                    is_task_complete: true,
+                    content: response,
+                })
+                .await;
         });
-        
+
         AgentStream { receiver }
     }
 }

@@ -1,32 +1,36 @@
 //! Server adapters for the A2A protocol
 
-#[cfg(feature = "http-server")]
-pub mod http;
-#[cfg(feature = "ws-server")]
-pub mod ws;
-#[cfg(feature = "server")]
-pub mod task_storage;
-#[cfg(feature = "server")]
-pub mod request_processor;
 #[cfg(feature = "server")]
 pub mod agent_info;
 #[cfg(feature = "server")]
+pub mod auth;
+#[cfg(feature = "http-server")]
+pub mod http;
+#[cfg(feature = "server")]
 pub mod push_notification;
 #[cfg(feature = "server")]
-pub mod auth;
+pub mod request_processor;
+#[cfg(feature = "server")]
+pub mod task_storage;
+#[cfg(all(test, feature = "server"))]
+mod tests;
+#[cfg(feature = "ws-server")]
+pub mod ws;
 
 // Re-export server implementations
-#[cfg(feature = "http-server")]
-pub use http::HttpServer;
-#[cfg(feature = "ws-server")]
-pub use ws::WebSocketServer;
-#[cfg(feature = "server")]
-pub use task_storage::InMemoryTaskStorage;
-#[cfg(feature = "server")]
-pub use request_processor::DefaultRequestProcessor;
 #[cfg(feature = "server")]
 pub use agent_info::SimpleAgentInfo;
 #[cfg(feature = "server")]
-pub use push_notification::{HttpPushNotificationSender, PushNotificationRegistry, PushNotificationSender};
+pub use auth::{Authenticator, NoopAuthenticator, TokenAuthenticator, with_auth};
+#[cfg(feature = "http-server")]
+pub use http::HttpServer;
 #[cfg(feature = "server")]
-pub use auth::{Authenticator, TokenAuthenticator, NoopAuthenticator, with_auth};
+pub use push_notification::{
+    HttpPushNotificationSender, PushNotificationRegistry, PushNotificationSender,
+};
+#[cfg(feature = "server")]
+pub use request_processor::DefaultRequestProcessor;
+#[cfg(feature = "server")]
+pub use task_storage::InMemoryTaskStorage;
+#[cfg(feature = "ws-server")]
+pub use ws::WebSocketServer;

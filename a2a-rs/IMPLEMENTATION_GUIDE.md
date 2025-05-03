@@ -260,3 +260,41 @@ The library supports HTTP and WebSocket transport, but you can implement custom 
 ### Authentication
 
 For production use, implement proper authentication by extending the provided adapters with authentication middleware.
+
+### TLS Configuration
+
+This library uses `rustls` as its TLS backend rather than `native-tls` or `openssl`. This provides several advantages:
+
+1. **No OpenSSL Dependencies**: You don't need OpenSSL development libraries installed on your system
+2. **Pure Rust Implementation**: The entire TLS stack is implemented in Rust
+3. **Cross-Platform Compatibility**: Easier to build and deploy across different platforms
+
+All HTTP and WebSocket clients and servers are configured to use rustls by default. For custom certificates or advanced TLS configuration, you can create custom clients:
+
+```rust
+// Custom HTTP client with TLS configuration
+let mut rustls_config = rustls::ClientConfig::builder()
+    .with_safe_defaults()
+    .with_root_certificates(root_store)
+    .with_no_client_auth();
+
+// Configure certificate verification if needed
+// rustls_config.dangerous().set_certificate_verifier(Arc::new(my_verifier));
+
+let reqwest_client = reqwest::Client::builder()
+    .use_preconfigured_tls(rustls_config)
+    .build()?;
+
+// Create a custom client using your configured reqwest client
+struct CustomHttpClient {
+    client: reqwest::Client,
+    base_url: String,
+}
+
+#[async_trait]
+impl AsyncA2AClient for CustomHttpClient {
+    // Implement the trait methods using your custom reqwest client
+}
+```
+
+Similar approaches can be used for WebSocket clients with custom TLS configuration.

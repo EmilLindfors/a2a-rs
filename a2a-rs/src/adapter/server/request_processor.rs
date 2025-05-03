@@ -1,6 +1,6 @@
 //! A default request processor implementation
 
-#![cfg(feature = "server")]
+// This module is already conditionally compiled with #[cfg(feature = "server")] in mod.rs
 
 use std::sync::Arc;
 
@@ -38,12 +38,18 @@ where
     }
 
     /// Process a send task request
-    async fn process_send_task(&self, request: &SendTaskRequest) -> Result<JSONRPCResponse, A2AError> {
+    async fn process_send_task(
+        &self,
+        request: &SendTaskRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
         let params = &request.params;
         let session_id = params.session_id.as_deref();
-        
-        let task = self.task_handler.handle_message(&params.id, &params.message, session_id).await?;
-        
+
+        let task = self
+            .task_handler
+            .handle_message(&params.id, &params.message, session_id)
+            .await?;
+
         Ok(JSONRPCResponse::success(
             request.id.clone(),
             serde_json::to_value(task)?,
@@ -51,10 +57,16 @@ where
     }
 
     /// Process a get task request
-    async fn process_get_task(&self, request: &GetTaskRequest) -> Result<JSONRPCResponse, A2AError> {
+    async fn process_get_task(
+        &self,
+        request: &GetTaskRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
         let params = &request.params;
-        let task = self.task_handler.get_task(&params.id, params.history_length).await?;
-        
+        let task = self
+            .task_handler
+            .get_task(&params.id, params.history_length)
+            .await?;
+
         Ok(JSONRPCResponse::success(
             request.id.clone(),
             serde_json::to_value(task)?,
@@ -62,10 +74,13 @@ where
     }
 
     /// Process a cancel task request
-    async fn process_cancel_task(&self, request: &CancelTaskRequest) -> Result<JSONRPCResponse, A2AError> {
+    async fn process_cancel_task(
+        &self,
+        request: &CancelTaskRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
         let params = &request.params;
         let task = self.task_handler.cancel_task(&params.id).await?;
-        
+
         Ok(JSONRPCResponse::success(
             request.id.clone(),
             serde_json::to_value(task)?,
@@ -77,8 +92,11 @@ where
         &self,
         request: &SetTaskPushNotificationRequest,
     ) -> Result<JSONRPCResponse, A2AError> {
-        let config = self.task_handler.set_push_notification(&request.params).await?;
-        
+        let config = self
+            .task_handler
+            .set_push_notification(&request.params)
+            .await?;
+
         Ok(JSONRPCResponse::success(
             request.id.clone(),
             serde_json::to_value(config)?,
@@ -92,7 +110,7 @@ where
     ) -> Result<JSONRPCResponse, A2AError> {
         let params = &request.params;
         let config = self.task_handler.get_push_notification(&params.id).await?;
-        
+
         Ok(JSONRPCResponse::success(
             request.id.clone(),
             serde_json::to_value(config)?,
@@ -107,8 +125,11 @@ where
         // For resubscription, we return an initial success response,
         // and then the streaming updates are handled separately
         let params = &request.params;
-        let task = self.task_handler.get_task(&params.id, params.history_length).await?;
-        
+        let task = self
+            .task_handler
+            .get_task(&params.id, params.history_length)
+            .await?;
+
         Ok(JSONRPCResponse::success(
             request.id.clone(),
             serde_json::to_value(task)?,
@@ -124,9 +145,12 @@ where
         // and then the streaming updates are handled separately
         let params = &request.params;
         let session_id = params.session_id.as_deref();
-        
-        let task = self.task_handler.handle_message(&params.id, &params.message, session_id).await?;
-        
+
+        let task = self
+            .task_handler
+            .handle_message(&params.id, &params.message, session_id)
+            .await?;
+
         Ok(JSONRPCResponse::success(
             request.id.clone(),
             serde_json::to_value(task)?,
@@ -166,18 +190,28 @@ where
         Ok(serde_json::to_string(&response)?)
     }
 
-    async fn process_request<'a>(&self, request: &'a A2ARequest) -> Result<JSONRPCResponse, A2AError> {
+    async fn process_request<'a>(
+        &self,
+        request: &'a A2ARequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
         match request {
             A2ARequest::SendTask(req) => self.process_send_task(req).await,
             A2ARequest::GetTask(req) => self.process_get_task(req).await,
             A2ARequest::CancelTask(req) => self.process_cancel_task(req).await,
-            A2ARequest::SetTaskPushNotification(req) => self.process_set_push_notification(req).await,
-            A2ARequest::GetTaskPushNotification(req) => self.process_get_push_notification(req).await,
+            A2ARequest::SetTaskPushNotification(req) => {
+                self.process_set_push_notification(req).await
+            }
+            A2ARequest::GetTaskPushNotification(req) => {
+                self.process_get_push_notification(req).await
+            }
             A2ARequest::TaskResubscription(req) => self.process_task_resubscription(req).await,
             A2ARequest::SendTaskStreaming(req) => self.process_send_task_streaming(req).await,
             A2ARequest::Generic(req) => {
                 // Handle unknown method
-                Err(A2AError::MethodNotFound(format!("Method '{}' not found", req.method)))
+                Err(A2AError::MethodNotFound(format!(
+                    "Method '{}' not found",
+                    req.method
+                )))
             }
         }
     }

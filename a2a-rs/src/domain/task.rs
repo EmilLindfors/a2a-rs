@@ -134,7 +134,7 @@ impl Task {
                 timestamp: Some(Utc::now()),
             },
             artifacts: None,
-            history: None, 
+            history: None,
             metadata: None,
         }
     }
@@ -147,7 +147,7 @@ impl Task {
             message: message.clone(),
             timestamp: Some(Utc::now()),
         };
-        
+
         // Add message to history if provided and state_transition_history is enabled
         if let Some(msg) = message {
             if let Some(history) = &mut self.history {
@@ -157,17 +157,23 @@ impl Task {
             }
         }
     }
-    
+
     /// Get a copy of this task with history limited to the specified length
+    ///
+    /// This method follows the A2A spec for history truncation:
+    /// - If no history_length is provided, returns the full history
+    /// - If history_length is 0, removes history entirely
+    /// - If history_length is less than the current history size,
+    ///   keeps only the most recent messages (truncates from the beginning)
     pub fn with_limited_history(&self, history_length: Option<u32>) -> Self {
         // If no history limit specified or no history, return as is
         if history_length.is_none() || self.history.is_none() {
             return self.clone();
         }
-        
+
         let limit = history_length.unwrap() as usize;
         let mut task_copy = self.clone();
-        
+
         // Limit history if specified
         if let Some(history) = &mut task_copy.history {
             if limit == 0 {
@@ -176,10 +182,17 @@ impl Task {
             } else if history.len() > limit {
                 // If history is longer than limit, truncate it
                 // Keep the most recent messages by removing from the beginning
-                *history = history.iter().skip(history.len() - limit).cloned().collect();
+                // For example, if history has 10 items and limit is 3, we skip 7 items (10-3)
+                // and keep items 8, 9, and 10
+                *history = history
+                    .iter()
+                    .skip(history.len() - limit)
+                    .cloned()
+                    .collect();
             }
+            // Otherwise, if history.len() <= limit, we keep the full history
         }
-        
+
         task_copy
     }
 

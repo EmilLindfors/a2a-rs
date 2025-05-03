@@ -1,31 +1,21 @@
 //! WebSocket server adapter for the A2A protocol
 
-#![cfg(feature = "ws-server")]
+// This module is already conditionally compiled with #[cfg(feature = "ws-server")] in mod.rs
 
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::Arc,
-};
+use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc, Mutex}, // Changed to tokio::sync::Mutex
+    sync::{Mutex, mpsc}, // Changed to tokio::sync::Mutex
 };
-use tokio_tungstenite::{
-    accept_async,
-    tungstenite::Message as WsMessage,
-};
+use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
 use crate::{
     adapter::server::auth::{Authenticator, NoopAuthenticator},
-    domain::{
-        A2AError, TaskArtifactUpdateEvent,
-        TaskStatusUpdateEvent,
-    },
+    domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent},
     port::server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber},
 };
 
@@ -80,7 +70,13 @@ where
     Auth: Authenticator + Clone + Send + Sync + 'static,
 {
     /// Create a new WebSocket server with authentication
-    pub fn with_auth(processor: P, agent_info: A, task_handler: T, address: String, authenticator: Auth) -> Self {
+    pub fn with_auth(
+        processor: P,
+        agent_info: A,
+        task_handler: T,
+        address: String,
+        authenticator: Auth,
+    ) -> Self {
         Self {
             processor: Arc::new(processor),
             _agent_info: Arc::new(agent_info),
@@ -111,19 +107,21 @@ where
             let clients = self.clients.clone();
 
             let authenticator = self.authenticator.clone();
-            
+
             tokio::spawn(async move {
                 // If an authenticator is present, obtain credentials from query parameters or headers
                 if let Some(_auth) = &authenticator {
                     // For WebSockets, we'd typically extract auth from the URL query parameters
                     // or from headers. In this simplified implementation, we'll just assume success.
                     // In a real implementation, you would extract the token and call authenticate()
-                    
+
                     // For now, we'll just log a message indicating auth is enabled
                     println!("Authentication is enabled for WebSocket connections");
                 }
-                
-                if let Err(e) = handle_connection(stream, processor, agent_info, task_handler, clients).await {
+
+                if let Err(e) =
+                    handle_connection(stream, processor, agent_info, task_handler, clients).await
+                {
                     eprintln!("Error handling connection: {}", e);
                 }
             });
@@ -211,7 +209,8 @@ where
                             if method == "tasks/sendSubscribe" || method == "tasks/resubscribe" {
                                 // Handle streaming request
                                 if let Some(params) = request.get("params") {
-                                    if let Some(task_id) = params.get("id").and_then(Value::as_str) {
+                                    if let Some(task_id) = params.get("id").and_then(Value::as_str)
+                                    {
                                         // Create subscribers for status and artifact updates
                                         let status_subscriber = WebSocketSubscriber {
                                             client_id: client_id.clone(),

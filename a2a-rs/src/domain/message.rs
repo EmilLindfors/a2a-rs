@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
 use crate::domain::error::A2AError;
@@ -9,6 +9,7 @@ use crate::domain::error::A2AError;
 pub enum Role {
     User,
     Agent,
+    System,
 }
 
 /// File content representation
@@ -40,9 +41,9 @@ impl<'de> Deserialize<'de> for FileContent {
             bytes: Option<String>,
             uri: Option<String>,
         }
-        
+
         let helper = FileContentHelper::deserialize(deserializer)?;
-        
+
         // Create the FileContent
         let file_content = FileContent {
             name: helper.name,
@@ -50,13 +51,16 @@ impl<'de> Deserialize<'de> for FileContent {
             bytes: helper.bytes,
             uri: helper.uri,
         };
-        
+
         // Validate and return
         match file_content.validate() {
             Ok(_) => Ok(file_content),
             Err(err) => {
                 // Convert the A2AError to a serde error
-                Err(serde::de::Error::custom(format!("FileContent validation error: {}", err)))
+                Err(serde::de::Error::custom(format!(
+                    "FileContent validation error: {}",
+                    err
+                )))
             }
         }
     }
@@ -67,8 +71,12 @@ impl FileContent {
     pub fn validate(&self) -> Result<(), A2AError> {
         match (&self.bytes, &self.uri) {
             (Some(_), None) | (None, Some(_)) => Ok(()),
-            (Some(_), Some(_)) => Err(A2AError::InvalidParams("Cannot provide both bytes and uri".to_string())),
-            (None, None) => Err(A2AError::InvalidParams("Must provide either bytes or uri".to_string())),
+            (Some(_), Some(_)) => Err(A2AError::InvalidParams(
+                "Cannot provide both bytes and uri".to_string(),
+            )),
+            (None, None) => Err(A2AError::InvalidParams(
+                "Must provide either bytes or uri".to_string(),
+            )),
         }
     }
 }
@@ -95,6 +103,17 @@ pub enum Part {
         #[serde(skip_serializing_if = "Option::is_none")]
         metadata: Option<Map<String, Value>>,
     },
+}
+
+impl Part {
+    /// Helper method to get the text content if this is a Text part
+    #[cfg(test)]
+    pub fn get_text(&self) -> Option<&str> {
+        match self {
+            Part::Text { text, .. } => Some(text),
+            _ => None,
+        }
+    }
 }
 
 /// A message in the A2A protocol
@@ -151,21 +170,20 @@ impl Part {
     }
 
     /// Create a file part from base64 encoded data
-    pub fn file_from_bytes(
-        bytes: String,
-        name: Option<String>,
-        mime_type: Option<String>,
-    ) -> Self {
+    pub fn file_from_bytes(bytes: String, name: Option<String>, mime_type: Option<String>) -> Self {
         let file_content = FileContent {
             name,
             mime_type,
             bytes: Some(bytes),
             uri: None,
         };
-        
+
         // Validates implicitly as it only has bytes and no URI
-        debug_assert!(file_content.validate().is_ok(), "FileContent validation failed");
-        
+        debug_assert!(
+            file_content.validate().is_ok(),
+            "FileContent validation failed"
+        );
+
         Part::File {
             file: file_content,
             metadata: None,
@@ -173,21 +191,20 @@ impl Part {
     }
 
     /// Create a file part from a URI
-    pub fn file_from_uri(
-        uri: String,
-        name: Option<String>,
-        mime_type: Option<String>,
-    ) -> Self {
+    pub fn file_from_uri(uri: String, name: Option<String>, mime_type: Option<String>) -> Self {
         let file_content = FileContent {
             name,
             mime_type,
             bytes: None,
             uri: Some(uri),
         };
-        
+
         // Validates implicitly as it only has URI and no bytes
-        debug_assert!(file_content.validate().is_ok(), "FileContent validation failed");
-        
+        debug_assert!(
+            file_content.validate().is_ok(),
+            "FileContent validation failed"
+        );
+
         Part::File {
             file: file_content,
             metadata: None,
@@ -220,19 +237,22 @@ impl Message {
         // If it's a file part, validate the file content
         if let Part::File { file, .. } = &part {
             // In debug mode, we'll assert that the file content is valid
-            debug_assert!(file.validate().is_ok(), "Invalid file content in Part::File");
+            debug_assert!(
+                file.validate().is_ok(),
+                "Invalid file content in Part::File"
+            );
         }
-        
+
         self.parts.push(part);
     }
-    
+
     /// Add a part to this message, validating and returning Result
     pub fn add_part_validated(&mut self, part: Part) -> Result<(), A2AError> {
         // If it's a file part, validate the file content
         if let Part::File { file, .. } = &part {
             file.validate()?;
         }
-        
+
         self.parts.push(part);
         Ok(())
     }

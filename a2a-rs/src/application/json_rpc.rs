@@ -2,8 +2,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::domain::{
-    error::A2AError, task::{Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, 
-    TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent}
+    error::A2AError,
+    task::{
+        Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
+        TaskSendParams, TaskStatusUpdateEvent,
+    },
 };
 
 /// Standard JSON-RPC 2.0 message
@@ -35,22 +38,28 @@ pub struct JSONRPCError {
 impl From<A2AError> for JSONRPCError {
     fn from(error: A2AError) -> Self {
         let value = error.to_jsonrpc_error();
-        
+
         // Extract the fields from the JSON value
         if let Value::Object(map) = value {
-            let code = map.get("code")
+            let code = map
+                .get("code")
                 .and_then(|v| v.as_i64())
                 .map(|v| v as i32)
                 .unwrap_or(-32603); // Internal error code as fallback
-                
-            let message = map.get("message")
+
+            let message = map
+                .get("message")
                 .and_then(|v| v.as_str())
                 .unwrap_or("Internal error")
                 .to_string();
-                
+
             let data = map.get("data").cloned();
-            
-            Self { code, message, data }
+
+            Self {
+                code,
+                message,
+                data,
+            }
         } else {
             // Fallback to internal error if the JSON structure is unexpected
             Self {

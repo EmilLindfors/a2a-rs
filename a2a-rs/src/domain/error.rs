@@ -72,9 +72,15 @@ impl A2AError {
             A2AError::InvalidParams(_) => (INVALID_PARAMS, "Invalid parameters"),
             A2AError::TaskNotFound(_) => (TASK_NOT_FOUND, "Task not found"),
             A2AError::TaskNotCancelable(_) => (TASK_NOT_CANCELABLE, "Task cannot be canceled"),
-            A2AError::PushNotificationNotSupported => (PUSH_NOTIFICATION_NOT_SUPPORTED, "Push Notification is not supported"),
-            A2AError::UnsupportedOperation(_) => (UNSUPPORTED_OPERATION, "This operation is not supported"),
-            A2AError::Internal(_) | _ => (INTERNAL_ERROR, "Internal error"),
+            A2AError::PushNotificationNotSupported => (
+                PUSH_NOTIFICATION_NOT_SUPPORTED,
+                "Push Notification is not supported",
+            ),
+            A2AError::UnsupportedOperation(_) => {
+                (UNSUPPORTED_OPERATION, "This operation is not supported")
+            }
+            A2AError::Internal(_) => (INTERNAL_ERROR, "Internal error"),
+            _ => (INTERNAL_ERROR, "Internal error"),
         };
 
         serde_json::json!({

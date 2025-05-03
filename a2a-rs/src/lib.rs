@@ -150,9 +150,11 @@ pub use adapter::server::ws::WebSocketServer;
 
 #[cfg(feature = "server")]
 pub use adapter::server::{
-    auth::{Authenticator, TokenAuthenticator, NoopAuthenticator},
-    push_notification::{PushNotificationSender, HttpPushNotificationSender, PushNotificationRegistry},
-    task_storage::InMemoryTaskStorage,
     agent_info::SimpleAgentInfo,
+    auth::{Authenticator, NoopAuthenticator, TokenAuthenticator},
+    push_notification::{
+        HttpPushNotificationSender, PushNotificationRegistry, PushNotificationSender,
+    },
     request_processor::DefaultRequestProcessor,
+    task_storage::InMemoryTaskStorage,
 };

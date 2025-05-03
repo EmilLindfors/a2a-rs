@@ -1,6 +1,6 @@
 //! In-memory task storage implementation
 
-#![cfg(feature = "server")]
+// This module is already conditionally compiled with #[cfg(feature = "server")] in mod.rs
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -8,12 +8,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::Mutex; // Changed from std::sync::Mutex
 
-use crate::domain::{
-    A2AError, Artifact, Message, Task, TaskArtifactUpdateEvent,
-    TaskPushNotificationConfig, TaskState, TaskStatus,
-    TaskStatusUpdateEvent,
+use crate::adapter::server::push_notification::{
+    HttpPushNotificationSender, PushNotificationRegistry, PushNotificationSender,
 };
-use crate::adapter::server::push_notification::{PushNotificationRegistry, PushNotificationSender, HttpPushNotificationSender};
+use crate::domain::{
+    A2AError, Artifact, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
+    TaskState, TaskStatus, TaskStatusUpdateEvent,
+};
 use crate::port::server::{AsyncTaskHandler, Subscriber};
 
 type StatusSubscribers = Vec<Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>>;
@@ -50,24 +51,26 @@ impl InMemoryTaskStorage {
         // Use the default HTTP push notification sender
         let push_sender = HttpPushNotificationSender::new();
         let push_registry = PushNotificationRegistry::new(push_sender);
-        
+
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             subscribers: Arc::new(Mutex::new(HashMap::new())),
             push_notification_registry: Arc::new(push_registry),
         }
     }
-    
+
     /// Create a new task storage with a custom push notification sender
     pub fn with_push_sender(push_sender: impl PushNotificationSender + 'static) -> Self {
         let push_registry = PushNotificationRegistry::new(push_sender);
-        
+
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             subscribers: Arc::new(Mutex::new(HashMap::new())),
             push_notification_registry: Arc::new(push_registry),
         }
     }
+
+    // Method removed to avoid unused code warning
 }
 
 impl Default for InMemoryTaskStorage {
@@ -95,7 +98,7 @@ impl InMemoryTaskStorage {
         // Get all subscribers for this task and notify them
         {
             let subscribers_guard = self.subscribers.lock().await;
-            
+
             if let Some(task_subscribers) = subscribers_guard.get(task_id) {
                 // Clone the subscribers so we don't hold the lock during notification
                 for subscriber in task_subscribers.status.iter() {
@@ -107,7 +110,11 @@ impl InMemoryTaskStorage {
         }; // Lock is dropped here
 
         // Send push notification if configured
-        if let Err(e) = self.push_notification_registry.send_status_update(task_id, &event).await {
+        if let Err(e) = self
+            .push_notification_registry
+            .send_status_update(task_id, &event)
+            .await
+        {
             eprintln!("Failed to send push notification: {}", e);
         }
 
@@ -130,7 +137,7 @@ impl InMemoryTaskStorage {
         // Get all subscribers for this task
         {
             let subscribers_guard = self.subscribers.lock().await;
-            
+
             if let Some(task_subscribers) = subscribers_guard.get(task_id) {
                 // Clone the subscribers so we don't hold the lock during notification
                 for subscriber in task_subscribers.artifacts.iter() {
@@ -142,7 +149,11 @@ impl InMemoryTaskStorage {
         }; // Lock is dropped here
 
         // Send push notification if configured
-        if let Err(e) = self.push_notification_registry.send_artifact_update(task_id, &event).await {
+        if let Err(e) = self
+            .push_notification_registry
+            .send_artifact_update(task_id, &event)
+            .await
+        {
             eprintln!("Failed to send push notification: {}", e);
         }
 
@@ -180,6 +191,7 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
         }; // Lock is dropped here
 
         // Update the task with the message
+        // This already adds the message to history inside the update_status method
         task.update_status(TaskState::Working, Some(message.clone()));
 
         // Update the task in storage
@@ -231,8 +243,18 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
                     )));
                 }
 
-                // Update the status
-                updated_task.update_status(TaskState::Canceled, None);
+                // Create a cancellation message to add to history
+                let cancel_message = Message {
+                    role: crate::domain::Role::System,
+                    parts: vec![crate::domain::Part::Text {
+                        text: format!("Task {} canceled.", task_id),
+                        metadata: None,
+                    }],
+                    metadata: None,
+                };
+
+                // Update the status with the cancellation message to track in history
+                updated_task.update_status(TaskState::Canceled, Some(cancel_message));
                 tasks_guard.insert(task_id.to_string(), updated_task.clone());
                 updated_task
             } else {
@@ -261,12 +283,16 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
 
     async fn get_push_notification<'a>(
         &self,
-        _task_id: &'a str,
+        task_id: &'a str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
-        // We don't have a direct way to get the config from the registry currently
-        // In a full implementation, we'd add a method to the registry to retrieve configs
-        // For now, we'll return a NotSupported error
-        Err(A2AError::PushNotificationNotSupported)
+        // Get the push notification config from the registry
+        match self.push_notification_registry.get_config(task_id).await? {
+            Some(config) => Ok(TaskPushNotificationConfig {
+                id: task_id.to_string(),
+                push_notification_config: config,
+            }),
+            None => Err(A2AError::PushNotificationNotSupported),
+        }
     }
 
     async fn add_status_subscriber<'a>(

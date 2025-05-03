@@ -1,17 +1,17 @@
 //! HTTP server adapter for the A2A protocol
 
-#![cfg(feature = "http-server")]
+// This module is already conditionally compiled with #[cfg(feature = "http-server")] in mod.rs
 
 use std::sync::Arc;
 
 use axum::{
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use crate::{
     adapter::server::auth::{Authenticator, NoopAuthenticator, with_auth},
@@ -82,12 +82,12 @@ where
                 processor: processor.clone(),
                 agent_info: agent_info.clone(),
             });
-            
+
         // Apply authentication if provided
         if let Some(auth) = &self.authenticator {
             // Clone the authenticator for the middleware
             let auth_clone = auth.clone();
-            
+
             // Create an auth router with the authenticator
             app = with_auth(app, (*auth_clone).clone());
         }
@@ -140,7 +140,7 @@ where
                     }
                 })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -162,7 +162,7 @@ where
                             }
                         })),
                     )
-                        .into_response()
+                        .into_response();
                 }
             };
             (StatusCode::OK, Json(response_value)).into_response()

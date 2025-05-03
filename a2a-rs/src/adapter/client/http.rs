@@ -1,19 +1,17 @@
 //! HTTP client adapter for the A2A protocol
 
-#![cfg(feature = "http-client")]
+// This module is already conditionally compiled with #[cfg(feature = "http-client")] in mod.rs
 
 use async_trait::async_trait;
 use futures::stream::Stream;
 use reqwest::{
-    header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client,
+    header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use std::{pin::Pin, time::Duration};
 
 use crate::{
-    application::json_rpc::{
-        self, A2ARequest, JSONRPCResponse, SendTaskRequest,
-    },
+    application::json_rpc::{self, A2ARequest, JSONRPCResponse, SendTaskRequest},
     domain::{
         A2AError, Message, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
         TaskSendParams,
@@ -64,14 +62,14 @@ impl HttpClient {
     fn get_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
-        
+
         if let Some(token) = &self.auth_token {
             headers.insert(
                 reqwest::header::AUTHORIZATION,
                 HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
             );
         }
-        
+
         headers
     }
 }

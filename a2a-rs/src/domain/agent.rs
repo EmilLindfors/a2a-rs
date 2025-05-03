@@ -17,7 +17,7 @@ pub struct AgentAuthentication {
 }
 
 /// Capabilities supported by an agent
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentCapabilities {
     #[serde(default)]
     pub streaming: bool,
@@ -25,16 +25,6 @@ pub struct AgentCapabilities {
     pub push_notifications: bool,
     #[serde(default, rename = "stateTransitionHistory")]
     pub state_transition_history: bool,
-}
-
-impl Default for AgentCapabilities {
-    fn default() -> Self {
-        Self {
-            streaming: false,
-            push_notifications: false,
-            state_transition_history: false,
-        }
-    }
 }
 
 /// A skill provided by an agent
@@ -52,6 +42,72 @@ pub struct AgentSkill {
     pub input_modes: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "outputModes")]
     pub output_modes: Option<Vec<String>>,
+}
+
+impl AgentSkill {
+    /// Create a new skill with the minimum required fields
+    pub fn new(id: String, name: String) -> Self {
+        Self {
+            id,
+            name,
+            description: None,
+            tags: None,
+            examples: None,
+            input_modes: None,
+            output_modes: None,
+        }
+    }
+
+    /// Add a description to the skill
+    pub fn with_description(mut self, description: String) -> Self {
+        self.description = Some(description);
+        self
+    }
+
+    /// Add tags to the skill
+    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
+        self.tags = Some(tags);
+        self
+    }
+
+    /// Add examples to the skill
+    pub fn with_examples(mut self, examples: Vec<String>) -> Self {
+        self.examples = Some(examples);
+        self
+    }
+
+    /// Add input modes to the skill
+    pub fn with_input_modes(mut self, input_modes: Vec<String>) -> Self {
+        self.input_modes = Some(input_modes);
+        self
+    }
+
+    /// Add output modes to the skill
+    pub fn with_output_modes(mut self, output_modes: Vec<String>) -> Self {
+        self.output_modes = Some(output_modes);
+        self
+    }
+
+    /// Create a comprehensive skill with all details in one call
+    pub fn comprehensive(
+        id: String,
+        name: String,
+        description: Option<String>,
+        tags: Option<Vec<String>>,
+        examples: Option<Vec<String>>,
+        input_modes: Option<Vec<String>>,
+        output_modes: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            description,
+            tags,
+            examples,
+            input_modes,
+            output_modes,
+        }
+    }
 }
 
 /// Card describing an agent's capabilities and metadata
