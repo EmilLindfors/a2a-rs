@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Deserializer};
 use serde_json::{Map, Value};
 
 use crate::domain::error::A2AError;
@@ -12,7 +12,7 @@ pub enum Role {
 }
 
 /// File content representation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct FileContent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -22,6 +22,44 @@ pub struct FileContent {
     pub bytes: Option<String>, // Base64 encoded
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uri: Option<String>,
+}
+
+// Custom FileContent deserializer that validates the content
+// during deserialization
+impl<'de> Deserialize<'de> for FileContent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        // Use a helper struct to deserialize the raw data
+        #[derive(Deserialize)]
+        struct FileContentHelper {
+            name: Option<String>,
+            #[serde(rename = "mimeType")]
+            mime_type: Option<String>,
+            bytes: Option<String>,
+            uri: Option<String>,
+        }
+        
+        let helper = FileContentHelper::deserialize(deserializer)?;
+        
+        // Create the FileContent
+        let file_content = FileContent {
+            name: helper.name,
+            mime_type: helper.mime_type,
+            bytes: helper.bytes,
+            uri: helper.uri,
+        };
+        
+        // Validate and return
+        match file_content.validate() {
+            Ok(_) => Ok(file_content),
+            Err(err) => {
+                // Convert the A2AError to a serde error
+                Err(serde::de::Error::custom(format!("FileContent validation error: {}", err)))
+            }
+        }
+    }
 }
 
 impl FileContent {
@@ -118,13 +156,18 @@ impl Part {
         name: Option<String>,
         mime_type: Option<String>,
     ) -> Self {
+        let file_content = FileContent {
+            name,
+            mime_type,
+            bytes: Some(bytes),
+            uri: None,
+        };
+        
+        // Validates implicitly as it only has bytes and no URI
+        debug_assert!(file_content.validate().is_ok(), "FileContent validation failed");
+        
         Part::File {
-            file: FileContent {
-                name,
-                mime_type,
-                bytes: Some(bytes),
-                uri: None,
-            },
+            file: file_content,
             metadata: None,
         }
     }
@@ -135,13 +178,18 @@ impl Part {
         name: Option<String>,
         mime_type: Option<String>,
     ) -> Self {
+        let file_content = FileContent {
+            name,
+            mime_type,
+            bytes: None,
+            uri: Some(uri),
+        };
+        
+        // Validates implicitly as it only has URI and no bytes
+        debug_assert!(file_content.validate().is_ok(), "FileContent validation failed");
+        
         Part::File {
-            file: FileContent {
-                name,
-                mime_type,
-                bytes: None,
-                uri: Some(uri),
-            },
+            file: file_content,
             metadata: None,
         }
     }
@@ -169,6 +217,23 @@ impl Message {
 
     /// Add a part to this message
     pub fn add_part(&mut self, part: Part) {
+        // If it's a file part, validate the file content
+        if let Part::File { file, .. } = &part {
+            // In debug mode, we'll assert that the file content is valid
+            debug_assert!(file.validate().is_ok(), "Invalid file content in Part::File");
+        }
+        
         self.parts.push(part);
+    }
+    
+    /// Add a part to this message, validating and returning Result
+    pub fn add_part_validated(&mut self, part: Part) -> Result<(), A2AError> {
+        // If it's a file part, validate the file content
+        if let Part::File { file, .. } = &part {
+            file.validate()?;
+        }
+        
+        self.parts.push(part);
+        Ok(())
     }
 }

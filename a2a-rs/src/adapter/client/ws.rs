@@ -7,8 +7,8 @@ use futures::{
     stream::{Stream, StreamExt},
     SinkExt,
 };
-use serde_json::{json, Value};
-use std::{pin::Pin, sync::Arc, time::Duration};
+use serde_json::Value;
+use std::{sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     sync::Mutex, // Changed to tokio::sync::Mutex

@@ -17,10 +17,51 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a message
     let message = Message::user_text("Hello, A2A agent! How are you today?".to_string());
+    
+    // Optional: Add a file part (properly validated)
+    // let file_part = Part::file_from_bytes(
+    //     "SGVsbG8sIHdvcmxkIQ==".to_string(), // Base64 encoded "Hello, world!"
+    //     Some("greeting.txt".to_string()),
+    //     Some("text/plain".to_string()),
+    // );
+    // message.add_part_validated(file_part).unwrap();
 
-    // Send a task message
+    // Optional: Set up push notifications
+    // let push_config = TaskPushNotificationConfig {
+    //     id: task_id.clone(),
+    //     push_notification_config: PushNotificationConfig {
+    //         url: "https://example.com/webhook".to_string(),
+    //         token: Some("secret-token".to_string()),
+    //         authentication: None,
+    //     },
+    // };
+    // client.set_task_push_notification(&push_config).await?;
+    
+    // Send a task message with retries
     println!("Sending message to task...");
-    let task = client.send_task_message(&task_id, &message, None, None).await?;
+    
+    // Try to connect with retries
+    let max_retries = 5;
+    let mut task = None;
+    
+    for retry in 0..max_retries {
+        match client.send_task_message(&task_id, &message, None, None).await {
+            Ok(t) => {
+                task = Some(t);
+                break;
+            }
+            Err(e) => {
+                if retry < max_retries - 1 {
+                    println!("Connection attempt {} failed: {}. Retrying in 1 second...", retry + 1, e);
+                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                } else {
+                    return Err(e.into());
+                }
+            }
+        }
+    }
+    
+    let task = task.unwrap();
     println!("Got response with status: {:?}", task.status.state);
 
     if let Some(response_message) = task.status.message {
@@ -33,10 +74,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Get the task again to verify it's stored
+    // Get the task again to verify it's stored (with history)
     println!("\nRetrieving task...");
     let task = client.get_task(&task_id, None).await?;
     println!("Retrieved task with ID: {} and state: {:?}", task.id, task.status.state);
+    
+    // Check for task history
+    if let Some(history) = &task.history {
+        println!("\nTask history:");
+        for (i, msg) in history.iter().enumerate() {
+            println!("  Message {}: Role: {:?}", i+1, msg.role);
+            for part in &msg.parts {
+                match part {
+                    Part::Text { text, .. } => println!("    Text: {}", text),
+                    Part::File { .. } => println!("    [File content]"),
+                    Part::Data { .. } => println!("    [Data content]"),
+                }
+            }
+        }
+    }
 
     // Cancel the task
     println!("\nCanceling task...");

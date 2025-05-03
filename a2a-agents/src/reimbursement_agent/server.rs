@@ -1,8 +1,6 @@
-use std::sync::Arc;
 
 use a2a_rs::adapter::server::{DefaultRequestProcessor, HttpServer, WebSocketServer};
-use a2a_rs::domain::{AgentCapabilities, AgentCard, AgentSkill};
-use crate::reimbursement_agent::agent::ReimbursementAgent;
+use a2a_rs::domain::AgentCard;
 use crate::reimbursement_agent::task_manager::AgentTaskManager;
 
 /// A2A Server implementation that combines both HTTP and WebSocket servers

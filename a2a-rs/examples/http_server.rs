@@ -1,13 +1,14 @@
 //! A simple HTTP server example
 
-use a2a_rs::{
-    adapter::server::{DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, SimpleAgentInfo},
-};
+use a2a_rs::adapter::server::{DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, SimpleAgentInfo, HttpPushNotificationSender};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create task storage
-    let storage = InMemoryTaskStorage::new();
+    // Create a custom push notification sender
+    let push_sender = HttpPushNotificationSender::new();
+    
+    // Create task storage with the push notification sender
+    let storage = InMemoryTaskStorage::with_push_sender(push_sender);
     
     // Create request processor
     let processor = DefaultRequestProcessor::new(storage);
@@ -21,17 +22,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_provider("Example Organization".to_string(), Some("https://example.org".to_string()))
     .with_documentation_url("https://example.org/docs".to_string())
     .with_streaming()
-    .add_skill(
+    .add_comprehensive_skill(
         "echo".to_string(),
         "Echo Skill".to_string(),
         Some("Echoes back the user's message".to_string()),
+        Some(vec!["echo".to_string(), "respond".to_string()]),
+        Some(vec!["Echo: Hello World".to_string()]),
+        Some(vec!["text".to_string()]),
+        Some(vec!["text".to_string()]),
     );
     
-    // Create HTTP server
+    // Uncomment the following lines to enable token-based authentication
+    // let tokens = vec!["secret-token".to_string()];
+    // let authenticator = TokenAuthenticator::new(tokens);
+    // let server = HttpServer::with_auth(processor, agent_info, "127.0.0.1:8080".to_string(), authenticator);
+    
+    // Using the default no-authentication server for the example
     let server = HttpServer::new(processor, agent_info, "127.0.0.1:8080".to_string());
     
     println!("Starting HTTP server on http://127.0.0.1:8080");
     println!("Try accessing the agent card at http://127.0.0.1:8080/agent-card");
+    println!("Try accessing the skills at http://127.0.0.1:8080/skills");
+    println!("Try accessing a specific skill at http://127.0.0.1:8080/skills/echo");
     println!("Press Ctrl+C to stop");
     
     // Start the server

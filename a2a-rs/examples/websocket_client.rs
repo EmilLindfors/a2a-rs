@@ -19,6 +19,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a message
     let message = Message::user_text("Hello, A2A agent! Please stream your response.".to_string());
+    
+    // Optional: Add a data part
+    // let mut data = serde_json::Map::new();
+    // data.insert("key".to_string(), serde_json::Value::String("value".to_string()));
+    // let data_part = Part::data(data);
+    // message.add_part(data_part);
 
     // Subscribe to task updates
     println!("Subscribing to task updates...");
@@ -68,6 +74,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\nCanceling task...");
         let task = client.cancel_task(&task_id).await?;
         println!("Task canceled with state: {:?}", task.status.state);
+        
+        // Check if we have task history
+        if let Some(history) = &task.history {
+            println!("\nTask history:");
+            for (i, msg) in history.iter().enumerate() {
+                println!("  Message {}: Role: {:?}", i+1, msg.role);
+                for part in &msg.parts {
+                    match part {
+                        Part::Text { text, .. } => println!("    Text: {}", text),
+                        Part::File { .. } => println!("    [File content]"),
+                        Part::Data { .. } => println!("    [Data content]"),
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

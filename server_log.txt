@@ -1,0 +1,186 @@
+warning: unused import: `serde_json::json`
+  --> a2a-rs/src/adapter/client/http.rs:11:5
+   |
+11 | use serde_json::json;
+   |     ^^^^^^^^^^^^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused import: `sync::Arc`
+  --> a2a-rs/src/adapter/client/http.rs:12:21
+   |
+12 | use std::{pin::Pin, sync::Arc, time::Duration};
+   |                     ^^^^^^^^^
+
+warning: unused import: `SendTaskStreamingRequest`
+  --> a2a-rs/src/adapter/client/http.rs:16:61
+   |
+16 |         self, A2ARequest, JSONRPCResponse, SendTaskRequest, SendTaskStreamingRequest,
+   |                                                             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `json`
+  --> a2a-rs/src/adapter/client/ws.rs:10:18
+   |
+10 | use serde_json::{json, Value};
+   |                  ^^^^
+
+warning: unused import: `pin::Pin`
+  --> a2a-rs/src/adapter/client/ws.rs:11:11
+   |
+11 | use std::{pin::Pin, sync::Arc, time::Duration};
+   |           ^^^^^^^^
+
+warning: unused import: `async_trait::async_trait`
+ --> a2a-rs/src/adapter/server/http.rs:7:5
+  |
+7 | use async_trait::async_trait;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `Response`
+  --> a2a-rs/src/adapter/server/http.rs:11:30
+   |
+11 |     response::{IntoResponse, Response},
+   |                              ^^^^^^^^
+
+warning: unused imports: `A2ARequest`, `AgentCard`, `JSONRPCResponse`, and `self`
+  --> a2a-rs/src/adapter/server/http.rs:19:29
+   |
+19 |     application::json_rpc::{self, A2ARequest, JSONRPCResponse},
+   |                             ^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^
+20 |     domain::{A2AError, AgentCard},
+   |                        ^^^^^^^^^
+
+warning: unused import: `Error as WsError`
+  --> a2a-rs/src/adapter/server/ws.rs:20:19
+   |
+20 |     tungstenite::{Error as WsError, Message as WsMessage},
+   |                   ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `A2ARequest`, `AgentCard`, `JSONRPCResponse`, `TaskIdParams`, `TaskQueryParams`, and `self`
+  --> a2a-rs/src/adapter/server/ws.rs:25:29
+   |
+25 |     application::json_rpc::{self, A2ARequest, JSONRPCResponse},
+   |                             ^^^^  ^^^^^^^^^^  ^^^^^^^^^^^^^^^
+26 |     domain::{
+27 |         A2AError, AgentCard, TaskArtifactUpdateEvent, TaskIdParams, TaskQueryParams,
+   |                   ^^^^^^^^^                           ^^^^^^^^^^^^  ^^^^^^^^^^^^^^^
+
+warning: unused import: `chrono::Utc`
+ --> a2a-rs/src/adapter/server/task_storage.rs:9:5
+  |
+9 | use chrono::Utc;
+  |     ^^^^^^^^^^^
+
+warning: unused import: `tokio::sync::mpsc`
+  --> a2a-rs/src/adapter/server/task_storage.rs:11:5
+   |
+11 | use tokio::sync::mpsc;
+   |     ^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TaskIdParams`, `TaskQueryParams`, and `TaskSendParams`
+  --> a2a-rs/src/adapter/server/task_storage.rs:14:65
+   |
+14 |     A2AError, Artifact, Message, Task, TaskArtifactUpdateEvent, TaskIdParams,
+   |                                                                 ^^^^^^^^^^^^
+15 |     TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+   |                                 ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused imports: `Value` and `json`
+ --> a2a-rs/src/adapter/server/request_processor.rs:8:18
+  |
+8 | use serde_json::{json, Value};
+  |                  ^^^^  ^^^^^
+
+warning: unused import: `std::fmt`
+ --> a2a-rs/src/adapter/server/push_notification.rs:5:5
+  |
+5 | use std::fmt;
+  |     ^^^^^^^^
+
+warning: unused import: `serde::Serialize`
+  --> a2a-rs/src/adapter/server/push_notification.rs:10:5
+   |
+10 | use serde::Serialize;
+   |     ^^^^^^^^^^^^^^^^
+
+warning: unused imports: `Deserialize` and `Serialize`
+  --> a2a-rs/src/adapter/server/auth.rs:14:13
+   |
+14 | use serde::{Deserialize, Serialize};
+   |             ^^^^^^^^^^^  ^^^^^^^^^
+
+warning: unused import: `Map`
+ --> a2a-rs/src/application/json_rpc.rs:2:18
+  |
+2 | use serde_json::{Map, Value};
+  |                  ^^^
+
+warning: unused import: `std::fmt`
+ --> a2a-rs/src/domain/message.rs:3:5
+  |
+3 | use std::fmt;
+  |     ^^^^^^^^
+
+warning: unused import: `std::future::Future`
+ --> a2a-rs/src/port/client.rs:3:5
+  |
+3 | use std::future::Future;
+  |     ^^^^^^^^^^^^^^^^^^^
+
+warning: unused imports: `TaskIdParams`, `TaskQueryParams`, and `TaskSendParams`
+  --> a2a-rs/src/port/client.rs:11:59
+   |
+11 |         A2AError, Message, Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig,
+   |                                                           ^^^^^^^^^^^^
+12 |         TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
+   |         ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused imports: `TaskIdParams`, `TaskQueryParams`, and `TaskSendParams`
+  --> a2a-rs/src/port/server.rs:9:70
+   |
+9  |         A2AError, AgentCard, Message, Task, TaskArtifactUpdateEvent, TaskIdParams,
+   |                                                                      ^^^^^^^^^^^^
+10 |         TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
+   |                                     ^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused variable: `auth`
+   --> a2a-rs/src/adapter/server/ws.rs:118:29
+    |
+118 |                 if let Some(auth) = &authenticator {
+    |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_auth`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `agent_info`
+   --> a2a-rs/src/adapter/server/ws.rs:141:5
+    |
+141 |     agent_info: Arc<A>,
+    |     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_agent_info`
+
+warning: unused variable: `task_id`
+   --> a2a-rs/src/adapter/server/task_storage.rs:258:9
+    |
+258 |         task_id: &'a str,
+    |         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_task_id`
+
+warning: `a2a-rs` (lib) generated 25 warnings (run `cargo fix --lib -p a2a-rs` to apply 22 suggestions)
+warning: unused imports: `NoopAuthenticator` and `TokenAuthenticator`
+ --> a2a-rs/examples/http_server.rs:5:9
+  |
+5 |         TokenAuthenticator, NoopAuthenticator, HttpPushNotificationSender},
+  |         ^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` on by default
+
+warning: `a2a-rs` (example "http_server") generated 1 warning (run `cargo fix --example "http_server"` to apply 1 suggestion)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.04s
+     Running `target/debug/examples/http_server`
+Starting HTTP server on http://127.0.0.1:8080
+Try accessing the agent card at http://127.0.0.1:8080/agent-card
+Try accessing the skills at http://127.0.0.1:8080/skills
+Try accessing a specific skill at http://127.0.0.1:8080/skills/echo
+Press Ctrl+C to stop
+
+thread 'main' panicked at /mnt/c/Users/emill/Desktop/rust/a2a/a2a-rs/src/adapter/server/http.rs:82:14:
+Path segments must not start with `:`. For capture groups, use `{capture}`. If you meant to literally match a segment starting with a colon, call `without_v07_checks` on the router.
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
@@ -194,7 +194,7 @@ impl ReimbursementAgent {
         
         if query.contains("reimburse") {
             // Parse basic request details
-            let mut date = None;
+            let date = None;
             let mut amount = None;
             let mut purpose = None;
             
@@ -261,7 +261,7 @@ impl ReimbursementAgent {
             // Now send the final response
             let response = if query.contains("reimburse") {
                 // Parse basic request details (simplified)
-                let mut date = None;
+                let date = None;
                 let mut amount = None;
                 let mut purpose = None;
                 

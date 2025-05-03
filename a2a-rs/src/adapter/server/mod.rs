@@ -10,6 +10,10 @@ pub mod task_storage;
 pub mod request_processor;
 #[cfg(feature = "server")]
 pub mod agent_info;
+#[cfg(feature = "server")]
+pub mod push_notification;
+#[cfg(feature = "server")]
+pub mod auth;
 
 // Re-export server implementations
 #[cfg(feature = "http-server")]
@@ -22,3 +26,7 @@ pub use task_storage::InMemoryTaskStorage;
 pub use request_processor::DefaultRequestProcessor;
 #[cfg(feature = "server")]
 pub use agent_info::SimpleAgentInfo;
+#[cfg(feature = "server")]
+pub use push_notification::{HttpPushNotificationSender, PushNotificationRegistry, PushNotificationSender};
+#[cfg(feature = "server")]
+pub use auth::{Authenticator, TokenAuthenticator, NoopAuthenticator, with_auth};
