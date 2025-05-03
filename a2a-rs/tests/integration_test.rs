@@ -126,10 +126,13 @@ async fn test_http_client_server_interaction() {
     assert!(task_limited.history.is_none());
 
     // Test 7: Cancel task
+    println!("About to cancel task with ID: {}", task_id);
     let canceled_task = client
         .cancel_task(&task_id)
         .await
         .expect("Failed to cancel task");
+    println!("Received task after cancellation: {:?}", canceled_task);
+    println!("Task state: {:?}", canceled_task.status.state);
     assert_eq!(canceled_task.status.state, TaskState::Canceled);
 
     // Shut down the server
