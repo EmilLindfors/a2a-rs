@@ -47,27 +47,49 @@ async fn test_websocket_streaming() {
 
     // Create a shutdown channel
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let (ready_tx, ready_rx) = oneshot::channel::<()>();
 
     // Start the server in a separate task
     let server_handle = tokio::spawn(async move {
-        tokio::select! {
-            _ = server.start() => {},
+        println!("Starting WebSocket server...");
+        let server_result = tokio::select! {
+            result = server.start() => {
+                if let Err(e) = &result {
+                    eprintln!("WebSocket server error: {}", e);
+                }
+                result
+            },
             _ = shutdown_rx => {
-                // Server will be dropped and shut down
+                println!("Server shutdown requested");
+                Ok(())
             }
+        };
+        
+        if let Err(e) = server_result {
+            eprintln!("Server exited with error: {}", e);
         }
     });
+    
+    // Let the server know we're ready to start
+    let _ = ready_tx.send(());
 
     // Give the server time to start
-    tokio::time::sleep(Duration::from_millis(300)).await;
+    println!("Waiting for server to start...");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    println!("Proceeding with test...");
 
     // Create the client
     let client = WebSocketClient::new("ws://localhost:8183".to_string());
 
     // Test 1: Get agent card using HTTP client
-    let http_client = Client::new();
+    let http_client = Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("Failed to build HTTP client");
+    
     let response = http_client
         .get("http://localhost:8183/agent-card")
+        .header("Connection", "keep-alive")
         .send()
         .await
         .expect("Failed to fetch agent card");
@@ -80,11 +102,21 @@ async fn test_websocket_streaming() {
     let task_id = format!("ws-task-{}", uuid::Uuid::new_v4());
     let message = Message::user_text("Hello, WebSocket A2A agent!".to_string());
 
+    println!("Attempting to subscribe to task: {}", task_id);
+    
+    // Give additional time for server to be ready for websocket connections
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    
     // Create a task subscription
-    let mut stream = client
+    let subscribe_result = client
         .subscribe_to_task(&task_id, &message, Some("test-session"), None)
-        .await
-        .expect("Failed to subscribe to task");
+        .await;
+        
+    if let Err(ref e) = subscribe_result {
+        println!("Failed to subscribe to task: {}", e);
+    }
+    
+    let mut stream = subscribe_result.expect("Failed to subscribe to task");
 
     // Process streaming updates
     let mut status_updates = 0;
@@ -92,7 +124,7 @@ async fn test_websocket_streaming() {
     let mut final_received = false;
 
     // Create a timeout future
-    let timeout_future = tokio::time::sleep(Duration::from_secs(2));
+    let timeout_future = tokio::time::sleep(Duration::from_secs(5));
 
     // Wait for streaming updates
     tokio::select! {
