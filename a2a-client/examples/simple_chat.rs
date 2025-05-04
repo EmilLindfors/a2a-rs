@@ -32,9 +32,9 @@ fn SimpleChatApp() -> impl IntoView {
     )));
 
     // Create signals for the state
-    let messages = create_rw_signal(Vec::<String>::new());
-    let input = create_rw_signal(String::new());
-    let is_loading = create_rw_signal(false);
+    let messages = RwSignal::new(Vec::<String>::new());
+    let input = RwSignal::new(String::new());
+    let is_loading = RwSignal::new(false);
 
     // Function to send a message
     let send_message = move |message_text: String| {
@@ -60,6 +60,7 @@ fn SimpleChatApp() -> impl IntoView {
             is_loading.set(true);
 
             // Subscribe to the task
+            #[allow(clippy::await_holding_refcell_ref)]
             let client_ref = client.borrow();
             match client_ref
                 .subscribe_to_task(&task_id, &message, None, None)
@@ -67,7 +68,8 @@ fn SimpleChatApp() -> impl IntoView {
             {
                 Ok(mut stream) => {
                     // Process streaming updates
-                    let mut response_text = String::new();
+                    #[allow(unused_assignments)]
+                    let mut current_response = String::new();
 
                     while let Some(result) = stream.next().await {
                         match result {
@@ -77,7 +79,7 @@ fn SimpleChatApp() -> impl IntoView {
                                         for part in &message.parts {
                                             if let Part::Text { text, .. } = part {
                                                 // Update our accumulated response
-                                                response_text = text.clone();
+                                                current_response = text.clone();
 
                                                 // Update the message in our UI
                                                 messages.update(|msgs| {
@@ -93,7 +95,7 @@ fn SimpleChatApp() -> impl IntoView {
                                                     // Add the new message
                                                     msgs.push(format!(
                                                         "Assistant: {}",
-                                                        response_text
+                                                        current_response
                                                     ));
                                                 });
                                             }

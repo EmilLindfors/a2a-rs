@@ -4,11 +4,9 @@
 use async_trait::async_trait;
 
 use crate::{
-    AgentSkill,
     application::json_rpc::{A2ARequest, JSONRPCResponse},
     domain::{
-        A2AError, AgentCard, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
-        TaskStatusUpdateEvent,
+        A2AError, Message, Task, TaskPushNotificationConfig,
     },
 };
 
@@ -76,14 +74,14 @@ pub trait AsyncTaskHandler: Send + Sync {
     async fn add_status_subscriber<'a>(
         &self,
         task_id: &'a str,
-        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
+        subscriber: Box<dyn Subscriber<crate::domain::TaskStatusUpdateEvent> + Send + Sync>,
     ) -> Result<(), A2AError>;
 
     /// Add an artifact update subscriber for streaming
     async fn add_artifact_subscriber<'a>(
         &self,
         task_id: &'a str,
-        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
+        subscriber: Box<dyn Subscriber<crate::domain::TaskArtifactUpdateEvent> + Send + Sync>,
     ) -> Result<(), A2AError>;
 
     /// Remove subscribers for a task
@@ -118,17 +116,17 @@ pub trait AsyncA2ARequestProcessor: Send + Sync {
 /// A trait for getting information about an agent
 pub trait AgentInfoProvider: Send + Sync {
     /// Get the agent card
-    async fn get_agent_card(&self) -> Result<AgentCard, A2AError>;
+    async fn get_agent_card(&self) -> Result<crate::domain::AgentCard, A2AError>;
 
     /// Get all skills provided by the agent
-    async fn get_skills(&self) -> Result<Vec<AgentSkill>, A2AError> {
+    async fn get_skills(&self) -> Result<Vec<crate::AgentSkill>, A2AError> {
         // Default implementation that gets skills from the agent card
         let card = self.get_agent_card().await?;
         Ok(card.skills)
     }
 
     /// Get a specific skill by ID
-    async fn get_skill_by_id(&self, id: &str) -> Result<Option<AgentSkill>, A2AError> {
+    async fn get_skill_by_id(&self, id: &str) -> Result<Option<crate::AgentSkill>, A2AError> {
         // Default implementation that finds the skill by ID
         let skills = self.get_skills().await?;
         Ok(skills.into_iter().find(|skill| skill.id == id))

@@ -40,6 +40,7 @@ struct MessageBroadcaster {
     senders: Arc<Mutex<Vec<Sender<Result<String, WebSocketClientError>>>>>,
 }
 
+#[allow(clippy::type_complexity)]
 impl MessageBroadcaster {
     fn new() -> Self {
         Self {
@@ -91,6 +92,7 @@ impl Stream for WebSocketStream {
     }
 }
 
+#[allow(clippy::needless_lifetimes)]
 impl WebSocketHandle {
     /// Create a new WebSocket connection
     pub async fn connect(url: &str) -> Result<(Self, WebSocketStream), WebSocketClientError> {
@@ -238,6 +240,7 @@ impl WebSocketHandle {
 }
 
 // Type for sharing the WebSocket handle
+#[allow(clippy::arc_with_non_send_sync)]
 type SharedSocket = Arc<Mutex<Option<WebSocketHandle>>>;
 
 /// WebSocket client for interacting with the A2A protocol in a browser environment
@@ -252,6 +255,7 @@ pub struct WasmWebSocketClient {
     timeout: u64,
 }
 
+#[allow(clippy::needless_lifetimes, dead_code)]
 impl WasmWebSocketClient {
     /// Create a new WebSocket client with the given base URL
     pub fn new(base_url: String) -> Self {
@@ -763,6 +767,7 @@ impl Clone for A2AClientImpl {
 }
 
 // Implementation for our internal client
+#[allow(clippy::needless_lifetimes, dead_code)]
 impl WasmWebSocketClient {
     async fn send_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
         self.send_and_receive(request).await

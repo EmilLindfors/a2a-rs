@@ -28,10 +28,10 @@ pub fn Chat() -> impl IntoView {
     )));
 
     // Create signals for our chat state
-    let messages = create_rw_signal::<Vec<ChatMessage>>(vec![]);
-    let input_text = create_rw_signal("".to_string());
-    let current_task_id = create_rw_signal::<Option<String>>(None);
-    let is_streaming = create_rw_signal(false);
+    let messages = RwSignal::new(vec![]);
+    let input_text = RwSignal::new("".to_string());
+    let current_task_id = RwSignal::new(None);
+    let is_streaming = RwSignal::new(false);
 
     // Function to send a message
     let send_message = move |message_text: String| {
@@ -67,6 +67,7 @@ pub fn Chat() -> impl IntoView {
             });
 
             // Subscribe to the task
+            #[allow(clippy::await_holding_refcell_ref)]
             let client_ref = client.borrow();
             match client_ref
                 .subscribe_to_task(&task_id, &a2a_message, None, None)
@@ -74,7 +75,8 @@ pub fn Chat() -> impl IntoView {
             {
                 Ok(mut stream) => {
                     // Process streaming updates
-                    let mut response_text = String::new();
+                    #[allow(unused_assignments)]
+                    let mut current_response = String::new();
 
                     while let Some(result) = stream.next().await {
                         match result {
@@ -84,13 +86,13 @@ pub fn Chat() -> impl IntoView {
                                         for part in &message.parts {
                                             if let Part::Text { text, .. } = part {
                                                 // Update our accumulated response
-                                                response_text = text.clone();
+                                                current_response = text.clone();
 
                                                 // Update the message in our UI
                                                 messages.update(|messages| {
                                                     for msg in messages.iter_mut() {
                                                         if msg.id == assistant_msg_id {
-                                                            msg.content = response_text.clone();
+                                                            msg.content = current_response.clone();
                                                             break;
                                                         }
                                                     }
