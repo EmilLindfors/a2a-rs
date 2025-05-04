@@ -387,26 +387,29 @@ impl AsyncA2AClient for WebSocketClient {
                 // Process the message
                 let result = match message {
                     WsMessage::Text(text) => {
+                        // Add debug logging for received messages
+                        println!("DEBUG: Received WebSocket message: {}", text);
+
                         // Parse the response
                         let response: Value = match serde_json::from_str(&text) {
                             Ok(value) => value,
                             Err(e) => {
+                                println!("DEBUG: JSON parse error: {}", e);
                                 return Some((Err(A2AError::JsonParse(e)), conn));
                             }
                         };
 
-                        let response_clone = response.clone();
-
                         // Check for errors
                         if let Some(error) = response.get("error") {
                             if error.is_object() {
-                                let error: JSONRPCResponse = match serde_json::from_value(response)
-                                {
-                                    Ok(resp) => resp,
-                                    Err(e) => {
-                                        return Some((Err(A2AError::JsonParse(e)), conn));
-                                    }
-                                };
+                                let response_clone = response.clone();
+                                let error: JSONRPCResponse =
+                                    match serde_json::from_value(response_clone) {
+                                        Ok(resp) => resp,
+                                        Err(e) => {
+                                            return Some((Err(A2AError::JsonParse(e)), conn));
+                                        }
+                                    };
 
                                 if let Some(err) = error.error {
                                     return Some((
@@ -421,26 +424,42 @@ impl AsyncA2AClient for WebSocketClient {
                             }
                         }
 
-                        // Try to parse as a status update
-                        if let Ok(status_update) = serde_json::from_value::<TaskStatusUpdateEvent>(
-                            response_clone.get("result").cloned().unwrap_or(Value::Null),
-                        ) {
-                            Ok(StreamItem::StatusUpdate(status_update))
-                        } else {
+                        // Check if it's a valid JSON-RPC message
+                        if response.get("jsonrpc").is_some() && response.get("result").is_some() {
+                            let result = response.get("result").cloned().unwrap_or(Value::Null);
+
+                            // Try to parse as an initial Task response first
+                            if let Ok(task) = serde_json::from_value::<Task>(result.clone()) {
+                                println!("DEBUG: Parsed as Task");
+                                return Some((Ok(StreamItem::Task(task)), conn));
+                            }
+
+                            // Try to parse as a status update
+                            if let Ok(status_update) =
+                                serde_json::from_value::<TaskStatusUpdateEvent>(result.clone())
+                            {
+                                println!("DEBUG: Parsed as StatusUpdate");
+                                return Some((Ok(StreamItem::StatusUpdate(status_update)), conn));
+                            }
+
                             // Try to parse as an artifact update
                             if let Ok(artifact_update) =
-                                serde_json::from_value::<TaskArtifactUpdateEvent>(
-                                    response_clone.get("result").cloned().unwrap_or(Value::Null),
-                                )
+                                serde_json::from_value::<TaskArtifactUpdateEvent>(result)
                             {
-                                Ok(StreamItem::ArtifactUpdate(artifact_update))
-                            } else {
-                                Err(WebSocketClientError::Protocol(
-                                    "Failed to parse streaming response".to_string(),
-                                )
-                                .into())
+                                println!("DEBUG: Parsed as ArtifactUpdate");
+                                return Some((
+                                    Ok(StreamItem::ArtifactUpdate(artifact_update)),
+                                    conn,
+                                ));
                             }
                         }
+
+                        // If we got here, we couldn't parse the response
+                        println!("DEBUG: Failed to parse streaming response");
+                        Err(WebSocketClientError::Protocol(
+                            "Failed to parse streaming response".to_string(),
+                        )
+                        .into())
                     }
                     _ => Err(WebSocketClientError::Protocol(
                         "Unexpected WebSocket message type".to_string(),
@@ -517,25 +536,29 @@ impl AsyncA2AClient for WebSocketClient {
                 // Process the message
                 let result = match message {
                     WsMessage::Text(text) => {
+                        // Add debug logging for received messages
+                        println!("DEBUG: Received WebSocket message: {}", text);
+
                         // Parse the response
                         let response: Value = match serde_json::from_str(&text) {
                             Ok(value) => value,
                             Err(e) => {
+                                println!("DEBUG: JSON parse error: {}", e);
                                 return Some((Err(A2AError::JsonParse(e)), conn));
                             }
                         };
-                        let response_clone = response.clone();
 
                         // Check for errors
                         if let Some(error) = response.get("error") {
                             if error.is_object() {
-                                let error: JSONRPCResponse = match serde_json::from_value(response)
-                                {
-                                    Ok(resp) => resp,
-                                    Err(e) => {
-                                        return Some((Err(A2AError::JsonParse(e)), conn));
-                                    }
-                                };
+                                let response_clone = response.clone();
+                                let error: JSONRPCResponse =
+                                    match serde_json::from_value(response_clone) {
+                                        Ok(resp) => resp,
+                                        Err(e) => {
+                                            return Some((Err(A2AError::JsonParse(e)), conn));
+                                        }
+                                    };
 
                                 if let Some(err) = error.error {
                                     return Some((
@@ -550,26 +573,42 @@ impl AsyncA2AClient for WebSocketClient {
                             }
                         }
 
-                        // Try to parse as a status update
-                        if let Ok(status_update) = serde_json::from_value::<TaskStatusUpdateEvent>(
-                            response_clone.get("result").cloned().unwrap_or(Value::Null),
-                        ) {
-                            Ok(StreamItem::StatusUpdate(status_update))
-                        } else {
+                        // Check if it's a valid JSON-RPC message
+                        if response.get("jsonrpc").is_some() && response.get("result").is_some() {
+                            let result = response.get("result").cloned().unwrap_or(Value::Null);
+
+                            // Try to parse as an initial Task response first
+                            if let Ok(task) = serde_json::from_value::<Task>(result.clone()) {
+                                println!("DEBUG: Parsed as Task");
+                                return Some((Ok(StreamItem::Task(task)), conn));
+                            }
+
+                            // Try to parse as a status update
+                            if let Ok(status_update) =
+                                serde_json::from_value::<TaskStatusUpdateEvent>(result.clone())
+                            {
+                                println!("DEBUG: Parsed as StatusUpdate");
+                                return Some((Ok(StreamItem::StatusUpdate(status_update)), conn));
+                            }
+
                             // Try to parse as an artifact update
                             if let Ok(artifact_update) =
-                                serde_json::from_value::<TaskArtifactUpdateEvent>(
-                                    response_clone.get("result").cloned().unwrap_or(Value::Null),
-                                )
+                                serde_json::from_value::<TaskArtifactUpdateEvent>(result)
                             {
-                                Ok(StreamItem::ArtifactUpdate(artifact_update))
-                            } else {
-                                Err(WebSocketClientError::Protocol(
-                                    "Failed to parse streaming response".to_string(),
-                                )
-                                .into())
+                                println!("DEBUG: Parsed as ArtifactUpdate");
+                                return Some((
+                                    Ok(StreamItem::ArtifactUpdate(artifact_update)),
+                                    conn,
+                                ));
                             }
                         }
+
+                        // If we got here, we couldn't parse the response
+                        println!("DEBUG: Failed to parse streaming response");
+                        Err(WebSocketClientError::Protocol(
+                            "Failed to parse streaming response".to_string(),
+                        )
+                        .into())
                     }
                     _ => Err(WebSocketClientError::Protocol(
                         "Unexpected WebSocket message type".to_string(),

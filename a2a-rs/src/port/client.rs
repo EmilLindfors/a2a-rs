@@ -89,6 +89,8 @@ pub enum StreamItem {
     StatusUpdate(TaskStatusUpdateEvent),
     /// An artifact update
     ArtifactUpdate(TaskArtifactUpdateEvent),
+    /// An initial task response
+    Task(Task),
 }
 
 #[cfg(feature = "client")]

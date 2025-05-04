@@ -80,6 +80,29 @@ pub fn Chat() -> impl IntoView {
 
                     while let Some(result) = stream.next().await {
                         match result {
+                            Ok(StreamItem::Task(task)) => {
+                                // Handle initial task response
+                                if let Some(message) = &task.status.message {
+                                    if message.role == Role::Agent {
+                                        for part in &message.parts {
+                                            if let Part::Text { text, .. } = part {
+                                                // Update our accumulated response
+                                                current_response = text.clone();
+
+                                                // Update the message in our UI
+                                                messages.update(|messages| {
+                                                    for msg in messages.iter_mut() {
+                                                        if msg.id == assistant_msg_id {
+                                                            msg.content = current_response.clone();
+                                                            break;
+                                                        }
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             Ok(StreamItem::StatusUpdate(update)) => {
                                 if let Some(message) = &update.status.message {
                                     if message.role == Role::Agent {

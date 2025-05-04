@@ -51,6 +51,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     while let Some(result) = stream.next().await {
         match result {
+            Ok(StreamItem::Task(task)) => {
+                println!("Received initial task response for task {}", task.id);
+                println!("  Status: {:?}", task.status.state);
+
+                if let Some(message) = &task.status.message {
+                    println!("  Message:");
+                    for part in &message.parts {
+                        match part {
+                            Part::Text { text, .. } => println!("    {}", text),
+                            Part::Data { .. } => println!("    [Data content]"),
+                            _ => println!("    [Other content]"),
+                        }
+                    }
+                }
+            }
             Ok(StreamItem::StatusUpdate(update)) => {
                 status_updates += 1;
                 println!(
