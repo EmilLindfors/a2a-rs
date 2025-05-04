@@ -89,10 +89,7 @@ impl AsyncA2AClient for HttpClient {
             .map_err(HttpClientError::Reqwest)?;
 
         if response.status().is_success() {
-            let body = response
-                .text()
-                .await
-                .map_err(HttpClientError::Reqwest)?;
+            let body = response.text().await.map_err(HttpClientError::Reqwest)?;
             Ok(body)
         } else {
             let status = response.status();

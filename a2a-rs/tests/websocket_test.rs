@@ -86,7 +86,7 @@ async fn test_websocket_streaming() {
     let task_result = client
         .send_task_message(&task_id, &message, None, None)
         .await;
-    
+
     if let Err(ref e) = task_result {
         println!("Warning: Task send failed: {}", e);
         // Don't fail the test just yet
@@ -99,18 +99,18 @@ async fn test_websocket_streaming() {
     let subscribe_result = client
         .subscribe_to_task(&task_id, &message, Some("test-session"), None)
         .await;
-        
+
     if let Err(ref e) = subscribe_result {
         println!("Warning: Subscription failed: {}", e);
     }
-    
+
     // Skip the streaming test if we can't get a subscription
     if let Ok(mut stream) = subscribe_result {
         println!("Subscription succeeded, processing stream...");
-        
+
         // Process streaming updates
         let mut status_updates = 0;
-        
+
         // Create a timeout future
         let timeout_future = tokio::time::sleep(Duration::from_secs(5));
 

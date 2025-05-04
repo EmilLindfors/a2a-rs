@@ -404,71 +404,62 @@ impl<'de> Deserialize<'de> for A2ARequest {
     {
         // First deserialize into a JSONRPCRequest to get the method
         let json_req = JSONRPCRequest::deserialize(deserializer)?;
-        
+
         // Based on the method field, determine the appropriate variant
         let result = match json_req.method.as_str() {
             "tasks/send" => {
                 // Re-parse as SendTaskRequest
-                let value = serde_json::to_value(&json_req)
-                    .map_err(serde::de::Error::custom)?;
-                let req = SendTaskRequest::deserialize(value)
-                    .map_err(serde::de::Error::custom)?;
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = SendTaskRequest::deserialize(value).map_err(serde::de::Error::custom)?;
                 A2ARequest::SendTask(req)
-            },
+            }
             "tasks/get" => {
                 // Re-parse as GetTaskRequest
-                let value = serde_json::to_value(&json_req)
-                    .map_err(serde::de::Error::custom)?;
-                let req = GetTaskRequest::deserialize(value)
-                    .map_err(serde::de::Error::custom)?;
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = GetTaskRequest::deserialize(value).map_err(serde::de::Error::custom)?;
                 A2ARequest::GetTask(req)
-            },
+            }
             "tasks/cancel" => {
                 // Re-parse as CancelTaskRequest
-                let value = serde_json::to_value(&json_req)
-                    .map_err(serde::de::Error::custom)?;
-                let req = CancelTaskRequest::deserialize(value)
-                    .map_err(serde::de::Error::custom)?;
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req =
+                    CancelTaskRequest::deserialize(value).map_err(serde::de::Error::custom)?;
                 A2ARequest::CancelTask(req)
-            },
+            }
             "tasks/pushNotification/set" => {
                 // Re-parse as SetTaskPushNotificationRequest
-                let value = serde_json::to_value(&json_req)
-                    .map_err(serde::de::Error::custom)?;
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
                 let req = SetTaskPushNotificationRequest::deserialize(value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::SetTaskPushNotification(req)
-            },
+            }
             "tasks/pushNotification/get" => {
                 // Re-parse as GetTaskPushNotificationRequest
-                let value = serde_json::to_value(&json_req)
-                    .map_err(serde::de::Error::custom)?;
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
                 let req = GetTaskPushNotificationRequest::deserialize(value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::GetTaskPushNotification(req)
-            },
+            }
             "tasks/resubscribe" => {
                 // Re-parse as TaskResubscriptionRequest
-                let value = serde_json::to_value(&json_req)
-                    .map_err(serde::de::Error::custom)?;
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
                 let req = TaskResubscriptionRequest::deserialize(value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::TaskResubscription(req)
-            },
+            }
             "tasks/sendSubscribe" => {
                 // Re-parse as SendTaskStreamingRequest
-                let value = serde_json::to_value(&json_req)
-                    .map_err(serde::de::Error::custom)?;
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
                 let req = SendTaskStreamingRequest::deserialize(value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::SendTaskStreaming(req)
-            },
+            }
             _ => {
                 // For other methods, use Generic variant
                 A2ARequest::Generic(json_req)
             }
         };
-        
+
         Ok(result)
     }
 }

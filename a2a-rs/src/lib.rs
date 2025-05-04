@@ -18,7 +18,7 @@
 //!
 //! ```rust,no_run
 //! #[cfg(feature = "http-client")]
-//! use a2a_protocol::{
+//! use a2a_rs::{
 //!     adapter::client::HttpClient,
 //!     domain::{Message, Part},
 //!     port::client::AsyncA2AClient,
@@ -43,7 +43,7 @@
 //!
 //! ```rust,no_run
 //! #[cfg(feature = "http-server")]
-//! use a2a_protocol::{
+//! use a2a_rs::{
 //!     adapter::server::HttpServer,
 //!     domain::{A2AError, AgentCard, Message, Task, TaskIdParams, TaskPushNotificationConfig},
 //!     port::server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler},

@@ -5,9 +5,7 @@ use async_trait::async_trait;
 
 use crate::{
     application::json_rpc::{A2ARequest, JSONRPCResponse},
-    domain::{
-        A2AError, Message, Task, TaskPushNotificationConfig,
-    },
+    domain::{A2AError, Message, Task, TaskPushNotificationConfig},
 };
 
 /// A trait defining the methods a task handler should implement
