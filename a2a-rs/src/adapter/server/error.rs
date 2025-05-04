@@ -1,9 +1,10 @@
 //! Error types for server adapters
 
+#[cfg(feature = "http-server")]
 use std::io;
-use thiserror::Error;
 
-use crate::domain::A2AError;
+#[cfg(any(feature = "http-server", feature = "ws-server"))]
+use thiserror::Error;
 
 /// Error type for HTTP server adapter
 #[derive(Error, Debug)]
@@ -53,34 +54,34 @@ pub enum WebSocketServerError {
 
 // Conversion from adapter errors to domain errors
 #[cfg(feature = "http-server")]
-impl From<HttpServerError> for A2AError {
+impl From<HttpServerError> for crate::domain::A2AError {
     fn from(error: HttpServerError) -> Self {
         match error {
             HttpServerError::Server(msg) => {
-                A2AError::Internal(format!("HTTP server error: {}", msg))
+                crate::domain::A2AError::Internal(format!("HTTP server error: {}", msg))
             }
-            HttpServerError::Io(e) => A2AError::Io(e),
-            HttpServerError::Json(e) => A2AError::JsonParse(e),
-            HttpServerError::InvalidRequest(msg) => A2AError::InvalidRequest(msg),
+            HttpServerError::Io(e) => crate::domain::A2AError::Io(e),
+            HttpServerError::Json(e) => crate::domain::A2AError::JsonParse(e),
+            HttpServerError::InvalidRequest(msg) => crate::domain::A2AError::InvalidRequest(msg),
         }
     }
 }
 
 #[cfg(feature = "ws-server")]
-impl From<WebSocketServerError> for A2AError {
+impl From<WebSocketServerError> for crate::domain::A2AError {
     fn from(error: WebSocketServerError) -> Self {
         match error {
             WebSocketServerError::Server(msg) => {
-                A2AError::Internal(format!("WebSocket server error: {}", msg))
+                crate::domain::A2AError::Internal(format!("WebSocket server error: {}", msg))
             }
-            WebSocketServerError::Io(e) => A2AError::Io(e),
+            WebSocketServerError::Io(e) => crate::domain::A2AError::Io(e),
             WebSocketServerError::Connection(msg) => {
-                A2AError::Internal(format!("WebSocket connection error: {}", msg))
+                crate::domain::A2AError::Internal(format!("WebSocket connection error: {}", msg))
             }
             WebSocketServerError::Message(msg) => {
-                A2AError::Internal(format!("WebSocket message error: {}", msg))
+                crate::domain::A2AError::Internal(format!("WebSocket message error: {}", msg))
             }
-            WebSocketServerError::Json(e) => A2AError::JsonParse(e),
+            WebSocketServerError::Json(e) => crate::domain::A2AError::JsonParse(e),
         }
     }
 }
