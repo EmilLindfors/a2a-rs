@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod push_notification_tests {
+mod tests {
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;

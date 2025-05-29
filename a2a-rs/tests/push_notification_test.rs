@@ -49,7 +49,7 @@ impl PushNotificationSender for MockPushNotificationSender {
         event: &TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         // Record the update
-        let update = format!("Status update for task {} to URL {}", event.id, config.url);
+        let update = format!("Status update for task {} to URL {}", event.task_id, config.url);
         self.status_updates.lock().unwrap().push(update);
         Ok(())
     }
@@ -62,7 +62,7 @@ impl PushNotificationSender for MockPushNotificationSender {
         // Record the update
         let update = format!(
             "Artifact update for task {} to URL {}",
-            event.id, config.url
+            event.task_id, config.url
         );
         self.artifact_updates.lock().unwrap().push(update);
         Ok(())
@@ -115,7 +115,7 @@ async fn test_push_notifications() {
     // Test 1: Set push notification
     let task_id = format!("push-task-{}", uuid::Uuid::new_v4());
     let push_config = a2a_rs::domain::TaskPushNotificationConfig {
-        id: task_id.clone(),
+        task_id: task_id.clone(),
         push_notification_config: PushNotificationConfig {
             url: "https://example.com/webhook".to_string(),
             token: Some("test-token".to_string()),
@@ -127,7 +127,8 @@ async fn test_push_notifications() {
     assert!(result.is_ok());
 
     // Test 2: Send a task message
-    let message = Message::user_text("Hello, Push Notification Agent!".to_string());
+    let message_id = format!("msg-{}", uuid::Uuid::new_v4());
+    let message = Message::user_text("Hello, Push Notification Agent!".to_string(), message_id);
     let _task = client
         .send_task_message(&task_id, &message, None, None)
         .await
@@ -143,19 +144,23 @@ async fn test_push_notifications() {
     };
 
     let _artifact = a2a_rs::domain::Artifact {
+        artifact_id: format!("artifact-{}", uuid::Uuid::new_v4()),
         name: Some("test-artifact".to_string()),
         description: Some("A test artifact".to_string()),
         parts: vec![artifact_part],
-        index: 0,
-        append: None,
-        last_chunk: Some(true),
         metadata: None,
     };
 
+    let artifact_message_id = format!("msg-{}", uuid::Uuid::new_v4());
     let artifact_message = Message {
+        message_id: artifact_message_id,
+        context_id: Some("default".to_string()),
         role: a2a_rs::domain::Role::Agent,
+        kind: "message".to_string(),
         parts: vec![],
         metadata: None,
+        reference_task_ids: None,
+        task_id: None,
     };
 
     // Send the artifact message

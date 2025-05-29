@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "http-client")]
 use reqwest::{
     Client,
     header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
@@ -34,6 +35,7 @@ pub trait PushNotificationSender: Send + Sync {
 }
 
 /// HTTP-based push notification sender
+#[cfg(feature = "http-client")]
 pub struct HttpPushNotificationSender {
     /// HTTP client for sending notifications
     client: Client,
@@ -45,12 +47,14 @@ pub struct HttpPushNotificationSender {
     backoff_ms: u64,
 }
 
+#[cfg(feature = "http-client")]
 impl Default for HttpPushNotificationSender {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "http-client")]
 impl HttpPushNotificationSender {
     /// Create a new push notification sender
     pub fn new() -> Self {
@@ -128,6 +132,7 @@ impl HttpPushNotificationSender {
     }
 }
 
+#[cfg(feature = "http-client")]
 #[async_trait]
 impl PushNotificationSender for HttpPushNotificationSender {
     async fn send_status_update(
@@ -246,6 +251,31 @@ impl PushNotificationSender for HttpPushNotificationSender {
         Err(last_error.unwrap_or_else(|| {
             A2AError::Internal("Unknown error sending push notification".to_string())
         }))
+    }
+}
+
+/// No-op push notification sender that does nothing
+#[derive(Default)]
+pub struct NoopPushNotificationSender;
+
+#[async_trait]
+impl PushNotificationSender for NoopPushNotificationSender {
+    async fn send_status_update(
+        &self,
+        _config: &PushNotificationConfig,
+        _event: &TaskStatusUpdateEvent,
+    ) -> Result<(), A2AError> {
+        // Do nothing - no-op implementation
+        Ok(())
+    }
+
+    async fn send_artifact_update(
+        &self,
+        _config: &PushNotificationConfig,
+        _event: &TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError> {
+        // Do nothing - no-op implementation
+        Ok(())
     }
 }
 

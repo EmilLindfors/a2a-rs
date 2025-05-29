@@ -37,7 +37,7 @@ async fn test_websocket_streaming() {
     .with_description("WebSocket Test A2A agent".to_string())
     .with_provider(
         "Test Organization".to_string(),
-        Some("https://example.org".to_string()),
+        "https://example.org".to_string(),
     )
     .with_documentation_url("https://example.org/docs".to_string())
     .with_streaming()
@@ -79,7 +79,8 @@ async fn test_websocket_streaming() {
 
     // Create a task and verify basic functionality
     let task_id = format!("ws-task-{}", uuid::Uuid::new_v4());
-    let message = Message::user_text("Hello, WebSocket A2A agent!".to_string());
+    let message_id = format!("msg-{}", uuid::Uuid::new_v4());
+    let message = Message::user_text("Hello, WebSocket A2A agent!".to_string(), message_id);
 
     // First, test simple non-streaming task send
     println!("Testing basic task send...");
@@ -119,6 +120,9 @@ async fn test_websocket_streaming() {
             _ = async {
                 while let Some(result) = stream.next().await {
                     match result {
+                        Ok(StreamItem::Task(task)) => {
+                            println!("Received task: {:?}", task.status.state);
+                        }
                         Ok(StreamItem::StatusUpdate(update)) => {
                             status_updates += 1;
                             println!("Status update: {:?}", update.status.state);

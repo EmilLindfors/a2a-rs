@@ -1,3 +1,4 @@
+use bon::Builder;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
@@ -116,9 +117,10 @@ impl Part {
 }
 
 /// A message in the A2A protocol
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct Message {
     pub role: Role,
+    #[builder(default = Vec::new())]
     pub parts: Vec<Part>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
@@ -130,6 +132,7 @@ pub struct Message {
     pub task_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "contextId")]
     pub context_id: Option<String>,
+    #[builder(default = "message".to_string())]
     pub kind: String,  // Always "message"
 }
 
@@ -214,6 +217,132 @@ impl Part {
             metadata: None,
         }
     }
+
+    /// Create a builder-style text part that can be chained
+    pub fn text_builder(content: String) -> PartBuilder {
+        PartBuilder::new_text(content)
+    }
+
+    /// Create a builder-style data part that can be chained
+    pub fn data_builder(data: Map<String, Value>) -> PartBuilder {
+        PartBuilder::new_data(data)
+    }
+
+    /// Create a builder-style file part that can be chained
+    pub fn file_builder() -> FilePartBuilder {
+        FilePartBuilder::new()
+    }
+}
+
+/// Builder for Part instances
+pub struct PartBuilder {
+    part: Part,
+}
+
+impl PartBuilder {
+    fn new_text(content: String) -> Self {
+        Self {
+            part: Part::Text {
+                text: content,
+                metadata: None,
+            },
+        }
+    }
+
+    fn new_data(data: Map<String, Value>) -> Self {
+        Self {
+            part: Part::Data {
+                data,
+                metadata: None,
+            },
+        }
+    }
+
+    /// Add metadata to any part type
+    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
+        match &mut self.part {
+            Part::Text { metadata: ref mut meta, .. } => *meta = Some(metadata),
+            Part::Data { metadata: ref mut meta, .. } => *meta = Some(metadata),
+            Part::File { metadata: ref mut meta, .. } => *meta = Some(metadata),
+        }
+        self
+    }
+
+    /// Build the final Part
+    pub fn build(self) -> Part {
+        self.part
+    }
+}
+
+/// Builder for file parts with validation
+pub struct FilePartBuilder {
+    name: Option<String>,
+    mime_type: Option<String>,
+    bytes: Option<String>,
+    uri: Option<String>,
+    metadata: Option<Map<String, Value>>,
+}
+
+impl FilePartBuilder {
+    fn new() -> Self {
+        Self {
+            name: None,
+            mime_type: None,
+            bytes: None,
+            uri: None,
+            metadata: None,
+        }
+    }
+
+    /// Set the file name
+    pub fn name(mut self, name: String) -> Self {
+        self.name = Some(name);
+        self
+    }
+
+    /// Set the MIME type
+    pub fn mime_type(mut self, mime_type: String) -> Self {
+        self.mime_type = Some(mime_type);
+        self
+    }
+
+    /// Set file content as base64 bytes
+    pub fn bytes(mut self, bytes: String) -> Self {
+        self.bytes = Some(bytes);
+        self.uri = None; // Clear URI if setting bytes
+        self
+    }
+
+    /// Set file URI
+    pub fn uri(mut self, uri: String) -> Self {
+        self.uri = Some(uri);
+        self.bytes = None; // Clear bytes if setting URI
+        self
+    }
+
+    /// Add metadata
+    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    /// Build the file part with validation
+    pub fn build(self) -> Result<Part, A2AError> {
+        let file_content = FileContent {
+            name: self.name,
+            mime_type: self.mime_type,
+            bytes: self.bytes,
+            uri: self.uri,
+        };
+
+        // Validate the file content
+        file_content.validate()?;
+
+        Ok(Part::File {
+            file: file_content,
+            metadata: self.metadata,
+        })
+    }
 }
 
 /// Helper methods for creating messages
@@ -268,6 +397,25 @@ impl Message {
         }
 
         self.parts.push(part);
+        Ok(())
+    }
+
+    /// Validate a message (useful after building with builder)
+    pub fn validate(&self) -> Result<(), A2AError> {
+        // Validate all file parts
+        for part in &self.parts {
+            if let Part::File { file, .. } = part {
+                file.validate()?;
+            }
+        }
+
+        // Validate that kind is "message"
+        if self.kind != "message" {
+            return Err(A2AError::InvalidParams(
+                "Message kind must be 'message'".to_string(),
+            ));
+        }
+
         Ok(())
     }
 }

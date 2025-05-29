@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_description("An example A2A WebSocket agent with streaming support".to_string())
     .with_provider(
         "Example Organization".to_string(),
-        Some("https://example.org".to_string()),
+        "https://example.org".to_string(),
     )
     .with_documentation_url("https://example.org/docs".to_string())
     .with_streaming()

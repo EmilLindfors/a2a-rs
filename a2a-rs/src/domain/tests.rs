@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod task_tests {
     use crate::domain::{Message, Task, TaskState};
 
     #[test]

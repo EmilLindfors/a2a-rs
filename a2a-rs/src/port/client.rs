@@ -5,10 +5,7 @@ use async_trait::async_trait;
 
 use crate::{
     application::json_rpc::{A2ARequest, JSONRPCResponse},
-    domain::{
-        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
-        TaskStatusUpdateEvent,
-    },
+    domain::{A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent},
 };
 
 /// A trait defining the methods a client should implement

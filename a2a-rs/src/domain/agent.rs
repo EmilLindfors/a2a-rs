@@ -31,7 +31,7 @@ pub enum SecurityScheme {
     },
     #[serde(rename = "oauth2")]
     OAuth2 {
-        flows: OAuthFlows,
+        flows: Box<OAuthFlows>,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },

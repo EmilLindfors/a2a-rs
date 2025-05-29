@@ -1,3 +1,4 @@
+use bon::Builder;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -32,12 +33,23 @@ pub struct TaskStatus {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
+impl Default for TaskStatus {
+    fn default() -> Self {
+        Self {
+            state: TaskState::Submitted,
+            message: None,
+            timestamp: Some(Utc::now()),
+        }
+    }
+}
+
 /// A task in the A2A protocol
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct Task {
     pub id: String,
     #[serde(rename = "contextId")]
     pub context_id: String,
+    #[builder(default = TaskStatus::default())]
     pub status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<Vec<Artifact>>,
@@ -45,6 +57,7 @@ pub struct Task {
     pub history: Option<Vec<Message>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
+    #[builder(default = "task".to_string())]
     pub kind: String,  // Always "task"
 }
 
@@ -232,5 +245,41 @@ impl Task {
         } else {
             self.artifacts = Some(vec![artifact]);
         }
+    }
+
+    /// Validate a task (useful after building with builder)
+    pub fn validate(&self) -> Result<(), crate::domain::A2AError> {
+        // Validate that kind is "task"
+        if self.kind != "task" {
+            return Err(crate::domain::A2AError::InvalidParams(
+                "Task kind must be 'task'".to_string(),
+            ));
+        }
+
+        // Validate message IDs are unique if history exists
+        if let Some(ref hist) = &self.history {
+            let mut message_ids = std::collections::HashSet::new();
+            for message in hist {
+                if !message_ids.insert(&message.message_id) {
+                    return Err(crate::domain::A2AError::InvalidParams(
+                        format!("Duplicate message ID in history: {}", message.message_id),
+                    ));
+                }
+            }
+        }
+
+        // Validate all messages in history
+        if let Some(ref hist) = &self.history {
+            for message in hist {
+                message.validate()?;
+            }
+        }
+
+        // Validate status message if present
+        if let Some(ref msg) = &self.status.message {
+            msg.validate()?;
+        }
+
+        Ok(())
     }
 }

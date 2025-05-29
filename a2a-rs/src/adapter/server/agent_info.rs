@@ -83,7 +83,7 @@ impl SimpleAgentInfo {
     }
 
     /// Set the authentication schemes
-    pub fn with_authentication(mut self, _schemes: Vec<String>) -> Self {
+    pub fn with_authentication(self, _schemes: Vec<String>) -> Self {
         // TODO: Implement SecurityScheme integration
         // For now, just return self since we removed AgentAuthentication
         self
@@ -130,7 +130,7 @@ impl SimpleAgentInfo {
             id,
             name,
             description.unwrap_or_else(|| "Skill description".to_string()),
-            tags.unwrap_or_else(Vec::new),
+            tags.unwrap_or_default(),
             examples,
             input_modes,
             output_modes,
@@ -204,7 +204,7 @@ impl SimpleAgentInfo {
             }
 
             if let Some(tags_val) = tags {
-                skill.tags = tags_val.unwrap_or_else(Vec::new);
+                skill.tags = tags_val.unwrap_or_default();
             }
 
             if let Some(examples_val) = examples {

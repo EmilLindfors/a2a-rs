@@ -4,7 +4,7 @@ pub mod error;
 
 #[cfg(feature = "server")]
 pub mod agent_info;
-#[cfg(feature = "server")]
+#[cfg(feature = "http-server")]
 pub mod auth;
 #[cfg(feature = "http-server")]
 pub mod http;
@@ -22,14 +22,15 @@ pub mod ws;
 // Re-export server implementations
 #[cfg(feature = "server")]
 pub use agent_info::SimpleAgentInfo;
-#[cfg(feature = "server")]
+#[cfg(feature = "http-server")]
 pub use auth::{Authenticator, NoopAuthenticator, TokenAuthenticator, with_auth};
 #[cfg(feature = "http-server")]
 pub use http::HttpServer;
 #[cfg(feature = "server")]
-pub use push_notification::{
-    HttpPushNotificationSender, PushNotificationRegistry, PushNotificationSender,
-};
+pub use push_notification::{NoopPushNotificationSender, PushNotificationRegistry, PushNotificationSender};
+
+#[cfg(all(feature = "server", feature = "http-client"))]
+pub use push_notification::HttpPushNotificationSender;
 #[cfg(feature = "server")]
 pub use request_processor::DefaultRequestProcessor;
 #[cfg(feature = "server")]

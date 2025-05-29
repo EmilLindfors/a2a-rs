@@ -8,9 +8,12 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::Mutex; // Changed from std::sync::Mutex
 
-use crate::adapter::server::push_notification::{
-    HttpPushNotificationSender, PushNotificationRegistry, PushNotificationSender,
-};
+use crate::adapter::server::push_notification::{PushNotificationRegistry, PushNotificationSender};
+
+#[cfg(feature = "http-client")]
+use crate::adapter::server::push_notification::HttpPushNotificationSender;
+#[cfg(not(feature = "http-client"))]
+use crate::adapter::server::push_notification::NoopPushNotificationSender;
 use crate::domain::{
     A2AError, Artifact, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
     TaskState, TaskStatus, TaskStatusUpdateEvent,
@@ -48,8 +51,12 @@ pub struct InMemoryTaskStorage {
 impl InMemoryTaskStorage {
     /// Create a new empty task storage
     pub fn new() -> Self {
-        // Use the default HTTP push notification sender
+        // Use the appropriate push notification sender based on available features
+        #[cfg(feature = "http-client")]
         let push_sender = HttpPushNotificationSender::new();
+        #[cfg(not(feature = "http-client"))]
+        let push_sender = NoopPushNotificationSender::default();
+        
         let push_registry = PushNotificationRegistry::new(push_sender);
 
         Self {
@@ -184,7 +191,7 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
             } else {
                 // Create a new task
                 let context_id = session_id.unwrap_or("default").to_string();
-                let mut new_task = Task::new(task_id.to_string(), context_id);
+                let new_task = Task::new(task_id.to_string(), context_id);
 
                 // Insert it
                 tasks_guard.insert(task_id.to_string(), new_task.clone());

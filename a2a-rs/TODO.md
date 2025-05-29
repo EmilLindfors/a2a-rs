@@ -44,13 +44,17 @@
   - [ ] Create `src/domain/protocols/` for protocol types
   - [ ] Create `src/domain/validation/` for validation logic
 
-### Builder Pattern Implementation 🟡 IN PROGRESS
+### Builder Pattern Implementation ✅ COMPLETED
 - [x] **Add `bon` crate to dependencies**
-- [x] **Start implementing builders for complex types**
+- [x] **Implement comprehensive builders for complex types**
   - [x] AgentCard builder foundation added
-  - [ ] Message builder with part validation
-  - [ ] Task builder with proper defaults
-  - [ ] SecurityScheme builders for each variant
+  - [x] Message builder with full validation and smart defaults
+  - [x] Task builder with proper defaults and validation
+  - [x] Part builders (PartBuilder, FilePartBuilder) with fluent API
+  - [x] Built-in validation methods for all builder-created objects
+  - [x] Type-safe compile-time guarantees for required fields
+  - [x] Example demonstrating all builder patterns (`examples/builder_patterns.rs`)
+  - [ ] SecurityScheme builders for each variant (future enhancement)
 
 ### Error Structure Enhancement
 - [ ] **Improve error types with more context**
@@ -160,11 +164,17 @@
   - [x] JSON-RPC routing updated
   - [x] Core library tests passing
   - [x] Bon builder pattern foundation added
+- [x] **Phase 2: Builder Pattern Implementation** (Complete type-safe builders)
+  - [x] Message and Task builders with validation
+  - [x] Part builders with fluent API
+  - [x] Comprehensive example demonstrating patterns
+  - [x] All compilation errors fixed
+  - [x] All tests passing
 - [x] Git commit: "Fix A2A specification compliance issues and improve codebase structure"
 
 ### In Progress 🔄
-- [x] Builder pattern implementation (AgentCard completed, others pending)
-- [ ] Examples and integration tests fixes (lower priority)
+- [ ] Domain layer restructuring (next priority)
+- [ ] JSON-RPC file splitting (next priority)
 
 ### Blocked ⛔
 - [ ] (None currently)

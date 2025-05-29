@@ -16,7 +16,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Created task with ID: {}", task_id);
 
     // Create a message
-    let mut message = Message::user_text("Hello, A2A agent! How are you today?".to_string());
+    let message_id = format!("msg-{}", uuid::Uuid::new_v4());
+    let mut message = Message::user_text("Hello, A2A agent! How are you today?".to_string(), message_id);
 
     // Add a file part (properly validated)
     let file_part = Part::file_from_bytes(

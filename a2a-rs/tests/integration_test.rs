@@ -28,7 +28,7 @@ async fn test_http_client_server_interaction() {
     .with_description("Test A2A agent for integration tests".to_string())
     .with_provider(
         "Test Organization".to_string(),
-        Some("https://example.org".to_string()),
+        "https://example.org".to_string(),
     )
     .with_documentation_url("https://example.org/docs".to_string())
     .with_state_transition_history()
@@ -100,7 +100,8 @@ async fn test_http_client_server_interaction() {
 
     // Test 4: Send task message
     let task_id = format!("task-{}", uuid::Uuid::new_v4());
-    let message = Message::user_text("Hello, A2A agent!".to_string());
+    let message_id = format!("msg-{}", uuid::Uuid::new_v4());
+    let message = Message::user_text("Hello, A2A agent!".to_string(), message_id);
     let task = client
         .send_task_message(&task_id, &message, None, None)
         .await
@@ -148,7 +149,8 @@ async fn test_http_client_server_interaction() {
 #[tokio::test]
 async fn test_message_types() {
     // Create a message with text part
-    let mut message = Message::user_text("Hello, A2A agent!".to_string());
+    let message_id = format!("msg-{}", uuid::Uuid::new_v4());
+    let mut message = Message::user_text("Hello, A2A agent!".to_string(), message_id);
 
     // Add a data part
     let mut data = serde_json::Map::new();
@@ -201,12 +203,16 @@ async fn test_message_types() {
 #[tokio::test]
 async fn test_task_history() {
     // Create a new task
-    let mut task = a2a_rs::domain::Task::new("test-task-1".to_string());
+    let context_id = format!("ctx-{}", uuid::Uuid::new_v4());
+    let mut task = a2a_rs::domain::Task::new("test-task-1".to_string(), context_id);
 
     // Create messages
-    let message1 = Message::user_text("Message 1".to_string());
-    let message2 = Message::agent_text("Message 2".to_string());
-    let message3 = Message::user_text("Message 3".to_string());
+    let msg_id1 = format!("msg-{}", uuid::Uuid::new_v4());
+    let msg_id2 = format!("msg-{}", uuid::Uuid::new_v4());
+    let msg_id3 = format!("msg-{}", uuid::Uuid::new_v4());
+    let message1 = Message::user_text("Message 1".to_string(), msg_id1);
+    let message2 = Message::agent_text("Message 2".to_string(), msg_id2);
+    let message3 = Message::user_text("Message 3".to_string(), msg_id3);
 
     // Update the task with messages
     task.update_status(TaskState::Working, Some(message1));

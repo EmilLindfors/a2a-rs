@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_description("An example A2A agent using the a2a-protocol crate".to_string())
     .with_provider(
         "Example Organization".to_string(),
-        Some("https://example.org".to_string()),
+        "https://example.org".to_string(),
     )
     .with_documentation_url("https://example.org/docs".to_string())
     .with_streaming()

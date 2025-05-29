@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::domain::{
     error::A2AError,
     task::{
-        MessageSendConfiguration, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskIdParams,
+        MessageSendParams, Task, TaskArtifactUpdateEvent, TaskIdParams,
         TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
     },
 };

@@ -18,8 +18,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Created task with ID: {}", task_id);
 
     // Create a message
+    let message_id = format!("msg-{}", uuid::Uuid::new_v4());
     let mut message =
-        Message::user_text("Hello, A2A agent! Please stream your response.".to_string());
+        Message::user_text("Hello, A2A agent! Please stream your response.".to_string(), message_id);
 
     // Add a data part to test multiple content types
     let mut data = serde_json::Map::new();
@@ -94,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 artifact_updates += 1;
                 println!(
                     "Artifact update #{} for task {}",
-                    artifact_updates, update.id
+                    artifact_updates, update.task_id
                 );
                 println!("  Artifact name: {:?}", update.artifact.name);
                 println!("  Parts: {} item(s)", update.artifact.parts.len());
