@@ -1,6 +1,5 @@
 #[cfg(test)]
 mod push_notification_tests {
-    use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
@@ -9,7 +8,7 @@ mod push_notification_tests {
         PushNotificationRegistry, PushNotificationSender,
     };
     use crate::domain::{
-        A2AError, Message, Part, PushNotificationConfig, Role, TaskArtifactUpdateEvent,
+        A2AError, Message, Part, PushNotificationConfig, TaskArtifactUpdateEvent,
         TaskStatusUpdateEvent,
     };
 
@@ -50,7 +49,7 @@ mod push_notification_tests {
             }
 
             // Record the update
-            let update = format!("Status update for task {} to URL {}", event.id, config.url);
+            let update = format!("Status update for task {} to URL {}", event.task_id, config.url);
             self.status_updates.lock().unwrap().push(update);
 
             Ok(())
@@ -68,7 +67,7 @@ mod push_notification_tests {
             // Record the update
             let update = format!(
                 "Artifact update for task {} to URL {}",
-                event.id, config.url
+                event.task_id, config.url
             );
             self.artifact_updates.lock().unwrap().push(update);
 
@@ -98,17 +97,12 @@ mod push_notification_tests {
 
         // Create some events
         let status_event = TaskStatusUpdateEvent {
-            id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            context_id: "test-context".to_string(),
+            kind: "status-update".to_string(),
             status: crate::domain::TaskStatus {
                 state: crate::domain::TaskState::Working,
-                message: Some(Message {
-                    role: Role::Agent,
-                    parts: vec![Part::Text {
-                        text: "Working on it...".to_string(),
-                        metadata: None,
-                    }],
-                    metadata: None,
-                }),
+                message: Some(Message::agent_text("Working on it...".to_string(), "msg1".to_string())),
                 timestamp: Some(chrono::Utc::now()),
             },
             final_: false,
@@ -116,19 +110,18 @@ mod push_notification_tests {
         };
 
         let artifact_event = TaskArtifactUpdateEvent {
-            id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            context_id: "test-context".to_string(),
+            kind: "artifact-update".to_string(),
             artifact: crate::domain::Artifact {
+                artifact_id: "artifact-1".to_string(),
                 name: Some("test-artifact".to_string()),
                 description: Some("A test artifact".to_string()),
-                parts: vec![Part::Text {
-                    text: "Artifact content".to_string(),
-                    metadata: None,
-                }],
-                index: 1,
-                append: None,
-                last_chunk: Some(true),
+                parts: vec![Part::text("Artifact content".to_string())],
                 metadata: None,
             },
+            append: None,
+            last_chunk: Some(true),
             metadata: None,
         };
 
@@ -194,17 +187,12 @@ mod push_notification_tests {
 
         // Create a status event
         let status_event = TaskStatusUpdateEvent {
-            id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            context_id: "test-context".to_string(),
+            kind: "status-update".to_string(),
             status: crate::domain::TaskStatus {
                 state: crate::domain::TaskState::Working,
-                message: Some(Message {
-                    role: Role::Agent,
-                    parts: vec![Part::Text {
-                        text: "Working on it...".to_string(),
-                        metadata: None,
-                    }],
-                    metadata: None,
-                }),
+                message: Some(Message::agent_text("Working on it...".to_string(), "msg1".to_string())),
                 timestamp: Some(chrono::Utc::now()),
             },
             final_: false,

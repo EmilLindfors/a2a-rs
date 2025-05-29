@@ -1,39 +1,16 @@
 #[cfg(test)]
 mod tests {
-    use crate::domain::{Message, Part, Role, Task, TaskState};
+    use crate::domain::{Message, Task, TaskState};
 
     #[test]
     fn test_task_history_tracking() {
         // Create a new task
-        let mut task = Task::new("test-task-1".to_string());
+        let mut task = Task::new("test-task-1".to_string(), "test-context-1".to_string());
 
-        // Create messages
-        let message1 = Message {
-            role: Role::User,
-            parts: vec![Part::Text {
-                text: "Message 1".to_string(),
-                metadata: None,
-            }],
-            metadata: None,
-        };
-
-        let message2 = Message {
-            role: Role::Agent,
-            parts: vec![Part::Text {
-                text: "Message 2".to_string(),
-                metadata: None,
-            }],
-            metadata: None,
-        };
-
-        let message3 = Message {
-            role: Role::User,
-            parts: vec![Part::Text {
-                text: "Message 3".to_string(),
-                metadata: None,
-            }],
-            metadata: None,
-        };
+        // Create messages using helper methods
+        let message1 = Message::user_text("Message 1".to_string(), "msg1".to_string());
+        let message2 = Message::agent_text("Message 2".to_string(), "msg2".to_string());
+        let message3 = Message::user_text("Message 3".to_string(), "msg3".to_string());
 
         // Update the task with messages
         task.update_status(TaskState::Working, Some(message1.clone()));

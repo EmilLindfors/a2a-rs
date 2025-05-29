@@ -196,6 +196,11 @@ where
     ) -> Result<JSONRPCResponse, A2AError> {
         match request {
             A2ARequest::SendTask(req) => self.process_send_task(req).await,
+            A2ARequest::SendMessage(req) => {
+                // Convert MessageSendParams to TaskSendParams for backwards compatibility
+                // TODO: Implement proper message handling
+                Err(A2AError::UnsupportedOperation("Message sending not yet implemented".to_string()))
+            }
             A2ARequest::GetTask(req) => self.process_get_task(req).await,
             A2ARequest::CancelTask(req) => self.process_cancel_task(req).await,
             A2ARequest::SetTaskPushNotification(req) => {
@@ -206,6 +211,11 @@ where
             }
             A2ARequest::TaskResubscription(req) => self.process_task_resubscription(req).await,
             A2ARequest::SendTaskStreaming(req) => self.process_send_task_streaming(req).await,
+            A2ARequest::SendMessageStreaming(req) => {
+                // Convert MessageSendParams to TaskSendParams for backwards compatibility
+                // TODO: Implement proper message streaming
+                Err(A2AError::UnsupportedOperation("Message streaming not yet implemented".to_string()))
+            }
             A2ARequest::Generic(req) => {
                 // Handle unknown method
                 Err(A2AError::MethodNotFound(format!(

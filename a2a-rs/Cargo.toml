@@ -19,6 +19,7 @@ thiserror = "1.0"
 uuid = { version = "1.4", features = ["v4", "serde"] }
 base64 = "0.21"
 url = { version = "2.4", features = ["serde"] }
+bon = "2.3"
 
 # Async foundation - optional
 tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"], optional = true }

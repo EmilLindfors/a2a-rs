@@ -89,7 +89,9 @@ impl InMemoryTaskStorage {
     ) -> Result<(), A2AError> {
         // Create the update event
         let event = TaskStatusUpdateEvent {
-            id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            context_id: "default".to_string(), // TODO: get actual context_id
+            kind: "status-update".to_string(),
             status,
             final_,
             metadata: None,
@@ -129,8 +131,12 @@ impl InMemoryTaskStorage {
     ) -> Result<(), A2AError> {
         // Create the update event
         let event = TaskArtifactUpdateEvent {
-            id: task_id.to_string(),
+            task_id: task_id.to_string(),
+            context_id: "default".to_string(), // TODO: get actual context_id
+            kind: "artifact-update".to_string(),
             artifact,
+            append: None,
+            last_chunk: None,
             metadata: None,
         };
 
@@ -177,12 +183,8 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
                 existing_task.clone()
             } else {
                 // Create a new task
-                let mut new_task = Task::new(task_id.to_string());
-
-                // Add session ID if provided
-                if let Some(sid) = session_id {
-                    new_task.session_id = Some(sid.to_string());
-                }
+                let context_id = session_id.unwrap_or("default").to_string();
+                let mut new_task = Task::new(task_id.to_string(), context_id);
 
                 // Insert it
                 tasks_guard.insert(task_id.to_string(), new_task.clone());
@@ -245,12 +247,17 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
 
                 // Create a cancellation message to add to history
                 let cancel_message = Message {
-                    role: crate::domain::Role::System,
+                    role: crate::domain::Role::Agent,
                     parts: vec![crate::domain::Part::Text {
                         text: format!("Task {} canceled.", task_id),
                         metadata: None,
                     }],
                     metadata: None,
+                    reference_task_ids: None,
+                    message_id: uuid::Uuid::new_v4().to_string(),
+                    task_id: Some(task_id.to_string()),
+                    context_id: Some(updated_task.context_id.clone()),
+                    kind: "message".to_string(),
                 };
 
                 // Update the status with the cancellation message to track in history
@@ -275,7 +282,7 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Register with the push notification registry
         self.push_notification_registry
-            .register(&config.id, config.push_notification_config.clone())
+            .register(&config.task_id, config.push_notification_config.clone())
             .await?;
 
         Ok(config.clone())
@@ -288,7 +295,7 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
         // Get the push notification config from the registry
         match self.push_notification_registry.get_config(task_id).await? {
             Some(config) => Ok(TaskPushNotificationConfig {
-                id: task_id.to_string(),
+                task_id: task_id.to_string(),
                 push_notification_config: config,
             }),
             None => Err(A2AError::PushNotificationNotSupported),

@@ -6,7 +6,7 @@ use async_trait::async_trait;
 
 use crate::{
     domain::{
-        A2AError, AgentAuthentication, AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
+        A2AError, AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
     },
     port::server::AgentInfoProvider,
 };
@@ -24,28 +24,30 @@ impl SimpleAgentInfo {
         Self {
             card: AgentCard {
                 name,
-                description: None,
+                description: "Agent description".to_string(),
                 url,
                 provider: None,
                 version: "1.0.0".to_string(),
                 documentation_url: None,
                 capabilities: AgentCapabilities::default(),
-                authentication: None,
+                security_schemes: None,
+                security: None,
                 default_input_modes: vec!["text".to_string()],
                 default_output_modes: vec!["text".to_string()],
                 skills: Vec::new(),
+                supports_authenticated_extended_card: None,
             },
         }
     }
 
     /// Set the description of the agent
     pub fn with_description(mut self, description: String) -> Self {
-        self.card.description = Some(description);
+        self.card.description = description;
         self
     }
 
     /// Set the provider of the agent
-    pub fn with_provider(mut self, organization: String, url: Option<String>) -> Self {
+    pub fn with_provider(mut self, organization: String, url: String) -> Self {
         self.card.provider = Some(AgentProvider { organization, url });
         self
     }
@@ -81,11 +83,9 @@ impl SimpleAgentInfo {
     }
 
     /// Set the authentication schemes
-    pub fn with_authentication(mut self, schemes: Vec<String>) -> Self {
-        self.card.authentication = Some(AgentAuthentication {
-            schemes,
-            credentials: None,
-        });
+    pub fn with_authentication(mut self, _schemes: Vec<String>) -> Self {
+        // TODO: Implement SecurityScheme integration
+        // For now, just return self since we removed AgentAuthentication
         self
     }
 
@@ -103,11 +103,12 @@ impl SimpleAgentInfo {
 
     /// Add a basic skill
     pub fn add_skill(mut self, id: String, name: String, description: Option<String>) -> Self {
-        let skill = if let Some(desc) = description {
-            AgentSkill::new(id, name).with_description(desc)
-        } else {
-            AgentSkill::new(id, name)
-        };
+        let skill = AgentSkill::new(
+            id,
+            name,
+            description.unwrap_or_else(|| "Skill description".to_string()),
+            Vec::new(), // empty tags
+        );
 
         self.card.skills.push(skill);
         self
@@ -128,8 +129,8 @@ impl SimpleAgentInfo {
         let skill = AgentSkill::comprehensive(
             id,
             name,
-            description,
-            tags,
+            description.unwrap_or_else(|| "Skill description".to_string()),
+            tags.unwrap_or_else(Vec::new),
             examples,
             input_modes,
             output_modes,
@@ -199,11 +200,11 @@ impl SimpleAgentInfo {
             }
 
             if let Some(desc) = description {
-                skill.description = desc;
+                skill.description = desc.unwrap_or_else(|| "Updated description".to_string());
             }
 
             if let Some(tags_val) = tags {
-                skill.tags = tags_val;
+                skill.tags = tags_val.unwrap_or_else(Vec::new);
             }
 
             if let Some(examples_val) = examples {

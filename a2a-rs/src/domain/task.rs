@@ -17,6 +17,8 @@ pub enum TaskState {
     Completed,
     Canceled,
     Failed,
+    Rejected,
+    AuthRequired,
     Unknown,
 }
 
@@ -34,8 +36,8 @@ pub struct TaskStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "sessionId")]
-    pub session_id: Option<String>,
+    #[serde(rename = "contextId")]
+    pub context_id: String,
     pub status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<Vec<Artifact>>,
@@ -43,6 +45,7 @@ pub struct Task {
     pub history: Option<Vec<Message>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
+    pub kind: String,  // Always "task"
 }
 
 /// Parameters for identifying a task
@@ -63,7 +66,30 @@ pub struct TaskQueryParams {
     pub metadata: Option<Map<String, Value>>,
 }
 
-/// Parameters for sending a task
+/// Configuration for sending a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageSendConfiguration {
+    #[serde(rename = "acceptedOutputModes")]
+    pub accepted_output_modes: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "historyLength")]
+    pub history_length: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "pushNotificationConfig")]
+    pub push_notification_config: Option<PushNotificationConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocking: Option<bool>,
+}
+
+/// Parameters for sending a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageSendParams {
+    pub message: Message,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub configuration: Option<MessageSendConfiguration>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
+}
+
+/// Parameters for sending a task (legacy)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskSendParams {
     pub id: String,
@@ -81,7 +107,8 @@ pub struct TaskSendParams {
 /// Configuration for task push notifications
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskPushNotificationConfig {
-    pub id: String,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
     #[serde(rename = "pushNotificationConfig")]
     pub push_notification_config: PushNotificationConfig,
 }
@@ -89,7 +116,11 @@ pub struct TaskPushNotificationConfig {
 /// Event for task status updates
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskStatusUpdateEvent {
-    pub id: String,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    #[serde(rename = "contextId")]
+    pub context_id: String,
+    pub kind: String,  // Always "status-update"
     pub status: TaskStatus,
     #[serde(rename = "final")]
     pub final_: bool,
@@ -100,18 +131,26 @@ pub struct TaskStatusUpdateEvent {
 /// Event for task artifact updates
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskArtifactUpdateEvent {
-    pub id: String,
+    #[serde(rename = "taskId")]
+    pub task_id: String,
+    #[serde(rename = "contextId")]
+    pub context_id: String,
+    pub kind: String,  // Always "artifact-update"
     pub artifact: Artifact,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub append: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "lastChunk")]
+    pub last_chunk: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
 
 impl Task {
     /// Create a new task with the given ID in the submitted state
-    pub fn new(id: String) -> Self {
+    pub fn new(id: String, context_id: String) -> Self {
         Self {
             id,
-            session_id: None,
+            context_id,
             status: TaskStatus {
                 state: TaskState::Submitted,
                 message: None,
@@ -120,23 +159,13 @@ impl Task {
             artifacts: None,
             history: None,
             metadata: None,
+            kind: "task".to_string(),
         }
     }
 
-    /// Create a new task with the given ID and session ID in the submitted state
-    pub fn with_session(id: String, session_id: String) -> Self {
-        Self {
-            id,
-            session_id: Some(session_id),
-            status: TaskStatus {
-                state: TaskState::Submitted,
-                message: None,
-                timestamp: Some(Utc::now()),
-            },
-            artifacts: None,
-            history: None,
-            metadata: None,
-        }
+    /// Create a new task with the given ID and context ID in the submitted state
+    pub fn with_context(id: String, context_id: String) -> Self {
+        Self::new(id, context_id)
     }
 
     /// Update the task status

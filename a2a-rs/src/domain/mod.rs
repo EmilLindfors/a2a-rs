@@ -9,12 +9,15 @@ mod tests;
 
 // Re-export key types for convenience
 pub use agent::{
-    AgentAuthentication, AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
-    AuthenticationInfo, PushNotificationConfig,
+    AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
+    PushNotificationAuthenticationInfo, PushNotificationConfig, SecurityScheme,
+    OAuthFlows, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
+    ImplicitOAuthFlow, PasswordOAuthFlow,
 };
 pub use error::A2AError;
 pub use message::{Artifact, FileContent, Message, Part, Role};
 pub use task::{
-    Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-    TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
+    MessageSendConfiguration, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskIdParams,
+    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    TaskStatusUpdateEvent,
 };

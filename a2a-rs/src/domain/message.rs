@@ -9,7 +9,6 @@ use crate::domain::error::A2AError;
 pub enum Role {
     User,
     Agent,
-    System,
 }
 
 /// File content representation
@@ -83,7 +82,7 @@ impl FileContent {
 
 /// Parts that can make up a message
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
+#[serde(tag = "kind")]
 pub enum Part {
     #[serde(rename = "text")]
     Text {
@@ -123,22 +122,27 @@ pub struct Message {
     pub parts: Vec<Part>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "referenceTaskIds")]
+    pub reference_task_ids: Option<Vec<String>>,
+    #[serde(rename = "messageId")]
+    pub message_id: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "taskId")]
+    pub task_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "contextId")]
+    pub context_id: Option<String>,
+    pub kind: String,  // Always "message"
 }
 
 /// An artifact produced by an agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artifact {
+    #[serde(rename = "artifactId")]
+    pub artifact_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub parts: Vec<Part>,
-    #[serde(default)]
-    pub index: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub append: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "lastChunk")]
-    pub last_chunk: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
@@ -215,20 +219,30 @@ impl Part {
 /// Helper methods for creating messages
 impl Message {
     /// Create a new user message with a single text part
-    pub fn user_text(text: String) -> Self {
+    pub fn user_text(text: String, message_id: String) -> Self {
         Self {
             role: Role::User,
             parts: vec![Part::text(text)],
             metadata: None,
+            reference_task_ids: None,
+            message_id,
+            task_id: None,
+            context_id: None,
+            kind: "message".to_string(),
         }
     }
 
     /// Create a new agent message with a single text part
-    pub fn agent_text(text: String) -> Self {
+    pub fn agent_text(text: String, message_id: String) -> Self {
         Self {
             role: Role::Agent,
             parts: vec![Part::text(text)],
             metadata: None,
+            reference_task_ids: None,
+            message_id,
+            task_id: None,
+            context_id: None,
+            kind: "message".to_string(),
         }
     }
 

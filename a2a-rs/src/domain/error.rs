@@ -12,6 +12,8 @@ pub const TASK_NOT_FOUND: i32 = -32001;
 pub const TASK_NOT_CANCELABLE: i32 = -32002;
 pub const PUSH_NOTIFICATION_NOT_SUPPORTED: i32 = -32003;
 pub const UNSUPPORTED_OPERATION: i32 = -32004;
+pub const CONTENT_TYPE_NOT_SUPPORTED: i32 = -32005;
+pub const INVALID_AGENT_RESPONSE: i32 = -32006;
 
 /// Error type for the A2A protocol operations
 #[derive(Error, Debug)]
@@ -47,6 +49,12 @@ pub enum A2AError {
     #[error("Unsupported operation: {0}")]
     UnsupportedOperation(String),
 
+    #[error("Content type not supported: {0}")]
+    ContentTypeNotSupported(String),
+
+    #[error("Invalid agent response: {0}")]
+    InvalidAgentResponse(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -70,6 +78,12 @@ impl A2AError {
             ),
             A2AError::UnsupportedOperation(_) => {
                 (UNSUPPORTED_OPERATION, "This operation is not supported")
+            }
+            A2AError::ContentTypeNotSupported(_) => {
+                (CONTENT_TYPE_NOT_SUPPORTED, "Incompatible content types")
+            }
+            A2AError::InvalidAgentResponse(_) => {
+                (INVALID_AGENT_RESPONSE, "Invalid agent response")
             }
             A2AError::Internal(_) => (INTERNAL_ERROR, "Internal error"),
             _ => (INTERNAL_ERROR, "Internal error"),

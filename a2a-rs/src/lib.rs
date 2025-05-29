@@ -116,14 +116,17 @@ pub mod port;
 // Public API exports
 pub use domain::{
     agent::{
-        AgentAuthentication, AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
-        AuthenticationInfo, PushNotificationConfig,
+        AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
+        PushNotificationAuthenticationInfo, PushNotificationConfig, SecurityScheme,
+        OAuthFlows, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
+        ImplicitOAuthFlow, PasswordOAuthFlow,
     },
     error::A2AError,
     message::{Artifact, FileContent, Message, Part, Role},
     task::{
-        Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-        TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
+        MessageSendConfiguration, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskIdParams,
+        TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+        TaskStatusUpdateEvent,
     },
 };
 

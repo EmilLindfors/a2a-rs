@@ -1,19 +1,102 @@
+use bon::Builder;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Information about an agent provider
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProvider {
     pub organization: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url: Option<String>,
+    pub url: String,
 }
 
-/// Authentication information for an agent
+/// Security scheme types
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AgentAuthentication {
-    pub schemes: Vec<String>,
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum SecurityScheme {
+    #[serde(rename = "apiKey")]
+    ApiKey {
+        #[serde(rename = "in")]
+        location: String,  // "query" | "header" | "cookie"
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    #[serde(rename = "http")]
+    Http {
+        scheme: String,
+        #[serde(skip_serializing_if = "Option::is_none", rename = "bearerFormat")]
+        bearer_format: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    #[serde(rename = "oauth2")]
+    OAuth2 {
+        flows: OAuthFlows,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+    #[serde(rename = "openIdConnect")]
+    OpenIdConnect {
+        #[serde(rename = "openIdConnectUrl")]
+        open_id_connect_url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
+    },
+}
+
+/// OAuth flow configurations
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct OAuthFlows {
+    #[serde(skip_serializing_if = "Option::is_none", rename = "authorizationCode")]
+    pub authorization_code: Option<AuthorizationCodeOAuthFlow>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "clientCredentials")]
+    pub client_credentials: Option<ClientCredentialsOAuthFlow>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub credentials: Option<String>,
+    pub implicit: Option<ImplicitOAuthFlow>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub password: Option<PasswordOAuthFlow>,
+}
+
+/// Authorization code OAuth flow
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuthorizationCodeOAuthFlow {
+    #[serde(rename = "authorizationUrl")]
+    pub authorization_url: String,
+    #[serde(rename = "tokenUrl")]
+    pub token_url: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "refreshUrl")]
+    pub refresh_url: Option<String>,
+    pub scopes: HashMap<String, String>,
+}
+
+/// Client credentials OAuth flow
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientCredentialsOAuthFlow {
+    #[serde(rename = "tokenUrl")]
+    pub token_url: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "refreshUrl")]
+    pub refresh_url: Option<String>,
+    pub scopes: HashMap<String, String>,
+}
+
+/// Implicit OAuth flow
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImplicitOAuthFlow {
+    #[serde(rename = "authorizationUrl")]
+    pub authorization_url: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "refreshUrl")]
+    pub refresh_url: Option<String>,
+    pub scopes: HashMap<String, String>,
+}
+
+/// Password OAuth flow
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PasswordOAuthFlow {
+    #[serde(rename = "tokenUrl")]
+    pub token_url: String,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "refreshUrl")]
+    pub refresh_url: Option<String>,
+    pub scopes: HashMap<String, String>,
 }
 
 /// Capabilities supported by an agent
@@ -32,10 +115,8 @@ pub struct AgentCapabilities {
 pub struct AgentSkill {
     pub id: String,
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags: Option<Vec<String>>,
+    pub description: String,
+    pub tags: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub examples: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "inputModes")]
@@ -46,29 +127,18 @@ pub struct AgentSkill {
 
 impl AgentSkill {
     /// Create a new skill with the minimum required fields
-    pub fn new(id: String, name: String) -> Self {
+    pub fn new(id: String, name: String, description: String, tags: Vec<String>) -> Self {
         Self {
             id,
             name,
-            description: None,
-            tags: None,
+            description,
+            tags,
             examples: None,
             input_modes: None,
             output_modes: None,
         }
     }
 
-    /// Add a description to the skill
-    pub fn with_description(mut self, description: String) -> Self {
-        self.description = Some(description);
-        self
-    }
-
-    /// Add tags to the skill
-    pub fn with_tags(mut self, tags: Vec<String>) -> Self {
-        self.tags = Some(tags);
-        self
-    }
 
     /// Add examples to the skill
     pub fn with_examples(mut self, examples: Vec<String>) -> Self {
@@ -92,8 +162,8 @@ impl AgentSkill {
     pub fn comprehensive(
         id: String,
         name: String,
-        description: Option<String>,
-        tags: Option<Vec<String>>,
+        description: String,
+        tags: Vec<String>,
         examples: Option<Vec<String>>,
         input_modes: Option<Vec<String>>,
         output_modes: Option<Vec<String>>,
@@ -111,11 +181,10 @@ impl AgentSkill {
 }
 
 /// Card describing an agent's capabilities and metadata
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct AgentCard {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
+    pub description: String,
     pub url: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<AgentProvider>,
@@ -123,13 +192,17 @@ pub struct AgentCard {
     #[serde(skip_serializing_if = "Option::is_none", rename = "documentationUrl")]
     pub documentation_url: Option<String>,
     pub capabilities: AgentCapabilities,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "securitySchemes")]
+    pub security_schemes: Option<HashMap<String, SecurityScheme>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authentication: Option<AgentAuthentication>,
+    pub security: Option<Vec<HashMap<String, Vec<String>>>>,
     #[serde(default = "default_input_modes", rename = "defaultInputModes")]
     pub default_input_modes: Vec<String>,
     #[serde(default = "default_output_modes", rename = "defaultOutputModes")]
     pub default_output_modes: Vec<String>,
     pub skills: Vec<AgentSkill>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "supportsAuthenticatedExtendedCard")]
+    pub supports_authenticated_extended_card: Option<bool>,
 }
 
 fn default_input_modes() -> Vec<String> {
@@ -140,15 +213,12 @@ fn default_output_modes() -> Vec<String> {
     vec!["text".to_string()]
 }
 
-/// Authentication information with extensibility
+/// Push notification authentication information
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AuthenticationInfo {
+pub struct PushNotificationAuthenticationInfo {
     pub schemes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub credentials: Option<String>,
-    // Support for additional properties as specified in schema
-    #[serde(flatten)]
-    pub additional_properties: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Configuration for push notifications
@@ -157,5 +227,5 @@ pub struct PushNotificationConfig {
     pub url: String,
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub authentication: Option<AuthenticationInfo>,
+    pub authentication: Option<PushNotificationAuthenticationInfo>,
 }

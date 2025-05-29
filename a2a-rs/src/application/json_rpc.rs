@@ -4,8 +4,8 @@ use serde_json::Value;
 use crate::domain::{
     error::A2AError,
     task::{
-        Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-        TaskSendParams, TaskStatusUpdateEvent,
+        MessageSendConfiguration, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskIdParams,
+        TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
     },
 };
 
@@ -145,7 +145,28 @@ impl JSONRPCResponse {
 
 // A2A-specific request types
 
-/// Request to send a task
+/// Request to send a message
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageRequest {
+    pub jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Value>,
+    pub method: String,
+    pub params: MessageSendParams,
+}
+
+impl SendMessageRequest {
+    pub fn new(params: MessageSendParams) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
+            method: "message/send".to_string(),
+            params,
+        }
+    }
+}
+
+/// Request to send a task (legacy)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendTaskRequest {
     pub jsonrpc: String,
@@ -166,7 +187,19 @@ impl SendTaskRequest {
     }
 }
 
-/// Response to a send task request
+/// Response to a send message request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageResponse {
+    pub jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<Task>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JSONRPCError>,
+}
+
+/// Response to a send task request (legacy)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendTaskResponse {
     pub jsonrpc: String,
@@ -259,7 +292,7 @@ impl SetTaskPushNotificationRequest {
         Self {
             jsonrpc: "2.0".to_string(),
             id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
-            method: "tasks/pushNotification/set".to_string(),
+            method: "tasks/pushNotificationConfig/set".to_string(),
             params,
         }
     }
@@ -292,7 +325,7 @@ impl GetTaskPushNotificationRequest {
         Self {
             jsonrpc: "2.0".to_string(),
             id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
-            method: "tasks/pushNotification/get".to_string(),
+            method: "tasks/pushNotificationConfig/get".to_string(),
             params,
         }
     }
@@ -310,7 +343,28 @@ pub struct GetTaskPushNotificationResponse {
     pub error: Option<JSONRPCError>,
 }
 
-/// Request to send a task with streaming
+/// Request to send a message with streaming
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SendMessageStreamingRequest {
+    pub jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Value>,
+    pub method: String,
+    pub params: MessageSendParams,
+}
+
+impl SendMessageStreamingRequest {
+    pub fn new(params: MessageSendParams) -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
+            method: "message/stream".to_string(),
+            params,
+        }
+    }
+}
+
+/// Request to send a task with streaming (legacy)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SendTaskStreamingRequest {
     pub jsonrpc: String,
@@ -331,7 +385,37 @@ impl SendTaskStreamingRequest {
     }
 }
 
-/// Response to a send task streaming request
+/// Response to a send message streaming request
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SendMessageStreamingResponse {
+    Status {
+        jsonrpc: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<Value>,
+        result: TaskStatusUpdateEvent,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<JSONRPCError>,
+    },
+    Artifact {
+        jsonrpc: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<Value>,
+        result: TaskArtifactUpdateEvent,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<JSONRPCError>,
+    },
+    Error {
+        jsonrpc: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<Value>,
+        error: JSONRPCError,
+    },
+}
+
+/// Response to a send task streaming request (legacy)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum SendTaskStreamingResponse {
@@ -386,13 +470,15 @@ impl TaskResubscriptionRequest {
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum A2ARequest {
+    SendMessage(SendMessageRequest),
+    SendMessageStreaming(SendMessageStreamingRequest),
     SendTask(SendTaskRequest),
+    SendTaskStreaming(SendTaskStreamingRequest),
     GetTask(GetTaskRequest),
     CancelTask(CancelTaskRequest),
     SetTaskPushNotification(SetTaskPushNotificationRequest),
     GetTaskPushNotification(GetTaskPushNotificationRequest),
     TaskResubscription(TaskResubscriptionRequest),
-    SendTaskStreaming(SendTaskStreamingRequest),
     Generic(JSONRPCRequest),
 }
 
@@ -407,8 +493,20 @@ impl<'de> Deserialize<'de> for A2ARequest {
 
         // Based on the method field, determine the appropriate variant
         let result = match json_req.method.as_str() {
+            "message/send" => {
+                // Re-parse as SendMessageRequest
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = SendMessageRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                A2ARequest::SendMessage(req)
+            }
+            "message/stream" => {
+                // Re-parse as SendMessageStreamingRequest
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = SendMessageStreamingRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                A2ARequest::SendMessageStreaming(req)
+            }
             "tasks/send" => {
-                // Re-parse as SendTaskRequest
+                // Re-parse as SendTaskRequest (legacy)
                 let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
                 let req = SendTaskRequest::deserialize(value).map_err(serde::de::Error::custom)?;
                 A2ARequest::SendTask(req)
@@ -426,14 +524,14 @@ impl<'de> Deserialize<'de> for A2ARequest {
                     CancelTaskRequest::deserialize(value).map_err(serde::de::Error::custom)?;
                 A2ARequest::CancelTask(req)
             }
-            "tasks/pushNotification/set" => {
+            "tasks/pushNotificationConfig/set" => {
                 // Re-parse as SetTaskPushNotificationRequest
                 let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
                 let req = SetTaskPushNotificationRequest::deserialize(value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::SetTaskPushNotification(req)
             }
-            "tasks/pushNotification/get" => {
+            "tasks/pushNotificationConfig/get" => {
                 // Re-parse as GetTaskPushNotificationRequest
                 let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
                 let req = GetTaskPushNotificationRequest::deserialize(value)
@@ -448,7 +546,7 @@ impl<'de> Deserialize<'de> for A2ARequest {
                 A2ARequest::TaskResubscription(req)
             }
             "tasks/sendSubscribe" => {
-                // Re-parse as SendTaskStreamingRequest
+                // Re-parse as SendTaskStreamingRequest (legacy)
                 let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
                 let req = SendTaskStreamingRequest::deserialize(value)
                     .map_err(serde::de::Error::custom)?;
@@ -468,13 +566,15 @@ impl A2ARequest {
     /// Get the method of the request
     pub fn method(&self) -> &str {
         match self {
+            A2ARequest::SendMessage(req) => &req.method,
+            A2ARequest::SendMessageStreaming(req) => &req.method,
             A2ARequest::SendTask(req) => &req.method,
+            A2ARequest::SendTaskStreaming(req) => &req.method,
             A2ARequest::GetTask(req) => &req.method,
             A2ARequest::CancelTask(req) => &req.method,
             A2ARequest::SetTaskPushNotification(req) => &req.method,
             A2ARequest::GetTaskPushNotification(req) => &req.method,
             A2ARequest::TaskResubscription(req) => &req.method,
-            A2ARequest::SendTaskStreaming(req) => &req.method,
             A2ARequest::Generic(req) => &req.method,
         }
     }
@@ -482,13 +582,15 @@ impl A2ARequest {
     /// Get the ID of the request, if any
     pub fn id(&self) -> Option<&Value> {
         match self {
+            A2ARequest::SendMessage(req) => req.id.as_ref(),
+            A2ARequest::SendMessageStreaming(req) => req.id.as_ref(),
             A2ARequest::SendTask(req) => req.id.as_ref(),
+            A2ARequest::SendTaskStreaming(req) => req.id.as_ref(),
             A2ARequest::GetTask(req) => req.id.as_ref(),
             A2ARequest::CancelTask(req) => req.id.as_ref(),
             A2ARequest::SetTaskPushNotification(req) => req.id.as_ref(),
             A2ARequest::GetTaskPushNotification(req) => req.id.as_ref(),
             A2ARequest::TaskResubscription(req) => req.id.as_ref(),
-            A2ARequest::SendTaskStreaming(req) => req.id.as_ref(),
             A2ARequest::Generic(req) => req.id.as_ref(),
         }
     }
