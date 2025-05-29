@@ -1,14 +1,14 @@
 //! A simple WebSocket server example
 
 use a2a_rs::adapter::server::{
-    DefaultRequestProcessor, HttpPushNotificationSender, InMemoryTaskStorage, SimpleAgentInfo,
+    DefaultRequestProcessor, NoopPushNotificationSender, InMemoryTaskStorage, SimpleAgentInfo,
     WebSocketServer,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a custom push notification sender
-    let push_sender = HttpPushNotificationSender::new();
+    let push_sender = NoopPushNotificationSender::default();
 
     // Create task storage with the push notification sender
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);
@@ -49,10 +49,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting WebSocket server on ws://127.0.0.1:8081");
     println!("This server supports streaming responses");
     println!("Push notifications are configured but require a valid endpoint");
-    println!("Press Ctrl+C to stop");
+    println!("Server will exit after handling connections for 15 seconds");
 
-    // Start the server
-    server.start().await?;
+    // Start the server with a timeout
+    let server_future = server.start();
+    let timeout_future = tokio::time::sleep(tokio::time::Duration::from_secs(15));
+
+    tokio::select! {
+        result = server_future => {
+            println!("Server exited: {:?}", result);
+            result?;
+        }
+        _ = timeout_future => {
+            println!("Server timeout reached, exiting gracefully");
+        }
+    }
 
     Ok(())
 }

@@ -4,7 +4,7 @@ pub mod error;
 
 #[cfg(feature = "server")]
 pub mod agent_info;
-#[cfg(feature = "http-server")]
+#[cfg(any(feature = "http-server", feature = "ws-server"))]
 pub mod auth;
 #[cfg(feature = "http-server")]
 pub mod http;
@@ -22,8 +22,10 @@ pub mod ws;
 // Re-export server implementations
 #[cfg(feature = "server")]
 pub use agent_info::SimpleAgentInfo;
+#[cfg(any(feature = "http-server", feature = "ws-server"))]
+pub use auth::{Authenticator, NoopAuthenticator, TokenAuthenticator};
 #[cfg(feature = "http-server")]
-pub use auth::{Authenticator, NoopAuthenticator, TokenAuthenticator, with_auth};
+pub use auth::with_auth;
 #[cfg(feature = "http-server")]
 pub use http::HttpServer;
 #[cfg(feature = "server")]

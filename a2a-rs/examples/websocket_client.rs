@@ -44,73 +44,91 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subscribe_to_task(&task_id, &message, None, None)
         .await?;
 
-    // Process streaming updates
+    // Process streaming updates with timeout
     println!("Waiting for streaming updates...");
     let mut final_received = false;
     let mut status_updates = 0;
     let mut artifact_updates = 0;
 
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(StreamItem::Task(task)) => {
-                println!("Received initial task response for task {}", task.id);
-                println!("  Status: {:?}", task.status.state);
+    // Set a timeout for receiving streaming updates (12 seconds to allow server time)
+    let timeout = tokio::time::sleep(tokio::time::Duration::from_secs(12));
+    tokio::pin!(timeout);
 
-                if let Some(message) = &task.status.message {
-                    println!("  Message:");
-                    for part in &message.parts {
-                        match part {
-                            Part::Text { text, .. } => println!("    {}", text),
-                            Part::Data { .. } => println!("    [Data content]"),
-                            _ => println!("    [Other content]"),
+    loop {
+        tokio::select! {
+            result = stream.next() => {
+                if let Some(result) = result {
+                    match result {
+                        Ok(StreamItem::Task(task)) => {
+                            println!("Received initial task response for task {}", task.id);
+                            println!("  Status: {:?}", task.status.state);
+
+                            if let Some(message) = &task.status.message {
+                                println!("  Message:");
+                                for part in &message.parts {
+                                    match part {
+                                        Part::Text { text, .. } => println!("    {}", text),
+                                        Part::Data { .. } => println!("    [Data content]"),
+                                        _ => println!("    [Other content]"),
+                                    }
+                                }
+                            }
+                        }
+                        Ok(StreamItem::StatusUpdate(update)) => {
+                            status_updates += 1;
+                            println!(
+                                "Status update #{}: {:?}",
+                                status_updates, update.status.state
+                            );
+
+                            if let Some(message) = &update.status.message {
+                                println!("  Message:");
+                                for part in &message.parts {
+                                    match part {
+                                        Part::Text { text, .. } => println!("    {}", text),
+                                        Part::Data { .. } => println!("    [Data content]"),
+                                        _ => println!("    [Other content]"),
+                                    }
+                                }
+                            }
+
+                            if update.final_ {
+                                println!("Received final update");
+                                final_received = true;
+                                break;
+                            }
+                        }
+                        Ok(StreamItem::ArtifactUpdate(update)) => {
+                            artifact_updates += 1;
+                            println!(
+                                "Artifact update #{} for task {}",
+                                artifact_updates, update.task_id
+                            );
+                            println!("  Artifact name: {:?}", update.artifact.name);
+                            println!("  Parts: {} item(s)", update.artifact.parts.len());
+
+                            // Display artifact parts
+                            for (i, part) in update.artifact.parts.iter().enumerate() {
+                                match part {
+                                    Part::Text { text, .. } => println!("    Part {}: {}", i + 1, text),
+                                    Part::Data { .. } => println!("    Part {}: [Data content]", i + 1),
+                                    _ => println!("    Part {}: [Other content]", i + 1),
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Error: {}", e);
+                            break;
                         }
                     }
-                }
-            }
-            Ok(StreamItem::StatusUpdate(update)) => {
-                status_updates += 1;
-                println!(
-                    "Status update #{}: {:?}",
-                    status_updates, update.status.state
-                );
-
-                if let Some(message) = &update.status.message {
-                    println!("  Message:");
-                    for part in &message.parts {
-                        match part {
-                            Part::Text { text, .. } => println!("    {}", text),
-                            Part::Data { .. } => println!("    [Data content]"),
-                            _ => println!("    [Other content]"),
-                        }
-                    }
-                }
-
-                if update.final_ {
-                    println!("Received final update");
-                    final_received = true;
+                } else {
+                    // Stream ended
+                    println!("Stream ended");
                     break;
                 }
             }
-            Ok(StreamItem::ArtifactUpdate(update)) => {
-                artifact_updates += 1;
-                println!(
-                    "Artifact update #{} for task {}",
-                    artifact_updates, update.task_id
-                );
-                println!("  Artifact name: {:?}", update.artifact.name);
-                println!("  Parts: {} item(s)", update.artifact.parts.len());
-
-                // Display artifact parts
-                for (i, part) in update.artifact.parts.iter().enumerate() {
-                    match part {
-                        Part::Text { text, .. } => println!("    Part {}: {}", i + 1, text),
-                        Part::Data { .. } => println!("    Part {}: [Data content]", i + 1),
-                        _ => println!("    Part {}: [Other content]", i + 1),
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("Error: {}", e);
+            _ = &mut timeout => {
+                println!("Timeout reached, stopping streaming");
                 break;
             }
         }

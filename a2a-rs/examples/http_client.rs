@@ -41,8 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Send a task message with retries
     println!("Sending message to task...");
 
-    // Try to connect with retries
-    let max_retries = 5;
+    // Try to connect with retries (faster retry for demo)
+    let max_retries = 10;
     let mut task = None;
 
     for retry in 0..max_retries {
@@ -57,11 +57,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Err(e) => {
                 if retry < max_retries - 1 {
                     println!(
-                        "Connection attempt {} failed: {}. Retrying in 1 second...",
+                        "Connection attempt {} failed: {}. Retrying in 0.5 seconds...",
                         retry + 1,
                         e
                     );
-                    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 } else {
                     return Err(e.into());
                 }

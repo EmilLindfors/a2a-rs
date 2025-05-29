@@ -1,14 +1,14 @@
 //! A simple HTTP server example
 
 use a2a_rs::adapter::server::{
-    DefaultRequestProcessor, HttpPushNotificationSender, HttpServer, InMemoryTaskStorage,
+    DefaultRequestProcessor, NoopPushNotificationSender, HttpServer, InMemoryTaskStorage,
     SimpleAgentInfo,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a custom push notification sender
-    let push_sender = HttpPushNotificationSender::new();
+    let push_sender = NoopPushNotificationSender::default();
 
     // Create task storage with the push notification sender
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);
@@ -50,10 +50,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Try accessing the agent card at http://127.0.0.1:8080/agent-card");
     println!("Try accessing the skills at http://127.0.0.1:8080/skills");
     println!("Try accessing a specific skill at http://127.0.0.1:8080/skills/echo");
-    println!("Press Ctrl+C to stop");
+    println!("Server will exit after handling requests for 15 seconds");
 
-    // Start the server
-    server.start().await?;
+    // Start the server with a timeout
+    let server_future = server.start();
+    let timeout_future = tokio::time::sleep(tokio::time::Duration::from_secs(15));
+
+    tokio::select! {
+        result = server_future => {
+            println!("Server exited: {:?}", result);
+            result?;
+        }
+        _ = timeout_future => {
+            println!("Server timeout reached, exiting gracefully");
+        }
+    }
 
     Ok(())
 }

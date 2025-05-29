@@ -1,6 +1,6 @@
 //! Error types for server adapters
 
-#[cfg(feature = "http-server")]
+#[cfg(any(feature = "http-server", feature = "ws-server"))]
 use std::io;
 
 #[cfg(any(feature = "http-server", feature = "ws-server"))]

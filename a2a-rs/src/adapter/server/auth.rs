@@ -5,6 +5,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+#[cfg(feature = "http-server")]
 use axum::{
     extract::State,
     http::{Request, StatusCode, header},
@@ -93,72 +94,80 @@ impl Authenticator for NoopAuthenticator {
     }
 }
 
-/// Authentication middleware state
-#[derive(Clone)]
-pub struct AuthState {
-    /// The authenticator to use
-    authenticator: Arc<dyn Authenticator>,
-}
+#[cfg(feature = "http-server")]
+mod http_auth {
+    use super::*;
 
-impl AuthState {
-    /// Create a new authentication state
-    pub fn new(authenticator: impl Authenticator + 'static) -> Self {
-        Self {
-            authenticator: Arc::new(authenticator),
-        }
+    /// Authentication middleware state
+    #[derive(Clone)]
+    pub struct AuthState {
+        /// The authenticator to use
+        authenticator: Arc<dyn Authenticator>,
     }
-}
 
-/// Authentication middleware for Axum
-pub async fn http_auth_middleware(
-    State(state): State<AuthState>,
-    req: Request<axum::body::Body>,
-    next: Next,
-) -> Result<Response, StatusCode> {
-    // Extract the token from the Authorization header
-    let auth_header = req
-        .headers()
-        .get(header::AUTHORIZATION)
-        .and_then(|header| header.to_str().ok());
-
-    if let Some(auth) = auth_header {
-        // Split the scheme and token
-        let parts: Vec<&str> = auth.splitn(2, ' ').collect();
-        if parts.len() == 2 {
-            let scheme = parts[0];
-            let token = parts[1];
-
-            // Verify the scheme matches
-            if scheme.to_lowercase() == state.authenticator.scheme().to_lowercase() {
-                // Authenticate the token
-                match state.authenticator.authenticate(token).await {
-                    Ok(_) => {
-                        // Authentication successful, proceed with the request
-                        return Ok(next.run(req).await);
-                    }
-                    Err(_) => {
-                        // Authentication failed
-                        return Err(StatusCode::UNAUTHORIZED);
-                    }
-                }
+    impl AuthState {
+        /// Create a new authentication state
+        pub fn new(authenticator: impl Authenticator + 'static) -> Self {
+            Self {
+                authenticator: Arc::new(authenticator),
             }
         }
     }
 
-    // No valid authentication header found
-    Err(StatusCode::UNAUTHORIZED)
+    /// Authentication middleware for Axum
+    pub async fn http_auth_middleware(
+        State(state): State<AuthState>,
+        req: Request<axum::body::Body>,
+        next: Next,
+    ) -> Result<Response, StatusCode> {
+        // Extract the token from the Authorization header
+        let auth_header = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|header| header.to_str().ok());
+
+        if let Some(auth) = auth_header {
+            // Split the scheme and token
+            let parts: Vec<&str> = auth.splitn(2, ' ').collect();
+            if parts.len() == 2 {
+                let scheme = parts[0];
+                let token = parts[1];
+
+                // Verify the scheme matches
+                if scheme.to_lowercase() == state.authenticator.scheme().to_lowercase() {
+                    // Authenticate the token
+                    match state.authenticator.authenticate(token).await {
+                        Ok(_) => {
+                            // Authentication successful, proceed with the request
+                            return Ok(next.run(req).await);
+                        }
+                        Err(_) => {
+                            // Authentication failed
+                            return Err(StatusCode::UNAUTHORIZED);
+                        }
+                    }
+                }
+            }
+        }
+
+        // No valid authentication header found
+        Err(StatusCode::UNAUTHORIZED)
+    }
+
+    /// Helper function to apply authentication middleware to a router
+    pub fn with_auth<R>(router: R, authenticator: impl Authenticator + 'static) -> axum::Router
+    where
+        R: Into<axum::Router>,
+    {
+        let auth_state = AuthState::new(authenticator);
+        let router = router.into();
+
+        router.layer(axum::middleware::from_fn_with_state(
+            auth_state,
+            http_auth_middleware,
+        ))
+    }
 }
 
-/// Helper function to apply authentication middleware to a router
-pub fn with_auth<R>(router: R, authenticator: impl Authenticator + 'static) -> axum::Router
-where
-    R: Into<axum::Router>,
-{
-    let auth_state = AuthState::new(authenticator);
-    let router = router.into();
-
-    router.layer(axum::middleware::from_fn_with_state(
-        auth_state,
-        http_auth_middleware,
-    ))
-}
+#[cfg(feature = "http-server")]
+pub use http_auth::with_auth;
