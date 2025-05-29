@@ -1,0 +1,184 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "A2A Agent Definitions",
+  "description": "Agent-related type definitions for the A2A protocol",
+  "definitions": {
+    "AgentCard": {
+      "description": "An AgentCard conveys key information:\n- Overall details (version, name, description, uses)\n- Skills: A set of capabilities the agent can perform\n- Default modalities/content types supported by the agent.\n- Authentication requirements",
+      "properties": {
+        "capabilities": {
+          "$ref": "#/definitions/AgentCapabilities",
+          "description": "Optional capabilities supported by the agent."
+        },
+        "defaultInputModes": {
+          "description": "The set of interaction modes that the agent supports across all skills. This can be overridden per-skill.\nSupported mime types for input.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "defaultOutputModes": {
+          "description": "Supported mime types for output.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "description": {
+          "description": "A human-readable description of the agent. Used to assist users and\nother agents in understanding what the agent can do.",
+          "type": "string"
+        },
+        "documentationUrl": {
+          "description": "A URL to documentation for the agent.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Human readable name of the agent.",
+          "type": "string"
+        },
+        "provider": {
+          "$ref": "#/definitions/AgentProvider",
+          "description": "The service provider of the agent"
+        },
+        "security": {
+          "description": "Security requirements for contacting the agent.",
+          "items": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "securitySchemes": {
+          "additionalProperties": {
+            "$ref": "security.json#/definitions/SecurityScheme"
+          },
+          "description": "Security scheme details used for authenticating with this agent.",
+          "type": "object"
+        },
+        "skills": {
+          "description": "Skills are a unit of capability that an agent can perform.",
+          "items": {
+            "$ref": "#/definitions/AgentSkill"
+          },
+          "type": "array"
+        },
+        "supportsAuthenticatedExtendedCard": {
+          "description": "true if the agent supports providing an extended agent card when the user is authenticated.\nDefaults to false if not specified.",
+          "type": "boolean"
+        },
+        "url": {
+          "description": "A URL to the address the agent is hosted at.",
+          "type": "string"
+        },
+        "version": {
+          "description": "The version of the agent - format is up to the provider.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "capabilities",
+        "defaultInputModes",
+        "defaultOutputModes",
+        "description",
+        "name",
+        "skills",
+        "url",
+        "version"
+      ],
+      "type": "object"
+    },
+    "AgentCapabilities": {
+      "description": "Defines optional capabilities supported by an agent.",
+      "properties": {
+        "pushNotifications": {
+          "description": "true if the agent can notify updates to client.",
+          "type": "boolean"
+        },
+        "stateTransitionHistory": {
+          "description": "true if the agent exposes status change history for tasks.",
+          "type": "boolean"
+        },
+        "streaming": {
+          "description": "true if the agent supports SSE.",
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
+    "AgentProvider": {
+      "description": "Represents the service provider of an agent.",
+      "properties": {
+        "organization": {
+          "description": "Agent provider's organization name.",
+          "type": "string"
+        },
+        "url": {
+          "description": "Agent provider's URL.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "organization",
+        "url"
+      ],
+      "type": "object"
+    },
+    "AgentSkill": {
+      "description": "Represents a unit of capability that an agent can perform.",
+      "properties": {
+        "description": {
+          "description": "Description of the skill - will be used by the client or a human\nas a hint to understand what the skill does.",
+          "type": "string"
+        },
+        "examples": {
+          "description": "The set of example scenarios that the skill can perform.\nWill be used by the client as a hint to understand how the skill can be used.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Unique identifier for the agent's skill.",
+          "type": "string"
+        },
+        "inputModes": {
+          "description": "The set of interaction modes that the skill supports\n(if different than the default).\nSupported mime types for input.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "description": "Human readable name of the skill.",
+          "type": "string"
+        },
+        "outputModes": {
+          "description": "Supported mime types for output.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "tags": {
+          "description": "Set of tagwords describing classes of capabilities for this specific skill.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "description",
+        "id",
+        "name",
+        "tags"
+      ],
+      "type": "object"
+    }
+  }
+}

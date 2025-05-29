@@ -1,0 +1,224 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "A2A Message Definitions",
+  "description": "Message and content type definitions for the A2A protocol",
+  "definitions": {
+    "Message": {
+      "description": "Represents a single message exchanged between user and agent.",
+      "properties": {
+        "contextId": {
+          "description": "The context the message is associated with",
+          "type": "string"
+        },
+        "kind": {
+          "const": "message",
+          "description": "Event type",
+          "type": "string"
+        },
+        "messageId": {
+          "description": "Identifier created by the message creator",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {},
+          "description": "Extension metadata.",
+          "type": "object"
+        },
+        "parts": {
+          "description": "Message content",
+          "items": {
+            "$ref": "#/definitions/Part"
+          },
+          "type": "array"
+        },
+        "referenceTaskIds": {
+          "description": "List of tasks referenced as context by this message.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "role": {
+          "description": "Message sender's role",
+          "enum": [
+            "agent",
+            "user"
+          ],
+          "type": "string"
+        },
+        "taskId": {
+          "description": "Identifier of task the message is related to",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "messageId",
+        "parts",
+        "role"
+      ],
+      "type": "object"
+    },
+    "Part": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TextPart"
+        },
+        {
+          "$ref": "#/definitions/FilePart"
+        },
+        {
+          "$ref": "#/definitions/DataPart"
+        }
+      ],
+      "description": "Represents a part of a message, which can be text, a file, or structured data."
+    },
+    "PartBase": {
+      "description": "Base properties common to all message parts.",
+      "properties": {
+        "metadata": {
+          "additionalProperties": {},
+          "description": "Optional metadata associated with the part.",
+          "type": "object"
+        }
+      },
+      "type": "object"
+    },
+    "TextPart": {
+      "description": "Represents a text segment within parts.",
+      "properties": {
+        "kind": {
+          "const": "text",
+          "description": "Part type - text for TextParts",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {},
+          "description": "Optional metadata associated with the part.",
+          "type": "object"
+        },
+        "text": {
+          "description": "Text content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "type": "object"
+    },
+    "FilePart": {
+      "description": "Represents a File segment within parts.",
+      "properties": {
+        "file": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/FileWithBytes"
+            },
+            {
+              "$ref": "#/definitions/FileWithUri"
+            }
+          ],
+          "description": "File content either as url or bytes"
+        },
+        "kind": {
+          "const": "file",
+          "description": "Part type - file for FileParts",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {},
+          "description": "Optional metadata associated with the part.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "file",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "DataPart": {
+      "description": "Represents a structured data segment within a message part.",
+      "properties": {
+        "data": {
+          "additionalProperties": {},
+          "description": "Structured data content",
+          "type": "object"
+        },
+        "kind": {
+          "const": "data",
+          "description": "Part type - data for DataParts",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {},
+          "description": "Optional metadata associated with the part.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "data",
+        "kind"
+      ],
+      "type": "object"
+    },
+    "FileBase": {
+      "description": "Represents the base entity for FileParts",
+      "properties": {
+        "mimeType": {
+          "description": "Optional mimeType for the file",
+          "type": "string"
+        },
+        "name": {
+          "description": "Optional name for the file",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "FileWithBytes": {
+      "description": "Define the variant where 'bytes' is present and 'uri' is absent",
+      "properties": {
+        "bytes": {
+          "description": "base64 encoded content of the file",
+          "type": "string"
+        },
+        "mimeType": {
+          "description": "Optional mimeType for the file",
+          "type": "string"
+        },
+        "name": {
+          "description": "Optional name for the file",
+          "type": "string"
+        }
+      },
+      "required": [
+        "bytes"
+      ],
+      "type": "object"
+    },
+    "FileWithUri": {
+      "description": "Define the variant where 'uri' is present and 'bytes' is absent",
+      "properties": {
+        "mimeType": {
+          "description": "Optional mimeType for the file",
+          "type": "string"
+        },
+        "name": {
+          "description": "Optional name for the file",
+          "type": "string"
+        },
+        "uri": {
+          "description": "URL for the File content",
+          "type": "string"
+        }
+      },
+      "required": [
+        "uri"
+      ],
+      "type": "object"
+    }
+  }
+}

@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "A2A Task Definitions",
+  "description": "Task, artifact, and state management definitions for the A2A protocol",
+  "definitions": {
+    "Task": {
+      "properties": {
+        "artifacts": {
+          "description": "Collection of artifacts created by the agent.",
+          "items": {
+            "$ref": "#/definitions/Artifact"
+          },
+          "type": "array"
+        },
+        "contextId": {
+          "description": "Server-generated id for contextual alignment across interactions",
+          "type": "string"
+        },
+        "history": {
+          "items": {
+            "$ref": "message.json#/definitions/Message"
+          },
+          "type": "array"
+        },
+        "id": {
+          "description": "Unique identifier for the task",
+          "type": "string"
+        },
+        "kind": {
+          "const": "task",
+          "description": "Event type",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {},
+          "description": "Extension metadata.",
+          "type": "object"
+        },
+        "status": {
+          "$ref": "#/definitions/TaskStatus",
+          "description": "Current status of the task"
+        }
+      },
+      "required": [
+        "contextId",
+        "id",
+        "kind",
+        "status"
+      ],
+      "type": "object"
+    },
+    "TaskState": {
+      "description": "Represents the possible states of a Task.",
+      "enum": [
+        "submitted",
+        "working",
+        "input-required",
+        "completed",
+        "canceled",
+        "failed",
+        "rejected",
+        "auth-required",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "TaskStatus": {
+      "description": "TaskState and accompanying message.",
+      "properties": {
+        "message": {
+          "$ref": "message.json#/definitions/Message",
+          "description": "Additional status updates for client"
+        },
+        "state": {
+          "$ref": "#/definitions/TaskState"
+        },
+        "timestamp": {
+          "description": "ISO 8601 datetime string when the status was recorded.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "state"
+      ],
+      "type": "object"
+    },
+    "Artifact": {
+      "description": "Represents an artifact generated for a task.",
+      "properties": {
+        "artifactId": {
+          "description": "Unique identifier for the artifact.",
+          "type": "string"
+        },
+        "description": {
+          "description": "Optional description for the artifact.",
+          "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": {},
+          "description": "Extension metadata.",
+          "type": "object"
+        },
+        "name": {
+          "description": "Optional name for the artifact.",
+          "type": "string"
+        },
+        "parts": {
+          "description": "Artifact parts.",
+          "items": {
+            "$ref": "message.json#/definitions/Part"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "artifactId",
+        "parts"
+      ],
+      "type": "object"
+    }
+  }
+}

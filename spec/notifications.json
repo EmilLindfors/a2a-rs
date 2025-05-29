@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "A2A Push Notification Definitions",
+  "description": "Push notification configuration and authentication for the A2A protocol",
+  "definitions": {
+    "PushNotificationConfig": {
+      "description": "Configuration for setting up push notifications for task updates.",
+      "properties": {
+        "authentication": {
+          "$ref": "#/definitions/PushNotificationAuthenticationInfo"
+        },
+        "token": {
+          "description": "Token unique to this task/session.",
+          "type": "string"
+        },
+        "url": {
+          "description": "URL for sending the push notifications.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ],
+      "type": "object"
+    },
+    "PushNotificationAuthenticationInfo": {
+      "description": "Defines authentication details for push notifications.",
+      "properties": {
+        "credentials": {
+          "description": "Optional credentials",
+          "type": "string"
+        },
+        "schemes": {
+          "description": "Supported authentication schemes - e.g. Basic, Bearer",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schemes"
+      ],
+      "type": "object"
+    }
+  }
+}
