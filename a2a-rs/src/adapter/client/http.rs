@@ -12,7 +12,7 @@ use std::{pin::Pin, time::Duration};
 
 use crate::{
     adapter::client::HttpClientError,
-    application::json_rpc::{self, A2ARequest, JSONRPCResponse, SendTaskRequest},
+    application::{json_rpc::{self, A2ARequest, SendTaskRequest}, JSONRPCResponse},
     domain::{
         A2AError, Message, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
         TaskSendParams,

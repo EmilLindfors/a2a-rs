@@ -4,11 +4,17 @@
 use async_trait::async_trait;
 
 use crate::{
-    application::json_rpc::{A2ARequest, JSONRPCResponse},
+    application::{json_rpc::A2ARequest, JSONRPCResponse},
     domain::{A2AError, Message, Task, TaskPushNotificationConfig},
 };
 
 /// A trait defining the methods a task handler should implement
+/// 
+/// **⚠️ Consider using the enhanced ports instead:**
+/// - `MessageHandler` for message processing
+/// - `TaskManager` for task operations  
+/// - `NotificationManager` for push notifications
+/// - `StreamingHandler` for real-time updates
 pub trait TaskHandler {
     /// Handle a task message
     fn handle_message(
@@ -37,6 +43,12 @@ pub trait TaskHandler {
 #[cfg(feature = "server")]
 #[async_trait]
 /// An async trait defining the methods an async task handler should implement
+/// 
+/// **⚠️ Consider using the enhanced ports instead:**
+/// - `AsyncMessageHandler` for message processing
+/// - `AsyncTaskManager` for task operations  
+/// - `AsyncNotificationManager` for push notifications
+/// - `AsyncStreamingHandler` for real-time updates
 pub trait AsyncTaskHandler: Send + Sync {
     /// Handle a task message
     async fn handle_message<'a>(

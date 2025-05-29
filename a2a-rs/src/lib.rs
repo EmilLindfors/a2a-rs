@@ -115,19 +115,15 @@ pub mod port;
 
 // Public API exports
 pub use domain::{
-    agent::{
-        AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
-        PushNotificationAuthenticationInfo, PushNotificationConfig, SecurityScheme,
-        OAuthFlows, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-        ImplicitOAuthFlow, PasswordOAuthFlow,
-    },
-    error::A2AError,
-    message::{Artifact, FileContent, Message, Part, Role},
-    task::{
-        MessageSendConfiguration, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskIdParams,
-        TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
-        TaskStatusUpdateEvent,
-    },
+    AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
+    PushNotificationAuthenticationInfo, PushNotificationConfig, SecurityScheme,
+    OAuthFlows, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
+    ImplicitOAuthFlow, PasswordOAuthFlow,
+    A2AError,
+    Artifact, FileContent, Message, Part, Role,
+    MessageSendConfiguration, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskIdParams,
+    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    TaskStatusUpdateEvent,
 };
 
 #[cfg(feature = "client")]
@@ -137,6 +133,14 @@ pub use port::client::{A2AClient, AsyncA2AClient, StreamItem};
 pub use port::server::{
     A2ARequestProcessor, AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber,
     TaskHandler,
+};
+
+// Enhanced port traits for better separation of concerns
+#[cfg(feature = "server")]
+pub use port::{
+    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
+    MessageHandler, NotificationManager, StreamingHandler, StreamingSubscriber, TaskManager,
+    UpdateEvent,
 };
 
 #[cfg(feature = "http-client")]

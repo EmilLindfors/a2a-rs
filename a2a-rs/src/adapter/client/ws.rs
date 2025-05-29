@@ -20,9 +20,12 @@ use url::Url;
 
 use crate::{
     adapter::client::WebSocketClientError,
-    application::json_rpc::{
-        self, A2ARequest, JSONRPCResponse, SendTaskRequest, SendTaskStreamingRequest,
-        TaskResubscriptionRequest,
+    application::{
+        json_rpc::{
+            self, A2ARequest, SendTaskRequest, SendTaskStreamingRequest,
+            TaskResubscriptionRequest,
+        },
+        JSONRPCResponse,
     },
     domain::{
         A2AError, Message, Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig,

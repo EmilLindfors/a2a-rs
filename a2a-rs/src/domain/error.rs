@@ -58,6 +58,12 @@ pub enum A2AError {
     #[error("Internal error: {0}")]
     Internal(String),
 
+    #[error("Validation error in {field}: {message}")]
+    ValidationError {
+        field: String,
+        message: String,
+    },
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -85,6 +91,7 @@ impl A2AError {
             A2AError::InvalidAgentResponse(_) => {
                 (INVALID_AGENT_RESPONSE, "Invalid agent response")
             }
+            A2AError::ValidationError { .. } => (INVALID_PARAMS, "Validation error"),
             A2AError::Internal(_) => (INTERNAL_ERROR, "Internal error"),
             _ => (INTERNAL_ERROR, "Internal error"),
         };

@@ -7,10 +7,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
-    application::json_rpc::{
-        self, A2ARequest, CancelTaskRequest, GetTaskPushNotificationRequest, GetTaskRequest,
-        JSONRPCError, JSONRPCResponse, SendTaskRequest, SendTaskStreamingRequest,
-        SetTaskPushNotificationRequest, TaskResubscriptionRequest,
+    application::{
+        json_rpc::{
+            self, A2ARequest, CancelTaskRequest, GetTaskPushNotificationRequest, GetTaskRequest,
+            SendTaskRequest, SendTaskStreamingRequest, SetTaskPushNotificationRequest,
+            TaskResubscriptionRequest,
+        },
+        JSONRPCError, JSONRPCResponse,
     },
     domain::A2AError,
     port::server::{AsyncA2ARequestProcessor, AsyncTaskHandler},

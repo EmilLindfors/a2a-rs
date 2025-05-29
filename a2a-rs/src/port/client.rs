@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 
 use crate::{
-    application::json_rpc::{A2ARequest, JSONRPCResponse},
+    application::{json_rpc::A2ARequest, JSONRPCResponse},
     domain::{A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent},
 };
 
