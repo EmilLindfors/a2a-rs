@@ -1,36 +1,99 @@
 use a2a_rs::adapter::{
-    business::DefaultBusinessHandler, DefaultRequestProcessor, HttpServer, WebSocketServer,
+    DefaultRequestProcessor, HttpServer,
     InMemoryTaskStorage, NoopPushNotificationSender, SimpleAgentInfo,
+    BearerTokenAuthenticator, ApiKeyAuthenticator,
 };
-// use a2a_rs::domain::AgentCapabilities; // For future use
+use a2a_rs::port::{AsyncTaskManager, AsyncNotificationManager};
 
-/// Modern A2A server setup using the framework's DefaultBusinessHandler
+// SQLx storage support (feature-gated)
+#[cfg(feature = "sqlx")]
+use a2a_rs::adapter::storage::SqlxTaskStorage;
+
+use super::config::{AuthConfig, ServerConfig, StorageConfig};
+use super::message_handler::ReimbursementMessageHandler;
+
+
+/// Modern A2A server setup using custom ReimbursementMessageHandler
 pub struct ModernReimbursementServer {
-    host: String,
-    port: u16,
+    config: ServerConfig,
 }
 
 impl ModernReimbursementServer {
-    /// Create a new modern reimbursement server
+    /// Create a new modern reimbursement server with default config
     pub fn new(host: String, port: u16) -> Self {
-        Self {
+        let config = ServerConfig {
             host,
-            port,
-        }
+            http_port: port,
+            ws_port: port + 1,
+            storage: StorageConfig::default(),
+            auth: AuthConfig::default(),
+        };
+        Self { config }
     }
+
+    /// Create server from config
+    pub fn from_config(config: ServerConfig) -> Self {
+        Self { config }
+    }
+
+    /// Create in-memory storage
+    fn create_in_memory_storage(&self) -> InMemoryTaskStorage {
+        tracing::info!("Using in-memory storage");
+        let push_sender = NoopPushNotificationSender;
+        InMemoryTaskStorage::with_push_sender(push_sender)
+    }
+
+    #[cfg(feature = "sqlx")]
+    /// Create SQLx storage (only available with sqlx feature)
+    async fn create_sqlx_storage(&self, url: &str, _max_connections: u32, enable_logging: bool) -> Result<SqlxTaskStorage, Box<dyn std::error::Error>> {
+        tracing::info!("Using SQLx storage with URL: {}", url);
+        if enable_logging {
+            tracing::info!("SQL query logging enabled");
+        }
+        let storage = SqlxTaskStorage::new(url).await
+            .map_err(|e| format!("Failed to create SQLx storage: {}", e))?;
+        Ok(storage)
+    }
+
 
     /// Start the HTTP server
     pub async fn start_http(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Create server components using framework architecture
-        let push_sender = NoopPushNotificationSender;
-        let storage = InMemoryTaskStorage::with_push_sender(push_sender);
-        let handler = DefaultBusinessHandler::with_storage(storage);
-        let processor = DefaultRequestProcessor::with_handler(handler);
+        match &self.config.storage {
+            StorageConfig::InMemory => {
+                let storage = self.create_in_memory_storage();
+                self.start_http_server(storage).await
+            }
+            #[cfg(feature = "sqlx")]
+            StorageConfig::Sqlx { url, max_connections, enable_logging } => {
+                let storage = self.create_sqlx_storage(url, *max_connections, *enable_logging).await?;
+                self.start_http_server(storage).await
+            }
+            #[cfg(not(feature = "sqlx"))]
+            StorageConfig::Sqlx { .. } => {
+                Err("SQLx storage requested but 'sqlx' feature is not enabled.".into())
+            }
+        }
+    }
+
+    /// Start HTTP server
+    async fn start_http_server<S>(&self, storage: S) -> Result<(), Box<dyn std::error::Error>>
+    where
+        S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+    {
+        // Create our custom message handler
+        let message_handler = ReimbursementMessageHandler::new();
+        
+        // Create processor with separate handlers
+        let processor = DefaultRequestProcessor::new(
+            message_handler,
+            storage.clone(),  // storage implements AsyncTaskManager
+            storage,          // storage also implements AsyncNotificationManager
+        );
 
         // Create agent info with reimbursement capabilities
         let agent_info = SimpleAgentInfo::new(
             "Reimbursement Agent".to_string(),
-            format!("http://{}:{}", self.host, self.port),
+            format!("http://{}:{}", self.config.host, self.config.http_port),
         )
         .with_description("An intelligent agent that handles employee reimbursement requests, from form generation to approval processing.".to_string())
         .with_provider(
@@ -58,59 +121,58 @@ impl ModernReimbursementServer {
             Some(vec!["text".to_string(), "data".to_string()]),
         );
 
-        // Create HTTP server
-        let server = HttpServer::new(
+        // Create HTTP server with authentication
+        // Note: For now, always use BearerTokenAuthenticator for type consistency
+        let tokens = match &self.config.auth {
+            AuthConfig::None => vec![], // Empty tokens = no authentication 
+            AuthConfig::BearerToken { tokens, format: _ } => tokens.clone(),
+            AuthConfig::ApiKey { .. } => {
+                tracing::warn!("API key authentication not yet supported, using no authentication");
+                vec![]
+            },
+        };
+        
+        let authenticator = BearerTokenAuthenticator::new(tokens);
+        let server = HttpServer::with_auth(
             processor,
             agent_info,
-            format!("{}:{}", self.host, self.port),
+            format!("{}:{}", self.config.host, self.config.http_port),
+            authenticator,
         );
 
-        println!("🌐 Starting HTTP reimbursement server on {}:{}", self.host, self.port);
-        println!("📋 Agent card: http://{}:{}/agent-card", self.host, self.port);
-        println!("🛠️  Skills: http://{}:{}/skills", self.host, self.port);
+        println!("🌐 Starting HTTP reimbursement server on {}:{}", self.config.host, self.config.http_port);
+        println!("📋 Agent card: http://{}:{}/agent-card", self.config.host, self.config.http_port);
+        println!("🛠️  Skills: http://{}:{}/skills", self.config.host, self.config.http_port);
+        
+        match &self.config.storage {
+            StorageConfig::InMemory => println!("💾 Storage: In-memory (non-persistent)"),
+            StorageConfig::Sqlx { url, .. } => println!("💾 Storage: SQLx ({})", url),
+        }
+        
+        match &self.config.auth {
+            AuthConfig::None => println!("🔓 Authentication: None (public access)"),
+            AuthConfig::BearerToken { tokens, format } => {
+                println!("🔐 Authentication: Bearer token ({} token(s){})", 
+                    tokens.len(),
+                    format.as_ref().map(|f| format!(", format: {}", f)).unwrap_or_default()
+                );
+            }
+            AuthConfig::ApiKey { keys, location, name } => {
+                println!("🔐 Authentication: API key ({} {}, {} key(s))", 
+                    location, name, keys.len()
+                );
+            }
+        }
         
         server.start().await
             .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 
-    /// Start the WebSocket server
+    /// Start the WebSocket server (simplified for now)
     pub async fn start_websocket(&self) -> Result<(), Box<dyn std::error::Error>> {
-        // Create server components using framework architecture
-        let push_sender = NoopPushNotificationSender;
-        let storage = InMemoryTaskStorage::with_push_sender(push_sender);
-        let handler = DefaultBusinessHandler::with_storage(storage);
-        let processor = DefaultRequestProcessor::with_handler(handler.clone());
-
-        // Create agent info (same as HTTP)
-        let agent_info = SimpleAgentInfo::new(
-            "Reimbursement Agent".to_string(),
-            format!("ws://{}:{}", self.host, self.port + 1),
-        )
-        .with_description("WebSocket interface for the reimbursement agent with streaming support.".to_string())
-        .with_streaming()
-        .add_comprehensive_skill(
-            "process_reimbursement".to_string(),
-            "Process Reimbursement".to_string(),
-            Some("Real-time reimbursement processing with streaming updates.".to_string()),
-            Some(vec!["reimbursement".to_string(), "streaming".to_string()]),
-            Some(vec!["Can you reimburse me $20 for my lunch?".to_string()]),
-            Some(vec!["text".to_string()]),
-            Some(vec!["text".to_string()]),
-        );
-
-        // Create WebSocket server
-        let server = WebSocketServer::new(
-            processor,
-            agent_info,
-            handler,
-            format!("{}:{}", self.host, self.port + 1),
-        );
-
-        println!("🔌 Starting WebSocket reimbursement server on {}:{}", self.host, self.port + 1);
-        println!("📡 WebSocket endpoint: ws://{}:{}", self.host, self.port + 1);
-        
-        server.start().await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+        println!("🔌 WebSocket server not yet implemented with authentication");
+        println!("🔌 Use HTTP server for now");
+        Err("WebSocket server not yet implemented".into())
     }
 
     /// Start both HTTP and WebSocket servers (simplified for now)

@@ -1,0 +1,17 @@
+{
+  "host": "127.0.0.1",
+  "http_port": 8080,
+  "ws_port": 8081,
+  "storage": {
+    "type": "Sqlx",
+    "url": "sqlite:authenticated_tasks.db",
+    "max_connections": 10,
+    "enable_logging": false
+  },
+  "auth": {
+    "type": "ApiKey",
+    "keys": ["api-key-123", "api-key-456"],
+    "location": "header",
+    "name": "X-API-Key"
+  }
+}

@@ -37,6 +37,8 @@ lazy_static = "1.4"  # Used for static request ID storage in message_handler
 [features]
 default = ["reimbursement-agent"]
 reimbursement-agent = []
+sqlx = ["a2a-rs/sqlx-storage"]
+auth = ["a2a-rs/auth"]
 # Future agent types can be added as features
 # document-agent = ["dep:reqwest"]
 # research-agent = ["dep:reqwest"]

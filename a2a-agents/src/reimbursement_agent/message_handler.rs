@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-// use serde_json::{Map, Value}; // Unused for now
+use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::sync::Mutex;
 use uuid::Uuid;
@@ -63,9 +63,30 @@ pub struct FormField {
     pub title: String,
 }
 
+#[derive(Debug, Clone)]
+struct MessageContent {
+    text: Option<String>,
+    data: Option<Map<String, Value>>,
+    files: Vec<FileInfo>,
+}
+
+#[derive(Debug, Clone)]
+struct FileInfo {
+    name: Option<String>,
+    mime_type: Option<String>,
+    has_content: bool,
+    metadata: Option<Map<String, Value>>,
+}
+
 /// Modern message handler for reimbursement processing
+/// 
+/// Supports multiple content types:
+/// - Text: Natural language reimbursement requests
+/// - Data: Structured JSON form submissions
+/// - File: Receipt attachments (future: OCR processing)
+#[derive(Clone)]
 pub struct ReimbursementMessageHandler {
-    // Future: Add database connection, LLM client, etc.
+    // Future: Add database connection, LLM client, OCR service, etc.
 }
 
 impl ReimbursementMessageHandler {
@@ -73,8 +94,8 @@ impl ReimbursementMessageHandler {
         Self {}
     }
 
-    /// Extract text content from message parts
-    fn extract_text_content(&self, message: &Message) -> Result<String, A2AError> {
+    /// Extract and process content from message parts
+    fn extract_message_content(&self, message: &Message) -> Result<MessageContent, A2AError> {
         if message.parts.is_empty() {
             return Err(A2AError::ValidationError {
                 field: "message.parts".to_string(),
@@ -82,8 +103,10 @@ impl ReimbursementMessageHandler {
             });
         }
 
-        // Combine all text parts
         let mut text_content = String::new();
+        let mut data_content: Option<Map<String, Value>> = None;
+        let mut files = Vec::new();
+
         for part in &message.parts {
             match part {
                 Part::Text { text, .. } => {
@@ -93,22 +116,38 @@ impl ReimbursementMessageHandler {
                     text_content.push_str(text);
                 }
                 Part::Data { data, .. } => {
-                    // Handle structured data (e.g., form submissions)
-                    if let Ok(text) = serde_json::to_string(data) {
-                        if !text_content.is_empty() {
-                            text_content.push(' ');
+                    // Merge data parts if multiple exist
+                    if let Some(ref mut existing_data) = data_content {
+                        for (key, value) in data {
+                            existing_data.insert(key.clone(), value.clone());
                         }
-                        text_content.push_str(&text);
+                    } else {
+                        data_content = Some(data.clone());
                     }
                 }
-                Part::File { .. } => {
-                    // Future: Handle file uploads (receipts, etc.)
-                    tracing::info!("File part received but not yet implemented");
+                Part::File { file, metadata } => {
+                    files.push(FileInfo {
+                        name: file.name.clone(),
+                        mime_type: file.mime_type.clone(),
+                        has_content: file.bytes.is_some() || file.uri.is_some(),
+                        metadata: metadata.clone(),
+                    });
+                    
+                    // Log receipt handling (future implementation)
+                    if let Some(ref mime) = file.mime_type {
+                        if mime.starts_with("image/") || mime == "application/pdf" {
+                            tracing::info!("Receipt file detected: {:?}", file.name);
+                        }
+                    }
                 }
             }
         }
 
-        Ok(text_content)
+        Ok(MessageContent {
+            text: if text_content.is_empty() { None } else { Some(text_content) },
+            data: data_content,
+            files,
+        })
     }
 
     /// Create a request form with generated or extracted parameters
@@ -121,15 +160,30 @@ impl ReimbursementMessageHandler {
         let request_id = format!("req_{}", Uuid::new_v4().simple());
 
         // Add to the set of known request IDs
-        REQUEST_IDS.lock().unwrap().insert(request_id.clone());
+        if let Ok(mut ids) = REQUEST_IDS.lock() {
+            ids.insert(request_id.clone());
+        } else {
+            tracing::error!("Failed to acquire lock on request store");
+        }
+
+        // Validate and clean input values
+        let clean_date = date
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "<transaction date>".to_string());
+        
+        let clean_amount = amount
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "<transaction dollar amount>".to_string());
+        
+        let clean_purpose = purpose
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "<business justification/purpose of the transaction>".to_string());
 
         RequestForm {
             request_id,
-            date: date.unwrap_or_else(|| "<transaction date>".to_string()),
-            amount: amount.unwrap_or_else(|| "<transaction dollar amount>".to_string()),
-            purpose: purpose.unwrap_or_else(|| {
-                "<business justification/purpose of the transaction>".to_string()
-            }),
+            date: clean_date,
+            amount: clean_amount,
+            purpose: clean_purpose,
         }
     }
 
@@ -178,25 +232,110 @@ impl ReimbursementMessageHandler {
     }
 
     /// Process a reimbursement request
-    fn process_reimbursement(&self, request_id: &str) -> ReimbursementResult {
-        let valid = REQUEST_IDS.lock().unwrap().contains(request_id);
+    fn process_reimbursement(&self, request_id: &str) -> Result<ReimbursementResult, A2AError> {
+        // Validate request ID format
+        if !request_id.starts_with("req_") {
+            return Err(A2AError::ValidationError {
+                field: "request_id".to_string(),
+                message: "Request ID must start with 'req_'".to_string(),
+            });
+        }
+
+        // Check if request ID exists
+        let valid = REQUEST_IDS.lock()
+            .map_err(|_| A2AError::Internal("Failed to acquire lock on request store".to_string()))?
+            .contains(request_id);
 
         if !valid {
-            return ReimbursementResult {
-                request_id: request_id.to_string(),
-                status: "Error: Invalid request_id.".to_string(),
-            };
+            return Err(A2AError::ValidationError {
+                field: "request_id".to_string(),
+                message: format!("Request ID '{}' not found or already processed", request_id),
+            });
         }
 
-        ReimbursementResult {
+        // In a real implementation, this would:
+        // - Validate amounts against policy limits
+        // - Check receipt attachments
+        // - Verify manager approval if needed
+        // - Update database status
+        
+        Ok(ReimbursementResult {
             request_id: request_id.to_string(),
             status: "approved".to_string(),
-        }
+        })
     }
 
-    /// Extract structured data from text using simple parsing
-    /// In a real implementation, this would use an LLM or NLP
-    fn extract_reimbursement_data(&self, text: &str) -> (Option<String>, Option<String>, Option<String>) {
+    /// Extract reimbursement data from message content
+    fn extract_reimbursement_data(&self, content: &MessageContent) -> Result<RequestForm, A2AError> {
+        // First check if we have structured data (e.g., from a form submission)
+        if let Some(ref data) = content.data {
+            // Try to parse as RequestForm directly
+            if let Ok(form) = serde_json::from_value::<RequestForm>(Value::Object(data.clone())) {
+                // Validate and store the request ID
+                if !form.request_id.is_empty() {
+                    REQUEST_IDS.lock()
+                        .map_err(|_| A2AError::Internal("Failed to acquire lock on request store".to_string()))?
+                        .insert(form.request_id.clone());
+                }
+                return Ok(form);
+            }
+
+            // Otherwise, extract fields from the data
+            let request_id = data.get("request_id")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("req_{}", Uuid::new_v4().simple()));
+
+            let date = data.get("date")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            let amount = data.get("amount")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .or_else(|| {
+                    data.get("amount")
+                        .and_then(|v| v.as_f64())
+                        .map(|f| {
+                            // Validate amount is positive
+                            if f <= 0.0 {
+                                tracing::warn!("Invalid amount: {} (must be positive)", f);
+                                return format!("<invalid amount: ${:.2}>", f);
+                            }
+                            format!("${:.2}", f)
+                        })
+                });
+
+            let purpose = data.get("purpose")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            if date.is_some() && amount.is_some() && purpose.is_some() {
+                let form = RequestForm {
+                    request_id: request_id.clone(),
+                    date: date.unwrap(),
+                    amount: amount.unwrap(),
+                    purpose: purpose.unwrap(),
+                };
+                REQUEST_IDS.lock()
+                    .map_err(|_| A2AError::Internal("Failed to acquire lock on request store".to_string()))?
+                    .insert(request_id);
+                return Ok(form);
+            }
+        }
+
+        // Fall back to text parsing if no structured data
+        if let Some(ref text) = content.text {
+            let (date, amount, purpose) = self.parse_text_for_reimbursement(text);
+            return Ok(self.create_request_form(date, amount, purpose));
+        }
+
+        // If no content to parse, return empty form
+        Ok(self.create_request_form(None, None, None))
+    }
+
+    /// Parse text content for reimbursement information
+    fn parse_text_for_reimbursement(&self, text: &str) -> (Option<String>, Option<String>, Option<String>) {
         let mut amount = None;
         let mut purpose = None;
         let date = None; // For now, we don't extract dates
@@ -230,6 +369,103 @@ impl ReimbursementMessageHandler {
         (date, amount, purpose)
     }
 
+    /// Process reimbursement request based on content type
+    fn process_reimbursement_request(&self, content: &MessageContent) -> Result<(String, bool), A2AError> {
+        // Check if this is a form submission (has structured data)
+        if let Some(ref data) = content.data {
+            // Check if it has request_id field (form submission)
+            if data.contains_key("request_id") {
+                // Try to extract and validate the form data
+                match self.extract_reimbursement_data(content) {
+                    Ok(form) => {
+                        // Check if all required fields are filled
+                        if form.date.contains("transaction date") || 
+                           form.amount.contains("dollar amount") || 
+                           form.purpose.contains("justification") {
+                            // Form is incomplete
+                            return Ok((
+                                "The form is incomplete. Please provide all required information.".to_string(),
+                                false
+                            ));
+                        }
+
+                        // Process the complete form
+                        match self.process_reimbursement(&form.request_id) {
+                            Ok(result) => {
+                                match serde_json::to_string(&result) {
+                                    Ok(json) => Ok((json, false)),
+                                    Err(e) => {
+                                        tracing::error!("Failed to serialize reimbursement result: {}", e);
+                                        Err(A2AError::Internal(
+                                            "Failed to serialize reimbursement result".to_string()
+                                        ))
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("Reimbursement processing failed: {}", e);
+                                Err(e)
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to extract reimbursement data: {}", e);
+                        Err(A2AError::InvalidParams(
+                            "Invalid form data: missing or malformed required fields".to_string()
+                        ))
+                    }
+                }
+            } else {
+                // Data without request_id, treat as initial request
+                self.handle_initial_request(content)
+            }
+        } else if let Some(ref text) = content.text {
+            // Text-based request
+            if text.to_lowercase().contains("reimburse") || 
+               text.to_lowercase().contains("expense") ||
+               text.to_lowercase().contains("receipt") {
+                // Initial reimbursement request
+                self.handle_initial_request(content)
+            } else if text.contains("request_id") || text.contains("req_") {
+                // Text containing request ID - might be a follow-up
+                Ok(("Please use the form to submit your reimbursement details.".to_string(), false))
+            } else {
+                // General query
+                Ok((
+                    "I'm a reimbursement agent. I can help you with:\n\
+                    • Processing expense reimbursements\n\
+                    • Generating reimbursement forms\n\
+                    • Tracking reimbursement status\n\
+                    \nJust tell me about your expense and I'll help you get reimbursed!".to_string(),
+                    false
+                ))
+            }
+        } else {
+            // No content to process
+            Ok((
+                "I didn't receive any content to process. Please describe your reimbursement request.".to_string(),
+                false
+            ))
+        }
+    }
+
+    /// Handle initial reimbursement request
+    fn handle_initial_request(&self, content: &MessageContent) -> Result<(String, bool), A2AError> {
+        // Extract reimbursement data from content
+        let form = self.extract_reimbursement_data(content)?;
+        let form_response = self.create_form_response(form);
+        
+        match serde_json::to_string(&form_response) {
+            Ok(json) => Ok((json, true)),
+            Err(e) => {
+                tracing::error!("Failed to serialize form response: {}", e);
+                Err(A2AError::Internal(
+                    "Failed to generate reimbursement form".to_string()
+                ))
+            }
+        }
+    }
+
     /// Create a response message with proper task state
     fn create_response_message(
         &self,
@@ -244,10 +480,21 @@ impl ReimbursementMessageHandler {
             TaskState::Completed
         };
 
+        // Create message parts based on content type
+        let parts = if is_form {
+            // For forms, we could send both text and data parts
+            // The text part contains the JSON for compatibility
+            // The data part contains the structured form (future enhancement)
+            vec![Part::text(content)]
+        } else {
+            // For regular responses, just send text
+            vec![Part::text(content)]
+        };
+
         // Create the response message
         let message = Message::builder()
             .role(Role::Agent)
-            .parts(vec![Part::text(content)])
+            .parts(parts)
             .message_id(Uuid::new_v4().to_string())
             .build();
 
@@ -269,39 +516,22 @@ impl AsyncMessageHandler for ReimbursementMessageHandler {
         message: &'a Message,
         _session_id: Option<&'a str>,
     ) -> Result<Task, A2AError> {
-        // Extract text content from the message
-        let text_content = self.extract_text_content(message)?;
+        // Extract all content from the message
+        let content = self.extract_message_content(message)?;
 
-        tracing::info!("Processing reimbursement message: {}", text_content);
+        tracing::info!("Processing reimbursement message with {} text parts, {} data parts, {} files",
+            if content.text.is_some() { 1 } else { 0 },
+            if content.data.is_some() { 1 } else { 0 },
+            content.files.len()
+        );
 
-        // Process the message based on content
-        let (response_content, is_form) = if text_content.contains("reimburse") {
-            // Initial reimbursement request
-            let (date, amount, purpose) = self.extract_reimbursement_data(&text_content);
-            let form = self.create_request_form(date, amount, purpose);
-            let form_response = self.create_form_response(form);
-            
-            match serde_json::to_string(&form_response) {
-                Ok(json) => (json, true),
-                Err(_) => ("Error creating reimbursement form".to_string(), false),
-            }
-        } else if text_content.contains("request_id") || text_content.contains("req_") {
-            // Form submission or follow-up
-            if text_content.contains("MISSING_INFO") {
-                ("The form is incomplete. Please provide all required information.".to_string(), false)
-            } else {
-                // Try to extract request ID for processing
-                // In a real implementation, this would parse the JSON properly
-                let result = self.process_reimbursement("req_sample");
-                match serde_json::to_string(&result) {
-                    Ok(json) => (json, false),
-                    Err(_) => ("Error processing reimbursement".to_string(), false),
-                }
-            }
-        } else {
-            // General query
-            ("I'm a reimbursement agent. How can I help you with your reimbursement request?".to_string(), false)
-        };
+        // Log file information if present
+        for file in &content.files {
+            tracing::info!("Received file: {:?} (type: {:?})", file.name, file.mime_type);
+        }
+
+        // Determine the type of request based on content
+        let (response_content, is_form) = self.process_reimbursement_request(&content)?;
 
         // Create the response message and determine task state
         let (response_message, task_state) = self.create_response_message(response_content.clone(), is_form, task_id)?;
@@ -361,9 +591,27 @@ impl AsyncMessageHandler for ReimbursementMessageHandler {
                         });
                     }
                 }
-                Part::File { .. } => {
-                    // Future: Validate file content (receipts, etc.)
-                    tracing::info!("File validation not yet implemented");
+                Part::File { file, .. } => {
+                    // Validate file has content
+                    if file.bytes.is_none() && file.uri.is_none() {
+                        return Err(A2AError::ValidationError {
+                            field: "file".to_string(),
+                            message: "File must have either bytes or URI".to_string(),
+                        });
+                    }
+                    
+                    // Validate supported file types for receipts
+                    if let Some(ref mime_type) = file.mime_type {
+                        let supported_types = ["image/jpeg", "image/png", "image/gif", "application/pdf"];
+                        if !supported_types.contains(&mime_type.as_str()) {
+                            return Err(A2AError::ContentTypeNotSupported(
+                                format!("File type '{}' not supported for receipts. Supported types: {}", 
+                                    mime_type, 
+                                    supported_types.join(", ")
+                                )
+                            ));
+                        }
+                    }
                 }
             }
         }

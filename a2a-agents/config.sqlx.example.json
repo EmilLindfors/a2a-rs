@@ -1,0 +1,11 @@
+{
+  "host": "127.0.0.1",
+  "http_port": 8080,
+  "ws_port": 8081,
+  "storage": {
+    "type": "Sqlx",
+    "url": "sqlite:reimbursement_tasks.db",
+    "max_connections": 10,
+    "enable_logging": false
+  }
+}
