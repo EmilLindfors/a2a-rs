@@ -9,7 +9,7 @@ use a2a_rs::{
         A2AError, Message, Part, PushNotificationConfig, TaskArtifactUpdateEvent,
         TaskStatusUpdateEvent,
     },
-    port::client::AsyncA2AClient,
+    services::AsyncA2AClient,
 };
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};

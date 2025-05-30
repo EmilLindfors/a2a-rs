@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc ce4d749c2667c10f423ff1d3977b3ad14b2edc0891de8320890dd52759e1c3bf # shrinks to task_id = " ", context_id = "¡", states = [Submitted, Submitted, Submitted, Submitted, Submitted, Submitted], messages = []

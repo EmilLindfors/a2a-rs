@@ -6,7 +6,7 @@ use a2a_rs::{
         InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::{Message, Part, TaskState},
-    port::client::AsyncA2AClient,
+    services::AsyncA2AClient,
 };
 use reqwest::Client;
 use serde_json::Value;

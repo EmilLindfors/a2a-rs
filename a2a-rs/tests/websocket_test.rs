@@ -6,11 +6,9 @@ use a2a_rs::{
         SimpleAgentInfo, WebSocketClient, WebSocketServer,
     },
     domain::Message,
-    port::client::{AsyncA2AClient, StreamItem},
+    services::{AsyncA2AClient, StreamItem},
 };
 use futures::StreamExt;
-use reqwest::Client;
-use serde_json::Value;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
@@ -101,7 +99,7 @@ async fn test_websocket_streaming() {
     // Now test streaming
     println!("Testing streaming...");
     let subscribe_result = client
-        .subscribe_to_task(&task_id, &message, Some("test-session"), None)
+        .subscribe_to_task(&task_id, None)
         .await;
 
     if let Err(ref e) = subscribe_result {
