@@ -1,74 +1,63 @@
-use a2a_agents::reimbursement_agent::agent::ReimbursementAgent;
-use a2a_agents::reimbursement_agent::server::A2AServer;
-use a2a_agents::reimbursement_agent::task_manager::AgentTaskManager;
-use a2a_rs::domain::{AgentCapabilities, AgentCard, AgentSkill};
+use a2a_agents::reimbursement_agent::modern_server::ModernReimbursementServer;
 use clap::Parser;
 
 /// Command-line arguments for the reimbursement server
 #[derive(Parser, Debug)]
-#[clap(author, version, about)]
+#[clap(author, version, about, long_about = None)]
 struct Args {
     /// Host to bind the server to
     #[clap(long, default_value = "localhost")]
     host: String,
 
-    /// Port to listen on
+    /// Port to listen on (HTTP server, WebSocket will use port+1)
     #[clap(long, default_value = "10002")]
     port: u16,
+
+    /// Server mode: http, websocket, or both
+    #[clap(long, default_value = "both")]
+    mode: String,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging
-    tracing_subscriber::fmt::init();
+    // Initialize logging with better formatting
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .init();
 
     // Parse command-line arguments
     let args = Args::parse();
 
-    // Create the agent capabilities
-    let capabilities = AgentCapabilities {
-        streaming: true,
-        push_notifications: false,
-        state_transition_history: false,
-    };
+    println!("🚀 Starting Modern Reimbursement Agent Server");
+    println!("===============================================");
+    println!("📍 Host: {}", args.host);
+    println!("🔌 HTTP Port: {}", args.port);
+    println!("📡 WebSocket Port: {}", args.port + 1);
+    println!("⚙️  Mode: {}", args.mode);
+    println!();
 
-    // Create the agent skill
-    let skill = AgentSkill {
-        id: "process_reimbursement".to_string(),
-        name: "Process Reimbursement Tool".to_string(),
-        description: Some("Helps with the reimbursement process for users given the amount and purpose of the reimbursement.".to_string()),
-        tags: Some(vec!["reimbursement".to_string()]),
-        examples: Some(vec!["Can you reimburse me $20 for my lunch with the clients?".to_string()]),
-        input_modes: None,
-        output_modes: None,
-    };
+    // Create the modern server
+    let server = ModernReimbursementServer::new(args.host, args.port);
 
-    // Create the agent card
-    let agent_card = AgentCard {
-        name: "Reimbursement Agent".to_string(),
-        description: Some("This agent handles the reimbursement process for the employees given the amount and purpose of the reimbursement.".to_string()),
-        url: format!("http://{}:{}/", args.host, args.port),
-        provider: None,
-        version: "1.0.0".to_string(),
-        documentation_url: None,
-        capabilities,
-        authentication: None,
-        default_input_modes: ReimbursementAgent::SUPPORTED_CONTENT_TYPES.iter().map(|&s| s.to_string()).collect(),
-        default_output_modes: ReimbursementAgent::SUPPORTED_CONTENT_TYPES.iter().map(|&s| s.to_string()).collect(),
-        skills: vec![skill],
-    };
-
-    // Create the reimbursement agent
-    let agent = ReimbursementAgent::new();
-
-    // Create the task manager
-    let task_manager = AgentTaskManager::new(agent);
-
-    // Create the server
-    let server = A2AServer::new(agent_card, task_manager, args.host, args.port);
-
-    // Start the server
-    server.start().await?;
+    // Start the server based on mode
+    match args.mode.as_str() {
+        "http" => {
+            println!("🌐 Starting HTTP server only...");
+            server.start_http().await?;
+        }
+        "websocket" | "ws" => {
+            println!("🔌 Starting WebSocket server only...");
+            server.start_websocket().await?;
+        }
+        "both" | "all" => {
+            println!("🔄 Starting both HTTP and WebSocket servers...");
+            server.start_all().await?;
+        }
+        _ => {
+            eprintln!("❌ Invalid mode: {}. Use 'http', 'websocket', or 'both'", args.mode);
+            std::process::exit(1);
+        }
+    }
 
     Ok(())
 }

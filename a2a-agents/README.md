@@ -1,63 +1,63 @@
-# Reimbursement Agent
+# A2A Agents - Modern Framework Examples
 
-This is an example implementation of a reimbursement agent using the A2A protocol in Rust. The agent handles reimbursement requests for employees, processing expense forms and providing status updates.
+This crate provides example agent implementations using the modern A2A protocol framework in Rust. Currently featuring a reimbursement agent that demonstrates best practices for building production-ready agents.
 
 ## Overview
 
-This implementation is a port of the Google Python reimbursement agent to Rust using our A2A protocol framework. It demonstrates how to:
+This implementation showcases the modern A2A framework architecture:
 
-1. Create a custom agent that processes natural language requests
-2. Implement form handling and validation
-3. Support streaming responses
-4. Bridge the agent with the A2A protocol
+1. **Hexagonal Architecture**: Clean separation between domain logic and adapters
+2. **Framework Integration**: Uses `DefaultBusinessHandler` and `InMemoryTaskStorage`
+3. **Protocol Compliance**: Full A2A protocol support with HTTP and WebSocket transports
+4. **Modern Patterns**: Async/await, builder patterns, and structured error handling
 
-## Components
+## Architecture
 
-### ReimbursementAgent
+### ReimbursementMessageHandler
 
-The core agent implementation that:
+The core business logic implementing `AsyncMessageHandler`:
 
-- Creates request forms for reimbursements
-- Validates submitted forms
-- Processes reimbursement requests
-- Provides status updates
+- Processes reimbursement requests using the A2A message format
+- Generates interactive forms for expense submissions
+- Validates and approves reimbursement requests
+- Returns structured responses with proper task states
 
-### AgentTaskManager
+### ModernReimbursementServer
 
-A task manager that bridges the A2A protocol with the reimbursement agent:
+The server implementation using framework components:
 
-- Handles task creation and management
-- Processes user messages
-- Manages streaming updates
-- Handles cancellation
-
-### A2AServer
-
-A server implementation that:
-
-- Exposes the agent via HTTP and/or WebSocket
-- Provides agent metadata via an agent card
-- Handles JSON-RPC requests according to the A2A protocol
+- Integrates with `DefaultBusinessHandler` for request processing
+- Uses `InMemoryTaskStorage` for task persistence
+- Configures `SimpleAgentInfo` with agent capabilities
+- Supports both HTTP and WebSocket transports
 
 ## Usage
 
-To run the reimbursement agent server:
+Run the modern reimbursement agent server:
 
 ```bash
-cargo run --bin reimbursement_server --features http-server
+# Run both HTTP and WebSocket servers (default)
+cargo run --bin reimbursement_server
+
+# Run HTTP server only on custom port
+cargo run --bin reimbursement_server -- --mode http --port 8080
+
+# Run WebSocket server only
+cargo run --bin reimbursement_server -- --mode websocket
+
+# Custom host and port
+cargo run --bin reimbursement_server -- --host 0.0.0.0 --port 9000 --mode both
 ```
 
-Or with WebSocket support:
+### Available Endpoints
 
-```bash
-cargo run --bin reimbursement_server --features ws-server
-```
+**HTTP Server (default port 10002):**
+- Agent Card: `http://localhost:10002/agent-card`
+- Skills List: `http://localhost:10002/skills`
+- A2A Protocol: `http://localhost:10002/` (JSON-RPC)
 
-You can specify host and port:
-
-```bash
-cargo run --bin reimbursement_server --features http-server -- --host 0.0.0.0 --port 8080
-```
+**WebSocket Server (default port 10003):**
+- WebSocket Endpoint: `ws://localhost:10003/`
 
 ## Example Conversation
 
@@ -118,17 +118,32 @@ Here's an example conversation with the reimbursement agent:
 
 4. Agent: "Your reimbursement request has been approved. Request ID: request_id_1234567"
 
-## Notes on Implementation
+## Current Limitations
 
-This implementation is simplified compared to a production system:
-- It simulates LLM interactions rather than using a real LLM
-- The form processing is hardcoded rather than using NLP
-- The storage is in-memory rather than using a database
-- Authentication is not implemented
+This example implementation demonstrates the framework architecture but has simplified business logic:
 
-In a real-world implementation, you would:
-1. Integrate with a real LLM API
-2. Add proper database storage for requests
-3. Implement authentication and authorization
-4. Enhance error handling and validation
-5. Add logging and monitoring
+- **Message Processing**: Basic pattern matching instead of LLM integration
+- **Storage**: In-memory storage (framework supports SQLx for production)
+- **Authentication**: Not implemented (framework supports Bearer/OAuth2)
+- **Form Processing**: Simple JSON forms without complex validation
+
+## Future Enhancements
+
+See [TODO.md](./TODO.md) for the comprehensive modernization roadmap including:
+
+1. **Phase 2**: Production features (SQLx storage, authentication)
+2. **Phase 3**: AI/LLM integration for natural language processing
+3. **Phase 4**: Additional agent examples (document analysis, research assistant)
+4. **Phase 5**: Comprehensive testing and documentation
+5. **Phase 6**: Docker support and production deployment
+
+## Framework Features Demonstrated
+
+- ✅ **AsyncMessageHandler** trait implementation
+- ✅ **DefaultBusinessHandler** integration  
+- ✅ **InMemoryTaskStorage** for task persistence
+- ✅ **SimpleAgentInfo** for agent metadata
+- ✅ **HTTP and WebSocket** transport support
+- ✅ **Structured error handling** with A2AError
+- ✅ **Modern async/await** patterns
+- ✅ **Builder patterns** for complex objects

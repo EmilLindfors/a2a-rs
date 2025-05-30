@@ -1,10 +1,8 @@
 //! Reimbursement agent implementation
 
-pub mod agent;
-pub mod server;
-pub mod task_manager;
+pub mod message_handler;
+pub mod modern_server;
 
 // Re-export key types for convenience
-pub use agent::ReimbursementAgent;
-pub use server::A2AServer;
-pub use task_manager::AgentTaskManager;
+pub use message_handler::ReimbursementMessageHandler;
+pub use modern_server::ModernReimbursementServer;

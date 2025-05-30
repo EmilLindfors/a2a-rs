@@ -2,6 +2,9 @@
 name = "a2a-agents"
 version = "0.1.0"
 edition = "2021"
+authors = ["Emil Lindfors <emil@lindfors.no>"]
+description = "Example agent implementations for the A2A Protocol"
+license = "MIT"
 
 [dependencies]
 a2a-rs = { path = "../a2a-rs", features = ["full"] }
@@ -12,37 +15,36 @@ serde_json = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
 uuid = { version = "1.4", features = ["v4", "serde"] }
-base64 = "0.21"
-url = { version = "2.4", features = ["serde"] }
-lazy_static = "1.4"
-rand = "0.8"
-clap = { version = "4.4", features = ["derive"] }
-tracing-subscriber = "0.3"
+bon = "2.3"
 
 # Async foundation
 tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
-async-trait = { version = "0.1" }
-futures = { version = "0.3" }
+async-trait = "0.1"
 
-# HTTP client - optional
-reqwest = { version = "0.11", features = ["json"], optional = true }
-
-# WebSocket - optional
-tokio-tungstenite = { version = "0.20", optional = true }
-
-axum = { version = "0.8", optional = true }
+# Command line interface
+clap = { version = "4.4", features = ["derive"] }
 
 # Logging
-tracing = { version = "0.1" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Required dependencies
+lazy_static = "1.4"  # Used for static request ID storage in message_handler
+
+# Optional AI integration (for future use)
+# reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false, optional = true }
 
 [features]
-http-server = ["dep:axum"]
-ws-server = ["dep:tokio-tungstenite"]
+default = ["reimbursement-agent"]
+reimbursement-agent = []
+# Future agent types can be added as features
+# document-agent = ["dep:reqwest"]
+# research-agent = ["dep:reqwest"]
 
 
 [[bin]]
 name = "reimbursement_server"
 path = "bin/reimbursement_server.rs"
-required-features = ["http-server"]
+required-features = ["reimbursement-agent"]
 
 
