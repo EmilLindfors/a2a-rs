@@ -2,6 +2,9 @@ use bon::Builder;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
+#[cfg(feature = "tracing")]
+use tracing::instrument;
+
 use crate::domain::error::A2AError;
 
 /// Roles in agent communication
@@ -68,15 +71,32 @@ impl<'de> Deserialize<'de> for FileContent {
 
 impl FileContent {
     /// Validates that the file content is properly specified
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
+        file.name = ?self.name,
+        file.has_bytes = self.bytes.is_some(),
+        file.has_uri = self.uri.is_some()
+    )))]
     pub fn validate(&self) -> Result<(), A2AError> {
         match (&self.bytes, &self.uri) {
-            (Some(_), None) | (None, Some(_)) => Ok(()),
-            (Some(_), Some(_)) => Err(A2AError::InvalidParams(
-                "Cannot provide both bytes and uri".to_string(),
-            )),
-            (None, None) => Err(A2AError::InvalidParams(
-                "Must provide either bytes or uri".to_string(),
-            )),
+            (Some(_), None) | (None, Some(_)) => {
+                #[cfg(feature = "tracing")]
+                tracing::debug!("File content validation successful");
+                Ok(())
+            }
+            (Some(_), Some(_)) => {
+                #[cfg(feature = "tracing")]
+                tracing::error!("File content has both bytes and uri");
+                Err(A2AError::InvalidParams(
+                    "Cannot provide both bytes and uri".to_string(),
+                ))
+            }
+            (None, None) => {
+                #[cfg(feature = "tracing")]
+                tracing::error!("File content has neither bytes nor uri");
+                Err(A2AError::InvalidParams(
+                    "Must provide either bytes or uri".to_string(),
+                ))
+            }
         }
     }
 }
@@ -133,7 +153,7 @@ pub struct Message {
     #[serde(skip_serializing_if = "Option::is_none", rename = "contextId")]
     pub context_id: Option<String>,
     #[builder(default = "message".to_string())]
-    pub kind: String,  // Always "message"
+    pub kind: String, // Always "message"
 }
 
 /// An artifact produced by an agent
@@ -261,9 +281,18 @@ impl PartBuilder {
     /// Add metadata to any part type
     pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
         match &mut self.part {
-            Part::Text { metadata: ref mut meta, .. } => *meta = Some(metadata),
-            Part::Data { metadata: ref mut meta, .. } => *meta = Some(metadata),
-            Part::File { metadata: ref mut meta, .. } => *meta = Some(metadata),
+            Part::Text {
+                metadata: ref mut meta,
+                ..
+            } => *meta = Some(metadata),
+            Part::Data {
+                metadata: ref mut meta,
+                ..
+            } => *meta = Some(metadata),
+            Part::File {
+                metadata: ref mut meta,
+                ..
+            } => *meta = Some(metadata),
         }
         self
     }
@@ -390,10 +419,23 @@ impl Message {
     }
 
     /// Add a part to this message, validating and returning Result
+    #[cfg_attr(feature = "tracing", instrument(skip(self, part), fields(
+        message.id = %self.message_id
+    )))]
     pub fn add_part_validated(&mut self, part: Part) -> Result<(), A2AError> {
         // If it's a file part, validate the file content
         if let Part::File { file, .. } = &part {
             file.validate()?;
+        }
+
+        #[cfg(feature = "tracing")]
+        {
+            let part_type = match &part {
+                Part::Text { .. } => "text",
+                Part::File { .. } => "file",
+                Part::Data { .. } => "data",
+            };
+            tracing::debug!(part_type = part_type, "Part added successfully to message");
         }
 
         self.parts.push(part);
@@ -401,21 +443,36 @@ impl Message {
     }
 
     /// Validate a message (useful after building with builder)
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
+        message.id = %self.message_id,
+        message.role = ?self.role,
+        message.parts_count = self.parts.len(),
+        message.kind = %self.kind
+    )))]
     pub fn validate(&self) -> Result<(), A2AError> {
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Validating message");
+
         // Validate all file parts
-        for part in &self.parts {
+        for (index, part) in self.parts.iter().enumerate() {
             if let Part::File { file, .. } = part {
+                #[cfg(feature = "tracing")]
+                tracing::trace!("Validating file part at index {}", index);
                 file.validate()?;
             }
         }
 
         // Validate that kind is "message"
         if self.kind != "message" {
+            #[cfg(feature = "tracing")]
+            tracing::error!("Invalid message kind: {}", self.kind);
             return Err(A2AError::InvalidParams(
                 "Message kind must be 'message'".to_string(),
             ));
         }
 
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Message validation successful");
         Ok(())
     }
 }

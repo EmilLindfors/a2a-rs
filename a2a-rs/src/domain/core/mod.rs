@@ -5,13 +5,12 @@ pub mod message;
 pub mod task;
 
 pub use agent::{
-    AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
+    AgentCapabilities, AgentCard, AgentProvider, AgentSkill, AuthorizationCodeOAuthFlow,
+    ClientCredentialsOAuthFlow, ImplicitOAuthFlow, OAuthFlows, PasswordOAuthFlow,
     PushNotificationAuthenticationInfo, PushNotificationConfig, SecurityScheme,
-    OAuthFlows, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    ImplicitOAuthFlow, PasswordOAuthFlow,
 };
 pub use message::{Artifact, FileContent, Message, Part, Role};
 pub use task::{
-    MessageSendConfiguration, MessageSendParams, Task, TaskIdParams,
-    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    MessageSendConfiguration, MessageSendParams, Task, TaskIdParams, TaskPushNotificationConfig,
+    TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
 };

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 #[cfg(feature = "http-client")]
 use reqwest::{
+    header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE},
     Client,
-    header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use tokio::sync::Mutex;
 

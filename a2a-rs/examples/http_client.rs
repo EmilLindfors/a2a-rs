@@ -3,11 +3,14 @@
 use a2a_rs::{
     adapter::HttpClient,
     domain::{Message, Part, PushNotificationConfig, TaskPushNotificationConfig},
-    port::client::AsyncA2AClient,
+    observability,
+    services::client::AsyncA2AClient,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing for better observability
+    observability::init_tracing();
     // Create a client connected to our example server
     let client = HttpClient::with_auth(
         "http://localhost:8080".to_string(),
@@ -34,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     message.add_part_validated(file_part).unwrap();
 
     // Optional: Set up push notifications
-    let push_config = TaskPushNotificationConfig {
+    let _push_config = TaskPushNotificationConfig {
         task_id: task_id.clone(),
         push_notification_config: PushNotificationConfig {
             url: "https://example.com/webhook".to_string(),
@@ -42,7 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             authentication: None,
         },
     };
-    client.set_task_push_notification(&push_config).await?;
+    // Note: set_task_push_notification is typically done server-side
+    // client.set_task_push_notification(&push_config).await?;
 
     // Send a task message with retries
     println!("Sending message to task...");

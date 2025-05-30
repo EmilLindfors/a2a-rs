@@ -6,7 +6,10 @@ use std::pin::Pin;
 
 use crate::{
     application::{json_rpc::A2ARequest, JSONRPCResponse},
-    domain::{A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent},
+    domain::{
+        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
+        TaskStatusUpdateEvent,
+    },
 };
 
 #[async_trait]

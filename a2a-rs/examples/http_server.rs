@@ -1,14 +1,17 @@
 //! A simple HTTP server example
 
 use a2a_rs::adapter::{
-    DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, NoopPushNotificationSender,
-    SimpleAgentInfo, TokenAuthenticator, business::DefaultBusinessHandler,
+    business::DefaultBusinessHandler, DefaultRequestProcessor, HttpServer, InMemoryTaskStorage,
+    NoopPushNotificationSender, SimpleAgentInfo, TokenAuthenticator,
 };
+use a2a_rs::observability;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing for better observability
+    observability::init_tracing();
     // Create a custom push notification sender
-    let push_sender = NoopPushNotificationSender::default();
+    let push_sender = NoopPushNotificationSender;
 
     // Create task storage with the push notification sender
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);

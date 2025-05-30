@@ -5,11 +5,14 @@ use futures::StreamExt;
 use a2a_rs::{
     adapter::WebSocketClient,
     domain::{Message, Part},
-    port::client::{AsyncA2AClient, StreamItem},
+    observability,
+    services::client::{AsyncA2AClient, StreamItem},
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing for better observability
+    observability::init_tracing();
     // Create a WebSocket client connected to our example server
     let client = WebSocketClient::new("ws://localhost:8081".to_string());
 
@@ -19,8 +22,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a message
     let message_id = format!("msg-{}", uuid::Uuid::new_v4());
-    let mut message =
-        Message::user_text("Hello, A2A agent! Please stream your response.".to_string(), message_id);
+    let mut message = Message::user_text(
+        "Hello, A2A agent! Please stream your response.".to_string(),
+        message_id,
+    );
 
     // Add a data part to test multiple content types
     let mut data = serde_json::Map::new();
@@ -40,9 +45,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Subscribe to task updates
     println!("Subscribing to task updates...");
-    let mut stream = client
-        .subscribe_to_task(&task_id, &message, None, None)
+    // First send the message
+    let task = client
+        .send_task_message(&task_id, &message, None, None)
         .await?;
+    println!("Task created: {:#?}", task);
+
+    // Then subscribe to updates
+    let mut stream = client.subscribe_to_task(&task_id, None).await?;
 
     // Process streaming updates with timeout
     println!("Waiting for streaming updates...");
@@ -117,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         Err(e) => {
-                            eprintln!("Error: {}", e);
+                            tracing::error!("Stream error: {}", e);
                             break;
                         }
                     }

@@ -114,17 +114,17 @@ pub mod domain;
 pub mod port;
 pub mod services;
 
+#[cfg(feature = "tracing")]
+pub mod observability;
+
 // Public API exports
 pub use domain::{
-    AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
-    PushNotificationAuthenticationInfo, PushNotificationConfig, SecurityScheme,
-    OAuthFlows, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    ImplicitOAuthFlow, PasswordOAuthFlow,
-    A2AError,
-    Artifact, FileContent, Message, Part, Role,
-    MessageSendConfiguration, MessageSendParams, Task, TaskArtifactUpdateEvent, TaskIdParams,
-    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
-    TaskStatusUpdateEvent,
+    A2AError, AgentCapabilities, AgentCard, AgentProvider, AgentSkill, Artifact,
+    AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow, FileContent, ImplicitOAuthFlow,
+    Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part, PasswordOAuthFlow,
+    PushNotificationAuthenticationInfo, PushNotificationConfig, Role, SecurityScheme, Task,
+    TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
+    TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 
 // Port traits for better separation of concerns
@@ -148,10 +148,8 @@ pub use adapter::WebSocketServer;
 
 #[cfg(feature = "server")]
 pub use adapter::{
-    SimpleAgentInfo,
-    NoopPushNotificationSender, PushNotificationRegistry, PushNotificationSender,
-    DefaultRequestProcessor,
-    InMemoryTaskStorage,
+    DefaultRequestProcessor, InMemoryTaskStorage, NoopPushNotificationSender,
+    PushNotificationRegistry, PushNotificationSender, SimpleAgentInfo,
 };
 
 #[cfg(all(feature = "server", feature = "http-client"))]

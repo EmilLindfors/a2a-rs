@@ -16,7 +16,7 @@ pub enum SecurityScheme {
     #[serde(rename = "apiKey")]
     ApiKey {
         #[serde(rename = "in")]
-        location: String,  // "query" | "header" | "cookie"
+        location: String, // "query" | "header" | "cookie"
         name: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -139,7 +139,6 @@ impl AgentSkill {
         }
     }
 
-
     /// Add examples to the skill
     pub fn with_examples(mut self, examples: Vec<String>) -> Self {
         self.examples = Some(examples);
@@ -201,7 +200,10 @@ pub struct AgentCard {
     #[serde(default = "default_output_modes", rename = "defaultOutputModes")]
     pub default_output_modes: Vec<String>,
     pub skills: Vec<AgentSkill>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "supportsAuthenticatedExtendedCard")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "supportsAuthenticatedExtendedCard"
+    )]
     pub supports_authenticated_extended_card: Option<bool>,
 }
 

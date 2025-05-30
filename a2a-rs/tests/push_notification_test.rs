@@ -2,8 +2,8 @@
 
 use a2a_rs::{
     adapter::{
-        HttpClient, DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, PushNotificationSender,
-        SimpleAgentInfo, business::DefaultBusinessHandler,
+        business::DefaultBusinessHandler, DefaultRequestProcessor, HttpClient, HttpServer,
+        InMemoryTaskStorage, PushNotificationSender, SimpleAgentInfo,
     },
     domain::{
         A2AError, Message, Part, PushNotificationConfig, TaskArtifactUpdateEvent,
@@ -48,7 +48,10 @@ impl PushNotificationSender for MockPushNotificationSender {
         event: &TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         // Record the update
-        let update = format!("Status update for task {} to URL {}", event.task_id, config.url);
+        let update = format!(
+            "Status update for task {} to URL {}",
+            event.task_id, config.url
+        );
         self.status_updates.lock().unwrap().push(update);
         Ok(())
     }

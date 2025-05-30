@@ -16,9 +16,7 @@ use crate::{
         JSONRPCError, JSONRPCResponse,
     },
     domain::A2AError,
-    port::{
-        AsyncMessageHandler, AsyncTaskManager, AsyncNotificationManager,
-    },
+    port::{AsyncMessageHandler, AsyncNotificationManager, AsyncTaskManager},
     services::server::AsyncA2ARequestProcessor,
 };
 
@@ -147,7 +145,10 @@ where
         request: &GetTaskPushNotificationRequest,
     ) -> Result<JSONRPCResponse, A2AError> {
         let params = &request.params;
-        let config = self.notification_manager.get_task_notification(&params.id).await?;
+        let config = self
+            .notification_manager
+            .get_task_notification(&params.id)
+            .await?;
 
         Ok(JSONRPCResponse::success(
             request.id.clone(),
@@ -239,7 +240,9 @@ where
             A2ARequest::SendMessage(_req) => {
                 // Convert MessageSendParams to TaskSendParams for backwards compatibility
                 // TODO: Implement proper message handling
-                Err(A2AError::UnsupportedOperation("Message sending not yet implemented".to_string()))
+                Err(A2AError::UnsupportedOperation(
+                    "Message sending not yet implemented".to_string(),
+                ))
             }
             A2ARequest::GetTask(req) => self.process_get_task(req).await,
             A2ARequest::CancelTask(req) => self.process_cancel_task(req).await,
@@ -254,7 +257,9 @@ where
             A2ARequest::SendMessageStreaming(_req) => {
                 // Convert MessageSendParams to TaskSendParams for backwards compatibility
                 // TODO: Implement proper message streaming
-                Err(A2AError::UnsupportedOperation("Message streaming not yet implemented".to_string()))
+                Err(A2AError::UnsupportedOperation(
+                    "Message streaming not yet implemented".to_string(),
+                ))
             }
             A2ARequest::Generic(req) => {
                 // Handle unknown method

@@ -5,17 +5,20 @@
 use std::sync::Arc;
 
 use axum::{
-    Json, Router,
     extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
+    Json, Router,
 };
-use serde_json::{Value, json};
+use serde_json::{json, Value};
+
+#[cfg(feature = "tracing")]
+use tracing::{debug, error, info, instrument};
 
 use crate::{
     adapter::{
-        auth::{Authenticator, NoopAuthenticator, with_auth},
+        auth::{with_auth, Authenticator, NoopAuthenticator},
         error::HttpServerError,
     },
     domain::A2AError,
@@ -72,7 +75,14 @@ where
     }
 
     /// Start the HTTP server
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
+        server.address = %self.address,
+        server.has_auth = self.authenticator.is_some()
+    )))]
     pub async fn start(&self) -> Result<(), A2AError> {
+        #[cfg(feature = "tracing")]
+        info!("Starting HTTP server");
+
         let processor = self.processor.clone();
         let agent_info = self.agent_info.clone();
 
@@ -99,9 +109,14 @@ where
             .await
             .map_err(HttpServerError::Io)?;
 
-        axum::serve(listener, app)
-            .await
-            .map_err(|e| HttpServerError::Server(format!("Server error: {}", e)))?;
+        #[cfg(feature = "tracing")]
+        info!("HTTP server listening on {}", self.address);
+
+        axum::serve(listener, app).await.map_err(|e| {
+            #[cfg(feature = "tracing")]
+            error!("Server error: {}", e);
+            HttpServerError::Server(format!("Server error: {}", e))
+        })?;
 
         Ok(())
     }
@@ -119,6 +134,10 @@ where
 }
 
 /// Handle a request from a client
+#[cfg_attr(feature = "tracing", instrument(skip(state), fields(
+    request.id = %request.get("id").and_then(|v| v.as_str()).unwrap_or("unknown"),
+    request.method = %request.get("method").and_then(|v| v.as_str()).unwrap_or("unknown")
+)))]
 async fn handle_request<P, A>(
     State(state): State<ServerState<P, A>>,
     Json(request): Json<Value>,
@@ -127,10 +146,18 @@ where
     P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
+    #[cfg(feature = "tracing")]
+    debug!("Processing JSON-RPC request");
+
+    #[cfg(feature = "tracing")]
+    let start_time = std::time::Instant::now();
+
     // Convert the request to a string
     let request_str = match serde_json::to_string(&request) {
         Ok(str) => str,
         Err(e) => {
+            #[cfg(feature = "tracing")]
+            error!("Invalid JSON payload: {}", e);
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({
@@ -150,9 +177,13 @@ where
     // Process the request
     match state.processor.process_raw_request(&request_str).await {
         Ok(response) => {
+            #[cfg(feature = "tracing")]
+            debug!("Request processed successfully");
             let response_value: Value = match serde_json::from_str(&response) {
                 Ok(value) => value,
-                Err(_) => {
+                Err(e) => {
+                    #[cfg(feature = "tracing")]
+                    error!("Failed to parse response: {}", e);
                     return (
                         StatusCode::INTERNAL_SERVER_ERROR,
                         Json(json!({
@@ -168,9 +199,22 @@ where
                         .into_response();
                 }
             };
+
+            #[cfg(feature = "tracing")]
+            {
+                let duration = start_time.elapsed();
+                tracing::Span::current().record("request.duration_ms", duration.as_millis() as u64);
+                info!(
+                    duration_ms = duration.as_millis() as u64,
+                    "Request completed successfully"
+                );
+            }
+
             (StatusCode::OK, Json(response_value)).into_response()
         }
         Err(e) => {
+            #[cfg(feature = "tracing")]
+            error!("Request processing failed: {}", e);
             let error = e.to_jsonrpc_error();
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -186,13 +230,20 @@ where
 }
 
 /// Handle a request for the agent card
+#[cfg_attr(feature = "tracing", instrument(skip(state)))]
 async fn handle_agent_card<P, A>(State(state): State<ServerState<P, A>>) -> impl IntoResponse
 where
     P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
+    #[cfg(feature = "tracing")]
+    debug!("Fetching agent card");
     match state.agent_info.get_agent_card().await {
-        Ok(card) => (StatusCode::OK, Json(card)).into_response(),
+        Ok(card) => {
+            #[cfg(feature = "tracing")]
+            debug!("Agent card retrieved successfully");
+            (StatusCode::OK, Json(card)).into_response()
+        }
         Err(e) => {
             let error = e.to_jsonrpc_error();
             (

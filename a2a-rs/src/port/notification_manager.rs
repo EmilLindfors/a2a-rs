@@ -3,7 +3,7 @@
 #[cfg(feature = "server")]
 use async_trait::async_trait;
 
-use crate::domain::{A2AError, TaskIdParams, TaskPushNotificationConfig, PushNotificationConfig};
+use crate::domain::{A2AError, PushNotificationConfig, TaskIdParams, TaskPushNotificationConfig};
 
 /// A trait for managing push notification configurations and delivery
 pub trait NotificationManager {
@@ -29,7 +29,10 @@ pub trait NotificationManager {
     }
 
     /// Validate push notification configuration
-    fn validate_notification_config(&self, config: &PushNotificationConfig) -> Result<(), A2AError> {
+    fn validate_notification_config(
+        &self,
+        config: &PushNotificationConfig,
+    ) -> Result<(), A2AError> {
         if config.url.trim().is_empty() {
             return Err(A2AError::ValidationError {
                 field: "url".to_string(),
@@ -133,7 +136,8 @@ pub trait AsyncNotificationManager: Send + Sync {
         }
 
         // Validate the notification config
-        self.validate_notification_config(&config.push_notification_config).await?;
+        self.validate_notification_config(&config.push_notification_config)
+            .await?;
 
         // Set the notification
         self.set_task_notification(config).await
@@ -169,7 +173,7 @@ pub trait AsyncNotificationManager: Send + Sync {
         // In a real implementation, this would send the actual notification
         // For now, just validate that we have the configuration
         let _config = self.get_task_notification(task_id).await?;
-        
+
         Ok(())
     }
 
@@ -188,7 +192,7 @@ pub trait AsyncNotificationManager: Send + Sync {
         // In a real implementation, this would send the actual notification
         // For now, just validate that we have the configuration
         let _config = self.get_task_notification(task_id).await?;
-        
+
         Ok(())
     }
 }

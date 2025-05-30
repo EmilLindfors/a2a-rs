@@ -1,5 +1,5 @@
 //! Service layer for the A2A protocol
-//! 
+//!
 //! Services provide application-level abstractions that orchestrate
 //! between ports and adapters.
 

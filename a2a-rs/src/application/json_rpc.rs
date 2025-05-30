@@ -42,13 +42,15 @@ impl<'de> Deserialize<'de> for A2ARequest {
             "message/send" => {
                 // Re-parse as SendMessageRequest
                 let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = SendMessageRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                let req =
+                    SendMessageRequest::deserialize(value).map_err(serde::de::Error::custom)?;
                 A2ARequest::SendMessage(req)
             }
             "message/stream" => {
                 // Re-parse as SendMessageStreamingRequest
                 let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = SendMessageStreamingRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                let req = SendMessageStreamingRequest::deserialize(value)
+                    .map_err(serde::de::Error::custom)?;
                 A2ARequest::SendMessageStreaming(req)
             }
             "tasks/send" => {

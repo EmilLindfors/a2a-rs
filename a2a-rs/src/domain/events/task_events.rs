@@ -10,7 +10,7 @@ pub struct TaskStatusUpdateEvent {
     pub task_id: String,
     #[serde(rename = "contextId")]
     pub context_id: String,
-    pub kind: String,  // Always "status-update"
+    pub kind: String, // Always "status-update"
     pub status: TaskStatus,
     #[serde(rename = "final")]
     pub final_: bool,
@@ -25,7 +25,7 @@ pub struct TaskArtifactUpdateEvent {
     pub task_id: String,
     #[serde(rename = "contextId")]
     pub context_id: String,
-    pub kind: String,  // Always "artifact-update"
+    pub kind: String, // Always "artifact-update"
     pub artifact: Artifact,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub append: Option<bool>,

@@ -117,7 +117,10 @@ pub trait AsyncStreamingHandler: Send + Sync {
     async fn artifact_update_stream<'a>(
         &self,
         task_id: &'a str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>, A2AError>;
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>,
+        A2AError,
+    >;
 
     /// Create a combined stream of all updates for a task
     async fn combined_update_stream<'a>(
@@ -183,4 +186,3 @@ impl UpdateEvent {
         }
     }
 }
-

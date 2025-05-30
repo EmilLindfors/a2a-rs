@@ -1,8 +1,8 @@
 //! Error types for client adapters
 
+use crate::domain::A2AError;
 use std::io;
 use thiserror::Error;
-use crate::domain::A2AError;
 
 /// Error type for HTTP client adapter
 #[derive(Error, Debug)]

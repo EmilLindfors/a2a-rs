@@ -3,10 +3,16 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
+#[cfg(feature = "tracing")]
+use tracing::instrument;
+
 use super::{
     agent::PushNotificationConfig,
     message::{Artifact, Message},
 };
+
+#[cfg(feature = "tracing")]
+use crate::measure_duration;
 
 /// States a task can be in
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -58,7 +64,7 @@ pub struct Task {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
     #[builder(default = "task".to_string())]
-    pub kind: String,  // Always "task"
+    pub kind: String, // Always "task"
 }
 
 /// Parameters for identifying a task
@@ -86,7 +92,10 @@ pub struct MessageSendConfiguration {
     pub accepted_output_modes: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "historyLength")]
     pub history_length: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "pushNotificationConfig")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "pushNotificationConfig"
+    )]
     pub push_notification_config: Option<PushNotificationConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blocking: Option<bool>,
@@ -126,7 +135,6 @@ pub struct TaskPushNotificationConfig {
     pub push_notification_config: PushNotificationConfig,
 }
 
-
 impl Task {
     /// Create a new task with the given ID in the submitted state
     pub fn new(id: String, context_id: String) -> Self {
@@ -151,10 +159,19 @@ impl Task {
     }
 
     /// Update the task status
+    #[cfg_attr(feature = "tracing", instrument(skip(self, message), fields(
+        task.id = %self.id,
+        task.old_state = ?self.status.state,
+        task.new_state = ?state,
+        task.has_message = message.is_some()
+    )))]
     pub fn update_status(&mut self, state: TaskState, message: Option<Message>) {
+        #[cfg(feature = "tracing")]
+        tracing::info!("Updating task status");
+
         // Set the new status
         self.status = TaskStatus {
-            state,
+            state: state.clone(),
             message: message.clone(),
             timestamp: Some(Utc::now()),
         };
@@ -162,11 +179,21 @@ impl Task {
         // Add message to history if provided and state_transition_history is enabled
         if let Some(msg) = message {
             if let Some(history) = &mut self.history {
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    "Adding message to existing history (size: {})",
+                    history.len()
+                );
                 history.push(msg);
             } else {
+                #[cfg(feature = "tracing")]
+                tracing::debug!("Creating new history with message");
                 self.history = Some(vec![msg]);
             }
         }
+
+        #[cfg(feature = "tracing")]
+        tracing::info!("Task status updated successfully");
     }
 
     /// Get a copy of this task with history limited to the specified length
@@ -176,30 +203,57 @@ impl Task {
     /// - If history_length is 0, removes history entirely
     /// - If history_length is less than the current history size,
     ///   keeps only the most recent messages (truncates from the beginning)
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
+        task.id = %self.id,
+        history.current_size = self.history.as_ref().map(|h| h.len()).unwrap_or(0),
+        history.requested_limit = ?history_length
+    )))]
     pub fn with_limited_history(&self, history_length: Option<u32>) -> Self {
         // If no history limit specified or no history, return as is
         if history_length.is_none() || self.history.is_none() {
+            #[cfg(feature = "tracing")]
+            tracing::debug!("No history truncation needed");
             return self.clone();
         }
 
+        #[cfg(feature = "tracing")]
+        let _span = tracing::Span::current();
+
         let limit = history_length.unwrap() as usize;
+
+        #[cfg(feature = "tracing")]
+        let mut task_copy = measure_duration!(_span, "operation.duration_ms", { self.clone() });
+
+        #[cfg(not(feature = "tracing"))]
         let mut task_copy = self.clone();
 
         // Limit history if specified
         if let Some(history) = &mut task_copy.history {
+            let original_size = history.len();
+
             if limit == 0 {
                 // If limit is 0, remove history entirely
+                #[cfg(feature = "tracing")]
+                tracing::debug!("Removing all history (limit = 0)");
                 task_copy.history = None;
             } else if history.len() > limit {
                 // If history is longer than limit, truncate it
                 // Keep the most recent messages by removing from the beginning
                 // For example, if history has 10 items and limit is 3, we skip 7 items (10-3)
                 // and keep items 8, 9, and 10
-                *history = history
-                    .iter()
-                    .skip(history.len() - limit)
-                    .cloned()
-                    .collect();
+                let items_to_skip = history.len() - limit;
+                #[cfg(feature = "tracing")]
+                tracing::debug!(
+                    "Truncating history from {} to {} items (removing {} oldest)",
+                    original_size,
+                    limit,
+                    items_to_skip
+                );
+
+                *history = history.iter().skip(items_to_skip).cloned().collect();
+            } else {
+                #[cfg(feature = "tracing")]
+                tracing::debug!("History size ({}) within limit ({})", original_size, limit);
             }
             // Otherwise, if history.len() <= limit, we keep the full history
         }
@@ -208,18 +262,38 @@ impl Task {
     }
 
     /// Add an artifact to the task
+    #[cfg_attr(feature = "tracing", instrument(skip(self, artifact), fields(
+        task.id = %self.id,
+        artifact.id = %artifact.artifact_id,
+        artifacts.count = self.artifacts.as_ref().map(|a| a.len()).unwrap_or(0)
+    )))]
     pub fn add_artifact(&mut self, artifact: Artifact) {
         if let Some(artifacts) = &mut self.artifacts {
+            #[cfg(feature = "tracing")]
+            tracing::debug!("Adding artifact to existing list");
             artifacts.push(artifact);
         } else {
+            #[cfg(feature = "tracing")]
+            tracing::debug!("Creating new artifacts list with artifact");
             self.artifacts = Some(vec![artifact]);
         }
     }
 
     /// Validate a task (useful after building with builder)
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
+        task.id = %self.id,
+        task.kind = %self.kind,
+        task.state = ?self.status.state,
+        history.size = self.history.as_ref().map(|h| h.len()).unwrap_or(0)
+    )))]
     pub fn validate(&self) -> Result<(), crate::domain::A2AError> {
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Validating task");
+
         // Validate that kind is "task"
         if self.kind != "task" {
+            #[cfg(feature = "tracing")]
+            tracing::error!("Invalid task kind: {}", self.kind);
             return Err(crate::domain::A2AError::InvalidParams(
                 "Task kind must be 'task'".to_string(),
             ));
@@ -227,28 +301,43 @@ impl Task {
 
         // Validate message IDs are unique if history exists
         if let Some(ref hist) = &self.history {
+            #[cfg(feature = "tracing")]
+            tracing::trace!("Checking for duplicate message IDs in history");
+
             let mut message_ids = std::collections::HashSet::new();
             for message in hist {
                 if !message_ids.insert(&message.message_id) {
-                    return Err(crate::domain::A2AError::InvalidParams(
-                        format!("Duplicate message ID in history: {}", message.message_id),
-                    ));
+                    #[cfg(feature = "tracing")]
+                    tracing::error!("Duplicate message ID found: {}", message.message_id);
+                    return Err(crate::domain::A2AError::InvalidParams(format!(
+                        "Duplicate message ID in history: {}",
+                        message.message_id
+                    )));
                 }
             }
         }
 
         // Validate all messages in history
         if let Some(ref hist) = &self.history {
-            for message in hist {
+            #[cfg(feature = "tracing")]
+            tracing::trace!("Validating {} messages in history", hist.len());
+
+            for (index, message) in hist.iter().enumerate() {
+                #[cfg(feature = "tracing")]
+                tracing::trace!("Validating message {} in history", index);
                 message.validate()?;
             }
         }
 
         // Validate status message if present
         if let Some(ref msg) = &self.status.message {
+            #[cfg(feature = "tracing")]
+            tracing::trace!("Validating status message");
             msg.validate()?;
         }
 
+        #[cfg(feature = "tracing")]
+        tracing::debug!("Task validation successful");
         Ok(())
     }
 }

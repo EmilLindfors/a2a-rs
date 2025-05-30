@@ -2,7 +2,8 @@
 
 use a2a_rs::{
     adapter::{
-        WebSocketClient, DefaultRequestProcessor, InMemoryTaskStorage, SimpleAgentInfo, WebSocketServer, business::DefaultBusinessHandler,
+        business::DefaultBusinessHandler, DefaultRequestProcessor, InMemoryTaskStorage,
+        SimpleAgentInfo, WebSocketClient, WebSocketServer,
     },
     domain::Message,
     port::client::{AsyncA2AClient, StreamItem},

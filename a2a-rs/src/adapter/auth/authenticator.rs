@@ -8,7 +8,7 @@ use async_trait::async_trait;
 #[cfg(feature = "http-server")]
 use axum::{
     extract::State,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
     middleware::Next,
     response::Response,
 };

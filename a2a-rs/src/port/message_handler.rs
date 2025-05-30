@@ -73,11 +73,12 @@ pub trait AsyncMessageHandler: Send + Sync {
     ) -> Result<Task, A2AError> {
         // Validate the message
         self.validate_message(&message).await?;
-        
+
         // Transform the message if needed
         let transformed_message = self.transform_message(message).await?;
-        
+
         // Process the message
-        self.process_message(task_id, &transformed_message, session_id).await
+        self.process_message(task_id, &transformed_message, session_id)
+            .await
     }
 }

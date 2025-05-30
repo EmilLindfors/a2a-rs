@@ -5,9 +5,7 @@
 use async_trait::async_trait;
 
 use crate::{
-    domain::{
-        A2AError, AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
-    },
+    domain::{A2AError, AgentCapabilities, AgentCard, AgentProvider, AgentSkill},
     services::server::AgentInfoProvider,
 };
 

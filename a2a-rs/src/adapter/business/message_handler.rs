@@ -58,6 +58,8 @@ where
 
         // Update the task status through the task manager
         // This will handle broadcasting and storage updates
-        self.task_manager.update_task_status(task_id, TaskState::Working).await
+        self.task_manager
+            .update_task_status(task_id, TaskState::Working)
+            .await
     }
 }

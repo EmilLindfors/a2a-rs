@@ -1,14 +1,17 @@
 //! A simple WebSocket server example
 
 use a2a_rs::adapter::{
-    DefaultRequestProcessor, NoopPushNotificationSender, InMemoryTaskStorage, SimpleAgentInfo,
-    WebSocketServer, business::DefaultBusinessHandler,
+    business::DefaultBusinessHandler, DefaultRequestProcessor, InMemoryTaskStorage,
+    NoopPushNotificationSender, SimpleAgentInfo, WebSocketServer,
 };
+use a2a_rs::observability;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize tracing for better observability
+    observability::init_tracing();
     // Create a custom push notification sender
-    let push_sender = NoopPushNotificationSender::default();
+    let push_sender = NoopPushNotificationSender;
 
     // Create task storage with the push notification sender
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);

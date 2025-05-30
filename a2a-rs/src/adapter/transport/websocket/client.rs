@@ -4,27 +4,27 @@
 
 use async_trait::async_trait;
 use futures::{
-    SinkExt,
     stream::{Stream, StreamExt},
+    SinkExt,
 };
 use serde_json::Value;
-use std::{sync::Arc, time::Duration};
+use std::{pin::Pin, sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     sync::Mutex, // Changed to tokio::sync::Mutex
 };
 use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async, tungstenite::protocol::Message as WsMessage,
+    connect_async, tungstenite::protocol::Message as WsMessage, MaybeTlsStream, WebSocketStream,
 };
 use url::Url;
+
+#[cfg(feature = "tracing")]
+use tracing::{debug, trace};
 
 use crate::{
     adapter::error::WebSocketClientError,
     application::{
-        json_rpc::{
-            self, A2ARequest, SendTaskRequest, SendTaskStreamingRequest,
-            TaskResubscriptionRequest,
-        },
+        json_rpc::{self, A2ARequest, SendTaskRequest, TaskResubscriptionRequest},
         JSONRPCResponse,
     },
     domain::{
@@ -365,7 +365,7 @@ impl AsyncA2AClient for WebSocketClient {
                     let mut guard = conn.lock().await;
                     guard.next().await
                 }; // Lock is dropped here
-                // Process result outside the lock scope
+                   // Process result outside the lock scope
                 let message = match message_result {
                     Some(Ok(msg)) => msg,
                     Some(Err(e)) => {
@@ -386,13 +386,15 @@ impl AsyncA2AClient for WebSocketClient {
                 let result = match message {
                     WsMessage::Text(text) => {
                         // Add debug logging for received messages
-                        println!("DEBUG: Received WebSocket message: {}", text);
+                        #[cfg(feature = "tracing")]
+                        trace!("Received WebSocket message: {}", text);
 
                         // Parse the response
                         let response: Value = match serde_json::from_str(&text) {
                             Ok(value) => value,
                             Err(e) => {
-                                println!("DEBUG: JSON parse error: {}", e);
+                                #[cfg(feature = "tracing")]
+                                debug!("JSON parse error: {}", e);
                                 return Some((Err(A2AError::JsonParse(e)), conn));
                             }
                         };
@@ -428,7 +430,8 @@ impl AsyncA2AClient for WebSocketClient {
 
                             // Try to parse as an initial Task response first
                             if let Ok(task) = serde_json::from_value::<Task>(result.clone()) {
-                                println!("DEBUG: Parsed as Task");
+                                #[cfg(feature = "tracing")]
+                                debug!("Parsed streaming response as Task");
                                 return Some((Ok(StreamItem::Task(task)), conn));
                             }
 
@@ -436,7 +439,8 @@ impl AsyncA2AClient for WebSocketClient {
                             if let Ok(status_update) =
                                 serde_json::from_value::<TaskStatusUpdateEvent>(result.clone())
                             {
-                                println!("DEBUG: Parsed as StatusUpdate");
+                                #[cfg(feature = "tracing")]
+                                debug!("Parsed streaming response as StatusUpdate");
                                 return Some((Ok(StreamItem::StatusUpdate(status_update)), conn));
                             }
 
@@ -444,7 +448,8 @@ impl AsyncA2AClient for WebSocketClient {
                             if let Ok(artifact_update) =
                                 serde_json::from_value::<TaskArtifactUpdateEvent>(result)
                             {
-                                println!("DEBUG: Parsed as ArtifactUpdate");
+                                #[cfg(feature = "tracing")]
+                                debug!("Parsed streaming response as ArtifactUpdate");
                                 return Some((
                                     Ok(StreamItem::ArtifactUpdate(artifact_update)),
                                     conn,
@@ -453,7 +458,8 @@ impl AsyncA2AClient for WebSocketClient {
                         }
 
                         // If we got here, we couldn't parse the response
-                        println!("DEBUG: Failed to parse streaming response");
+                        #[cfg(feature = "tracing")]
+                        debug!("Failed to parse streaming response");
                         Err(WebSocketClientError::Protocol(
                             "Failed to parse streaming response".to_string(),
                         )
@@ -470,153 +476,6 @@ impl AsyncA2AClient for WebSocketClient {
         });
 
         Ok(Box::pin(stream))
-    }
-        &self,
-        task_id: &'a str,
-        history_length: Option<u32>,
-    ) -> Result<impl Stream<Item = Result<StreamItem, A2AError>>, A2AError> {
-        // First connect to ensure we have a connection
-        let mut client_clone = self.clone();
-        client_clone.connect().await?;
-
-        let params = TaskQueryParams {
-            id: task_id.to_string(),
-            history_length,
-            metadata: None,
-        };
-
-        let request = TaskResubscriptionRequest::new(params);
-        let json = json_rpc::serialize_request(&A2ARequest::TaskResubscription(request))?;
-
-        // Get the connection
-        let connection = client_clone
-            .connection
-            .as_ref()
-            .ok_or_else(|| WebSocketClientError::Connection("No connection".to_string()))?
-            .clone();
-
-        // Send the request
-        {
-            let mut guard = connection.lock().await; // Changed to await
-
-            guard
-                .send(WsMessage::Text(json))
-                .await
-                .map_err(|e| WebSocketClientError::Message(format!("Send error: {}", e)))?;
-        }
-
-        // Create a stream that will process incoming messages (same as in subscribe_to_task)
-        let stream = futures::stream::unfold(connection, move |conn| {
-            Box::pin(async move {
-                let message_result = {
-                    let mut guard = conn.lock().await;
-                    guard.next().await
-                }; // Lock is dropped here
-
-                let message = match message_result {
-                    Some(Ok(msg)) => msg,
-                    Some(Err(e)) => {
-                        return Some((
-                            Err(
-                                WebSocketClientError::Message(format!("WebSocket error: {}", e))
-                                    .into(),
-                            ),
-                            conn,
-                        ));
-                    }
-                    None => {
-                        return Some((Err(WebSocketClientError::Closed.into()), conn));
-                    }
-                };
-
-                // Process the message
-                let result = match message {
-                    WsMessage::Text(text) => {
-                        // Add debug logging for received messages
-                        println!("DEBUG: Received WebSocket message: {}", text);
-
-                        // Parse the response
-                        let response: Value = match serde_json::from_str(&text) {
-                            Ok(value) => value,
-                            Err(e) => {
-                                println!("DEBUG: JSON parse error: {}", e);
-                                return Some((Err(A2AError::JsonParse(e)), conn));
-                            }
-                        };
-
-                        // Check for errors
-                        if let Some(error) = response.get("error") {
-                            if error.is_object() {
-                                let response_clone = response.clone();
-                                let error: JSONRPCResponse =
-                                    match serde_json::from_value(response_clone) {
-                                        Ok(resp) => resp,
-                                        Err(e) => {
-                                            return Some((Err(A2AError::JsonParse(e)), conn));
-                                        }
-                                    };
-
-                                if let Some(err) = error.error {
-                                    return Some((
-                                        Err(A2AError::JsonRpc {
-                                            code: err.code,
-                                            message: err.message,
-                                            data: err.data,
-                                        }),
-                                        conn,
-                                    ));
-                                }
-                            }
-                        }
-
-                        // Check if it's a valid JSON-RPC message
-                        if response.get("jsonrpc").is_some() && response.get("result").is_some() {
-                            let result = response.get("result").cloned().unwrap_or(Value::Null);
-
-                            // Try to parse as an initial Task response first
-                            if let Ok(task) = serde_json::from_value::<Task>(result.clone()) {
-                                println!("DEBUG: Parsed as Task");
-                                return Some((Ok(StreamItem::Task(task)), conn));
-                            }
-
-                            // Try to parse as a status update
-                            if let Ok(status_update) =
-                                serde_json::from_value::<TaskStatusUpdateEvent>(result.clone())
-                            {
-                                println!("DEBUG: Parsed as StatusUpdate");
-                                return Some((Ok(StreamItem::StatusUpdate(status_update)), conn));
-                            }
-
-                            // Try to parse as an artifact update
-                            if let Ok(artifact_update) =
-                                serde_json::from_value::<TaskArtifactUpdateEvent>(result)
-                            {
-                                println!("DEBUG: Parsed as ArtifactUpdate");
-                                return Some((
-                                    Ok(StreamItem::ArtifactUpdate(artifact_update)),
-                                    conn,
-                                ));
-                            }
-                        }
-
-                        // If we got here, we couldn't parse the response
-                        println!("DEBUG: Failed to parse streaming response");
-                        Err(WebSocketClientError::Protocol(
-                            "Failed to parse streaming response".to_string(),
-                        )
-                        .into())
-                    }
-                    _ => Err(WebSocketClientError::Protocol(
-                        "Unexpected WebSocket message type".to_string(),
-                    )
-                    .into()),
-                };
-
-                Some((result, conn))
-            })
-        });
-
-        Ok(stream)
     }
 }
 

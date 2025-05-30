@@ -23,14 +23,23 @@ pub trait TaskManager {
     fn task_exists(&self, task_id: &str) -> Result<bool, A2AError>;
 
     /// List tasks with optional filtering
-    fn list_tasks(&self, _context_id: Option<&str>, _limit: Option<u32>) -> Result<Vec<Task>, A2AError> {
+    fn list_tasks(
+        &self,
+        _context_id: Option<&str>,
+        _limit: Option<u32>,
+    ) -> Result<Vec<Task>, A2AError> {
         // Default implementation - can be overridden
         // Basic implementation that doesn't support filtering
-        Err(A2AError::UnsupportedOperation("Task listing not implemented".to_string()))
+        Err(A2AError::UnsupportedOperation(
+            "Task listing not implemented".to_string(),
+        ))
     }
 
     /// Get task metadata
-    fn get_task_metadata(&self, task_id: &str) -> Result<serde_json::Map<String, serde_json::Value>, A2AError> {
+    fn get_task_metadata(
+        &self,
+        task_id: &str,
+    ) -> Result<serde_json::Map<String, serde_json::Value>, A2AError> {
         let task = self.get_task(task_id, None)?;
         Ok(task.metadata.unwrap_or_default())
     }
@@ -96,7 +105,9 @@ pub trait AsyncTaskManager: Send + Sync {
     ) -> Result<Vec<Task>, A2AError> {
         // Default implementation - can be overridden
         // Basic implementation that doesn't support filtering
-        Err(A2AError::UnsupportedOperation("Task listing not implemented".to_string()))
+        Err(A2AError::UnsupportedOperation(
+            "Task listing not implemented".to_string(),
+        ))
     }
 
     /// Get task metadata
@@ -130,19 +141,13 @@ pub trait AsyncTaskManager: Send + Sync {
     }
 
     /// Get task with validation
-    async fn get_task_validated<'a>(
-        &self,
-        params: &'a TaskQueryParams,
-    ) -> Result<Task, A2AError> {
+    async fn get_task_validated<'a>(&self, params: &'a TaskQueryParams) -> Result<Task, A2AError> {
         self.validate_task_params(params).await?;
         self.get_task(&params.id, params.history_length).await
     }
 
     /// Cancel task with validation
-    async fn cancel_task_validated<'a>(
-        &self,
-        params: &'a TaskIdParams,
-    ) -> Result<Task, A2AError> {
+    async fn cancel_task_validated<'a>(&self, params: &'a TaskIdParams) -> Result<Task, A2AError> {
         if params.id.trim().is_empty() {
             return Err(A2AError::ValidationError {
                 field: "task_id".to_string(),

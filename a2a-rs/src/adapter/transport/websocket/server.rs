@@ -6,12 +6,15 @@ use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use async_trait::async_trait;
 use futures::{SinkExt, StreamExt};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Mutex, mpsc}, // Changed to tokio::sync::Mutex
+    sync::{mpsc, Mutex}, // Changed to tokio::sync::Mutex
 };
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
+
+#[cfg(feature = "tracing")]
+use tracing::{debug, error, info, instrument};
 
 use crate::{
     adapter::{
@@ -19,10 +22,7 @@ use crate::{
         error::WebSocketServerError,
     },
     domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent},
-    port::{
-        AsyncStreamingHandler,
-        streaming_handler::Subscriber,
-    },
+    port::{streaming_handler::Subscriber, AsyncStreamingHandler},
     services::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
 };
 
@@ -95,7 +95,14 @@ where
     }
 
     /// Start the WebSocket server
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
+        server.address = %self.address,
+        server.has_auth = self.authenticator.is_some()
+    )))]
     pub async fn start(&self) -> Result<(), A2AError> {
+        #[cfg(feature = "tracing")]
+        info!("Starting WebSocket server");
+
         let addr = self
             .address
             .parse::<SocketAddr>()
@@ -105,6 +112,10 @@ where
             .await
             .map_err(WebSocketServerError::Io)?;
 
+        #[cfg(feature = "tracing")]
+        info!("WebSocket server listening on: {}", addr);
+
+        #[cfg(not(feature = "tracing"))]
         println!("WebSocket server listening on: {}", addr);
 
         while let Ok((stream, _)) = listener.accept().await {
@@ -123,12 +134,19 @@ where
                     // In a real implementation, you would extract the token and call authenticate()
 
                     // For now, we'll just log a message indicating auth is enabled
+                    #[cfg(feature = "tracing")]
+                    debug!("Authentication is enabled for WebSocket connections");
+                    #[cfg(not(feature = "tracing"))]
                     println!("Authentication is enabled for WebSocket connections");
                 }
 
                 if let Err(e) =
-                    handle_connection(stream, processor, agent_info, streaming_handler, clients).await
+                    handle_connection(stream, processor, agent_info, streaming_handler, clients)
+                        .await
                 {
+                    #[cfg(feature = "tracing")]
+                    error!("Error handling connection: {}", e);
+                    #[cfg(not(feature = "tracing"))]
                     eprintln!("Error handling connection: {}", e);
                 }
             });
@@ -139,6 +157,7 @@ where
 }
 
 /// Handle a WebSocket connection
+#[cfg_attr(feature = "tracing", instrument(skip_all, fields(peer_addr)))]
 async fn handle_connection<P, A, S>(
     stream: TcpStream,
     processor: Arc<P>,
@@ -155,10 +174,16 @@ where
         WebSocketServerError::Connection(format!("Failed to get peer address: {}", e))
     })?;
 
+    #[cfg(feature = "tracing")]
+    tracing::Span::current().record("peer_addr", addr.to_string());
+
     let ws_stream = accept_async(stream).await.map_err(|e| {
         WebSocketServerError::Connection(format!("Error during WebSocket handshake: {}", e))
     })?;
 
+    #[cfg(feature = "tracing")]
+    info!("WebSocket connection established with: {}", addr);
+    #[cfg(not(feature = "tracing"))]
     println!("WebSocket connection established with: {}", addr);
 
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
@@ -171,12 +196,21 @@ where
     {
         let mut clients_guard = clients.lock().await; // Changed to await
         clients_guard.insert(client_id.clone(), tx.clone());
+        #[cfg(feature = "tracing")]
+        debug!(
+            "Registered client {}, total clients: {}",
+            client_id,
+            clients_guard.len()
+        );
     }
 
     // Task to forward messages from the channel to the WebSocket
     let forward_task = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Err(e) = ws_sender.send(msg).await {
+                #[cfg(feature = "tracing")]
+                error!("Error sending WebSocket message: {}", e);
+                #[cfg(not(feature = "tracing"))]
                 eprintln!("Error sending WebSocket message: {}", e);
                 break;
             }
@@ -249,6 +283,9 @@ where
                                             )
                                             .await
                                         {
+                                            #[cfg(feature = "tracing")]
+                                            error!("Error adding artifact subscriber: {}", e);
+                                            #[cfg(not(feature = "tracing"))]
                                             eprintln!("Error adding artifact subscriber: {}", e);
                                         }
                                     }
@@ -259,6 +296,9 @@ where
                 } else if let WsMessage::Ping(data) = msg {
                     // Respond to ping with pong
                     if let Err(e) = tx.send(WsMessage::Pong(data)).await {
+                        #[cfg(feature = "tracing")]
+                        error!("Error sending pong: {}", e);
+                        #[cfg(not(feature = "tracing"))]
                         eprintln!("Error sending pong: {}", e);
                         break;
                     }
@@ -282,6 +322,9 @@ where
     // Cancel the forward task
     forward_task.abort();
 
+    #[cfg(feature = "tracing")]
+    info!("WebSocket connection closed with: {}", addr);
+    #[cfg(not(feature = "tracing"))]
     println!("WebSocket connection closed with: {}", addr);
     Ok(())
 }

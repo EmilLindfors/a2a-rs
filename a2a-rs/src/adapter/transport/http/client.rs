@@ -5,20 +5,23 @@
 use async_trait::async_trait;
 use futures::stream::Stream;
 use reqwest::{
+    header::{HeaderMap, HeaderValue, CONTENT_TYPE},
     Client,
-    header::{CONTENT_TYPE, HeaderMap, HeaderValue},
 };
 use std::{pin::Pin, time::Duration};
 
 #[cfg(feature = "tracing")]
-use tracing::instrument;
+use tracing::{debug, error, instrument};
 
 use crate::{
     adapter::error::HttpClientError,
-    application::{json_rpc::{self, A2ARequest, SendTaskRequest}, JSONRPCResponse},
+    application::{
+        json_rpc::{self, A2ARequest, SendTaskRequest},
+        JSONRPCResponse,
+    },
     domain::{
-        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, 
-        TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
+        A2AError, Message, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
+        TaskSendParams,
     },
     services::client::{AsyncA2AClient, StreamItem},
 };
@@ -82,6 +85,9 @@ impl HttpClient {
 impl AsyncA2AClient for HttpClient {
     #[cfg_attr(feature = "tracing", instrument(skip(self, request), fields(url = %self.base_url, request_len = request.len())))]
     async fn send_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
+        #[cfg(feature = "tracing")]
+        debug!("Sending HTTP request");
+
         let response = self
             .client
             .post(&self.base_url)
@@ -90,14 +96,22 @@ impl AsyncA2AClient for HttpClient {
             .timeout(Duration::from_secs(self.timeout))
             .send()
             .await
-            .map_err(HttpClientError::Reqwest)?;
+            .map_err(|e| {
+                #[cfg(feature = "tracing")]
+                error!("HTTP request failed: {}", e);
+                HttpClientError::Reqwest(e)
+            })?;
 
         if response.status().is_success() {
             let body = response.text().await.map_err(HttpClientError::Reqwest)?;
+            #[cfg(feature = "tracing")]
+            debug!("HTTP request successful, response length: {}", body.len());
             Ok(body)
         } else {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
+            #[cfg(feature = "tracing")]
+            error!("HTTP request failed with status {}: {}", status, body);
             Err(HttpClientError::Response {
                 status: status.as_u16(),
                 message: body,
@@ -114,7 +128,10 @@ impl AsyncA2AClient for HttpClient {
         Ok(response)
     }
 
-    #[cfg_attr(feature = "tracing", instrument(skip(self, message), fields(task_id, session_id, history_length)))]
+    #[cfg_attr(
+        feature = "tracing",
+        instrument(skip(self, message), fields(task_id, session_id, history_length))
+    )]
     async fn send_task_message<'a>(
         &self,
         task_id: &'a str,
@@ -153,7 +170,10 @@ impl AsyncA2AClient for HttpClient {
         }
     }
 
-    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(task_id, history_length)))]
+    #[cfg_attr(
+        feature = "tracing",
+        instrument(skip(self), fields(task_id, history_length))
+    )]
     async fn get_task<'a>(
         &self,
         task_id: &'a str,

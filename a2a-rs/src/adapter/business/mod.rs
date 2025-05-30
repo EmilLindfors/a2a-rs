@@ -18,9 +18,11 @@ pub use agent_info::SimpleAgentInfo;
 pub use default_handler::DefaultBusinessHandler;
 #[cfg(feature = "server")]
 pub use message_handler::DefaultMessageHandler;
-#[cfg(feature = "server")]
-pub use push_notification::{PushNotificationRegistry, PushNotificationSender, NoopPushNotificationSender};
 #[cfg(all(feature = "server", feature = "http-client"))]
 pub use push_notification::HttpPushNotificationSender;
+#[cfg(feature = "server")]
+pub use push_notification::{
+    NoopPushNotificationSender, PushNotificationRegistry, PushNotificationSender,
+};
 #[cfg(feature = "server")]
 pub use request_processor::DefaultRequestProcessor;
