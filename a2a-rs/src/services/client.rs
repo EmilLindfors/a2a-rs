@@ -1,23 +1,14 @@
-//! Client port (interface) for the A2A protocol
+//! Client interface traits
 
-#[cfg(feature = "client")]
 use async_trait::async_trait;
+use futures::Stream;
+use std::pin::Pin;
 
 use crate::{
     application::{json_rpc::A2ARequest, JSONRPCResponse},
     domain::{A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent},
 };
 
-/// A trait defining the methods a client should implement
-pub trait A2AClient {
-    /// Send a raw request to the server and get a response
-    fn send_raw_request(&self, request: &str) -> Result<String, A2AError>;
-
-    /// Send a structured request to the server and get a response
-    fn send_request(&self, request: &A2ARequest) -> Result<JSONRPCResponse, A2AError>;
-}
-
-#[cfg(feature = "client")]
 #[async_trait]
 /// An async trait defining the methods an async client should implement
 pub trait AsyncA2AClient: Send + Sync {
@@ -52,7 +43,7 @@ pub trait AsyncA2AClient: Send + Sync {
         config: &'a TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError>;
 
-    /// Get the push notification configuration for a task
+    /// Get push notification configuration for a task
     async fn get_task_push_notification<'a>(
         &self,
         task_id: &'a str,
@@ -62,33 +53,17 @@ pub trait AsyncA2AClient: Send + Sync {
     async fn subscribe_to_task<'a>(
         &self,
         task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
         history_length: Option<u32>,
-    ) -> Result<impl Stream<Item = Result<StreamItem, A2AError>>, A2AError>
-    where
-        Self: Sized;
-
-    /// Resubscribe to an existing task
-    async fn resubscribe_to_task<'a>(
-        &self,
-        task_id: &'a str,
-        history_length: Option<u32>,
-    ) -> Result<impl Stream<Item = Result<StreamItem, A2AError>>, A2AError>
-    where
-        Self: Sized;
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError>;
 }
 
-#[cfg(feature = "client")]
-/// An enum for items received in a streaming response
+/// Items that can be streamed from the server
+#[derive(Debug, Clone)]
 pub enum StreamItem {
-    /// A status update
-    StatusUpdate(TaskStatusUpdateEvent),
-    /// An artifact update
-    ArtifactUpdate(TaskArtifactUpdateEvent),
-    /// An initial task response
+    /// The initial task state
     Task(Task),
+    /// A task status update
+    StatusUpdate(TaskStatusUpdateEvent),
+    /// A task artifact update
+    ArtifactUpdate(TaskArtifactUpdateEvent),
 }
-
-#[cfg(feature = "client")]
-pub use futures::stream::Stream;

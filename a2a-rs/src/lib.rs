@@ -112,6 +112,7 @@ pub mod adapter;
 pub mod application;
 pub mod domain;
 pub mod port;
+pub mod services;
 
 // Public API exports
 pub use domain::{
@@ -126,17 +127,7 @@ pub use domain::{
     TaskStatusUpdateEvent,
 };
 
-#[cfg(feature = "client")]
-pub use port::client::{A2AClient, AsyncA2AClient, StreamItem};
-
-#[cfg(feature = "server")]
-pub use port::server::{
-    A2ARequestProcessor, AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber,
-    TaskHandler,
-};
-
-// Enhanced port traits for better separation of concerns
-#[cfg(feature = "server")]
+// Port traits for better separation of concerns
 pub use port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
     MessageHandler, NotificationManager, StreamingHandler, StreamingSubscriber, TaskManager,
@@ -144,27 +135,27 @@ pub use port::{
 };
 
 #[cfg(feature = "http-client")]
-pub use adapter::client::http::HttpClient;
+pub use adapter::HttpClient;
 
 #[cfg(feature = "ws-client")]
-pub use adapter::client::ws::WebSocketClient;
+pub use adapter::WebSocketClient;
 
 #[cfg(feature = "http-server")]
-pub use adapter::server::http::HttpServer;
+pub use adapter::HttpServer;
 
 #[cfg(feature = "ws-server")]
-pub use adapter::server::ws::WebSocketServer;
+pub use adapter::WebSocketServer;
 
 #[cfg(feature = "server")]
-pub use adapter::server::{
-    agent_info::SimpleAgentInfo,
-    push_notification::{NoopPushNotificationSender, PushNotificationRegistry, PushNotificationSender},
-    request_processor::DefaultRequestProcessor,
-    task_storage::InMemoryTaskStorage,
+pub use adapter::{
+    SimpleAgentInfo,
+    NoopPushNotificationSender, PushNotificationRegistry, PushNotificationSender,
+    DefaultRequestProcessor,
+    InMemoryTaskStorage,
 };
 
 #[cfg(all(feature = "server", feature = "http-client"))]
-pub use adapter::server::push_notification::HttpPushNotificationSender;
+pub use adapter::HttpPushNotificationSender;
 
-#[cfg(feature = "http-server")]
-pub use adapter::server::auth::{Authenticator, NoopAuthenticator, TokenAuthenticator};
+#[cfg(any(feature = "http-server", feature = "ws-server"))]
+pub use adapter::{Authenticator, NoopAuthenticator, TokenAuthenticator};

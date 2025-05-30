@@ -1,15 +1,18 @@
 //! A simple HTTP client example
 
 use a2a_rs::{
-    adapter::client::HttpClient,
-    domain::{Message, Part},
+    adapter::HttpClient,
+    domain::{Message, Part, PushNotificationConfig, TaskPushNotificationConfig},
     port::client::AsyncA2AClient,
 };
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create a client connected to our example server
-    let client = HttpClient::new("http://localhost:8080".to_string());
+    let client = HttpClient::with_auth(
+        "http://localhost:8080".to_string(),
+        "secret-token".to_string(),
+    );
 
     // Generate a task ID
     let task_id = format!("task-{}", uuid::Uuid::new_v4());
@@ -17,7 +20,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create a message
     let message_id = format!("msg-{}", uuid::Uuid::new_v4());
-    let mut message = Message::user_text("Hello, A2A agent! How are you today?".to_string(), message_id);
+    let mut message = Message::user_text(
+        "Hello, A2A agent! How are you today?".to_string(),
+        message_id,
+    );
 
     // Add a file part (properly validated)
     let file_part = Part::file_from_bytes(
@@ -28,15 +34,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     message.add_part_validated(file_part).unwrap();
 
     // Optional: Set up push notifications
-    // let push_config = TaskPushNotificationConfig {
-    //     id: task_id.clone(),
-    //     push_notification_config: PushNotificationConfig {
-    //         url: "https://example.com/webhook".to_string(),
-    //         token: Some("secret-token".to_string()),
-    //         authentication: None,
-    //     },
-    // };
-    // client.set_task_push_notification(&push_config).await?;
+    let push_config = TaskPushNotificationConfig {
+        task_id: task_id.clone(),
+        push_notification_config: PushNotificationConfig {
+            url: "https://example.com/webhook".to_string(),
+            token: Some("secret-token".to_string()),
+            authentication: None,
+        },
+    };
+    client.set_task_push_notification(&push_config).await?;
 
     // Send a task message with retries
     println!("Sending message to task...");

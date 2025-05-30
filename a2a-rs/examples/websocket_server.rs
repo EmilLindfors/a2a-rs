@@ -1,8 +1,8 @@
 //! A simple WebSocket server example
 
-use a2a_rs::adapter::server::{
+use a2a_rs::adapter::{
     DefaultRequestProcessor, NoopPushNotificationSender, InMemoryTaskStorage, SimpleAgentInfo,
-    WebSocketServer,
+    WebSocketServer, business::DefaultBusinessHandler,
 };
 
 #[tokio::main]
@@ -13,8 +13,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create task storage with the push notification sender
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);
 
-    // Create request processor
-    let processor = DefaultRequestProcessor::new(storage.clone());
+    // Create business handler with the storage
+    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+
+    // Create request processor with the handler
+    let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     // Create agent info provider
     let agent_info = SimpleAgentInfo::new(
@@ -44,7 +47,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // let server = WebSocketServer::with_auth(processor, agent_info, storage, "127.0.0.1:8081".to_string(), authenticator);
 
     // Using the default no-authentication server for the example
-    let server = WebSocketServer::new(processor, agent_info, storage, "127.0.0.1:8081".to_string());
+    let server = WebSocketServer::new(processor, agent_info, handler, "127.0.0.1:8081".to_string());
 
     println!("Starting WebSocket server on ws://127.0.0.1:8081");
     println!("This server supports streaming responses");

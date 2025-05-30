@@ -14,12 +14,12 @@ use axum::{
 use serde_json::{Value, json};
 
 use crate::{
-    adapter::server::{
+    adapter::{
         auth::{Authenticator, NoopAuthenticator, with_auth},
         error::HttpServerError,
     },
     domain::A2AError,
-    port::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
+    services::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
 };
 
 /// HTTP server for the A2A protocol

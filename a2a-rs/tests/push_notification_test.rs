@@ -1,10 +1,9 @@
 //! Push notification tests
 
 use a2a_rs::{
-    adapter::client::HttpClient,
-    adapter::server::{
-        DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, PushNotificationSender,
-        SimpleAgentInfo,
+    adapter::{
+        HttpClient, DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, PushNotificationSender,
+        SimpleAgentInfo, business::DefaultBusinessHandler,
     },
     domain::{
         A2AError, Message, Part, PushNotificationConfig, TaskArtifactUpdateEvent,
@@ -79,8 +78,11 @@ async fn test_push_notifications() {
     // Create a storage with the push sender
     let storage = InMemoryTaskStorage::with_push_sender(push_sender_clone);
 
+    // Create business handler with the storage
+    let handler = DefaultBusinessHandler::with_storage(storage);
+
     // Create a processor
-    let processor = DefaultRequestProcessor::new(storage);
+    let processor = DefaultRequestProcessor::with_handler(handler);
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(

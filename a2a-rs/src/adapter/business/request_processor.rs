@@ -16,30 +16,65 @@ use crate::{
         JSONRPCError, JSONRPCResponse,
     },
     domain::A2AError,
-    port::server::{AsyncA2ARequestProcessor, AsyncTaskHandler},
+    port::{
+        AsyncMessageHandler, AsyncTaskManager, AsyncNotificationManager,
+    },
+    services::server::AsyncA2ARequestProcessor,
 };
 
-/// Default implementation of a request processor that routes requests to a task handler
+/// Default implementation of a request processor that routes requests to business handlers
 #[derive(Clone)]
-pub struct DefaultRequestProcessor<T>
+pub struct DefaultRequestProcessor<M, T, N>
 where
-    T: AsyncTaskHandler + Send + Sync + 'static,
+    M: AsyncMessageHandler + Send + Sync + 'static,
+    T: AsyncTaskManager + Send + Sync + 'static,
+    N: AsyncNotificationManager + Send + Sync + 'static,
 {
-    /// Task handler
-    task_handler: Arc<T>,
+    /// Message handler
+    message_handler: Arc<M>,
+    /// Task manager
+    task_manager: Arc<T>,
+    /// Notification manager
+    notification_manager: Arc<N>,
 }
 
-impl<T> DefaultRequestProcessor<T>
+impl<M, T, N> DefaultRequestProcessor<M, T, N>
 where
-    T: AsyncTaskHandler + Send + Sync + 'static,
+    M: AsyncMessageHandler + Send + Sync + 'static,
+    T: AsyncTaskManager + Send + Sync + 'static,
+    N: AsyncNotificationManager + Send + Sync + 'static,
 {
-    /// Create a new request processor with the given task handler
-    pub fn new(task_handler: T) -> Self {
+    /// Create a new request processor with the given handlers
+    pub fn new(message_handler: M, task_manager: T, notification_manager: N) -> Self {
         Self {
-            task_handler: Arc::new(task_handler),
+            message_handler: Arc::new(message_handler),
+            task_manager: Arc::new(task_manager),
+            notification_manager: Arc::new(notification_manager),
         }
     }
+}
 
+impl<H> DefaultRequestProcessor<H, H, H>
+where
+    H: AsyncMessageHandler + AsyncTaskManager + AsyncNotificationManager + Send + Sync + 'static,
+{
+    /// Create a new request processor with a single handler that implements all traits
+    pub fn with_handler(handler: H) -> Self {
+        let handler_arc = Arc::new(handler);
+        Self {
+            message_handler: handler_arc.clone(),
+            task_manager: handler_arc.clone(),
+            notification_manager: handler_arc,
+        }
+    }
+}
+
+impl<M, T, N> DefaultRequestProcessor<M, T, N>
+where
+    M: AsyncMessageHandler + Send + Sync + 'static,
+    T: AsyncTaskManager + Send + Sync + 'static,
+    N: AsyncNotificationManager + Send + Sync + 'static,
+{
     /// Process a send task request
     async fn process_send_task(
         &self,
@@ -49,8 +84,8 @@ where
         let session_id = params.session_id.as_deref();
 
         let task = self
-            .task_handler
-            .handle_message(&params.id, &params.message, session_id)
+            .message_handler
+            .process_message(&params.id, &params.message, session_id)
             .await?;
 
         Ok(JSONRPCResponse::success(
@@ -66,7 +101,7 @@ where
     ) -> Result<JSONRPCResponse, A2AError> {
         let params = &request.params;
         let task = self
-            .task_handler
+            .task_manager
             .get_task(&params.id, params.history_length)
             .await?;
 
@@ -82,7 +117,7 @@ where
         request: &CancelTaskRequest,
     ) -> Result<JSONRPCResponse, A2AError> {
         let params = &request.params;
-        let task = self.task_handler.cancel_task(&params.id).await?;
+        let task = self.task_manager.cancel_task(&params.id).await?;
 
         Ok(JSONRPCResponse::success(
             request.id.clone(),
@@ -96,8 +131,8 @@ where
         request: &SetTaskPushNotificationRequest,
     ) -> Result<JSONRPCResponse, A2AError> {
         let config = self
-            .task_handler
-            .set_push_notification(&request.params)
+            .notification_manager
+            .set_task_notification(&request.params)
             .await?;
 
         Ok(JSONRPCResponse::success(
@@ -112,7 +147,7 @@ where
         request: &GetTaskPushNotificationRequest,
     ) -> Result<JSONRPCResponse, A2AError> {
         let params = &request.params;
-        let config = self.task_handler.get_push_notification(&params.id).await?;
+        let config = self.notification_manager.get_task_notification(&params.id).await?;
 
         Ok(JSONRPCResponse::success(
             request.id.clone(),
@@ -129,7 +164,7 @@ where
         // and then the streaming updates are handled separately
         let params = &request.params;
         let task = self
-            .task_handler
+            .task_manager
             .get_task(&params.id, params.history_length)
             .await?;
 
@@ -150,8 +185,8 @@ where
         let session_id = params.session_id.as_deref();
 
         let task = self
-            .task_handler
-            .handle_message(&params.id, &params.message, session_id)
+            .message_handler
+            .process_message(&params.id, &params.message, session_id)
             .await?;
 
         Ok(JSONRPCResponse::success(
@@ -162,9 +197,11 @@ where
 }
 
 #[async_trait]
-impl<T> AsyncA2ARequestProcessor for DefaultRequestProcessor<T>
+impl<M, T, N> AsyncA2ARequestProcessor for DefaultRequestProcessor<M, T, N>
 where
-    T: AsyncTaskHandler + Send + Sync + 'static,
+    M: AsyncMessageHandler + Send + Sync + 'static,
+    T: AsyncTaskManager + Send + Sync + 'static,
+    N: AsyncNotificationManager + Send + Sync + 'static,
 {
     async fn process_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
         // Parse the request

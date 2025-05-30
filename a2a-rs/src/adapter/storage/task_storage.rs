@@ -8,17 +8,20 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::sync::Mutex; // Changed from std::sync::Mutex
 
-use crate::adapter::server::push_notification::{PushNotificationRegistry, PushNotificationSender};
+use crate::adapter::business::push_notification::{PushNotificationRegistry, PushNotificationSender};
 
 #[cfg(feature = "http-client")]
-use crate::adapter::server::push_notification::HttpPushNotificationSender;
+use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
-use crate::adapter::server::push_notification::NoopPushNotificationSender;
+use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
     A2AError, Artifact, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
     TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
-use crate::port::server::{AsyncTaskHandler, Subscriber};
+use crate::port::{
+    AsyncTaskManager, AsyncNotificationManager, AsyncStreamingHandler,
+    streaming_handler::Subscriber,
+};
 
 type StatusSubscribers = Vec<Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>>;
 type ArtifactSubscribers = Vec<Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>>;
@@ -41,11 +44,11 @@ impl TaskSubscribers {
 /// Simple in-memory task storage for testing and example purposes
 pub struct InMemoryTaskStorage {
     /// Tasks stored by ID
-    tasks: Arc<Mutex<HashMap<String, Task>>>,
+    pub(crate) tasks: Arc<Mutex<HashMap<String, Task>>>,
     /// Subscribers for task updates
-    subscribers: Arc<Mutex<HashMap<String, TaskSubscribers>>>,
+    pub(crate) subscribers: Arc<Mutex<HashMap<String, TaskSubscribers>>>,
     /// Push notification registry
-    push_notification_registry: Arc<PushNotificationRegistry>,
+    pub(crate) push_notification_registry: Arc<PushNotificationRegistry>,
 }
 
 impl InMemoryTaskStorage {
@@ -77,7 +80,23 @@ impl InMemoryTaskStorage {
         }
     }
 
-    // Method removed to avoid unused code warning
+    /// Add a status update subscriber for streaming (convenience method)
+    pub async fn add_status_subscriber_legacy(
+        &self,
+        task_id: &str,
+        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
+    ) -> Result<(), A2AError> {
+        self.add_status_subscriber(task_id, subscriber).await.map(|_| ())
+    }
+
+    /// Add an artifact update subscriber for streaming (convenience method)
+    pub async fn add_artifact_subscriber_legacy(
+        &self,
+        task_id: &str,
+        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
+    ) -> Result<(), A2AError> {
+        self.add_artifact_subscriber(task_id, subscriber).await.map(|_| ())
+    }
 }
 
 impl Default for InMemoryTaskStorage {
@@ -88,7 +107,7 @@ impl Default for InMemoryTaskStorage {
 
 impl InMemoryTaskStorage {
     /// Send a status update to all subscribers for a task
-    async fn broadcast_status_update(
+    pub(crate) async fn broadcast_status_update(
         &self,
         task_id: &str,
         status: TaskStatus,
@@ -131,10 +150,12 @@ impl InMemoryTaskStorage {
     }
 
     /// Send an artifact update to all subscribers for a task
-    async fn broadcast_artifact_update(
+    pub(crate) async fn broadcast_artifact_update(
         &self,
         task_id: &str,
         artifact: Artifact,
+        _index: Option<u32>,
+        _final: bool,
     ) -> Result<(), A2AError> {
         // Create the update event
         let event = TaskArtifactUpdateEvent {
@@ -175,45 +196,53 @@ impl InMemoryTaskStorage {
 }
 
 #[async_trait]
-impl AsyncTaskHandler for InMemoryTaskStorage {
-    async fn handle_message<'a>(
+impl AsyncTaskManager for InMemoryTaskStorage {
+    async fn create_task<'a>(
         &self,
         task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
+        context_id: &'a str,
     ) -> Result<Task, A2AError> {
-        // Get or create the task
-        let mut task = {
-            let mut tasks_guard = self.tasks.lock().await;
-
-            if let Some(existing_task) = tasks_guard.get(task_id) {
-                existing_task.clone()
-            } else {
-                // Create a new task
-                let context_id = session_id.unwrap_or("default").to_string();
-                let new_task = Task::new(task_id.to_string(), context_id);
-
-                // Insert it
-                tasks_guard.insert(task_id.to_string(), new_task.clone());
-                new_task
-            }
-        }; // Lock is dropped here
-
-        // Update the task with the message
-        // This already adds the message to history inside the update_status method
-        task.update_status(TaskState::Working, Some(message.clone()));
-
-        // Update the task in storage
-        {
-            let mut tasks_guard = self.tasks.lock().await;
-            tasks_guard.insert(task_id.to_string(), task.clone());
-        } // Lock is dropped here
-
-        // Broadcast status update
-        self.broadcast_status_update(task_id, task.status.clone(), false)
-            .await?;
-
+        let mut tasks_guard = self.tasks.lock().await;
+        
+        if tasks_guard.contains_key(task_id) {
+            return Err(A2AError::TaskNotFound(format!("Task {} already exists", task_id)));
+        }
+        
+        let task = Task::new(task_id.to_string(), context_id.to_string());
+        tasks_guard.insert(task_id.to_string(), task.clone());
+        
         Ok(task)
+    }
+
+    async fn update_task_status<'a>(
+        &self,
+        task_id: &'a str,
+        state: TaskState,
+    ) -> Result<Task, A2AError> {
+        let mut tasks_guard = self.tasks.lock().await;
+        
+        let task = tasks_guard.get_mut(task_id)
+            .ok_or_else(|| A2AError::TaskNotFound(task_id.to_string()))?;
+        
+        // Update the task status
+        task.update_status(state, None);
+        
+        // Return a clone of the updated task
+        let updated_task = task.clone();
+        
+        // Release the lock before broadcasting
+        drop(tasks_guard);
+        
+        // Broadcast status update
+        self.broadcast_status_update(task_id, updated_task.status.clone(), false)
+            .await?;
+        
+        Ok(updated_task)
+    }
+
+    async fn task_exists<'a>(&self, task_id: &'a str) -> Result<bool, A2AError> {
+        let tasks_guard = self.tasks.lock().await;
+        Ok(tasks_guard.contains_key(task_id))
     }
 
     async fn get_task<'a>(
@@ -283,7 +312,12 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
         Ok(task)
     }
 
-    async fn set_push_notification<'a>(
+}
+
+// AsyncNotificationManager implementation
+#[async_trait]
+impl AsyncNotificationManager for InMemoryTaskStorage {
+    async fn set_task_notification<'a>(
         &self,
         config: &'a TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
@@ -295,7 +329,7 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
         Ok(config.clone())
     }
 
-    async fn get_push_notification<'a>(
+    async fn get_task_notification<'a>(
         &self,
         task_id: &'a str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
@@ -309,11 +343,20 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
         }
     }
 
+    async fn remove_task_notification<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+        self.push_notification_registry.unregister(task_id).await?;
+        Ok(())
+    }
+}
+
+// AsyncStreamingHandler implementation
+#[async_trait]
+impl AsyncStreamingHandler for InMemoryTaskStorage {
     async fn add_status_subscriber<'a>(
         &self,
         task_id: &'a str,
         subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<(), A2AError> {
+    ) -> Result<String, A2AError> {
         // Add the subscriber
         {
             let mut subscribers_guard = self.subscribers.lock().await;
@@ -330,14 +373,14 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
         self.broadcast_status_update(task_id, task.status, false)
             .await?;
 
-        Ok(())
+        Ok(format!("status-{}-{}", task_id, uuid::Uuid::new_v4()))
     }
 
     async fn add_artifact_subscriber<'a>(
         &self,
         task_id: &'a str,
         subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<(), A2AError> {
+    ) -> Result<String, A2AError> {
         // Add the subscriber
         {
             let mut subscribers_guard = self.subscribers.lock().await;
@@ -353,14 +396,20 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
         let task = self.get_task(task_id, None).await?;
         if let Some(artifacts) = task.artifacts {
             for artifact in artifacts {
-                self.broadcast_artifact_update(task_id, artifact).await?;
+                self.broadcast_artifact_update(task_id, artifact, None, false).await?;
             }
         }
 
-        Ok(())
+        Ok(format!("artifact-{}-{}", task_id, uuid::Uuid::new_v4()))
     }
 
-    async fn remove_subscribers<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_subscription<'a>(&self, _subscription_id: &'a str) -> Result<(), A2AError> {
+        Err(A2AError::UnsupportedOperation(
+            "Subscription removal by ID requires storage layer refactoring".to_string()
+        ))
+    }
+
+    async fn remove_task_subscribers<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
         // Remove all subscribers
         {
             let mut subscribers_guard = self.subscribers.lock().await;
@@ -368,6 +417,64 @@ impl AsyncTaskHandler for InMemoryTaskStorage {
         } // Lock is dropped here
 
         Ok(())
+    }
+
+    async fn get_subscriber_count<'a>(&self, task_id: &'a str) -> Result<usize, A2AError> {
+        let subscribers_guard = self.subscribers.lock().await;
+        
+        if let Some(task_subscribers) = subscribers_guard.get(task_id) {
+            Ok(task_subscribers.status.len() + task_subscribers.artifacts.len())
+        } else {
+            Ok(0)
+        }
+    }
+
+    async fn broadcast_status_update<'a>(
+        &self,
+        task_id: &'a str,
+        update: TaskStatusUpdateEvent,
+    ) -> Result<(), A2AError> {
+        self.broadcast_status_update(task_id, update.status, update.final_).await
+    }
+
+    async fn broadcast_artifact_update<'a>(
+        &self,
+        task_id: &'a str,
+        update: TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError> {
+        self.broadcast_artifact_update(
+            task_id,
+            update.artifact,
+            None,
+            update.last_chunk.unwrap_or(false),
+        ).await
+    }
+
+    async fn status_update_stream<'a>(
+        &self,
+        _task_id: &'a str,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError> {
+        Err(A2AError::UnsupportedOperation(
+            "Status update stream requires storage layer refactoring".to_string()
+        ))
+    }
+
+    async fn artifact_update_stream<'a>(
+        &self,
+        _task_id: &'a str,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>, A2AError> {
+        Err(A2AError::UnsupportedOperation(
+            "Artifact update stream requires storage layer refactoring".to_string()
+        ))
+    }
+
+    async fn combined_update_stream<'a>(
+        &self,
+        _task_id: &'a str,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<crate::port::streaming_handler::UpdateEvent, A2AError>> + Send>>, A2AError> {
+        Err(A2AError::UnsupportedOperation(
+            "Combined update stream requires storage layer refactoring".to_string()
+        ))
     }
 }
 

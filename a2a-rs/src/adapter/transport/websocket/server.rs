@@ -14,30 +14,34 @@ use tokio::{
 use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 
 use crate::{
-    adapter::server::{
+    adapter::{
         auth::{Authenticator, NoopAuthenticator},
         error::WebSocketServerError,
     },
     domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent},
-    port::server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber},
+    port::{
+        AsyncStreamingHandler,
+        streaming_handler::Subscriber,
+    },
+    services::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
 };
 
 type ClientMap = Arc<Mutex<HashMap<String, mpsc::Sender<WsMessage>>>>;
 
 /// WebSocket server for the A2A protocol
-pub struct WebSocketServer<P, A, T, Auth = NoopAuthenticator>
+pub struct WebSocketServer<P, A, S, Auth = NoopAuthenticator>
 where
     P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
-    T: AsyncTaskHandler + Send + Sync + 'static,
+    S: AsyncStreamingHandler + Send + Sync + 'static,
     Auth: Authenticator + Send + Sync + 'static,
 {
     /// Request processor
     processor: Arc<P>,
     /// Agent info provider
     _agent_info: Arc<A>,
-    /// Task handler
-    task_handler: Arc<T>,
+    /// Streaming handler
+    streaming_handler: Arc<S>,
     /// Server address
     address: String,
     /// Connected clients
@@ -46,18 +50,18 @@ where
     authenticator: Option<Arc<Auth>>,
 }
 
-impl<P, A, T> WebSocketServer<P, A, T>
+impl<P, A, S> WebSocketServer<P, A, S>
 where
     P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
-    T: AsyncTaskHandler + Send + Sync + 'static,
+    S: AsyncStreamingHandler + Send + Sync + 'static,
 {
     /// Create a new WebSocket server
-    pub fn new(processor: P, agent_info: A, task_handler: T, address: String) -> Self {
+    pub fn new(processor: P, agent_info: A, streaming_handler: S, address: String) -> Self {
         Self {
             processor: Arc::new(processor),
             _agent_info: Arc::new(agent_info),
-            task_handler: Arc::new(task_handler),
+            streaming_handler: Arc::new(streaming_handler),
             address,
             clients: Arc::new(Mutex::new(HashMap::new())),
             authenticator: None,
@@ -65,25 +69,25 @@ where
     }
 }
 
-impl<P, A, T, Auth> WebSocketServer<P, A, T, Auth>
+impl<P, A, S, Auth> WebSocketServer<P, A, S, Auth>
 where
     P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
-    T: AsyncTaskHandler + Send + Sync + 'static,
+    S: AsyncStreamingHandler + Send + Sync + 'static,
     Auth: Authenticator + Clone + Send + Sync + 'static,
 {
     /// Create a new WebSocket server with authentication
     pub fn with_auth(
         processor: P,
         agent_info: A,
-        task_handler: T,
+        streaming_handler: S,
         address: String,
         authenticator: Auth,
     ) -> Self {
         Self {
             processor: Arc::new(processor),
             _agent_info: Arc::new(agent_info),
-            task_handler: Arc::new(task_handler),
+            streaming_handler: Arc::new(streaming_handler),
             address,
             clients: Arc::new(Mutex::new(HashMap::new())),
             authenticator: Some(Arc::new(authenticator)),
@@ -106,7 +110,7 @@ where
         while let Ok((stream, _)) = listener.accept().await {
             let processor = self.processor.clone();
             let agent_info = self._agent_info.clone();
-            let task_handler = self.task_handler.clone();
+            let streaming_handler = self.streaming_handler.clone();
             let clients = self.clients.clone();
 
             let authenticator = self.authenticator.clone();
@@ -123,7 +127,7 @@ where
                 }
 
                 if let Err(e) =
-                    handle_connection(stream, processor, agent_info, task_handler, clients).await
+                    handle_connection(stream, processor, agent_info, streaming_handler, clients).await
                 {
                     eprintln!("Error handling connection: {}", e);
                 }
@@ -135,17 +139,17 @@ where
 }
 
 /// Handle a WebSocket connection
-async fn handle_connection<P, A, T>(
+async fn handle_connection<P, A, S>(
     stream: TcpStream,
     processor: Arc<P>,
     _agent_info: Arc<A>,
-    task_handler: Arc<T>,
+    streaming_handler: Arc<S>,
     clients: ClientMap,
 ) -> Result<(), A2AError>
 where
     P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
-    T: AsyncTaskHandler + Send + Sync + 'static,
+    S: AsyncStreamingHandler + Send + Sync + 'static,
 {
     let addr = stream.peer_addr().map_err(|e| {
         WebSocketServerError::Connection(format!("Failed to get peer address: {}", e))
@@ -228,7 +232,7 @@ where
                                         };
 
                                         // Register the subscribers
-                                        if let Err(e) = task_handler
+                                        if let Err(e) = streaming_handler
                                             .add_status_subscriber(
                                                 task_id,
                                                 Box::new(status_subscriber),
@@ -238,7 +242,7 @@ where
                                             eprintln!("Error adding status subscriber: {}", e);
                                         }
 
-                                        if let Err(e) = task_handler
+                                        if let Err(e) = streaming_handler
                                             .add_artifact_subscriber(
                                                 task_id,
                                                 Box::new(artifact_subscriber),

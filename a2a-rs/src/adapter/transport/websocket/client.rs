@@ -19,7 +19,7 @@ use tokio_tungstenite::{
 use url::Url;
 
 use crate::{
-    adapter::client::WebSocketClientError,
+    adapter::error::WebSocketClientError,
     application::{
         json_rpc::{
             self, A2ARequest, SendTaskRequest, SendTaskStreamingRequest,
@@ -31,7 +31,7 @@ use crate::{
         A2AError, Message, Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig,
         TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
     },
-    port::client::{AsyncA2AClient, StreamItem},
+    services::client::{AsyncA2AClient, StreamItem},
 };
 
 type WebSocketTx = Arc<Mutex<WebSocketStream<MaybeTlsStream<TcpStream>>>>;
@@ -325,25 +325,20 @@ impl AsyncA2AClient for WebSocketClient {
     async fn subscribe_to_task<'a>(
         &self,
         task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
         history_length: Option<u32>,
-    ) -> Result<impl Stream<Item = Result<StreamItem, A2AError>>, A2AError> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
         // First connect to ensure we have a connection
         let mut client_clone = self.clone();
         client_clone.connect().await?;
 
-        let params = TaskSendParams {
+        let params = TaskQueryParams {
             id: task_id.to_string(),
-            session_id: session_id.map(|s| s.to_string()),
-            message: message.clone(),
-            push_notification: None,
             history_length,
             metadata: None,
         };
 
-        let request = SendTaskStreamingRequest::new(params);
-        let json = json_rpc::serialize_request(&A2ARequest::SendTaskStreaming(request))?;
+        let request = TaskResubscriptionRequest::new(params);
+        let json = json_rpc::serialize_request(&A2ARequest::TaskResubscription(request))?;
 
         // Get the connection
         let connection = client_clone
@@ -474,10 +469,8 @@ impl AsyncA2AClient for WebSocketClient {
             })
         });
 
-        Ok(stream)
+        Ok(Box::pin(stream))
     }
-
-    async fn resubscribe_to_task<'a>(
         &self,
         task_id: &'a str,
         history_length: Option<u32>,

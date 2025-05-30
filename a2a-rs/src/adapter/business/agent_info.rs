@@ -8,7 +8,7 @@ use crate::{
     domain::{
         A2AError, AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
     },
-    port::server::AgentInfoProvider,
+    services::server::AgentInfoProvider,
 };
 
 /// A simple agent info provider that returns a fixed agent card

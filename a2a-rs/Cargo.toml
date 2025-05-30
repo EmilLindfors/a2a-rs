@@ -37,6 +37,7 @@ axum = { version = "0.8", optional = true }
 
 # Logging - optional
 tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
 
 [features]
 default = ["server"]
@@ -45,8 +46,9 @@ http-client = ["client", "dep:reqwest"]
 ws-client = ["client", "dep:tokio-tungstenite"]
 server = ["dep:tokio", "dep:async-trait", "dep:futures"]
 http-server = ["server", "dep:axum"]
+tracing = ["dep:tracing"]
 ws-server = ["server", "dep:tokio-tungstenite"]
-full = ["http-client", "ws-client", "http-server", "ws-server", "dep:tracing"]
+full = ["http-client", "ws-client", "http-server", "ws-server", "dep:tracing", "dep:tracing-subscriber"]
 
 
 [[example]]

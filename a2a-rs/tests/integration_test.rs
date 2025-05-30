@@ -1,8 +1,7 @@
 //! Integration tests for the A2A protocol
 
 use a2a_rs::{
-    adapter::client::HttpClient,
-    adapter::server::{DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, SimpleAgentInfo},
+    adapter::{HttpClient, DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, SimpleAgentInfo, business::DefaultBusinessHandler},
     domain::{Message, Part, TaskState},
     port::client::AsyncA2AClient,
 };
@@ -17,8 +16,11 @@ async fn test_http_client_server_interaction() {
     // Create a storage
     let storage = InMemoryTaskStorage::new();
 
+    // Create business handler with the storage
+    let handler = DefaultBusinessHandler::with_storage(storage);
+
     // Create a processor
-    let processor = DefaultRequestProcessor::new(storage);
+    let processor = DefaultRequestProcessor::with_handler(handler);
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(

@@ -3,7 +3,7 @@
 use futures::StreamExt;
 
 use a2a_rs::{
-    adapter::client::WebSocketClient,
+    adapter::WebSocketClient,
     domain::{Message, Part},
     port::client::{AsyncA2AClient, StreamItem},
 };

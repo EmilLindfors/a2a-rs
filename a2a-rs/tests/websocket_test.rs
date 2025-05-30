@@ -1,9 +1,8 @@
 //! WebSocket-specific integration tests
 
 use a2a_rs::{
-    adapter::client::WebSocketClient,
-    adapter::server::{
-        DefaultRequestProcessor, InMemoryTaskStorage, SimpleAgentInfo, WebSocketServer,
+    adapter::{
+        WebSocketClient, DefaultRequestProcessor, InMemoryTaskStorage, SimpleAgentInfo, WebSocketServer, business::DefaultBusinessHandler,
     },
     domain::Message,
     port::client::{AsyncA2AClient, StreamItem},
@@ -26,8 +25,11 @@ async fn test_websocket_streaming() {
     // Create a storage for server
     let storage = InMemoryTaskStorage::new();
 
+    // Create business handler with the storage
+    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+
     // Create a processor
-    let processor = DefaultRequestProcessor::new(storage.clone());
+    let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(
@@ -49,7 +51,7 @@ async fn test_websocket_streaming() {
     );
 
     // Create the server
-    let server = WebSocketServer::new(processor, agent_info, storage, "127.0.0.1:8183".to_string());
+    let server = WebSocketServer::new(processor, agent_info, handler, "127.0.0.1:8183".to_string());
 
     // Create a shutdown channel
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();

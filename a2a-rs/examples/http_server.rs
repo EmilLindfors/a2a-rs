@@ -1,8 +1,8 @@
 //! A simple HTTP server example
 
-use a2a_rs::adapter::server::{
-    DefaultRequestProcessor, NoopPushNotificationSender, HttpServer, InMemoryTaskStorage,
-    SimpleAgentInfo,
+use a2a_rs::adapter::{
+    DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, NoopPushNotificationSender,
+    SimpleAgentInfo, TokenAuthenticator, business::DefaultBusinessHandler,
 };
 
 #[tokio::main]
@@ -13,8 +13,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create task storage with the push notification sender
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);
 
-    // Create request processor
-    let processor = DefaultRequestProcessor::new(storage);
+    // Create business handler with the storage
+    let handler = DefaultBusinessHandler::with_storage(storage);
+
+    // Create request processor with the handler
+    let processor = DefaultRequestProcessor::with_handler(handler);
 
     // Create agent info provider
     let agent_info = SimpleAgentInfo::new(
@@ -38,13 +41,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(vec!["text".to_string()]),
     );
 
-    // Uncomment the following lines to enable token-based authentication
-    // let tokens = vec!["secret-token".to_string()];
-    // let authenticator = TokenAuthenticator::new(tokens);
-    // let server = HttpServer::with_auth(processor, agent_info, "127.0.0.1:8080".to_string(), authenticator);
-
-    // Using the default no-authentication server for the example
-    let server = HttpServer::new(processor, agent_info, "127.0.0.1:8080".to_string());
+    // Server with token-based authentication
+    let tokens = vec!["secret-token".to_string()];
+    let authenticator = TokenAuthenticator::new(tokens);
+    let server = HttpServer::with_auth(
+        processor,
+        agent_info,
+        "127.0.0.1:8080".to_string(),
+        authenticator,
+    );
 
     println!("Starting HTTP server on http://127.0.0.1:8080");
     println!("Try accessing the agent card at http://127.0.0.1:8080/agent-card");

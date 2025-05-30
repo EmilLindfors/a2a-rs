@@ -77,6 +77,63 @@
   - [x] NotificationManager trait for push notifications
   - [x] StreamingHandler trait for real-time updates
 
+## Phase 2.5: Adapter Layer Reorganization (High Priority) ✅ COMPLETED
+
+### Reorganize Adapter Structure ✅
+- [x] **Align adapters with new port structure**
+  - Current structure mixes transport concerns with business logic
+  - Goal: Clear separation between transport protocols, business capabilities, and storage
+  
+- [x] **Create new adapter structure**
+  ```
+  adapter/
+  ├── transport/           # Transport protocol implementations
+  │   ├── http/
+  │   │   ├── client.rs   # HTTP client (implements AsyncA2AClient)
+  │   │   └── server.rs   # HTTP server (uses business capability ports)
+  │   └── websocket/
+  │       ├── client.rs   # WebSocket client (implements AsyncA2AClient)
+  │       └── server.rs   # WebSocket server (uses business capability ports)
+  ├── business/           # Business capability implementations
+  │   ├── agent_info.rs          # SimpleAgentInfo implementation
+  │   ├── default_handler.rs     # DefaultBusinessHandler - implements all business ports
+  │   ├── request_processor.rs   # DefaultRequestProcessor using business ports
+  │   └── mod.rs
+  ├── storage/            # Storage implementations
+  │   └── task_storage.rs # InMemoryTaskStorage, etc.
+  ├── auth/              # Authentication implementations
+  │   ├── authenticator.rs
+  │   └── push_notification.rs
+  └── error/             # Error types
+      ├── client.rs
+      └── server.rs
+  ```
+
+- [x] **Migration Steps**
+  1. [x] Create new directory structure
+  2. [x] Move HTTP client from `client/http.rs` to `transport/http/client.rs`
+  3. [x] Move HTTP server from `server/http.rs` to `transport/http/server.rs`
+  4. [x] Move WebSocket client from `client/ws.rs` to `transport/websocket/client.rs`
+  5. [x] Move WebSocket server from `server/ws.rs` to `transport/websocket/server.rs`
+  6. [x] Extract business logic from `server/request_processor.rs` to `business/` modules
+  7. [x] Move `server/task_storage.rs` to `storage/task_storage.rs`
+  8. [x] Move authentication from `server/auth.rs` to `auth/authenticator.rs`
+  9. [x] Update all imports and module declarations
+  10. [x] Update feature flags to match new structure
+  11. [x] Ensure all tests pass after reorganization
+
+- [x] **Update servers to use new business capability ports**
+  - [x] HTTP server to use MessageHandler, TaskManager, NotificationManager
+  - [x] WebSocket server to use StreamingHandler for real-time updates
+  - [x] Remove direct dependencies on old TaskHandler trait
+
+- [x] **Benefits achieved**
+  - Clear separation of concerns (transport vs business logic vs storage)
+  - Better alignment with hexagonal architecture principles
+  - Easier to test each adapter type independently
+  - Can add new transports or business implementations independently
+  - Follows the enhanced port structure introduced in Phase 2
+
 ## Phase 3: Enhanced Developer Experience (Low Priority) 🟢
 
 ### Observability & Logging
@@ -190,6 +247,16 @@
     - [x] Added guidance toward enhanced interfaces for new code
   - [x] All compilation errors fixed
   - [x] All tests passing (Unit, Integration, Push Notification, WebSocket)
+- [x] **Phase 2.5: Adapter Layer Reorganization** (Complete adapter restructuring)
+  - [x] Created new adapter directory structure with clear separation
+  - [x] Moved all transport implementations to `transport/` directory
+  - [x] Created `business/` directory with unified business handler
+  - [x] Moved storage implementations to `storage/` directory
+  - [x] Moved authentication and push notifications to `auth/` directory
+  - [x] Created `error/` directory for error types
+  - [x] Updated all imports in examples and tests
+  - [x] Removed backward compatibility with old server/client traits
+  - [x] All tests passing with new structure
 - [x] Git commits: Multiple architectural improvements
 
 ### In Progress 🔄

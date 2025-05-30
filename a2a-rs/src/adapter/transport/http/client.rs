@@ -10,14 +10,17 @@ use reqwest::{
 };
 use std::{pin::Pin, time::Duration};
 
+#[cfg(feature = "tracing")]
+use tracing::instrument;
+
 use crate::{
-    adapter::client::HttpClientError,
+    adapter::error::HttpClientError,
     application::{json_rpc::{self, A2ARequest, SendTaskRequest}, JSONRPCResponse},
     domain::{
-        A2AError, Message, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-        TaskSendParams,
+        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, 
+        TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
     },
-    port::client::{AsyncA2AClient, StreamItem},
+    services::client::{AsyncA2AClient, StreamItem},
 };
 
 /// HTTP client for interacting with the A2A protocol
@@ -77,6 +80,7 @@ impl HttpClient {
 
 #[async_trait]
 impl AsyncA2AClient for HttpClient {
+    #[cfg_attr(feature = "tracing", instrument(skip(self, request), fields(url = %self.base_url, request_len = request.len())))]
     async fn send_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
         let response = self
             .client
@@ -102,6 +106,7 @@ impl AsyncA2AClient for HttpClient {
         }
     }
 
+    #[cfg_attr(feature = "tracing", instrument(skip(self, request), fields(method = ?request)))]
     async fn send_request<'a>(&self, request: &'a A2ARequest) -> Result<JSONRPCResponse, A2AError> {
         let json = json_rpc::serialize_request(request)?;
         let response_text = self.send_raw_request(&json).await?;
@@ -109,6 +114,7 @@ impl AsyncA2AClient for HttpClient {
         Ok(response)
     }
 
+    #[cfg_attr(feature = "tracing", instrument(skip(self, message), fields(task_id, session_id, history_length)))]
     async fn send_task_message<'a>(
         &self,
         task_id: &'a str,
@@ -147,6 +153,7 @@ impl AsyncA2AClient for HttpClient {
         }
     }
 
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(task_id, history_length)))]
     async fn get_task<'a>(
         &self,
         task_id: &'a str,
@@ -180,6 +187,7 @@ impl AsyncA2AClient for HttpClient {
         }
     }
 
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(task_id)))]
     async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
         let params = TaskIdParams {
             id: task_id.to_string(),
@@ -272,18 +280,6 @@ impl AsyncA2AClient for HttpClient {
     // HTTP clients can't directly support streaming, so this method returns
     // an error indicating that streaming is not supported via HTTP
     async fn subscribe_to_task<'a>(
-        &self,
-        _task_id: &'a str,
-        _message: &'a Message,
-        _session_id: Option<&'a str>,
-        _history_length: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Streaming is not supported with HTTP client".to_string(),
-        ))
-    }
-
-    async fn resubscribe_to_task<'a>(
         &self,
         _task_id: &'a str,
         _history_length: Option<u32>,
