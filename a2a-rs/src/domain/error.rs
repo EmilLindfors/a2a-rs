@@ -14,6 +14,7 @@ pub const PUSH_NOTIFICATION_NOT_SUPPORTED: i32 = -32003;
 pub const UNSUPPORTED_OPERATION: i32 = -32004;
 pub const CONTENT_TYPE_NOT_SUPPORTED: i32 = -32005;
 pub const INVALID_AGENT_RESPONSE: i32 = -32006;
+pub const DATABASE_ERROR: i32 = -32007;
 
 /// Error type for the A2A protocol operations
 #[derive(Error, Debug)]
@@ -61,6 +62,9 @@ pub enum A2AError {
     #[error("Validation error in {field}: {message}")]
     ValidationError { field: String, message: String },
 
+    #[error("Database error: {0}")]
+    DatabaseError(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -87,6 +91,7 @@ impl A2AError {
             }
             A2AError::InvalidAgentResponse(_) => (INVALID_AGENT_RESPONSE, "Invalid agent response"),
             A2AError::ValidationError { .. } => (INVALID_PARAMS, "Validation error"),
+            A2AError::DatabaseError(_) => (DATABASE_ERROR, "Database error"),
             A2AError::Internal(_) => (INTERNAL_ERROR, "Internal error"),
             _ => (INTERNAL_ERROR, "Internal error"),
         };

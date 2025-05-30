@@ -21,6 +21,9 @@ base64 = "0.21"
 url = { version = "2.4", features = ["serde"] }
 bon = "2.3"
 
+# Database - optional
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "chrono", "uuid", "json"], optional = true }
+
 # Async foundation - optional
 tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"], optional = true }
 async-trait = { version = "0.1", optional = true }
@@ -62,7 +65,11 @@ http-server = ["server", "dep:axum"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
 ws-server = ["server", "dep:tokio-tungstenite"]
 auth = ["dep:jsonwebtoken", "dep:oauth2", "dep:openidconnect", "dep:reqwest"]
-full = ["http-client", "ws-client", "http-server", "ws-server", "tracing", "auth"]
+sqlx-storage = ["server", "dep:sqlx"]
+sqlite = ["sqlx-storage", "sqlx/sqlite"]
+postgres = ["sqlx-storage", "sqlx/postgres"]
+mysql = ["sqlx-storage", "sqlx/mysql"]
+full = ["http-client", "ws-client", "http-server", "ws-server", "tracing", "auth", "sqlite", "postgres"]
 
 
 [[example]]
@@ -74,6 +81,16 @@ required-features = ["http-server", "http-client"]
 name = "websocket_client_server"
 path = "examples/websocket_client_server.rs"
 required-features = ["ws-server", "ws-client"]
+
+[[example]]
+name = "sqlx_storage_demo"
+path = "examples/sqlx_storage_demo.rs"
+required-features = ["sqlx-storage", "tracing"]
+
+[[example]]
+name = "storage_comparison"
+path = "examples/storage_comparison.rs"
+required-features = ["server", "tracing"]
 
 [[bench]]
 name = "a2a_performance"
