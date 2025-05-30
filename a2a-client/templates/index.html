@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A2A Chat Client</title>
+    <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+    <main class="container">
+        <h1>A2A Chat Client</h1>
+        <p>Connect to an A2A agent and start chatting</p>
+        
+        <form action="/chat/new" method="post" class="agent-form">
+            <label for="agent_url">Agent URL:</label>
+            <input 
+                type="url" 
+                id="agent_url" 
+                name="agent_url" 
+                value="{{ agent_url }}" 
+                placeholder="http://localhost:8080"
+                required
+            >
+            <button type="submit">Start New Chat</button>
+        </form>
+        
+        <div class="info">
+            <h2>Available Agents</h2>
+            <ul>
+                <li><strong>Reimbursement Agent</strong> - Usually runs on <code>http://localhost:8080</code></li>
+            </ul>
+        </div>
+    </main>
+</body>
+</html>

@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat - A2A Client</title>
+    <link rel="stylesheet" href="/styles.css">
+    <meta http-equiv="refresh" content="5">
+</head>
+<body>
+    <main class="container">
+        <h1>Chat Session</h1>
+        <p class="task-id">Task ID: <code>{{ task_id }}</code></p>
+        
+        <div class="chat-container">
+            <div class="messages">
+                {% for message in messages %}
+                <div class="message message-{{ message.role|lower }}">
+                    <div class="message-header">
+                        <span class="role">{{ message.role }}</span>
+                    </div>
+                    <div class="message-content">{{ message.content }}</div>
+                </div>
+                {% endfor %}
+                
+                {% if messages.is_empty() %}
+                <p class="no-messages">No messages yet. Send a message to start the conversation!</p>
+                {% endif %}
+            </div>
+            
+            <form action="/chat/{{ task_id }}/send" method="post" class="message-form">
+                <input type="hidden" name="task_id" value="{{ task_id }}">
+                <div class="input-group">
+                    <input 
+                        type="text" 
+                        name="message" 
+                        placeholder="Type your message..." 
+                        required 
+                        autofocus
+                    >
+                    <button type="submit">Send</button>
+                </div>
+            </form>
+        </div>
+        
+        <div class="actions">
+            <a href="/">Start New Chat</a>
+        </div>
+    </main>
+    
+    <script>
+        // Auto-scroll to bottom of messages
+        const messages = document.querySelector('.messages');
+        if (messages) {
+            messages.scrollTop = messages.scrollHeight;
+        }
+    </script>
+</body>
+</html>

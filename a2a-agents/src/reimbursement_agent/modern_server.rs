@@ -1,7 +1,7 @@
 use a2a_rs::adapter::{
     DefaultRequestProcessor, HttpServer,
     InMemoryTaskStorage, NoopPushNotificationSender, SimpleAgentInfo,
-    BearerTokenAuthenticator, ApiKeyAuthenticator,
+    BearerTokenAuthenticator,
 };
 use a2a_rs::port::{AsyncTaskManager, AsyncNotificationManager};
 
@@ -121,24 +121,8 @@ impl ModernReimbursementServer {
             Some(vec!["text".to_string(), "data".to_string()]),
         );
 
-        // Create HTTP server with authentication
-        // Note: For now, always use BearerTokenAuthenticator for type consistency
-        let tokens = match &self.config.auth {
-            AuthConfig::None => vec![], // Empty tokens = no authentication 
-            AuthConfig::BearerToken { tokens, format: _ } => tokens.clone(),
-            AuthConfig::ApiKey { .. } => {
-                tracing::warn!("API key authentication not yet supported, using no authentication");
-                vec![]
-            },
-        };
-        
-        let authenticator = BearerTokenAuthenticator::new(tokens);
-        let server = HttpServer::with_auth(
-            processor,
-            agent_info,
-            format!("{}:{}", self.config.host, self.config.http_port),
-            authenticator,
-        );
+        // Create HTTP server
+        let bind_address = format!("{}:{}", self.config.host, self.config.http_port);
 
         println!("🌐 Starting HTTP reimbursement server on {}:{}", self.config.host, self.config.http_port);
         println!("📋 Agent card: http://{}:{}/agent-card", self.config.host, self.config.http_port);
@@ -150,22 +134,37 @@ impl ModernReimbursementServer {
         }
         
         match &self.config.auth {
-            AuthConfig::None => println!("🔓 Authentication: None (public access)"),
+            AuthConfig::None => {
+                println!("🔓 Authentication: None (public access)");
+                
+                // Create server without authentication
+                let server = HttpServer::new(processor, agent_info, bind_address);
+                server.start().await
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+            }
             AuthConfig::BearerToken { tokens, format } => {
                 println!("🔐 Authentication: Bearer token ({} token(s){})", 
                     tokens.len(),
                     format.as_ref().map(|f| format!(", format: {}", f)).unwrap_or_default()
                 );
+                
+                let authenticator = BearerTokenAuthenticator::new(tokens.clone());
+                let server = HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
+                server.start().await
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
             }
             AuthConfig::ApiKey { keys, location, name } => {
                 println!("🔐 Authentication: API key ({} {}, {} key(s))", 
                     location, name, keys.len()
                 );
+                println!("⚠️  API key authentication not yet supported, using no authentication");
+                
+                // Create server without authentication
+                let server = HttpServer::new(processor, agent_info, bind_address);
+                server.start().await
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
             }
         }
-        
-        server.start().await
-            .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
     }
 
     /// Start the WebSocket server (simplified for now)

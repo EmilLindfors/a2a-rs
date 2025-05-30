@@ -1,182 +1,169 @@
-# A2A Client for WebAssembly
+# A2A Client
 
-A WebSocket client implementation for the A2A protocol, built with Leptos 8.0 for WebAssembly applications.
-
-## Overview
-
-This crate provides a WebAssembly-compatible client for the A2A protocol, enabling the development of web applications that can communicate with A2A servers. It's built using Leptos, a Rust framework for building reactive web applications.
+A simple web-based chat client for interacting with A2A (Agent-to-Agent) protocol agents. This client provides a clean, server-side rendered interface for communicating with agents like the reimbursement agent.
 
 ## Features
 
-- WebSocket-based communication with A2A servers
-- Message streaming support for real-time updates
-- Integration with Leptos for reactivity
-- Built for WebAssembly environments
-- Support for all common A2A operations:
-  - Task creation and management
-  - Message streaming
-  - Task cancellation
-  - Push notification configuration
+- 🌐 **Web-based interface** - No client installation required
+- 💬 **Real-time chat** - Send and receive messages with A2A agents
+- 🔄 **Auto-refresh** - Automatically updates chat history every 5 seconds
+- 🎨 **Clean UI** - Simple, responsive design with styled messages
+- 🚀 **Fast** - Server-side rendered with Askama templates
+- 🔧 **Easy setup** - Single binary, minimal configuration
 
-## Prerequisites
+## Quick Start
 
-- Rust and Cargo
-- wasm-pack
-- An A2A-compatible WebSocket server running (default: ws://localhost:8081)
+### Prerequisites
 
-## Building and Running
+- Rust 1.70 or later
+- An A2A agent running (e.g., reimbursement agent on `http://localhost:8080`)
 
-### Setting up the toolchain
-
-If you haven't installed `wasm-pack` yet:
+### Building
 
 ```bash
-cargo install wasm-pack
+cd a2a-client
+cargo build --release --bin server
 ```
 
-### Building the WASM package
+### Running
 
 ```bash
-wasm-pack build --target web
+# Run with default settings (connects to http://localhost:8080)
+cargo run --bin server
+
+# Or specify a custom agent URL
+AGENT_URL=http://my-agent:8080 cargo run --bin server
+
+# With logging enabled
+RUST_LOG=info cargo run --bin server
 ```
 
-### Running the application
-
-You can use any static file server. For example, with `basic-http-server`:
-
-```bash
-cargo install basic-http-server
-basic-http-server .
-```
-
-Or with Python's built-in HTTP server:
-
-```bash
-python -m http.server
-```
-
-Then open your browser at http://localhost:8000 (or whatever port your server is using).
-
-## Structure
-
-- `src/client/` - WebSocket client implementation for A2A
-  - `client/mod.rs` - Client exports
-  - `client/ws.rs` - WebSocket implementation
-  - `client/error.rs` - Error types
-- `src/components/` - Leptos components for the chat interface
-  - `components/chat.rs` - Chat UI component
-- `src/lib.rs` - Main application entry point
-- `src/styles.css` - Styling for the application
-- `index.html` - HTML template for the application
-- `examples/` - Example applications
-  - `simple_chat.rs` - Basic chat interface
-  - `websocket_test.rs` - WebSocket connection tester
+The server will start on `http://localhost:3000`.
 
 ## Usage
 
-### Basic Setup
-
-```rust
-use a2a_client::client::A2AClientImpl;
-use a2a_rs::domain::Message;
-use std::{cell::RefCell, rc::Rc};
-
-// Create a client
-let client = Rc::new(RefCell::new(
-    A2AClientImpl::new("ws://your-a2a-server.com".to_string())
-));
-
-// Optionally add authentication
-let client_with_auth = Rc::new(RefCell::new(
-    A2AClientImpl::with_auth(
-        "ws://your-a2a-server.com".to_string(),
-        "your-auth-token".to_string()
-    )
-));
-```
-
-### Sending Messages
-
-```rust
-use a2a_rs::domain::Message;
-use wasm_bindgen_futures::spawn_local;
-use uuid::Uuid;
-
-// Create a task ID
-let task_id = format!("task-{}", Uuid::new_v4());
-
-// Create an A2A message
-let message = Message::user_text("Hello, A2A!");
-
-// Send the message
-spawn_local(async move {
-    let client_ref = client.borrow();
-    match client_ref.send_task_message(&task_id, &message, None, None).await {
-        Ok(task) => {
-            // Handle successful response
-            console_log::log!("Message sent successfully");
-        }
-        Err(e) => {
-            // Handle error
-            console_log::error!("Error sending message: {}", e);
-        }
-    }
-});
-```
-
-### Streaming Updates
-
-```rust
-use futures::StreamExt;
-use a2a_rs::port::client::StreamItem;
-
-spawn_local(async move {
-    let client_ref = client.borrow();
-    match client_ref.subscribe_to_task(&task_id, &message, None, None).await {
-        Ok(mut stream) => {
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(StreamItem::StatusUpdate(update)) => {
-                        // Handle status updates
-                        if update.final_ {
-                            // Final update received
-                            break;
-                        }
-                    }
-                    Ok(StreamItem::ArtifactUpdate(update)) => {
-                        // Handle artifact updates
-                    }
-                    Err(e) => {
-                        // Handle errors
-                        break;
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            // Handle subscription errors
-        }
-    }
-});
-```
-
-### Components
-
-The main component `Chat` provides a simple chat interface that connects to an A2A-compatible WebSocket server. It allows users to send messages and receive streaming responses.
-
-## Configuration
-
-By default, the client connects to `ws://localhost:8081`. To change this, modify the WebSocket URL when creating your client:
-
-```rust
-let client = A2AClientImpl::new("ws://your-server-url".to_string());
-```
+1. **Start the server** using one of the commands above
+2. **Open your browser** and navigate to `http://localhost:3000`
+3. **Enter the agent URL** (or use the default `http://localhost:8080`)
+4. **Click "Start New Chat"** to begin a conversation
+5. **Type your message** and click "Send" to interact with the agent
 
 ## Architecture
 
-The client implementation consists of several key components:
+The client is built with:
 
-- `WasmWebSocketClient`: Core WebSocket client implementation for WASM environments
-- `A2AClientImpl`: A user-friendly wrapper providing A2A-specific functionality
-- `WebSocketHandle`: Low-level WebSocket connection management
-- `MessageBroadcaster`: Distributes WebSocket messages to multiple subscribers
+- **[Axum](https://github.com/tokio-rs/axum)** - Web framework
+- **[Askama](https://github.com/djc/askama)** - Type-safe templating
+- **[a2a-rs](../a2a-rs)** - A2A protocol implementation
+- **Server-side rendering** - No JavaScript required
+
+### Project Structure
+
+```
+a2a-client/
+├── src/
+│   ├── bin/
+│   │   └── server.rs      # Main server binary
+│   └── styles.css         # CSS styles
+├── templates/
+│   ├── index.html         # Home page template
+│   └── chat.html          # Chat interface template
+├── Cargo.toml
+└── README.md
+```
+
+## Configuration
+
+### Environment Variables
+
+- `AGENT_URL` - Default agent URL (default: `http://localhost:8080`)
+- `RUST_LOG` - Log level (e.g., `info`, `debug`, `trace`)
+
+### Server Settings
+
+The server runs on port 3000 by default. To change this, modify the address in `src/bin/server.rs`:
+
+```rust
+let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+```
+
+## Message Format
+
+The client uses the A2A protocol message format:
+
+- **User messages** are sent with `Role::User`
+- **Text content** is wrapped in message parts
+- **Message IDs** are automatically generated UUIDs
+- **Task IDs** are used to group conversations
+
+## Styling
+
+The UI uses a clean, modern design with:
+
+- Distinct styling for user and agent messages
+- Responsive layout that works on mobile
+- Auto-scrolling to the latest message
+- Clear visual hierarchy
+
+To customize the appearance, edit `src/styles.css`.
+
+## Development
+
+### Adding Features
+
+To extend the client:
+
+1. **New routes** - Add handlers in `src/bin/server.rs`
+2. **New templates** - Create `.html` files in `templates/`
+3. **API changes** - Update the message handling logic
+4. **Styling** - Modify `src/styles.css`
+
+### Testing
+
+Run the client with a mock agent or the reimbursement agent:
+
+```bash
+# Terminal 1: Start the reimbursement agent
+cd ../a2a-agents
+cargo run --bin reimbursement_server
+
+# Terminal 2: Start the client
+cd ../a2a-client
+RUST_LOG=info cargo run --bin server
+
+# Terminal 3: Test with curl
+curl -X POST http://localhost:3000/chat/new \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "agent_url=http://localhost:8080"
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"Failed to connect to agent"**
+   - Ensure the agent is running on the specified URL
+   - Check firewall settings
+   - Verify the agent URL is correct
+
+2. **"No messages appearing"**
+   - Check the browser console for errors
+   - Ensure the task ID is valid
+   - Verify the agent is responding
+
+3. **"Build errors"**
+   - Run `cargo clean` and rebuild
+   - Ensure you're using Rust 1.70+
+   - Check all dependencies are available
+
+### Debug Mode
+
+Enable detailed logging:
+
+```bash
+RUST_LOG=debug cargo run --bin server
+```
+
+## License
+
+This project is part of the a2a-rs workspace. See the main project for license information.
