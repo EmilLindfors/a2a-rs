@@ -18,10 +18,11 @@ use tracing::{debug, error, info, instrument};
 
 use crate::{
     adapter::{
-        auth::{with_auth, Authenticator, NoopAuthenticator},
+        auth::{with_auth, NoopAuthenticator},
         error::HttpServerError,
     },
     domain::A2AError,
+    port::Authenticator,
     services::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
 };
 

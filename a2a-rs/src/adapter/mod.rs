@@ -28,7 +28,9 @@ pub use transport::websocket::WebSocketClient;
 #[cfg(feature = "http-server")]
 pub use auth::with_auth;
 #[cfg(any(feature = "http-server", feature = "ws-server"))]
-pub use auth::{Authenticator, NoopAuthenticator, TokenAuthenticator};
+pub use auth::{ApiKeyAuthenticator, BearerTokenAuthenticator, NoopAuthenticator};
+#[cfg(feature = "auth")]
+pub use auth::{JwtAuthenticator, OAuth2Authenticator, OpenIdConnectAuthenticator};
 #[cfg(all(feature = "server", feature = "http-client"))]
 pub use business::HttpPushNotificationSender;
 #[cfg(feature = "server")]

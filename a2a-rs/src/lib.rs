@@ -156,4 +156,8 @@ pub use adapter::{
 pub use adapter::HttpPushNotificationSender;
 
 #[cfg(any(feature = "http-server", feature = "ws-server"))]
-pub use adapter::{Authenticator, NoopAuthenticator, TokenAuthenticator};
+pub use adapter::{ApiKeyAuthenticator, BearerTokenAuthenticator, NoopAuthenticator};
+#[cfg(feature = "auth")]
+pub use adapter::{JwtAuthenticator, OAuth2Authenticator, OpenIdConnectAuthenticator};
+#[cfg(any(feature = "http-server", feature = "ws-server"))]
+pub use port::Authenticator;

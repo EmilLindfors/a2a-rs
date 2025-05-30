@@ -35,6 +35,11 @@ tokio-tungstenite = { version = "0.20", features = ["rustls", "connect", "stream
 # HTTP server - optional
 axum = { version = "0.8", optional = true }
 
+# Authentication - optional
+jsonwebtoken = { version = "9.3", optional = true }
+oauth2 = { version = "4.4", optional = true }
+openidconnect = { version = "3.5", optional = true }
+
 # Logging - optional
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
@@ -48,25 +53,16 @@ server = ["dep:tokio", "dep:async-trait", "dep:futures"]
 http-server = ["server", "dep:axum"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
 ws-server = ["server", "dep:tokio-tungstenite"]
-full = ["http-client", "ws-client", "http-server", "ws-server", "tracing"]
+auth = ["dep:jsonwebtoken", "dep:oauth2", "dep:openidconnect", "dep:reqwest"]
+full = ["http-client", "ws-client", "http-server", "ws-server", "tracing", "auth"]
 
 
 [[example]]
-name = "http_server"
-path = "examples/http_server.rs"
-required-features = ["http-server"]
+name = "http_client_server"
+path = "examples/http_client_server.rs"
+required-features = ["http-server", "http-client"]
 
 [[example]]
-name = "websocket_server"
-path = "examples/websocket_server.rs"
-required-features = ["ws-server"]
-
-[[example]]
-name = "http_client"
-path = "examples/http_client.rs"
-required-features = ["http-client"]
-
-[[example]]
-name = "websocket_client"
-path = "examples/websocket_client.rs"
-required-features = ["ws-client"]
+name = "websocket_client_server"
+path = "examples/websocket_client_server.rs"
+required-features = ["ws-server", "ws-client"]
