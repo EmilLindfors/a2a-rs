@@ -1,24 +1,22 @@
 use a2a_rs::adapter::{
-    DefaultRequestProcessor, HttpServer,
-    InMemoryTaskStorage, NoopPushNotificationSender, SimpleAgentInfo,
-    BearerTokenAuthenticator,
+    BearerTokenAuthenticator, DefaultRequestProcessor, HttpServer, InMemoryTaskStorage,
+    NoopPushNotificationSender, SimpleAgentInfo,
 };
-use a2a_rs::port::{AsyncTaskManager, AsyncNotificationManager};
+use a2a_rs::port::{AsyncNotificationManager, AsyncTaskManager};
 
 // SQLx storage support (feature-gated)
 #[cfg(feature = "sqlx")]
 use a2a_rs::adapter::storage::SqlxTaskStorage;
 
 use super::config::{AuthConfig, ServerConfig, StorageConfig};
-use super::message_handler::ReimbursementMessageHandler;
+use super::handler::ReimbursementHandler;
 
-
-/// Modern A2A server setup using custom ReimbursementMessageHandler
-pub struct ModernReimbursementServer {
+/// Modern A2A server setup using ReimbursementHandler
+pub struct ReimbursementServer {
     config: ServerConfig,
 }
 
-impl ModernReimbursementServer {
+impl ReimbursementServer {
     /// Create a new modern reimbursement server with default config
     pub fn new(host: String, port: u16) -> Self {
         let config = ServerConfig {
@@ -45,16 +43,27 @@ impl ModernReimbursementServer {
 
     #[cfg(feature = "sqlx")]
     /// Create SQLx storage (only available with sqlx feature)
-    async fn create_sqlx_storage(&self, url: &str, _max_connections: u32, enable_logging: bool) -> Result<SqlxTaskStorage, Box<dyn std::error::Error>> {
+    async fn create_sqlx_storage(
+        &self,
+        url: &str,
+        _max_connections: u32,
+        enable_logging: bool,
+    ) -> Result<SqlxTaskStorage, Box<dyn std::error::Error>> {
         tracing::info!("Using SQLx storage with URL: {}", url);
         if enable_logging {
             tracing::info!("SQL query logging enabled");
         }
-        let storage = SqlxTaskStorage::new(url).await
+
+        // Include reimbursement-specific migrations
+        let reimbursement_migrations = &[include_str!(
+            "../../migrations/001_create_reimbursements.sql"
+        )];
+
+        let storage = SqlxTaskStorage::with_migrations(url, reimbursement_migrations)
+            .await
             .map_err(|e| format!("Failed to create SQLx storage: {}", e))?;
         Ok(storage)
     }
-
 
     /// Start the HTTP server
     pub async fn start_http(&self) -> Result<(), Box<dyn std::error::Error>> {
@@ -64,8 +73,14 @@ impl ModernReimbursementServer {
                 self.start_http_server(storage).await
             }
             #[cfg(feature = "sqlx")]
-            StorageConfig::Sqlx { url, max_connections, enable_logging } => {
-                let storage = self.create_sqlx_storage(url, *max_connections, *enable_logging).await?;
+            StorageConfig::Sqlx {
+                url,
+                max_connections,
+                enable_logging,
+            } => {
+                let storage = self
+                    .create_sqlx_storage(url, *max_connections, *enable_logging)
+                    .await?;
                 self.start_http_server(storage).await
             }
             #[cfg(not(feature = "sqlx"))]
@@ -80,14 +95,26 @@ impl ModernReimbursementServer {
     where
         S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
     {
-        // Create our custom message handler
-        let message_handler = ReimbursementMessageHandler::new();
-        
+        // Create message handler
+        let message_handler = ReimbursementHandler::new();
+        self.start_with_handler(message_handler, storage).await
+    }
+
+    /// Start HTTP server with specific handler
+    async fn start_with_handler<S, H>(
+        &self,
+        message_handler: H,
+        storage: S,
+    ) -> Result<(), Box<dyn std::error::Error>>
+    where
+        S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+        H: a2a_rs::port::message_handler::AsyncMessageHandler + Clone + Send + Sync + 'static,
+    {
         // Create processor with separate handlers
         let processor = DefaultRequestProcessor::new(
             message_handler,
-            storage.clone(),  // storage implements AsyncTaskManager
-            storage,          // storage also implements AsyncNotificationManager
+            storage.clone(), // storage implements AsyncTaskManager
+            storage,         // storage also implements AsyncNotificationManager
         );
 
         // Create agent info with reimbursement capabilities
@@ -124,44 +151,71 @@ impl ModernReimbursementServer {
         // Create HTTP server
         let bind_address = format!("{}:{}", self.config.host, self.config.http_port);
 
-        println!("🌐 Starting HTTP reimbursement server on {}:{}", self.config.host, self.config.http_port);
-        println!("📋 Agent card: http://{}:{}/agent-card", self.config.host, self.config.http_port);
-        println!("🛠️  Skills: http://{}:{}/skills", self.config.host, self.config.http_port);
-        
+        println!(
+            "🌐 Starting HTTP reimbursement server on {}:{}",
+            self.config.host, self.config.http_port
+        );
+        println!(
+            "📋 Agent card: http://{}:{}/agent-card",
+            self.config.host, self.config.http_port
+        );
+        println!(
+            "🛠️  Skills: http://{}:{}/skills",
+            self.config.host, self.config.http_port
+        );
+
         match &self.config.storage {
             StorageConfig::InMemory => println!("💾 Storage: In-memory (non-persistent)"),
             StorageConfig::Sqlx { url, .. } => println!("💾 Storage: SQLx ({})", url),
         }
-        
+
         match &self.config.auth {
             AuthConfig::None => {
                 println!("🔓 Authentication: None (public access)");
-                
+
                 // Create server without authentication
                 let server = HttpServer::new(processor, agent_info, bind_address);
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
             }
             AuthConfig::BearerToken { tokens, format } => {
-                println!("🔐 Authentication: Bearer token ({} token(s){})", 
+                println!(
+                    "🔐 Authentication: Bearer token ({} token(s){})",
                     tokens.len(),
-                    format.as_ref().map(|f| format!(", format: {}", f)).unwrap_or_default()
+                    format
+                        .as_ref()
+                        .map(|f| format!(", format: {}", f))
+                        .unwrap_or_default()
                 );
-                
+
                 let authenticator = BearerTokenAuthenticator::new(tokens.clone());
-                let server = HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
-                server.start().await
+                let server =
+                    HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
+                server
+                    .start()
+                    .await
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
             }
-            AuthConfig::ApiKey { keys, location, name } => {
-                println!("🔐 Authentication: API key ({} {}, {} key(s))", 
-                    location, name, keys.len()
+            AuthConfig::ApiKey {
+                keys,
+                location,
+                name,
+            } => {
+                println!(
+                    "🔐 Authentication: API key ({} {}, {} key(s))",
+                    location,
+                    name,
+                    keys.len()
                 );
                 println!("⚠️  API key authentication not yet supported, using no authentication");
-                
+
                 // Create server without authentication
                 let server = HttpServer::new(processor, agent_info, bind_address);
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
             }
         }

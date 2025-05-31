@@ -3,7 +3,10 @@
 #[cfg(feature = "server")]
 use async_trait::async_trait;
 
-use crate::domain::{A2AError, Task, TaskIdParams, TaskQueryParams, TaskState};
+use crate::{
+    domain::{A2AError, Task, TaskIdParams, TaskQueryParams, TaskState},
+    Message,
+};
 
 /// A trait for managing task lifecycle and operations
 pub trait TaskManager {
@@ -13,8 +16,13 @@ pub trait TaskManager {
     /// Get a task by ID with optional history
     fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError>;
 
-    /// Update task status
-    fn update_task_status(&self, task_id: &str, state: TaskState) -> Result<Task, A2AError>;
+    /// Update task status with an optional message to add to history
+    fn update_task_status(
+        &self,
+        task_id: &str,
+        state: TaskState,
+        message: Option<Message>,
+    ) -> Result<Task, A2AError>;
 
     /// Cancel a task
     fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError>;
@@ -84,11 +92,12 @@ pub trait AsyncTaskManager: Send + Sync {
         history_length: Option<u32>,
     ) -> Result<Task, A2AError>;
 
-    /// Update task status
+    /// Update task status with an optional message to add to history
     async fn update_task_status<'a>(
         &self,
         task_id: &'a str,
         state: TaskState,
+        message: Option<Message>,
     ) -> Result<Task, A2AError>;
 
     /// Cancel a task

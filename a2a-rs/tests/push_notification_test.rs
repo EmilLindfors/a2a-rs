@@ -1,8 +1,12 @@
 //! Push notification tests
 
+#![cfg(all(feature = "http-client", feature = "http-server"))]
+
+mod common;
+
 use a2a_rs::{
     adapter::{
-        business::DefaultBusinessHandler, DefaultRequestProcessor, HttpClient, HttpServer,
+        DefaultRequestProcessor, HttpClient, HttpServer,
         InMemoryTaskStorage, PushNotificationSender, SimpleAgentInfo,
     },
     domain::{
@@ -11,6 +15,7 @@ use a2a_rs::{
     },
     services::AsyncA2AClient,
 };
+use common::TestBusinessHandler;
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -82,7 +87,7 @@ async fn test_push_notifications() {
     let storage = InMemoryTaskStorage::with_push_sender(push_sender_clone);
 
     // Create business handler with the storage
-    let handler = DefaultBusinessHandler::with_storage(storage);
+    let handler = TestBusinessHandler::with_storage(storage);
 
     // Create a processor
     let processor = DefaultRequestProcessor::with_handler(handler);

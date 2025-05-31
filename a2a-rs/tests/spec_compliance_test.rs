@@ -29,10 +29,18 @@ fn load_schema(filename: &str) -> JSONSchema {
         .unwrap_or_else(|_| panic!("Failed to compile schema: {}", filename))
 }
 
-/// Extract a specific definition from a schema file
+/// Extract a specific definition from a schema file with all definitions context
 fn extract_definition(schema_content: &str, definition_name: &str) -> Value {
-    let schema: Value = serde_json::from_str(schema_content).unwrap();
-    schema["definitions"][definition_name].clone()
+    let mut schema: Value = serde_json::from_str(schema_content).unwrap();
+    let definition = schema["definitions"][definition_name].clone();
+    
+    // Create a new schema with the specific definition as root but keep all definitions
+    json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "definitions": schema["definitions"],
+        "$ref": format!("#/definitions/{}", definition_name)
+    })
 }
 
 #[tokio::test]

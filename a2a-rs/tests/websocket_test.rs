@@ -1,13 +1,18 @@
 //! WebSocket-specific integration tests
 
+#![cfg(all(feature = "ws-client", feature = "ws-server"))]
+
+mod common;
+
 use a2a_rs::{
     adapter::{
-        business::DefaultBusinessHandler, DefaultRequestProcessor, InMemoryTaskStorage,
+        DefaultRequestProcessor, InMemoryTaskStorage,
         SimpleAgentInfo, WebSocketClient, WebSocketServer,
     },
     domain::Message,
     services::{AsyncA2AClient, StreamItem},
 };
+use common::TestBusinessHandler;
 use futures::StreamExt;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -25,7 +30,7 @@ async fn test_websocket_streaming() {
     let storage = InMemoryTaskStorage::new();
 
     // Create business handler with the storage
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
 
     // Create a processor
     let processor = DefaultRequestProcessor::with_handler(handler.clone());

@@ -30,6 +30,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Required dependencies
 lazy_static = "1.4"  # Used for static request ID storage in message_handler
+regex = "1.10"  # Used for text parsing in improved handler
 
 # Optional AI integration (for future use)
 # reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false, optional = true }
@@ -47,6 +48,11 @@ auth = ["a2a-rs/auth"]
 [[bin]]
 name = "reimbursement_server"
 path = "bin/reimbursement_server.rs"
+required-features = ["reimbursement-agent"]
+
+[[example]]
+name = "test_handler"
+path = "examples/test_handler.rs"
 required-features = ["reimbursement-agent"]
 
 

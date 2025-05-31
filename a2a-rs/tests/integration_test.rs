@@ -1,13 +1,18 @@
 //! Integration tests for the A2A protocol
 
+#![cfg(all(feature = "http-client", feature = "http-server"))]
+
+mod common;
+
 use a2a_rs::{
     adapter::{
-        business::DefaultBusinessHandler, DefaultRequestProcessor, HttpClient, HttpServer,
+        DefaultRequestProcessor, HttpClient, HttpServer,
         InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::{Message, Part, TaskState},
     services::AsyncA2AClient,
 };
+use common::TestBusinessHandler;
 use reqwest::Client;
 use serde_json::Value;
 use std::time::Duration;
@@ -20,7 +25,7 @@ async fn test_http_client_server_interaction() {
     let storage = InMemoryTaskStorage::new();
 
     // Create business handler with the storage
-    let handler = DefaultBusinessHandler::with_storage(storage);
+    let handler = TestBusinessHandler::with_storage(storage);
 
     // Create a processor
     let processor = DefaultRequestProcessor::with_handler(handler);

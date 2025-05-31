@@ -27,26 +27,16 @@
 
 ### Technical Improvements
 - [ ] **Configuration file** - Support config.toml for server settings
-- [ ] **Docker support** - Add Dockerfile and docker-compose.yml
 - [ ] **Health check endpoint** - Add /health for monitoring
-- [ ] **Metrics** - Add Prometheus metrics for monitoring
-- [ ] **Request logging** - Log all HTTP requests with correlation IDs
 
 ### Developer Experience
 - [ ] **API documentation** - Generate OpenAPI/Swagger docs
-- [ ] **Integration tests** - Add tests for the HTTP endpoints
-- [ ] **CI/CD pipeline** - GitHub Actions for testing and releases
-- [ ] **Development mode** - Hot reload for templates during development
 
 ## Low Priority
 
 ### Advanced Features
 - [ ] **Multi-agent chat** - Chat with multiple agents simultaneously
 - [ ] **Agent discovery** - Auto-discover available agents on the network
-- [ ] **Custom themes** - Allow users to switch between UI themes
-- [ ] **Keyboard shortcuts** - Add shortcuts for common actions
-- [ ] **Voice input** - Speech-to-text for message input
-- [ ] **Accessibility** - Full ARIA support and keyboard navigation
 
 ### Performance
 - [ ] **Response caching** - Cache agent responses where appropriate
@@ -66,16 +56,12 @@
 ### Experimental
 - [ ] **Plugin system** - Allow custom message handlers/transformers
 - [ ] **Agent SDK** - JavaScript SDK for embedding the chat
-- [ ] **Mobile app** - React Native or Flutter client
-- [ ] **CLI client** - Terminal-based chat interface
-- [ ] **GraphQL API** - Alternative to REST endpoints
 
 ### Integrations
+- [ ] **Email gateway** - Interact with agents via email
+- [ ] **Webhook support** - Send agent responses to webhooks
 - [ ] **Slack integration** - Chat with agents via Slack
 - [ ] **Discord bot** - Discord bot interface for agents
-- [ ] **Email gateway** - Interact with agents via email
-- [ ] **SMS interface** - Text message interface for agents
-- [ ] **Webhook support** - Send agent responses to webhooks
 
 ## Known Issues
 
@@ -91,7 +77,6 @@
 - [ ] **State management** - Consider using a proper state store
 - [ ] **Template organization** - Split large templates into partials
 - [ ] **CSS architecture** - Consider using CSS modules or similar
-- [ ] **TypeScript types** - Generate TS types from Rust structs
 
 ## Notes
 

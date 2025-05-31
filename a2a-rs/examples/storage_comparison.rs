@@ -129,7 +129,7 @@ async fn run_storage_tests<T: AsyncTaskManager>(
     println!("  ✓ Task exists: {}", exists);
     
     // Test 3: Update status
-    let updated_task = storage.update_task_status(&task_id, TaskState::Working).await?;
+    let updated_task = storage.update_task_status(&task_id, TaskState::Working, None).await?;
     println!("  ✓ Updated to Working (status: {:?})", updated_task.status.state);
     
     // Test 4: Get task with history
@@ -138,7 +138,7 @@ async fn run_storage_tests<T: AsyncTaskManager>(
     println!("  ✓ Retrieved task with {} history entries", history_count);
     
     // Test 5: Complete the task
-    let completed_task = storage.update_task_status(&task_id, TaskState::Completed).await?;
+    let completed_task = storage.update_task_status(&task_id, TaskState::Completed, None).await?;
     println!("  ✓ Completed task (status: {:?})", completed_task.status.state);
     
     // Test 6: Try to cancel completed task (should fail)
@@ -150,7 +150,7 @@ async fn run_storage_tests<T: AsyncTaskManager>(
     // Test 7: Create and cancel a working task
     let cancel_task_id = format!("cancel-test-{}", storage_name.to_lowercase());
     storage.create_task(&cancel_task_id, "test-context").await?;
-    storage.update_task_status(&cancel_task_id, TaskState::Working).await?;
+    storage.update_task_status(&cancel_task_id, TaskState::Working, None).await?;
     let canceled_task = storage.cancel_task(&cancel_task_id).await?;
     println!("  ✓ Canceled working task (status: {:?})", canceled_task.status.state);
 
@@ -167,8 +167,8 @@ async fn measure_performance<T: AsyncTaskManager>(
         
         // Create, update, and retrieve task
         storage.create_task(&task_id, "perf-context").await?;
-        storage.update_task_status(&task_id, TaskState::Working).await?;
-        storage.update_task_status(&task_id, TaskState::Completed).await?;
+        storage.update_task_status(&task_id, TaskState::Working, None).await?;
+        storage.update_task_status(&task_id, TaskState::Completed, None).await?;
         storage.get_task(&task_id, Some(5)).await?;
     }
     

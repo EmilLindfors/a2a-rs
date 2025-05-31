@@ -3,7 +3,7 @@
 #[cfg(feature = "sqlx-storage")]
 mod sqlx_tests {
     use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
-    use a2a_rs::domain::{TaskState, Message, Part, Role};
+    use a2a_rs::domain::TaskState;
     use a2a_rs::port::{AsyncTaskManager, AsyncNotificationManager, AsyncStreamingHandler};
     use a2a_rs::{A2AError, TaskPushNotificationConfig, PushNotificationConfig};
     use std::sync::Arc;
@@ -36,10 +36,10 @@ mod sqlx_tests {
         assert!(!storage.task_exists("non-existent").await?);
 
         // Test status updates
-        let working_task = storage.update_task_status(&task_id, TaskState::Working).await?;
+        let working_task = storage.update_task_status(&task_id, TaskState::Working, None).await?;
         assert_eq!(working_task.status.state, TaskState::Working);
 
-        let completed_task = storage.update_task_status(&task_id, TaskState::Completed).await?;
+        let completed_task = storage.update_task_status(&task_id, TaskState::Completed, None).await?;
         assert_eq!(completed_task.status.state, TaskState::Completed);
 
         // Test task retrieval with history
@@ -60,7 +60,7 @@ mod sqlx_tests {
 
         // Create and start working on task
         storage.create_task(&task_id, "test-context").await?;
-        storage.update_task_status(&task_id, TaskState::Working).await?;
+        storage.update_task_status(&task_id, TaskState::Working, None).await?;
 
         // Cancel the working task
         let canceled_task = storage.cancel_task(&task_id).await?;
@@ -82,8 +82,8 @@ mod sqlx_tests {
 
         // Create, work on, and complete task
         storage.create_task(&task_id, "test-context").await?;
-        storage.update_task_status(&task_id, TaskState::Working).await?;
-        storage.update_task_status(&task_id, TaskState::Completed).await?;
+        storage.update_task_status(&task_id, TaskState::Working, None).await?;
+        storage.update_task_status(&task_id, TaskState::Completed, None).await?;
 
         // Try to cancel completed task - should fail
         let result = storage.cancel_task(&task_id).await;
@@ -126,10 +126,10 @@ mod sqlx_tests {
 
         // Create task and make several status changes
         storage.create_task(&task_id, "test-context").await?;
-        storage.update_task_status(&task_id, TaskState::Working).await?;
-        storage.update_task_status(&task_id, TaskState::InputRequired).await?;
-        storage.update_task_status(&task_id, TaskState::Working).await?;
-        storage.update_task_status(&task_id, TaskState::Completed).await?;
+        storage.update_task_status(&task_id, TaskState::Working, None).await?;
+        storage.update_task_status(&task_id, TaskState::InputRequired, None).await?;
+        storage.update_task_status(&task_id, TaskState::Working, None).await?;
+        storage.update_task_status(&task_id, TaskState::Completed, None).await?;
 
         // Note: We're not fully implementing history loading in this version
         // In a full implementation, you'd test history limits here
@@ -236,8 +236,8 @@ mod sqlx_tests {
             let handle = tokio::spawn(async move {
                 let task_id = format!("concurrent-task-{}", i);
                 let task = storage_clone.create_task(&task_id, "concurrent-context").await?;
-                storage_clone.update_task_status(&task_id, TaskState::Working).await?;
-                storage_clone.update_task_status(&task_id, TaskState::Completed).await?;
+                storage_clone.update_task_status(&task_id, TaskState::Working, None).await?;
+                storage_clone.update_task_status(&task_id, TaskState::Completed, None).await?;
                 Ok::<_, A2AError>(task)
             });
             handles.push(handle);

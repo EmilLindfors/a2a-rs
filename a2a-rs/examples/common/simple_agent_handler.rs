@@ -1,10 +1,16 @@
-//! Default business handler implementation that coordinates all business capabilities
+//! Simple agent handler for examples and testing
+//! 
+//! This provides a complete agent implementation that bundles all business capabilities
+//! (message handling, task management, notifications, and streaming) with in-memory storage.
+//! 
+//! For production agents, you typically want to implement your own message handler
+//! and compose it with the storage implementations directly.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use crate::{
+use a2a_rs::{
     adapter::storage::InMemoryTaskStorage,
     domain::{
         A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskState,
@@ -17,16 +23,25 @@ use crate::{
     },
 };
 
-/// Default business handler that coordinates all business capability traits
-/// by delegating to InMemoryTaskStorage which implements the actual functionality
+/// Simple agent handler that coordinates all business capability traits
+/// by delegating to InMemoryTaskStorage which implements the actual functionality.
+/// 
+/// This is useful for:
+/// - Quick prototyping
+/// - Simple echo/test agents
+/// - Examples and demos
+/// - Agents that don't need custom message processing
+/// 
+/// For production agents with custom business logic, implement your own
+/// `AsyncMessageHandler` and compose it with storage using `DefaultRequestProcessor`.
 #[derive(Clone)]
-pub struct DefaultBusinessHandler {
+pub struct SimpleAgentHandler {
     /// Task storage that implements all the business capabilities
     storage: Arc<InMemoryTaskStorage>,
 }
 
-impl DefaultBusinessHandler {
-    /// Create a new default business handler
+impl SimpleAgentHandler {
+    /// Create a new simple agent handler
     pub fn new() -> Self {
         Self {
             storage: Arc::new(InMemoryTaskStorage::new()),
@@ -46,14 +61,14 @@ impl DefaultBusinessHandler {
     }
 }
 
-impl Default for DefaultBusinessHandler {
+impl Default for SimpleAgentHandler {
     fn default() -> Self {
         Self::new()
     }
 }
 
 // Synchronous trait implementations - not supported since we use async storage
-impl MessageHandler for DefaultBusinessHandler {
+impl MessageHandler for SimpleAgentHandler {
     fn process_message(
         &self,
         _task_id: &str,
@@ -66,7 +81,7 @@ impl MessageHandler for DefaultBusinessHandler {
     }
 }
 
-impl TaskManager for DefaultBusinessHandler {
+impl TaskManager for SimpleAgentHandler {
     fn create_task(&self, _task_id: &str, _context_id: &str) -> Result<Task, A2AError> {
         Err(A2AError::UnsupportedOperation(
             "Synchronous task creation not supported. Use async version.".to_string(),
@@ -79,7 +94,7 @@ impl TaskManager for DefaultBusinessHandler {
         ))
     }
 
-    fn update_task_status(&self, _task_id: &str, _state: TaskState) -> Result<Task, A2AError> {
+    fn update_task_status(&self, _task_id: &str, _state: TaskState, _message: Option<Message>) -> Result<Task, A2AError> {
         Err(A2AError::UnsupportedOperation(
             "Synchronous task status update not supported. Use async version.".to_string(),
         ))
@@ -98,7 +113,7 @@ impl TaskManager for DefaultBusinessHandler {
     }
 }
 
-impl NotificationManager for DefaultBusinessHandler {
+impl NotificationManager for SimpleAgentHandler {
     fn set_task_notification(
         &self,
         _config: &TaskPushNotificationConfig,
@@ -124,7 +139,7 @@ impl NotificationManager for DefaultBusinessHandler {
     }
 }
 
-impl StreamingHandler for DefaultBusinessHandler {
+impl StreamingHandler for SimpleAgentHandler {
     fn add_status_subscriber(
         &self,
         _task_id: &str,
@@ -167,7 +182,7 @@ impl StreamingHandler for DefaultBusinessHandler {
 // Asynchronous trait implementations - delegate to storage
 
 #[async_trait]
-impl AsyncMessageHandler for DefaultBusinessHandler {
+impl AsyncMessageHandler for SimpleAgentHandler {
     async fn process_message<'a>(
         &self,
         task_id: &'a str,
@@ -176,7 +191,7 @@ impl AsyncMessageHandler for DefaultBusinessHandler {
     ) -> Result<Task, A2AError> {
         // Create a message handler and delegate
         let message_handler =
-            crate::adapter::business::DefaultMessageHandler::new((*self.storage).clone());
+            a2a_rs::adapter::business::DefaultMessageHandler::new((*self.storage).clone());
         message_handler
             .process_message(task_id, message, session_id)
             .await
@@ -184,7 +199,7 @@ impl AsyncMessageHandler for DefaultBusinessHandler {
 }
 
 #[async_trait]
-impl AsyncTaskManager for DefaultBusinessHandler {
+impl AsyncTaskManager for SimpleAgentHandler {
     async fn create_task<'a>(
         &self,
         task_id: &'a str,
@@ -205,8 +220,9 @@ impl AsyncTaskManager for DefaultBusinessHandler {
         &self,
         task_id: &'a str,
         state: TaskState,
+        message: Option<Message>,
     ) -> Result<Task, A2AError> {
-        self.storage.update_task_status(task_id, state).await
+        self.storage.update_task_status(task_id, state, message).await
     }
 
     async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
@@ -219,7 +235,7 @@ impl AsyncTaskManager for DefaultBusinessHandler {
 }
 
 #[async_trait]
-impl AsyncNotificationManager for DefaultBusinessHandler {
+impl AsyncNotificationManager for SimpleAgentHandler {
     async fn set_task_notification<'a>(
         &self,
         config: &'a TaskPushNotificationConfig,
@@ -240,7 +256,7 @@ impl AsyncNotificationManager for DefaultBusinessHandler {
 }
 
 #[async_trait]
-impl AsyncStreamingHandler for DefaultBusinessHandler {
+impl AsyncStreamingHandler for SimpleAgentHandler {
     async fn add_status_subscriber<'a>(
         &self,
         task_id: &'a str,
@@ -279,7 +295,7 @@ impl AsyncStreamingHandler for DefaultBusinessHandler {
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         self.storage
-            .broadcast_status_update(task_id, update.status, update.final_)
+            .broadcast_status_update(task_id, update)
             .await
     }
 
@@ -289,12 +305,7 @@ impl AsyncStreamingHandler for DefaultBusinessHandler {
         update: TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
         self.storage
-            .broadcast_artifact_update(
-                task_id,
-                update.artifact,
-                None,
-                update.last_chunk.unwrap_or(false),
-            )
+            .broadcast_artifact_update(task_id, update)
             .await
     }
 
@@ -329,7 +340,7 @@ impl AsyncStreamingHandler for DefaultBusinessHandler {
         std::pin::Pin<
             Box<
                 dyn futures::Stream<
-                        Item = Result<crate::port::streaming_handler::UpdateEvent, A2AError>,
+                        Item = Result<a2a_rs::port::streaming_handler::UpdateEvent, A2AError>,
                     > + Send,
             >,
         >,

@@ -227,6 +227,7 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         &self,
         task_id: &'a str,
         state: TaskState,
+        message: Option<Message>,
     ) -> Result<Task, A2AError> {
         let mut tasks_guard = self.tasks.lock().await;
 
@@ -234,8 +235,8 @@ impl AsyncTaskManager for InMemoryTaskStorage {
             .get_mut(task_id)
             .ok_or_else(|| A2AError::TaskNotFound(task_id.to_string()))?;
 
-        // Update the task status
-        task.update_status(state, None);
+        // Update the task status with the optional message
+        task.update_status(state, message);
 
         // Return a clone of the updated task
         let updated_task = task.clone();

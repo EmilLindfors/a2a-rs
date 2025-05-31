@@ -1,4 +1,4 @@
-use a2a_agents::reimbursement_agent::{AuthConfig, ModernReimbursementServer, ServerConfig};
+use a2a_agents::reimbursement_agent::{AuthConfig, ReimbursementServer, ServerConfig};
 use clap::Parser;
 
 /// Command-line arguments for the reimbursement server
@@ -69,21 +69,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("🔓 Authentication: None (public access)");
         }
         AuthConfig::BearerToken { tokens, format } => {
-            println!("🔐 Authentication: Bearer token ({} token(s){})", 
+            println!(
+                "🔐 Authentication: Bearer token ({} token(s){})",
                 tokens.len(),
-                format.as_ref().map(|f| format!(", format: {}", f)).unwrap_or_default()
+                format
+                    .as_ref()
+                    .map(|f| format!(", format: {}", f))
+                    .unwrap_or_default()
             );
         }
-        AuthConfig::ApiKey { keys, location, name } => {
-            println!("🔐 Authentication: API key ({} {} '{}', {} key(s))", 
-                location, name, name, keys.len()
+        AuthConfig::ApiKey {
+            keys,
+            location,
+            name,
+        } => {
+            println!(
+                "🔐 Authentication: API key ({} {} '{}', {} key(s))",
+                location,
+                name,
+                name,
+                keys.len()
             );
         }
     }
     println!();
 
     // Create the modern server
-    let server = ModernReimbursementServer::from_config(config);
+    let server = ReimbursementServer::from_config(config);
 
     // Start the server based on mode
     match args.mode.as_str() {
@@ -100,7 +112,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             server.start_all().await?;
         }
         _ => {
-            eprintln!("❌ Invalid mode: {}. Use 'http', 'websocket', or 'both'", args.mode);
+            eprintln!(
+                "❌ Invalid mode: {}. Use 'http', 'websocket', or 'both'",
+                args.mode
+            );
             std::process::exit(1);
         }
     }

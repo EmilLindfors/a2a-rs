@@ -12,6 +12,7 @@ dependencies = [
  "chrono",
  "clap",
  "lazy_static",
+ "regex",
  "serde",
  "serde_json",
  "thiserror 1.0.69",

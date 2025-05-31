@@ -82,8 +82,8 @@ impl SqlxTaskStorage {
             .await
             .map_err(|e| A2AError::DatabaseError(format!("Failed to connect to database: {}", e)))?;
 
-        // Run migrations
-        Self::run_migrations(&pool).await?;
+        // Run base migrations
+        Self::run_base_migrations(&pool).await?;
 
         // Use the appropriate push notification sender based on available features
         #[cfg(feature = "http-client")]
@@ -110,7 +110,7 @@ impl SqlxTaskStorage {
             .map_err(|e| A2AError::DatabaseError(format!("Failed to connect to database: {}", e)))?;
 
         // Run migrations
-        Self::run_migrations(&pool).await?;
+        Self::run_base_migrations(&pool).await?;
 
         let push_registry = PushNotificationRegistry::new(push_sender);
 
@@ -121,8 +121,38 @@ impl SqlxTaskStorage {
         })
     }
 
-    /// Run database migrations
-    async fn run_migrations(pool: &SqlitePool) -> Result<(), A2AError> {
+    /// Create a new SQLx task storage with additional migrations
+    pub async fn with_migrations(
+        database_url: &str,
+        additional_migrations: &[&str],
+    ) -> Result<Self, A2AError> {
+        let pool = SqlitePool::connect(database_url)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to connect to database: {}", e)))?;
+
+        // Run base migrations
+        Self::run_base_migrations(&pool).await?;
+        
+        // Run additional migrations
+        Self::run_additional_migrations(&pool, additional_migrations).await?;
+
+        // Use the appropriate push notification sender based on available features
+        #[cfg(feature = "http-client")]
+        let push_sender = HttpPushNotificationSender::new();
+        #[cfg(not(feature = "http-client"))]
+        let push_sender = NoopPushNotificationSender::default();
+
+        let push_registry = PushNotificationRegistry::new(push_sender);
+
+        Ok(Self {
+            pool,
+            subscribers: Arc::new(Mutex::new(HashMap::new())),
+            push_notification_registry: Arc::new(push_registry),
+        })
+    }
+
+    /// Run base A2A framework migrations
+    async fn run_base_migrations(pool: &SqlitePool) -> Result<(), A2AError> {
         // For now, assume SQLite and run the SQLite migrations
         // In a real implementation, you'd detect the database type from the URL
         sqlx::query(include_str!("../../../migrations/001_initial_schema.sql"))
@@ -130,6 +160,20 @@ impl SqlxTaskStorage {
             .await
             .map_err(|e| A2AError::DatabaseError(format!("Migration failed: {}", e)))?;
 
+        Ok(())
+    }
+
+    /// Run additional migrations provided by the application
+    async fn run_additional_migrations(
+        pool: &SqlitePool,
+        migrations: &[&str],
+    ) -> Result<(), A2AError> {
+        for (i, migration_sql) in migrations.iter().enumerate() {
+            sqlx::query(migration_sql)
+                .execute(pool)
+                .await
+                .map_err(|e| A2AError::DatabaseError(format!("Additional migration {} failed: {}", i + 1, e)))?;
+        }
         Ok(())
     }
 
@@ -416,6 +460,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
         &self,
         task_id: &'a str,
         state: TaskState,
+        message: Option<Message>,
     ) -> Result<Task, A2AError> {
         // Convert state to string
         let state_str = match state {
@@ -443,7 +488,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
         }
 
         // Add to history
-        self.add_to_history(task_id, state, None).await?;
+        self.add_to_history(task_id, state, message).await?;
 
         // Get updated task
         let task = self.get_task(task_id, None).await?;

@@ -3,14 +3,19 @@
 //! Tests end-to-end workflows across different transport protocols (HTTP and WebSocket)
 //! to ensure compatibility and consistent behavior.
 
+#![cfg(all(feature = "http-client", feature = "http-server", feature = "ws-client", feature = "ws-server"))]
+
+mod common;
+
 use a2a_rs::{
     adapter::{
-        business::DefaultBusinessHandler, DefaultRequestProcessor, HttpClient, HttpServer,
+        DefaultRequestProcessor, HttpClient, HttpServer,
         InMemoryTaskStorage, SimpleAgentInfo, WebSocketClient, WebSocketServer,
     },
     domain::{Message, Part, TaskState},
     services::{AsyncA2AClient, StreamItem},
 };
+use common::TestBusinessHandler;
 use base64::Engine;
 use futures::StreamExt;
 use reqwest::Client as ReqwestClient;
@@ -25,7 +30,7 @@ async fn test_dual_protocol_agent() {
     let storage = InMemoryTaskStorage::new();
 
     // Create business handler that will be shared between protocols
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     // Create agent info with capabilities for both protocols
@@ -146,7 +151,7 @@ async fn test_dual_protocol_agent() {
 #[tokio::test]
 async fn test_cross_protocol_task_interaction() {
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(
@@ -276,7 +281,7 @@ async fn test_cross_protocol_task_interaction() {
 #[tokio::test]
 async fn test_complex_message_types_across_transports() {
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(
@@ -428,7 +433,7 @@ async fn test_complex_message_types_across_transports() {
 #[tokio::test]
 async fn test_error_handling_across_transports() {
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(

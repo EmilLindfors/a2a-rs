@@ -5,9 +5,12 @@ use tokio::time::sleep;
 use futures::StreamExt;
 
 use a2a_rs::adapter::{
-    business::DefaultBusinessHandler, DefaultRequestProcessor, InMemoryTaskStorage,
+    DefaultRequestProcessor, InMemoryTaskStorage,
     NoopPushNotificationSender, SimpleAgentInfo, WebSocketClient, WebSocketServer,
 };
+
+mod common;
+use common::SimpleAgentHandler;
 use a2a_rs::domain::{Message, Part, Role};
 use a2a_rs::services::{AsyncA2AClient, StreamItem};
 use a2a_rs::observability;
@@ -50,7 +53,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     // Create server components
     let push_sender = NoopPushNotificationSender;
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = SimpleAgentHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     // Create agent info
@@ -87,7 +90,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     println!("📱 Starting WebSocket client...");
 
     // Create WebSocket client
-    let mut client = WebSocketClient::new("ws://127.0.0.1:8081".to_string());
+    let client = WebSocketClient::new("ws://127.0.0.1:8081".to_string());
 
     // Note: WebSocket client connects automatically on first request
     println!("🔌 WebSocket client ready");

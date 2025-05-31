@@ -42,24 +42,43 @@ where
         message: &'a Message,
         session_id: Option<&'a str>,
     ) -> Result<Task, A2AError> {
-        // Get or create the task
-        let mut task = if self.task_manager.task_exists(task_id).await? {
-            // Get existing task
-            self.task_manager.get_task(task_id, None).await?
-        } else {
+        // Check if task exists
+        let task_exists = self.task_manager.task_exists(task_id).await?;
+        
+        if !task_exists {
             // Create a new task
             let context_id = session_id.unwrap_or("default");
-            self.task_manager.create_task(task_id, context_id).await?
-        };
+            self.task_manager.create_task(task_id, context_id).await?;
+        }
 
-        // Update the task with the message
-        // This adds the message to history inside the update_status method
-        task.update_status(TaskState::Working, Some(message.clone()));
-
-        // Update the task status through the task manager
-        // This will handle broadcasting and storage updates
+        // First, update the task with the incoming message to add it to history
         self.task_manager
-            .update_task_status(task_id, TaskState::Working)
-            .await
+            .update_task_status(task_id, TaskState::Working, Some(message.clone()))
+            .await?;
+
+        // Create a simple echo response
+        let response_message = Message::builder()
+            .role(crate::domain::Role::Agent)
+            .parts(vec![crate::domain::Part::text(format!("Echo: {}", 
+                message.parts.iter()
+                    .filter_map(|p| match p {
+                        crate::domain::Part::Text { text, .. } => Some(text.as_str()),
+                        _ => None
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ))])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .task_id(task_id.to_string())
+            .context_id(message.context_id.clone().unwrap_or_default())
+            .build();
+
+        // For the default handler, we'll add the response message to history but keep the task in Working state
+        // Real agents would process the message and determine the appropriate final state
+        let final_task = self.task_manager
+            .update_task_status(task_id, TaskState::Working, Some(response_message))
+            .await?;
+
+        Ok(final_task)
     }
 }

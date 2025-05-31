@@ -3,16 +3,20 @@
 //! Tests streaming events, WebSocket connections, event ordering, and real-time updates
 //! according to the A2A specification.
 
+#![cfg(all(feature = "ws-client", feature = "ws-server"))]
+
+mod common;
+
 use a2a_rs::{
     adapter::{
-        business::DefaultBusinessHandler, DefaultRequestProcessor, InMemoryTaskStorage,
+        DefaultRequestProcessor, InMemoryTaskStorage,
         SimpleAgentInfo, WebSocketClient, WebSocketServer,
     },
-    domain::{Message, Part, TaskState, TaskStatusUpdateEvent, TaskArtifactUpdateEvent},
+    domain::{Message, TaskState},
     services::{AsyncA2AClient, StreamItem},
 };
-use futures::{stream::StreamExt, SinkExt};
-use serde_json::json;
+use common::TestBusinessHandler;
+use futures::stream::StreamExt;
 use std::collections::HashSet;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -27,7 +31,7 @@ async fn test_basic_streaming_functionality() {
     }
 
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(
@@ -53,6 +57,10 @@ async fn test_basic_streaming_functionality() {
 
     let client = WebSocketClient::new("ws://localhost:8192".to_string());
     let task_id = format!("stream-test-{}", uuid::Uuid::new_v4());
+    
+    // First, send a message to create the task
+    let message = Message::user_text("Start streaming test".to_string(), uuid::Uuid::new_v4().to_string());
+    let _ = client.send_task_message(&task_id, &message, None, None).await;
 
     // Subscribe to streaming updates
     let stream_result = timeout(
@@ -124,7 +132,7 @@ async fn test_streaming_event_ordering() {
     }
 
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(
@@ -219,7 +227,7 @@ async fn test_streaming_artifact_updates() {
     }
 
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(
@@ -336,7 +344,7 @@ async fn test_websocket_connection_resilience() {
     }
 
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(
@@ -412,7 +420,7 @@ async fn test_websocket_connection_resilience() {
         let stream2_future = client2.subscribe_to_task(&task_id2, None);
         let stream3_future = client3.subscribe_to_task(&task_id3, None);
         
-        let (result2, result3) = tokio::join!(stream2_future, stream3_future);
+        let (result2, result3): (Result<_, _>, Result<_, _>) = tokio::join!(stream2_future, stream3_future);
         
         (result2.is_ok(), result3.is_ok())
     }).await;
@@ -463,7 +471,7 @@ async fn test_streaming_with_history_limits() {
     }
 
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(
@@ -556,7 +564,7 @@ async fn test_streaming_event_specification_compliance() {
     }
 
     let storage = InMemoryTaskStorage::new();
-    let handler = DefaultBusinessHandler::with_storage(storage.clone());
+    let handler = TestBusinessHandler::with_storage(storage.clone());
     let processor = DefaultRequestProcessor::with_handler(handler.clone());
 
     let agent_info = SimpleAgentInfo::new(

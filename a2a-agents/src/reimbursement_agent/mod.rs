@@ -1,10 +1,12 @@
 //! Reimbursement agent implementation
 
 pub mod config;
-pub mod message_handler;
-pub mod modern_server;
+pub mod handler;
+pub mod server;
+pub mod types;
 
 // Re-export key types for convenience
 pub use config::{AuthConfig, ServerConfig, StorageConfig};
-pub use message_handler::ReimbursementMessageHandler;
-pub use modern_server::ModernReimbursementServer;
+pub use handler::ReimbursementHandler;
+pub use server::ReimbursementServer;
+pub use types::*;

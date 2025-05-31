@@ -71,14 +71,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Demo: Update task statuses
     println!("🔄 Updating task statuses...");
-    storage.update_task_status("demo-task-1", TaskState::Working).await?;
+    storage.update_task_status("demo-task-1", TaskState::Working, None).await?;
     println!("  ✓ Updated demo-task-1 to Working");
     
-    storage.update_task_status("demo-task-2", TaskState::Working).await?;
-    storage.update_task_status("demo-task-2", TaskState::Completed).await?;
+    storage.update_task_status("demo-task-2", TaskState::Working, None).await?;
+    storage.update_task_status("demo-task-2", TaskState::Completed, None).await?;
     println!("  ✓ Updated demo-task-2 to Working, then Completed");
     
-    storage.update_task_status("demo-task-3", TaskState::Working).await?;
+    storage.update_task_status("demo-task-3", TaskState::Working, None).await?;
     println!("  ✓ Updated demo-task-3 to Working");
     println!();
 
