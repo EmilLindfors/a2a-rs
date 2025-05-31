@@ -10,12 +10,13 @@ use a2a_rs::{
     services::AgentInfoProvider,
     MessageSendParams,
 };
-use jsonschema::{Draft, JSONSchema};
+use jsonschema::{Draft, Validator};
 use serde_json::{json, Value};
 use std::fs;
 
 /// Load and compile a JSON Schema from the spec directory
-fn load_schema(filename: &str) -> JSONSchema {
+#[allow(dead_code)]
+fn load_schema(filename: &str) -> Validator {
     let schema_path = format!("../spec/{}", filename);
     let schema_content = fs::read_to_string(&schema_path)
         .unwrap_or_else(|_| panic!("Failed to read schema file: {}", schema_path));
@@ -23,7 +24,7 @@ fn load_schema(filename: &str) -> JSONSchema {
     let schema: Value = serde_json::from_str(&schema_content)
         .unwrap_or_else(|_| panic!("Failed to parse schema JSON: {}", filename));
     
-    JSONSchema::options()
+    Validator::options()
         .with_draft(Draft::Draft7)
         .build(&schema)
         .unwrap_or_else(|_| panic!("Failed to compile schema: {}", filename))
@@ -31,8 +32,8 @@ fn load_schema(filename: &str) -> JSONSchema {
 
 /// Extract a specific definition from a schema file with all definitions context
 fn extract_definition(schema_content: &str, definition_name: &str) -> Value {
-    let mut schema: Value = serde_json::from_str(schema_content).unwrap();
-    let definition = schema["definitions"][definition_name].clone();
+    let schema: Value = serde_json::from_str(schema_content).unwrap();
+    let _definition = schema["definitions"][definition_name].clone();
     
     // Create a new schema with the specific definition as root but keep all definitions
     json!({
@@ -71,7 +72,7 @@ async fn test_agent_card_compliance() {
         .expect("Failed to read specification.json");
     let agent_card_schema = extract_definition(&schema_content, "AgentCard");
     
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft7)
         .build(&agent_card_schema)
         .expect("Failed to compile AgentCard schema");
@@ -127,7 +128,7 @@ fn test_message_compliance() {
         .expect("Failed to read specification.json");
     let message_schema = extract_definition(&schema_content, "Message");
     
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft7)
         .build(&message_schema)
         .expect("Failed to compile Message schema");
@@ -164,7 +165,7 @@ fn test_task_compliance() {
         .expect("Failed to read specification.json");
     let task_schema = extract_definition(&schema_content, "Task");
     
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft7)
         .build(&task_schema)
         .expect("Failed to compile Task schema");
@@ -203,7 +204,7 @@ fn test_jsonrpc_request_compliance() {
         .expect("Failed to read specification.json");
     let request_schema = extract_definition(&schema_content, "SendMessageRequest");
     
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft7)
         .build(&request_schema)
         .expect("Failed to compile SendMessageRequest schema");
@@ -237,7 +238,7 @@ fn test_task_states_compliance() {
         .expect("Failed to read specification.json");
     let task_state_schema = extract_definition(&schema_content, "TaskState");
     
-    let schema = JSONSchema::options()
+    let schema = Validator::options()
         .with_draft(Draft::Draft7)
         .build(&task_state_schema)
         .expect("Failed to compile TaskState schema");

@@ -56,6 +56,7 @@ impl SimpleAgentHandler {
     }
 
     /// Get a reference to the underlying storage
+    #[allow(dead_code)]
     pub fn storage(&self) -> &Arc<InMemoryTaskStorage> {
         &self.storage
     }

@@ -40,6 +40,7 @@ impl MockPushNotificationSender {
         self.status_updates.lock().unwrap().clone()
     }
 
+    #[allow(dead_code)]
     fn get_artifact_updates(&self) -> Vec<String> {
         self.artifact_updates.lock().unwrap().clone()
     }

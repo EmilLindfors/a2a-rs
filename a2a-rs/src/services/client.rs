@@ -60,7 +60,7 @@ pub trait AsyncA2AClient: Send + Sync {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError>;
 }
 
-/// Items that can be streamed from the server
+/// Items that can be streamed from the server during task subscriptions.\n///\n/// When subscribing to streaming updates for a task, the server can send\n/// different types of items:\n/// - `Task`: The complete initial task state when subscription starts\n/// - `StatusUpdate`: Updates to the task's status (state changes, progress)\n/// - `ArtifactUpdate`: Notifications about new or updated artifacts\n///\n/// This allows clients to receive real-time updates about task progress\n/// and results as they become available.
 #[derive(Debug, Clone)]
 pub enum StreamItem {
     /// The initial task state

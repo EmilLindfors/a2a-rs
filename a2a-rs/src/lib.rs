@@ -17,14 +17,11 @@
 //! ## Creating a client
 //!
 //! ```rust,no_run
-//! #[cfg(feature = "http-client")]
-//! use a2a_rs::{
-//!     adapter::client::HttpClient,
-//!     domain::{Message, Part},
-//!     port::client::AsyncA2AClient,
-//! };
+//! # #[cfg(feature = "http-client")]
+//! # {
+//! use a2a_rs::{HttpClient, Message};
+//! use a2a_rs::port::AsyncA2AClient;
 //!
-//! #[cfg(feature = "http-client")]
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Create a client
@@ -37,67 +34,22 @@
 //!     println!("Task: {:?}", task);
 //!     Ok(())
 //! }
+//! # }
 //! ```
 //!
 //! ## Creating a server
 //!
 //! ```rust,no_run
-//! #[cfg(feature = "http-server")]
-//! use a2a_rs::{
-//!     adapter::server::HttpServer,
-//!     domain::{A2AError, AgentCard, Message, Task, TaskIdParams, TaskPushNotificationConfig},
-//!     port::server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler},
-//! };
+//! # #[cfg(feature = "http-server")]
+//! # {
+//! use a2a_rs::{HttpServer, SimpleAgentInfo, DefaultRequestProcessor};
 //!
-//! #[cfg(feature = "http-server")]
-//! struct MyTaskHandler;
-//!
-//! #[cfg(feature = "http-server")]
-//! #[async_trait::async_trait]
-//! impl AsyncTaskHandler for MyTaskHandler {
-//!     async fn handle_message<'a>(
-//!         &self,
-//!         task_id: &'a str,
-//!         message: &'a Message,
-//!         session_id: Option<&'a str>,
-//!     ) -> Result<Task, A2AError> {
-//!         // Implement message handling
-//!         Ok(Task::new(task_id.to_string()))
-//!     }
-//!
-//!     // Implement other required methods
-//!     // ...
-//! }
-//!
-//! #[cfg(feature = "http-server")]
-//! struct MyAgentInfo;
-//!
-//! #[cfg(feature = "http-server")]
-//! #[async_trait::async_trait]
-//! impl AgentInfoProvider for MyAgentInfo {
-//!     async fn get_agent_card(&self) -> Result<AgentCard, A2AError> {
-//!         // Return agent card
-//!         // ...
-//!     }
-//! }
-//!
-//! #[cfg(feature = "http-server")]
-//! struct MyRequestProcessor;
-//!
-//! #[cfg(feature = "http-server")]
-//! #[async_trait::async_trait]
-//! impl AsyncA2ARequestProcessor for MyRequestProcessor {
-//!     // Implement request processing
-//!     // ...
-//! }
-//!
-//! #[cfg(feature = "http-server")]
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Create a server
+//!     // Create a server with default implementations
 //!     let server = HttpServer::new(
-//!         MyRequestProcessor,
-//!         MyAgentInfo,
+//!         DefaultRequestProcessor::new(),
+//!         SimpleAgentInfo::new("my-agent".to_string(), "1.0.0".to_string()),
 //!         "127.0.0.1:8080".to_string(),
 //!     );
 //!
@@ -105,6 +57,7 @@
 //!     server.start().await?;
 //!     Ok(())
 //! }
+//! # }
 //! ```
 
 // Re-export key modules and types

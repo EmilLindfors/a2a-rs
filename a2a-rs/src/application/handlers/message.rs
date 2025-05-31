@@ -119,7 +119,7 @@ pub enum SendMessageStreamingResponse {
         jsonrpc: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<Value>,
-        result: Task,
+        result: Box<Task>,
     },
     Update {
         jsonrpc: String,
@@ -142,7 +142,7 @@ pub enum SendTaskStreamingResponse {
         jsonrpc: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         id: Option<Value>,
-        result: Task,
+        result: Box<Task>,
     },
     Update {
         jsonrpc: String,

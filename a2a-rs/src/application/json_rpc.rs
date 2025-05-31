@@ -12,7 +12,7 @@ pub use crate::application::handlers::{
     SetTaskPushNotificationRequest, SetTaskPushNotificationResponse, TaskResubscriptionRequest,
 };
 
-/// Any A2A protocol request
+/// Union type representing any A2A protocol request.\n///\n/// This enum provides a unified interface for all possible A2A protocol requests,\n/// automatically handling method-based routing during deserialization. The enum\n/// covers all standard A2A operations including message sending, task management,\n/// and notification configuration.\n///\n/// # Supported Request Types\n/// - `SendMessage`: Send a message to an agent\n/// - `SendMessageStreaming`: Send a message with streaming response\n/// - `SendTask`: Legacy task sending (replaced by SendMessage)\n/// - `SendTaskStreaming`: Legacy streaming task (replaced by SendMessageStreaming)\n/// - `GetTask`: Retrieve task status and information\n/// - `CancelTask`: Cancel a running task\n/// - `SetTaskPushNotification`: Configure push notifications for a task\n/// - `GetTaskPushNotification`: Retrieve push notification configuration\n/// - `TaskResubscription`: Re-subscribe to task updates\n/// - `Generic`: Fallback for custom or unknown requests
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum A2ARequest {
@@ -144,7 +144,35 @@ impl A2ARequest {
     }
 }
 
-/// Parse a JSON string as an A2A request
+/// Parse a JSON string as an A2A protocol request.
+///
+/// This function deserializes a JSON string into the appropriate A2ARequest variant
+/// based on the JSON-RPC method field. It automatically handles method-based routing
+/// and validates the request structure according to the A2A specification.
+///
+/// # Arguments
+/// * `json` - JSON string containing the request
+///
+/// # Returns
+/// * `Ok(A2ARequest)` - Successfully parsed request
+/// * `Err(A2AError::JsonParse)` - JSON parsing or validation failed
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::application::parse_request;
+/// 
+/// let json = r#"{
+///     "jsonrpc": "2.0",
+///     "id": "req-123",
+///     "method": "agent/sendMessage",
+///     "params": { "taskId": "task-456", "message": {...} }
+/// }"#;
+/// 
+/// match parse_request(json) {
+///     Ok(request) => println!("Parsed request: {:?}", request),
+///     Err(err) => eprintln!("Parse error: {}", err),
+/// }
+/// ```
 pub fn parse_request(json: &str) -> Result<A2ARequest, A2AError> {
     match serde_json::from_str::<A2ARequest>(json) {
         Ok(request) => Ok(request),
@@ -152,7 +180,30 @@ pub fn parse_request(json: &str) -> Result<A2ARequest, A2AError> {
     }
 }
 
-/// Serialize an A2A request to a JSON string
+/// Serialize an A2A request to a JSON string.
+///
+/// This function converts an A2ARequest into its JSON representation
+/// according to the JSON-RPC 2.0 specification and A2A protocol requirements.
+///
+/// # Arguments
+/// * `request` - The A2A request to serialize
+///
+/// # Returns
+/// * `Ok(String)` - JSON representation of the request
+/// * `Err(A2AError::JsonParse)` - Serialization failed
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::application::{serialize_request, A2ARequest};
+/// 
+/// // Assuming you have an A2ARequest instance
+/// // let request = A2ARequest::SendMessage(...);
+/// 
+/// // match serialize_request(&request) {
+/// //     Ok(json) => println!("Request JSON: {}", json),
+/// //     Err(err) => eprintln!("Serialization error: {}", err),
+/// // }
+/// ```
 pub fn serialize_request(request: &A2ARequest) -> Result<String, A2AError> {
     match serde_json::to_string(request) {
         Ok(json) => Ok(json),

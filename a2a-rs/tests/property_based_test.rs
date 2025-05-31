@@ -10,7 +10,7 @@ use a2a_rs::{
     MessageSendParams,
 };
 use proptest::prelude::*;
-use serde_json;
+use serde_json::{self};
 use base64::Engine;
 
 // Custom generators for A2A protocol types
@@ -270,7 +270,7 @@ proptest! {
     fn jsonrpc_id_preservation(
         id_value in prop_oneof![
             any::<u64>().prop_map(|n| serde_json::Value::Number(n.into())),
-            ".*".prop_map(|s| serde_json::Value::String(s)),
+            ".*".prop_map(serde_json::Value::String),
         ],
         message in arb_message()
     ) {
@@ -352,18 +352,16 @@ proptest! {
         
         if limit == 0 {
             prop_assert!(limited_task.history.is_none());
-        } else {
-            if let Some(history) = limited_task.history {
-                prop_assert!(history.len() <= limit);
-                prop_assert!(history.len() <= messages.len());
-                
-                // Should have the most recent messages
-                if !messages.is_empty() && !history.is_empty() {
-                    let expected_start = messages.len().saturating_sub(limit);
-                    for (i, hist_msg) in history.iter().enumerate() {
-                        if expected_start + i < messages.len() {
-                            prop_assert_eq!(&hist_msg.message_id, &messages[expected_start + i].message_id);
-                        }
+        } else if let Some(history) = limited_task.history {
+            prop_assert!(history.len() <= limit);
+            prop_assert!(history.len() <= messages.len());
+            
+            // Should have the most recent messages
+            if !messages.is_empty() && !history.is_empty() {
+                let expected_start = messages.len().saturating_sub(limit);
+                for (i, hist_msg) in history.iter().enumerate() {
+                    if expected_start + i < messages.len() {
+                        prop_assert_eq!(&hist_msg.message_id, &messages[expected_start + i].message_id);
                     }
                 }
             }

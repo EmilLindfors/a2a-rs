@@ -11,7 +11,7 @@ use a2a_rs::{
     application::SendMessageRequest,
 };
 use base64::Engine;
-use serde_json;
+use serde_json::{self};
 
 /// Benchmark message serialization performance
 fn bench_message_serialization(c: &mut Criterion) {

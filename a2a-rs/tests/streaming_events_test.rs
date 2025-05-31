@@ -181,7 +181,7 @@ async fn test_streaming_event_ordering() {
                             break;
                         }
                     },
-                    Ok(StreamItem::ArtifactUpdate(update)) => {
+                    Ok(StreamItem::ArtifactUpdate(_update)) => {
                         event_sequence.push(("ArtifactUpdate", TaskState::Working, false)); // Placeholder state for artifacts
                     },
                     Err(_) => break,
@@ -538,7 +538,7 @@ async fn test_streaming_with_history_limits() {
             for task in &task_events {
                 if let Some(history) = &task.history {
                     match history_length {
-                        Some(0) => assert!(history.is_empty() || history.len() == 0),
+                        Some(0) => assert!(history.is_empty()),
                         Some(limit) => assert!(history.len() <= limit as usize),
                         None => {} // No constraint
                     }

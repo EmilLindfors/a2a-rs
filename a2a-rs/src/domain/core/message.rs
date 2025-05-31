@@ -7,7 +7,10 @@ use tracing::instrument;
 
 use crate::domain::error::A2AError;
 
-/// Roles in agent communication
+/// Roles in agent communication (user or agent).
+///
+/// Distinguishes between messages sent by users (human or system)
+/// and messages sent by agents in the conversation flow.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -15,7 +18,32 @@ pub enum Role {
     Agent,
 }
 
-/// File content representation
+/// File content representation supporting both embedded data and URIs.
+///
+/// Files can be represented either as base64-encoded embedded data
+/// or as URIs pointing to external resources. The implementation
+/// validates that exactly one of `bytes` or `uri` is provided.
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::FileContent;
+/// 
+/// // Embedded file content
+/// let embedded = FileContent {
+///     name: Some("example.txt".to_string()),
+///     mime_type: Some("text/plain".to_string()),
+///     bytes: Some("SGVsbG8gV29ybGQ=".to_string()), // "Hello World" in base64
+///     uri: None,
+/// };
+/// 
+/// // URI-based file content  
+/// let uri_based = FileContent {
+///     name: Some("document.pdf".to_string()),
+///     mime_type: Some("application/pdf".to_string()),
+///     bytes: None,
+///     uri: Some("https://example.com/document.pdf".to_string()),
+/// };
+/// ```
 #[derive(Debug, Clone, Serialize)]
 pub struct FileContent {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -101,7 +129,7 @@ impl FileContent {
     }
 }
 
-/// Parts that can make up a message
+/// Parts that can make up a message (text, file, or structured data).\n///\n/// Messages in the A2A protocol consist of one or more parts, each of which\n/// can contain different types of content:\n/// - `Text`: Plain text content with optional metadata\n/// - `File`: File content (embedded or URI-based) with optional metadata  \n/// - `Data`: Structured JSON data with optional metadata\n///\n/// Each part type supports optional metadata for additional context.\n///\n/// # Example\n/// ```rust\n/// use a2a_rs::{Part, FileContent};\n/// use serde_json::{Map, Value};\n/// \n/// // Text part\n/// let text_part = Part::Text {\n///     text: \"Hello, world!\".to_string(),\n///     metadata: None,\n/// };\n/// \n/// // File part with metadata\n/// let mut metadata = Map::new();\n/// metadata.insert(\"source\".to_string(), Value::String(\"user_upload\".to_string()));\n/// \n/// let file_part = Part::File {\n///     file: FileContent {\n///         name: Some(\"example.txt\".to_string()),\n///         mime_type: Some(\"text/plain\".to_string()),\n///         bytes: Some(\"SGVsbG8=\".to_string()),\n///         uri: None,\n///     },\n///     metadata: Some(metadata),\n/// };\n/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind")]
 pub enum Part {
@@ -136,7 +164,25 @@ impl Part {
     }
 }
 
-/// A message in the A2A protocol
+/// A message in the A2A protocol containing parts and metadata.
+///
+/// Messages are the primary unit of communication in the A2A protocol.
+/// Each message has a role (user or agent), one or more content parts,
+/// and various IDs for tracking and organization.
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::{Message, Role, Part};
+/// 
+/// let message = Message::builder()
+///     .role(Role::User)
+///     .parts(vec![Part::Text {
+///         text: "Hello, agent!".to_string(),
+///         metadata: None,
+///     }])
+///     .message_id("msg-123".to_string())
+///     .build();
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct Message {
     pub role: Role,
@@ -156,7 +202,27 @@ pub struct Message {
     pub kind: String, // Always "message"
 }
 
-/// An artifact produced by an agent
+/// An artifact produced by an agent during task processing.
+///
+/// Artifacts represent outputs, intermediate results, or side effects
+/// produced by agents while processing tasks. They can contain various
+/// types of content and include metadata for organization and discovery.
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::{Artifact, Part};
+/// 
+/// let artifact = Artifact {
+///     artifact_id: "artifact-123".to_string(),
+///     name: Some("Generated Report".to_string()),
+///     description: Some("Analysis report generated from data".to_string()),
+///     parts: vec![Part::Text {
+///         text: "Report content here...".to_string(),
+///         metadata: None,
+///     }],
+///     metadata: None,
+/// };
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Artifact {
     #[serde(rename = "artifactId")]

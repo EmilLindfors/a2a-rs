@@ -356,6 +356,7 @@ mod http_auth {
         }
         
         /// Create with custom extractors
+        #[allow(dead_code)]
         pub fn with_extractors(
             authenticator: impl Authenticator + 'static,
             extractors: Vec<Arc<dyn AuthContextExtractor>>,

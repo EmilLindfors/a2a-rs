@@ -14,7 +14,18 @@ use super::{
 #[cfg(feature = "tracing")]
 use crate::measure_duration;
 
-/// States a task can be in
+/// States a task can be in during its lifecycle.
+///
+/// Tasks progress through various states from submission to completion:
+/// - `Submitted`: Task has been received and is queued for processing
+/// - `Working`: Task is currently being processed
+/// - `InputRequired`: Task needs additional input from the user
+/// - `Completed`: Task has finished successfully
+/// - `Canceled`: Task was canceled before completion
+/// - `Failed`: Task encountered an error and could not complete
+/// - `Rejected`: Task was rejected (invalid, unauthorized, etc.)
+/// - `AuthRequired`: Task requires authentication to proceed
+/// - `Unknown`: Task state could not be determined
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub enum TaskState {
@@ -29,7 +40,23 @@ pub enum TaskState {
     Unknown,
 }
 
-/// Status of a task including state, message, and timestamp
+/// Status of a task including state, optional message, and timestamp.
+///
+/// Represents a point-in-time status of a task, including its current state,
+/// an optional status message providing additional context, and the timestamp
+/// when this status was recorded.
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::{TaskStatus, TaskState};
+/// use chrono::Utc;
+/// 
+/// let status = TaskStatus {
+///     state: TaskState::Working,
+///     message: None,
+///     timestamp: Some(Utc::now()),
+/// };
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskStatus {
     pub state: TaskState,
@@ -49,7 +76,29 @@ impl Default for TaskStatus {
     }
 }
 
-/// A task in the A2A protocol
+/// A task in the A2A protocol with status, history, and artifacts.
+///
+/// Tasks represent units of work that agents process. Each task has:
+/// - A unique ID and context ID for tracking
+/// - Current status including state and optional message
+/// - Optional artifacts produced during processing
+/// - Optional message history for the conversation
+/// - Optional metadata for additional context
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::{Task, TaskStatus, TaskState};
+/// 
+/// let task = Task::builder()
+///     .id("task-123".to_string())
+///     .context_id("ctx-456".to_string())
+///     .status(TaskStatus {
+///         state: TaskState::Working,
+///         message: None,
+///         timestamp: None,
+///     })
+///     .build();
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize, Builder)]
 pub struct Task {
     pub id: String,
@@ -67,7 +116,10 @@ pub struct Task {
     pub kind: String, // Always "task"
 }
 
-/// Parameters for identifying a task
+/// Parameters for identifying a task by ID.
+///
+/// Simple structure containing a task ID and optional metadata
+/// for task identification in API requests.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskIdParams {
     pub id: String,
@@ -75,7 +127,10 @@ pub struct TaskIdParams {
     pub metadata: Option<Map<String, Value>>,
 }
 
-/// Parameters for querying a task
+/// Parameters for querying a task with optional history constraints.
+///
+/// Allows querying a task by ID with optional limits on the amount
+/// of history to return and additional metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskQueryParams {
     pub id: String,
@@ -85,7 +140,13 @@ pub struct TaskQueryParams {
     pub metadata: Option<Map<String, Value>>,
 }
 
-/// Configuration for sending a message
+/// Configuration options for sending messages including output modes and notifications.
+///
+/// Specifies how a message should be processed and delivered:
+/// - `accepted_output_modes`: Output formats the client can handle
+/// - `history_length`: Limit on conversation history to include
+/// - `push_notification_config`: Settings for push notifications
+/// - `blocking`: Whether the request should wait for completion
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageSendConfiguration {
     #[serde(rename = "acceptedOutputModes")]
@@ -101,7 +162,10 @@ pub struct MessageSendConfiguration {
     pub blocking: Option<bool>,
 }
 
-/// Parameters for sending a message
+/// Parameters for sending a message with optional configuration.
+///
+/// Contains the message to send along with optional configuration
+/// that controls how the message is processed and delivered.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageSendParams {
     pub message: Message,
