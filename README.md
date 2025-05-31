@@ -1,339 +1,260 @@
-# A2A Protocol for Rust
+# A2A-RS - Agent-to-Agent Protocol Implementation for Rust
 
-A Rust implementation of the Agent-to-Agent (A2A) Protocol that follows idiomatic Rust practices and hexagonal architecture principles.
+[![Crates.io](https://img.shields.io/crates/v/a2a-rs.svg)](https://crates.io/crates/a2a-rs)
+[![Documentation](https://docs.rs/a2a-rs/badge.svg)](https://docs.rs/a2a-rs)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-## Features
+A comprehensive Rust implementation of the Agent-to-Agent (A2A) Protocol, providing both a robust framework library and practical agent examples. This project demonstrates production-ready agent communication with modern Rust practices and hexagonal architecture.
 
-- Complete implementation of the A2A protocol as specified in the specification
-- Support for both client and server roles
-- Multiple transport options:
-  - HTTP client and server
-  - WebSocket client and server with streaming support
-- Comprehensive Agent Skills management
-- Task history tracking and management
-- Push notifications for task updates
-- Async interfaces with Tokio
-- Feature flags for optional dependencies
-- Built-in test suite and examples
-- Pure Rust TLS implementation with rustls
+## 🎯 Quick Start - Try the Reimbursement Agent
 
-## Architecture
+See the A2A protocol in action with our **reimbursement agent** - a complete example that handles expense reimbursement requests:
 
-The project follows a hexagonal architecture with:
+```bash
+# Clone the repository
+git clone https://github.com/emillindfors/a2a-rs.git
+cd a2a-rs
 
-- **Domain**: Core business logic and models
-- **Ports**: Interfaces for the outside world to interact with the domain
-- **Adapters**: Implementations of the ports for specific technologies
-- **Application**: Services that coordinate the domain logic
+# Run the reimbursement agent
+cd a2a-agents
+cargo run --bin reimbursement_server
+```
 
-## Installation
+The reimbursement agent showcases:
+- 💬 **Interactive conversations** with users about expenses
+- 📋 **Dynamic form generation** for expense submissions  
+- ✅ **Request validation** and approval workflows
+- 📊 **Structured responses** with proper task state management
+- 🔄 **Real-time updates** via the A2A protocol
 
-Add the following to your `Cargo.toml`:
+**Try it out**: Send a POST request to `http://localhost:3030/sendMessage` with a reimbursement question!
+
+## 🏗️ Project Structure
+
+This repository contains a complete A2A ecosystem:
+
+### 📦 [a2a-rs](./a2a-rs/) - Core Framework Library
+The main library published on [crates.io](https://crates.io/crates/a2a-rs):
+- 🚀 **Complete A2A Protocol Implementation** 
+- 🔄 **HTTP & WebSocket Support** with streaming
+- 🏛️ **Hexagonal Architecture** with clean separation
+- 🧩 **Modular Features** - use only what you need
+- 📚 **Comprehensive Documentation** with examples
+
+### 🤖 [a2a-agents](./a2a-agents/) - Production Agent Examples
+Real-world agent implementations demonstrating best practices:
+- 💰 **Reimbursement Agent** - Handles expense requests with interactive workflows
+- 🔧 **Modern Architecture** using the a2a-rs framework
+- 📖 **Full Documentation** with setup guides
+
+### 🔌 [a2a-mcp](./a2a-mcp/) - MCP Integration
+Bridges A2A agents with the Model Context Protocol ecosystem:
+- 🌉 **Bidirectional Integration** - A2A agents as MCP tools and vice versa
+- 🔗 **Protocol Translation** between A2A and MCP formats
+- 🛠️ **Developer Tools** for cross-protocol communication
+
+### 💻 [a2a-client](./a2a-client/) - Web Interface
+Browser-based client for interacting with A2A agents:
+- 🌐 **Web UI** for agent communication
+- 💬 **Chat Interface** with real-time updates
+- 📱 **Responsive Design** for all devices
+
+## ✨ Key Features
+
+### 🎯 Framework Library (a2a-rs)
+- **Type-Safe Protocol** - Rust's type system ensures protocol compliance
+- **Async-First Design** - Built on Tokio with full async/await support  
+- **Multiple Transports** - HTTP, WebSocket with automatic fallback
+- **Streaming Support** - Real-time task updates and progress tracking
+- **Authentication** - JWT, OAuth2, OpenID Connect, API keys
+- **Storage Backends** - SQLx integration for PostgreSQL, MySQL, SQLite
+- **Observability** - Structured logging and tracing throughout
+
+### 🤖 Agent Examples
+- **Production Ready** - Complete implementations following best practices
+- **Interactive Workflows** - Dynamic form generation and multi-step processes
+- **Business Logic Examples** - Real use cases like expense reimbursement
+- **Framework Integration** - Shows how to use a2a-rs effectively
+
+### 🔧 Developer Experience
+- **Comprehensive Documentation** - API docs, guides, and examples
+- **Working Examples** - Copy-paste code that actually works
+- **Test Coverage** - Integration tests and property-based testing
+- **Error Handling** - Structured errors with helpful messages
+
+## 🚀 Quick Integration
+
+Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-a2a-protocol = { version = "0.1.0", features = ["http-client"] }
+a2a-rs = "0.1.0"
+
+# For HTTP client
+a2a-rs = { version = "0.1.0", features = ["http-client"] }
+
+# For HTTP server  
+a2a-rs = { version = "0.1.0", features = ["http-server"] }
+
+# Everything
+a2a-rs = { version = "0.1.0", features = ["full"] }
 ```
 
-## Feature Flags
-
-- `client`: Base client functionality
-- `http-client`: HTTP client implementation
-- `ws-client`: WebSocket client implementation with streaming support
-- `server`: Base server functionality
-- `http-server`: HTTP server implementation
-- `ws-server`: WebSocket server implementation with streaming support
-- `full`: All available features
-
-## TLS Configuration
-
-This library uses `rustls` as its TLS backend rather than the more common `native-tls` or `openssl` crates. This eliminates the dependency on OpenSSL development libraries and simplifies cross-platform builds.
-
-### Benefits of rustls:
-
-1. **Pure Rust Implementation**: No need for system OpenSSL libraries
-2. **Security Focus**: Modern TLS implementation with security as a primary goal
-3. **Performance**: Often faster than OpenSSL-based solutions
-4. **Cross-Platform**: Easier to build on different platforms without system dependencies
-
-### Usage Notes:
-
-- All HTTP and WebSocket clients use `rustls` by default
-- No additional configuration is needed to use TLS connections
-- Standard certificate verification is automatically handled
-
-For custom certificate roots or client certificates, you can configure the reqwest or tungstenite clients directly and pass them to the library.
-
-## Examples and Testing
-
-The project includes several examples to help you get started:
-
-- `http_server.rs` - A simple HTTP server implementation
-- `http_client.rs` - A client that connects to the HTTP server
-- `websocket_server.rs` - A WebSocket server with streaming support
-- `websocket_client.rs` - A client that connects to the WebSocket server for streaming updates
-
-To run the examples:
-
-```bash
-# Start the HTTP server
-cargo run --example http_server --features http-server
-
-# In a different terminal, run the client
-cargo run --example http_client --features http-client
-
-# For WebSocket examples
-cargo run --example websocket_server --features ws-server
-cargo run --example websocket_client --features ws-client
-```
-
-The project also includes integration tests that verify compliance with the A2A specification:
-
-```bash
-# Run all tests
-cargo test --all-features
-
-# Run specific tests
-cargo test --test integration_test
-cargo test --test websocket_test
-cargo test --test push_notification_test
-```
-
-## Usage Examples
-
-### Client Example
+### Simple Client Example
 
 ```rust
-use a2a_protocol::{
-    adapter::client::HttpClient,
-    domain::{Message, Part},
-    port::client::AsyncA2AClient,
-};
+use a2a_rs::{HttpClient, Message};
+use a2a_rs::port::AsyncA2AClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a client
-    let client = HttpClient::new("https://example.com/api".to_string());
-
-    // Create a message
-    let message = Message::user_text("Hello, world!".to_string());
-
-    // Send a task message
+    let client = HttpClient::new("http://localhost:3030".to_string());
+    
+    let message = Message::user_text("I need to submit a $50 lunch expense".to_string());
     let task = client.send_task_message("task-123", &message, None, None).await?;
-
-    println!("Task: {:?}", task);
+    
+    println!("Response: {:?}", task);
     Ok(())
 }
 ```
 
-### Streaming Client Example
+### Simple Server Example
 
 ```rust
-use a2a_protocol::{
-    adapter::client::WebSocketClient,
-    domain::{Message, Part},
-    port::client::{AsyncA2AClient, StreamItem},
-};
+use a2a_rs::{HttpServer, SimpleAgentInfo, DefaultRequestProcessor};
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let server = HttpServer::new(
+        DefaultRequestProcessor::new(),
+        SimpleAgentInfo::new("my-agent".to_string(), "1.0.0".to_string()),
+        "127.0.0.1:3030".to_string(),
+    );
+    
+    server.start().await?;
+    Ok(())
+}
+```
+
+## 🎪 Advanced Examples
+
+### Streaming Client with WebSocket
+
+```rust
+use a2a_rs::{WebSocketClient, Message};
+use a2a_rs::services::StreamItem;
 use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create a WebSocket client
-    let client = WebSocketClient::new("wss://example.com/ws".to_string());
-
-    // Create a message
-    let message = Message::user_text("Hello, world!".to_string());
-
-    // Subscribe to task updates
-    let mut stream = client.subscribe_to_task("task-123", &message, None, None).await?;
-
-    // Process streaming updates
+    let client = WebSocketClient::new("ws://localhost:3030/ws".to_string());
+    
+    let message = Message::user_text("Process my reimbursement request".to_string());
+    let mut stream = client.subscribe_to_task("task-456", &message, None, None).await?;
+    
     while let Some(result) = stream.next().await {
-        match result {
-            Ok(StreamItem::StatusUpdate(update)) => {
-                println!("Status update: {:?}", update);
-                if update.final_ {
-                    break;
-                }
+        match result? {
+            StreamItem::Task(task) => println!("Initial task: {:?}", task),
+            StreamItem::StatusUpdate(update) => {
+                println!("Status: {:?}", update);
+                if update.final_ { break; }
             }
-            Ok(StreamItem::ArtifactUpdate(update)) => {
-                println!("Artifact update: {:?}", update);
-            }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                break;
+            StreamItem::ArtifactUpdate(artifact) => {
+                println!("New artifact: {:?}", artifact);
             }
         }
     }
-
-    Ok(())
-}
-```
-
-### Server Example
-
-```rust
-use a2a_protocol::{
-    adapter::server::HttpServer,
-    application::json_rpc::{A2ARequest, JSONRPCResponse},
-    domain::{A2AError, AgentCard, AgentCapabilities, Message, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams},
-    port::server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler},
-};
-use async_trait::async_trait;
-use std::sync::{Arc, Mutex};
-use std::collections::HashMap;
-
-// In-memory task storage
-struct TaskStorage {
-    tasks: Mutex<HashMap<String, Task>>,
-}
-
-impl TaskStorage {
-    fn new() -> Self {
-        Self {
-            tasks: Mutex::new(HashMap::new()),
-        }
-    }
-}
-
-// Task handler implementation
-struct MyTaskHandler {
-    storage: Arc<TaskStorage>,
-}
-
-#[async_trait]
-impl AsyncTaskHandler for MyTaskHandler {
-    async fn handle_message<'a>(
-        &self,
-        task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
-    ) -> Result<Task, A2AError> {
-        let mut task = Task::new(task_id.to_string());
-        
-        // Add the message to the task and update status
-        task.update_status(TaskState::Working, Some(message.clone()));
-        
-        // Store the task
-        let mut tasks = self.storage.tasks.lock().unwrap();
-        tasks.insert(task_id.to_string(), task.clone());
-        
-        Ok(task)
-    }
-    
-    // Implement other required methods
-    // ...
-}
-
-// Agent info provider implementation
-struct MyAgentInfo;
-
-#[async_trait]
-impl AgentInfoProvider for MyAgentInfo {
-    async fn get_agent_card(&self) -> Result<AgentCard, A2AError> {
-        Ok(AgentCard {
-            name: "My Agent".to_string(),
-            description: Some("A sample A2A agent".to_string()),
-            url: "https://example.com/agent".to_string(),
-            provider: None,
-            version: "1.0.0".to_string(),
-            documentation_url: Some("https://example.com/docs".to_string()),
-            capabilities: AgentCapabilities {
-                streaming: true,
-                push_notifications: false,
-                state_transition_history: true,
-            },
-            authentication: None,
-            default_input_modes: vec!["text".to_string()],
-            default_output_modes: vec!["text".to_string()],
-            skills: vec![],
-        })
-    }
-}
-
-// Request processor implementation
-struct MyRequestProcessor {
-    task_handler: Arc<MyTaskHandler>,
-}
-
-#[async_trait]
-impl AsyncA2ARequestProcessor for MyRequestProcessor {
-    async fn process_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
-        // Parse the request
-        let request: A2ARequest = serde_json::from_str(request)?;
-        
-        // Process the request
-        let response = self.process_request(&request).await?;
-        
-        // Serialize the response
-        let json = serde_json::to_string(&response)?;
-        Ok(json)
-    }
-    
-    async fn process_request<'a>(&self, request: &'a A2ARequest) -> Result<JSONRPCResponse, A2AError> {
-        // Process the request based on its type
-        // ...
-        
-        // Return a response
-        Ok(JSONRPCResponse::success(None, serde_json::json!({})))
-    }
-}
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Create task storage
-    let storage = Arc::new(TaskStorage::new());
-    
-    // Create task handler
-    let task_handler = Arc::new(MyTaskHandler { storage: storage.clone() });
-    
-    // Create request processor
-    let processor = MyRequestProcessor { task_handler: task_handler.clone() };
-    
-    // Create agent info provider
-    let agent_info = MyAgentInfo;
-    
-    // Create HTTP server
-    let server = HttpServer::new(processor, agent_info, "127.0.0.1:8080".to_string());
-    
-    // Start the server
-    println!("Starting server on 127.0.0.1:8080");
-    server.start().await?;
     
     Ok(())
 }
 ```
 
-## Project Status
+## 🏛️ Architecture
 
-This project is fully compliant with the A2A specification and includes:
+The project follows **hexagonal architecture** principles:
 
-- ✅ Functional HTTP and WebSocket transports
-- ✅ Full task history tracking
-- ✅ Comprehensive skills management
-- ✅ Push notification support
-- ✅ File content handling and validation
-- ✅ Integration tests covering core functionality
-- ✅ Example implementations for both client and server
+```
+┌─────────────────────────────────────────────────────────┐
+│                   Application Layer                     │
+│  ┌─────────────────┐    ┌─────────────────────────────┐ │
+│  │  JSON-RPC       │    │     HTTP/WebSocket          │ │
+│  │  Handlers       │    │     Transport               │ │
+│  └─────────────────┘    └─────────────────────────────┘ │
+└─────────────────┬───────────────────────┬───────────────┘
+                  │                       │
+┌─────────────────▼───────────────────────▼───────────────┐
+│                     Port Layer                          │
+│  ┌──────────────────┐    ┌──────────────────────────┐   │
+│  │ MessageHandler   │    │  StreamingHandler       │   │
+│  │ TaskManager      │    │  NotificationManager    │   │
+│  │ Authenticator    │    │  RequestProcessor       │   │
+│  └──────────────────┘    └──────────────────────────┘   │
+└─────────────────┬───────────────────────┬───────────────┘
+                  │                       │
+┌─────────────────▼───────────────────────▼───────────────┐
+│                    Domain Layer                         │
+│  ┌──────────────┐ ┌──────────────┐ ┌─────────────────┐  │
+│  │   Message    │ │     Task     │ │   AgentCard     │  │
+│  │   Artifact   │ │ TaskStatus   │ │ Capabilities    │  │
+│  │     Part     │ │   History    │ │    Skills       │  │
+│  └──────────────┘ └──────────────┘ └─────────────────┘  │
+└─────────────────────────────────────────────────────────┘
+```
 
-### Implementation Note
+## 📚 Documentation
 
-The codebase has been thoroughly refactored to improve compliance with the A2A specification. Recent improvements include:
+- **[Core Library Docs](https://docs.rs/a2a-rs)** - Complete API documentation
+- **[Reimbursement Agent Guide](./a2a-agents/README.md)** - Building production agents  
+- **[MCP Integration Guide](./a2a-mcp/README.md)** - Cross-protocol communication
+- **[Web Client Setup](./a2a-client/README.md)** - Browser-based interfaces
 
-1. Migrated from OpenSSL to rustls for better cross-platform support
-2. Enhanced task history functionality to properly track state transitions
-3. Improved skills handling with comprehensive builder patterns
-4. Added robust push notification support with retry mechanisms
-5. Expanded test coverage including integration tests
+## 🧪 Testing
 
-Check the `A2A_COMPLIANCE_ASSESSMENT.md` file for a detailed assessment of the implementation against the specification.
+```bash
+# Test the core library
+cd a2a-rs && cargo test --all-features
 
-## License
+# Test agent examples  
+cd a2a-agents && cargo test
 
-MIT
+# Test MCP integration
+cd a2a-mcp && cargo test
 
-## Contributing
+# Run integration tests
+cargo test --workspace
+```
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+## 🛣️ Roadmap
 
-For more detailed implementation information, see the `IMPLEMENTATION_GUIDE.md` file in the a2a-rs directory.
+- [x] **Core Protocol** - Complete A2A specification implementation
+- [x] **Documentation** - Comprehensive docs and examples  
+- [x] **Agent Examples** - Production-ready reimbursement agent
+- [x] **MCP Integration** - Cross-protocol compatibility
+- [ ] **More Agent Types** - Additional domain examples
+- [ ] **Performance Optimization** - Benchmarking and improvements
+- [ ] **Advanced Auth** - Enterprise authentication patterns
+
+## 🤝 Contributing
+
+We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) for details.
+
+### Development Setup
+
+```bash
+git clone https://github.com/emillindfors/a2a-rs.git
+cd a2a-rs
+cargo build --workspace
+cargo test --workspace
+```
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 🌟 Showcase
+
+Built with a2a-rs? We'd love to feature your project! Open an issue to let us know.
+
+---
+
+**Ready to build intelligent agents?** Start with our [reimbursement agent example](./a2a-agents/) or dive into the [core library documentation](https://docs.rs/a2a-rs)!
