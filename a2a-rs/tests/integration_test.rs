@@ -6,10 +6,9 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer,
-        InMemoryTaskStorage, SimpleAgentInfo,
+        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
-    domain::{Message, Part, TaskState},
+    domain::{Message, MessageSendConfiguration, Part, TaskState},
     services::AsyncA2AClient,
 };
 use common::TestBusinessHandler;
@@ -72,18 +71,25 @@ async fn test_http_client_server_interaction() {
 
     // Test 1: Get agent card using direct HTTP request
     let http_client = Client::new();
-    let response = http_client
-        .get("http://localhost:8182/agent-card")
-        .send()
-        .await
-        .expect("Failed to fetch agent card");
+    let card_locations = [
+        "http://localhost:8182/agent-card",
+        "http://localhost:8182/.well-known/agent-card.json",
+    ];
 
-    let agent_card: Value = response.json().await.expect("Failed to parse agent card");
-    assert_eq!(agent_card["name"].as_str().unwrap(), "Test Agent");
-    assert!(agent_card["capabilities"]["stateTransitionHistory"]
-        .as_bool()
-        .unwrap());
-    assert!(!agent_card["capabilities"]["streaming"].as_bool().unwrap());
+    for card_location in card_locations {
+        let response = http_client
+            .get(card_location)
+            .send()
+            .await
+            .expect("Failed to fetch agent card");
+
+        let agent_card: Value = response.json().await.expect("Failed to parse agent card");
+        assert_eq!(agent_card["name"].as_str().unwrap(), "Test Agent");
+        assert!(agent_card["capabilities"]["stateTransitionHistory"]
+            .as_bool()
+            .unwrap());
+        assert!(!agent_card["capabilities"]["streaming"].as_bool().unwrap());
+    }
 
     // Test 2: Get skills using direct HTTP request
     let response = http_client
@@ -143,6 +149,64 @@ async fn test_http_client_server_interaction() {
     println!("Received task after cancellation: {:?}", canceled_task);
     println!("Task state: {:?}", canceled_task.status.state);
     assert_eq!(canceled_task.status.state, TaskState::Canceled);
+
+    // Test 8: Send message using new send_message protocol
+    let send_message_id = format!("sendmsg-{}", uuid::Uuid::new_v4());
+    let send_message = Message::user_text("Test send_message method".to_string(), send_message_id);
+
+    // Test with basic send_message (no metadata, no configuration)
+    let send_task = client
+        .send_message(&send_message, None, None)
+        .await
+        .expect("Failed to send message using send_message method");
+
+    assert_eq!(send_task.status.state, TaskState::Working);
+    assert!(!send_task.id.is_empty(), "Task ID should not be empty");
+
+    // Test with configuration
+    let config = MessageSendConfiguration {
+        accepted_output_modes: vec!["text".to_string(), "json".to_string()],
+        history_length: Some(5),
+        push_notification_config: None,
+        blocking: Some(false),
+    };
+
+    let send_message_with_config_id = format!("sendmsg-config-{}", uuid::Uuid::new_v4());
+    let send_message_with_config = Message::user_text(
+        "Test with configuration".to_string(),
+        send_message_with_config_id,
+    );
+
+    let send_task_with_config = client
+        .send_message(&send_message_with_config, None, Some(&config))
+        .await
+        .expect("Failed to send message with configuration");
+
+    assert_eq!(send_task_with_config.status.state, TaskState::Working);
+
+    // Test with metadata
+    let mut metadata = serde_json::Map::new();
+    metadata.insert(
+        "test_key".to_string(),
+        serde_json::Value::String("test_value".to_string()),
+    );
+    metadata.insert(
+        "priority".to_string(),
+        serde_json::Value::Number(serde_json::Number::from(1)),
+    );
+
+    let send_message_with_metadata_id = format!("sendmsg-meta-{}", uuid::Uuid::new_v4());
+    let send_message_with_metadata = Message::user_text(
+        "Test with metadata".to_string(),
+        send_message_with_metadata_id,
+    );
+
+    let send_task_with_metadata = client
+        .send_message(&send_message_with_metadata, Some(&metadata), None)
+        .await
+        .expect("Failed to send message with metadata");
+
+    assert_eq!(send_task_with_metadata.status.state, TaskState::Working);
 
     // Shut down the server
     shutdown_tx

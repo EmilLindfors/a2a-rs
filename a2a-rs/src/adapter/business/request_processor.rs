@@ -18,6 +18,7 @@ use crate::{
     domain::A2AError,
     port::{AsyncMessageHandler, AsyncNotificationManager, AsyncTaskManager},
     services::server::AsyncA2ARequestProcessor,
+    TaskSendParams,
 };
 
 /// Default implementation of a request processor that routes requests to business handlers
@@ -237,12 +238,23 @@ where
     ) -> Result<JSONRPCResponse, A2AError> {
         match request {
             A2ARequest::SendTask(req) => self.process_send_task(req).await,
-            A2ARequest::SendMessage(_req) => {
+            A2ARequest::SendMessage(req) => {
                 // Convert MessageSendParams to TaskSendParams for backwards compatibility
-                // TODO: Implement proper message handling
-                Err(A2AError::UnsupportedOperation(
-                    "Message sending not yet implemented".to_string(),
-                ))
+                let id = uuid::Uuid::new_v4().to_string();
+                let config = req.params.configuration.as_ref();
+
+                let params = TaskSendParams {
+                    id,
+                    session_id: None,
+                    message: req.params.message.clone(),
+                    push_notification: config.and_then(|c| c.push_notification_config.clone()),
+                    history_length: config.and_then(|c| c.history_length),
+                    metadata: req.params.metadata.clone(),
+                };
+
+                let task_request = SendTaskRequest::new(params).with_id(req.id.clone());
+
+                self.process_send_task(&task_request).await
             }
             A2ARequest::GetTask(req) => self.process_get_task(req).await,
             A2ARequest::CancelTask(req) => self.process_cancel_task(req).await,
@@ -254,12 +266,23 @@ where
             }
             A2ARequest::TaskResubscription(req) => self.process_task_resubscription(req).await,
             A2ARequest::SendTaskStreaming(req) => self.process_send_task_streaming(req).await,
-            A2ARequest::SendMessageStreaming(_req) => {
+            A2ARequest::SendMessageStreaming(req) => {
                 // Convert MessageSendParams to TaskSendParams for backwards compatibility
-                // TODO: Implement proper message streaming
-                Err(A2AError::UnsupportedOperation(
-                    "Message streaming not yet implemented".to_string(),
-                ))
+                let id = uuid::Uuid::new_v4().to_string();
+                let config = req.params.configuration.as_ref();
+
+                let params = TaskSendParams {
+                    id,
+                    session_id: None,
+                    message: req.params.message.clone(),
+                    push_notification: config.and_then(|c| c.push_notification_config.clone()),
+                    history_length: config.and_then(|c| c.history_length),
+                    metadata: req.params.metadata.clone(),
+                };
+
+                let task_request = SendTaskStreamingRequest::new(params).with_id(req.id.clone());
+
+                self.process_send_task_streaming(&task_request).await
             }
             A2ARequest::Generic(req) => {
                 // Handle unknown method

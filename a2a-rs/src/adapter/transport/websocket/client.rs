@@ -7,7 +7,7 @@ use futures::{
     stream::{Stream, StreamExt},
     SinkExt,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::{pin::Pin, sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
@@ -25,11 +25,12 @@ use crate::{
     adapter::error::WebSocketClientError,
     application::{
         json_rpc::{self, A2ARequest, SendTaskRequest, TaskResubscriptionRequest},
-        JSONRPCResponse,
+        JSONRPCResponse, SendMessageRequest,
     },
     domain::{
-        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig,
-        TaskQueryParams, TaskSendParams, TaskStatusUpdateEvent,
+        A2AError, Message, MessageSendConfiguration, MessageSendParams, Task,
+        TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
+        TaskSendParams, TaskStatusUpdateEvent,
     },
     services::client::{AsyncA2AClient, StreamItem},
 };
@@ -307,6 +308,40 @@ impl AsyncA2AClient for WebSocketClient {
             Some(value) => {
                 let config: TaskPushNotificationConfig = serde_json::from_value(value)?;
                 Ok(config)
+            }
+            None => {
+                if let Some(error) = response.error {
+                    Err(A2AError::JsonRpc {
+                        code: error.code,
+                        message: error.message,
+                        data: error.data,
+                    })
+                } else {
+                    Err(A2AError::Internal("Empty response".to_string()))
+                }
+            }
+        }
+    }
+
+    async fn send_message<'a>(
+        &self,
+        message: &'a Message,
+        metadata: Option<&'a Map<String, Value>>,
+        configuration: Option<&'a MessageSendConfiguration>,
+    ) -> Result<Task, A2AError> {
+        let params = MessageSendParams {
+            message: message.clone(),
+            configuration: configuration.cloned(),
+            metadata: metadata.cloned(),
+        };
+
+        let request = SendMessageRequest::new(params);
+        let response = self.send_request(&A2ARequest::SendMessage(request)).await?;
+
+        match response.result {
+            Some(value) => {
+                let task: Task = serde_json::from_value(value)?;
+                Ok(task)
             }
             None => {
                 if let Some(error) = response.error {
