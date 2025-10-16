@@ -2,13 +2,14 @@
 
 use async_trait::async_trait;
 use futures::Stream;
+use serde_json::{Map, Value};
 use std::pin::Pin;
 
 use crate::{
     application::{json_rpc::A2ARequest, JSONRPCResponse},
     domain::{
-        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
-        TaskStatusUpdateEvent,
+        A2AError, Message, MessageSendConfiguration, Task, TaskArtifactUpdateEvent,
+        TaskPushNotificationConfig, TaskStatusUpdateEvent,
     },
 };
 
@@ -28,6 +29,14 @@ pub trait AsyncA2AClient: Send + Sync {
         message: &'a Message,
         session_id: Option<&'a str>,
         history_length: Option<u32>,
+    ) -> Result<Task, A2AError>;
+
+    /// Send a message using the new message/send protocol
+    async fn send_message<'a>(
+        &self,
+        message: &'a Message,
+        metadata: Option<&'a Map<String, Value>>,
+        configuration: Option<&'a MessageSendConfiguration>,
     ) -> Result<Task, A2AError>;
 
     /// Get a task by ID

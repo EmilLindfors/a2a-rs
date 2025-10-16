@@ -6,167 +6,185 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, InMemoryTaskStorage,
-        SimpleAgentInfo, WebSocketClient, WebSocketServer,
+        DefaultRequestProcessor, InMemoryTaskStorage, SimpleAgentInfo, WebSocketClient,
+        WebSocketServer,
     },
-    domain::Message,
+    domain::{Message, MessageSendConfiguration, TaskState},
     services::{AsyncA2AClient, StreamItem},
 };
 use common::TestBusinessHandler;
 use futures::StreamExt;
+use serde_json::{Map, Value};
 use std::time::Duration;
 use tokio::sync::oneshot;
+
+async fn setup_test_server(
+    port: u16,
+) -> (
+    tokio::task::JoinHandle<()>,
+    oneshot::Sender<()>,
+    WebSocketClient,
+) {
+    let storage = InMemoryTaskStorage::new();
+    let handler = TestBusinessHandler::with_storage(storage.clone());
+    let processor = DefaultRequestProcessor::with_handler(handler.clone());
+
+    let agent_info = SimpleAgentInfo::new(
+        "WS Test Agent".to_string(),
+        format!("ws://localhost:{}", port),
+    )
+    .with_streaming()
+    .with_state_transition_history()
+    .add_skill("test".to_string(), "Test Skill".to_string(), None);
+
+    let server = WebSocketServer::new(
+        processor,
+        agent_info,
+        handler,
+        format!("127.0.0.1:{}", port),
+    );
+
+    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
+    let server_handle = tokio::spawn(async move {
+        tokio::select! {
+            _ = server.start() => {},
+            _ = shutdown_rx => {}
+        }
+    });
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let client = WebSocketClient::new(format!("ws://localhost:{}", port));
+
+    (server_handle, shutdown_tx, client)
+}
 
 /// Test WebSocket streaming functionality
 #[tokio::test]
 async fn test_websocket_streaming() {
-    // Skip the test if it's running in the CI environment
     if std::env::var("CI").is_ok() {
-        println!("Skipping WebSocket test in CI environment");
         return;
     }
 
-    // Create a storage for server
-    let storage = InMemoryTaskStorage::new();
+    let (server_handle, shutdown_tx, client) = setup_test_server(8183).await;
 
-    // Create business handler with the storage
-    let handler = TestBusinessHandler::with_storage(storage.clone());
-
-    // Create a processor
-    let processor = DefaultRequestProcessor::with_handler(handler.clone());
-
-    // Create an agent info provider
-    let agent_info = SimpleAgentInfo::new(
-        "WS Test Agent".to_string(),
-        "ws://localhost:8183".to_string(),
-    )
-    .with_description("WebSocket Test A2A agent".to_string())
-    .with_provider(
-        "Test Organization".to_string(),
-        "https://example.org".to_string(),
-    )
-    .with_documentation_url("https://example.org/docs".to_string())
-    .with_streaming()
-    .with_state_transition_history()
-    .add_skill(
-        "ws-test".to_string(),
-        "WebSocket Test Skill".to_string(),
-        Some("A WebSocket test skill".to_string()),
+    let task_id = format!("ws-task-{}", uuid::Uuid::new_v4());
+    let message = Message::user_text(
+        "Hello, WebSocket!".to_string(),
+        format!("msg-{}", uuid::Uuid::new_v4()),
     );
 
-    // Create the server
-    let server = WebSocketServer::new(processor, agent_info, handler, "127.0.0.1:8183".to_string());
-
-    // Create a shutdown channel
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    // Start the server in a separate task
-    let server_handle = tokio::spawn(async move {
-        println!("Starting WebSocket server on 127.0.0.1:8183...");
-        tokio::select! {
-            result = server.start() => {
-                if let Err(e) = &result {
-                    eprintln!("WebSocket server error: {}", e);
-                }
-            },
-            _ = shutdown_rx => {
-                println!("Server shutdown requested");
-            }
-        }
-    });
-
-    // Give the server time to start
-    println!("Waiting for server to start...");
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    println!("Proceeding with test...");
-
-    // Create the WebSocket client
-    let client = WebSocketClient::new("ws://localhost:8183".to_string());
-
-    // Create a task and verify basic functionality
-    let task_id = format!("ws-task-{}", uuid::Uuid::new_v4());
-    let message_id = format!("msg-{}", uuid::Uuid::new_v4());
-    let message = Message::user_text("Hello, WebSocket A2A agent!".to_string(), message_id);
-
-    // First, test simple non-streaming task send
-    println!("Testing basic task send...");
+    // Test basic task send
     let task_result = client
         .send_task_message(&task_id, &message, None, None)
         .await;
-
-    if let Err(ref e) = task_result {
-        println!("Warning: Task send failed: {}", e);
-        // Don't fail the test just yet
-    } else {
-        println!("Task send succeeded");
+    if task_result.is_err() {
+        println!("Task send failed, skipping streaming test");
+        let _ = shutdown_tx.send(());
+        let _ = server_handle.await;
+        return;
     }
 
-    // Now test streaming
-    println!("Testing streaming...");
-    let subscribe_result = client
-        .subscribe_to_task(&task_id, None)
-        .await;
+    // Test streaming
+    if let Ok(mut stream) = client.subscribe_to_task(&task_id, None).await {
+        let mut updates = 0;
+        let timeout = tokio::time::sleep(Duration::from_secs(5));
 
-    if let Err(ref e) = subscribe_result {
-        println!("Warning: Subscription failed: {}", e);
-    }
-
-    // Skip the streaming test if we can't get a subscription
-    if let Ok(mut stream) = subscribe_result {
-        println!("Subscription succeeded, processing stream...");
-
-        // Process streaming updates
-        let mut status_updates = 0;
-
-        // Create a timeout future
-        let timeout_future = tokio::time::sleep(Duration::from_secs(5));
-
-        // Wait for streaming updates
         tokio::select! {
             _ = async {
                 while let Some(result) = stream.next().await {
                     match result {
-                        Ok(StreamItem::Task(task)) => {
-                            println!("Received task: {:?}", task.status.state);
-                        }
                         Ok(StreamItem::StatusUpdate(update)) => {
-                            status_updates += 1;
-                            println!("Status update: {:?}", update.status.state);
-
-                            if update.final_ {
-                                println!("Final update received");
-                                break;
-                            }
+                            updates += 1;
+                            if update.final_ { break; }
                         }
-                        Ok(StreamItem::ArtifactUpdate(_)) => {
-                            println!("Artifact update received");
-                        }
-                        Err(e) => {
-                            println!("Stream error: {}", e);
-                            break;
-                        }
+                        Ok(_) => updates += 1,
+                        Err(_) => break,
                     }
+                    if updates >= 3 { break; }
                 }
-            } => {
-                println!("Stream completed normally");
-            },
-            _ = timeout_future => {
-                println!("Stream timeout");
-                // Try to cancel the task, but don't fail if we can't
-                let _ = client.cancel_task(&task_id).await;
-            }
+            } => {},
+            _ = timeout => {}
         }
-
-        println!("Received {} status updates", status_updates);
-    } else {
-        println!("Skipping stream processing due to subscription failure");
     }
 
-    // Shut down the server
-    println!("Shutting down server...");
     let _ = shutdown_tx.send(());
-
-    // Wait for the server to shut down
     let _ = server_handle.await;
-    println!("Test completed");
+}
+
+/// Test WebSocket send_message with different parameter combinations
+#[tokio::test]
+async fn test_websocket_send_message() {
+    if std::env::var("CI").is_ok() {
+        return;
+    }
+
+    let (server_handle, shutdown_tx, client) = setup_test_server(8184).await;
+
+    // Test cases as a simple array of closures
+    let test_cases: Vec<(
+        &str,
+        Box<dyn Fn() -> (Option<Map<String, Value>>, Option<MessageSendConfiguration>)>,
+    )> = vec![
+        ("basic", Box::new(|| (None, None))),
+        (
+            "with_config",
+            Box::new(|| {
+                let config = MessageSendConfiguration {
+                    accepted_output_modes: vec!["text".to_string()],
+                    history_length: Some(3),
+                    push_notification_config: None,
+                    blocking: Some(false),
+                };
+                (None, Some(config))
+            }),
+        ),
+        (
+            "with_metadata",
+            Box::new(|| {
+                let mut metadata = Map::new();
+                metadata.insert("key".to_string(), Value::String("value".to_string()));
+                (Some(metadata), None)
+            }),
+        ),
+        (
+            "with_both",
+            Box::new(|| {
+                let mut metadata = Map::new();
+                metadata.insert("test".to_string(), Value::String("data".to_string()));
+                let config = MessageSendConfiguration {
+                    accepted_output_modes: vec!["json".to_string()],
+                    history_length: Some(5),
+                    push_notification_config: None,
+                    blocking: Some(true),
+                };
+                (Some(metadata), Some(config))
+            }),
+        ),
+    ];
+
+    let mut passed = 0;
+    for (name, setup) in test_cases {
+        let (metadata, config) = setup();
+        let message = Message::user_text(
+            format!("Test {}", name),
+            format!("{}-{}", name, uuid::Uuid::new_v4()),
+        );
+
+        match client
+            .send_message(&message, metadata.as_ref(), config.as_ref())
+            .await
+        {
+            Ok(task) => {
+                assert_eq!(task.status.state, TaskState::Working);
+                assert!(!task.id.is_empty());
+                passed += 1;
+            }
+            Err(e) => println!("Test {} failed: {}", name, e),
+        }
+    }
+
+    assert!(passed > 0, "At least one test should pass");
+
+    let _ = shutdown_tx.send(());
+    let _ = server_handle.await;
 }

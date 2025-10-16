@@ -90,6 +90,7 @@ where
         let mut app = Router::new()
             .route("/", post(handle_request))
             .route("/agent-card", get(handle_agent_card))
+            .route("/.well-known/agent-card.json", get(handle_agent_card))
             .route("/skills", get(handle_skills))
             .route("/skills/{id}", get(handle_skill_by_id))
             .with_state(ServerState {

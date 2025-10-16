@@ -43,6 +43,12 @@ impl SendTaskRequest {
             params,
         }
     }
+
+    #[must_use]
+    pub fn with_id(mut self, id: Option<Value>) -> Self {
+        self.id = id;
+        self
+    }
 }
 
 /// Response to a send message request
@@ -108,6 +114,12 @@ impl SendTaskStreamingRequest {
             method: "tasks/sendSubscribe".to_string(),
             params,
         }
+    }
+
+    #[must_use]
+    pub fn with_id(mut self, id: Option<Value>) -> Self {
+        self.id = id;
+        self
     }
 }
 
