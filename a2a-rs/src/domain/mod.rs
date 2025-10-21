@@ -10,11 +10,12 @@ pub mod validation;
 
 // Re-export key types for convenience
 pub use core::{
-    AgentCapabilities, AgentCard, AgentProvider, AgentSkill, Artifact, AuthorizationCodeOAuthFlow,
-    ClientCredentialsOAuthFlow, FileContent, ImplicitOAuthFlow, Message, MessageSendConfiguration,
-    MessageSendParams, OAuthFlows, Part, PasswordOAuthFlow, PushNotificationAuthenticationInfo,
-    PushNotificationConfig, Role, SecurityScheme, Task, TaskIdParams, TaskPushNotificationConfig,
-    TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    AgentCapabilities, AgentCard, AgentCardSignature, AgentProvider, AgentSkill, Artifact,
+    AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow, FileContent, ImplicitOAuthFlow,
+    Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part, PasswordOAuthFlow,
+    PushNotificationAuthenticationInfo, PushNotificationConfig, Role, SecurityScheme, Task,
+    TaskIdParams, TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState,
+    TaskStatus,
 };
 pub use error::A2AError;
 pub use events::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};

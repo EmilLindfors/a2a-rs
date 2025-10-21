@@ -89,6 +89,9 @@ where
 
         let mut app = Router::new()
             .route("/", post(handle_request))
+            // v0.3.0 well-known URI endpoint (RFC 8615)
+            .route("/.well-known/agent-card.json", get(handle_agent_card))
+            // Backward compatibility routes
             .route("/agent-card", get(handle_agent_card))
             .route("/skills", get(handle_skills))
             .route("/skills/{id}", get(handle_skill_by_id))

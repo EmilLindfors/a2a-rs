@@ -33,6 +33,7 @@ impl SimpleAgentInfo {
                 default_input_modes: vec!["text".to_string()],
                 default_output_modes: vec!["text".to_string()],
                 skills: Vec::new(),
+                signature: None,
                 supports_authenticated_extended_card: None,
             },
         }
@@ -132,6 +133,7 @@ impl SimpleAgentInfo {
             examples,
             input_modes,
             output_modes,
+            None, // security - v0.3.0
         );
 
         self.card.skills.push(skill);

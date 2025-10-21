@@ -5,14 +5,15 @@ use crate::domain::{A2AError, JSONRPCRequest};
 
 // Re-export handler types
 pub use crate::application::handlers::{
-    CancelTaskRequest, CancelTaskResponse, GetTaskPushNotificationRequest,
-    GetTaskPushNotificationResponse, GetTaskRequest, GetTaskResponse, SendMessageRequest,
-    SendMessageResponse, SendMessageStreamingRequest, SendMessageStreamingResponse,
-    SendTaskRequest, SendTaskResponse, SendTaskStreamingRequest, SendTaskStreamingResponse,
-    SetTaskPushNotificationRequest, SetTaskPushNotificationResponse, TaskResubscriptionRequest,
+    CancelTaskRequest, CancelTaskResponse, GetExtendedCardRequest, GetExtendedCardResponse,
+    GetTaskPushNotificationRequest, GetTaskPushNotificationResponse, GetTaskRequest,
+    GetTaskResponse, SendMessageRequest, SendMessageResponse, SendMessageStreamingRequest,
+    SendMessageStreamingResponse, SendTaskRequest, SendTaskResponse, SendTaskStreamingRequest,
+    SendTaskStreamingResponse, SetTaskPushNotificationRequest, SetTaskPushNotificationResponse,
+    TaskResubscriptionRequest,
 };
 
-/// Union type representing any A2A protocol request.\n///\n/// This enum provides a unified interface for all possible A2A protocol requests,\n/// automatically handling method-based routing during deserialization. The enum\n/// covers all standard A2A operations including message sending, task management,\n/// and notification configuration.\n///\n/// # Supported Request Types\n/// - `SendMessage`: Send a message to an agent\n/// - `SendMessageStreaming`: Send a message with streaming response\n/// - `SendTask`: Legacy task sending (replaced by SendMessage)\n/// - `SendTaskStreaming`: Legacy streaming task (replaced by SendMessageStreaming)\n/// - `GetTask`: Retrieve task status and information\n/// - `CancelTask`: Cancel a running task\n/// - `SetTaskPushNotification`: Configure push notifications for a task\n/// - `GetTaskPushNotification`: Retrieve push notification configuration\n/// - `TaskResubscription`: Re-subscribe to task updates\n/// - `Generic`: Fallback for custom or unknown requests
+/// Union type representing any A2A protocol request.\n///\n/// This enum provides a unified interface for all possible A2A protocol requests,\n/// automatically handling method-based routing during deserialization. The enum\n/// covers all standard A2A operations including message sending, task management,\n/// and notification configuration.\n///\n/// # Supported Request Types\n/// - `SendMessage`: Send a message to an agent\n/// - `SendMessageStreaming`: Send a message with streaming response\n/// - `SendTask`: Legacy task sending (replaced by SendMessage)\n/// - `SendTaskStreaming`: Legacy streaming task (replaced by SendMessageStreaming)\n/// - `GetTask`: Retrieve task status and information\n/// - `CancelTask`: Cancel a running task\n/// - `SetTaskPushNotification`: Configure push notifications for a task\n/// - `GetTaskPushNotification`: Retrieve push notification configuration\n/// - `TaskResubscription`: Re-subscribe to task updates\n/// - `GetExtendedCard`: Get extended agent card (v0.3.0)\n/// - `Generic`: Fallback for custom or unknown requests
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum A2ARequest {
@@ -25,6 +26,7 @@ pub enum A2ARequest {
     SetTaskPushNotification(SetTaskPushNotificationRequest),
     GetTaskPushNotification(GetTaskPushNotificationRequest),
     TaskResubscription(TaskResubscriptionRequest),
+    GetExtendedCard(GetExtendedCardRequest),
     Generic(JSONRPCRequest),
 }
 
@@ -100,6 +102,13 @@ impl<'de> Deserialize<'de> for A2ARequest {
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::SendTaskStreaming(req)
             }
+            "agent/getExtendedCard" => {
+                // Re-parse as GetExtendedCardRequest (v0.3.0)
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = GetExtendedCardRequest::deserialize(value)
+                    .map_err(serde::de::Error::custom)?;
+                A2ARequest::GetExtendedCard(req)
+            }
             _ => {
                 // For other methods, use Generic variant
                 A2ARequest::Generic(json_req)
@@ -123,6 +132,7 @@ impl A2ARequest {
             A2ARequest::SetTaskPushNotification(req) => &req.method,
             A2ARequest::GetTaskPushNotification(req) => &req.method,
             A2ARequest::TaskResubscription(req) => &req.method,
+            A2ARequest::GetExtendedCard(req) => &req.method,
             A2ARequest::Generic(req) => &req.method,
         }
     }
@@ -139,6 +149,7 @@ impl A2ARequest {
             A2ARequest::SetTaskPushNotification(req) => req.id.as_ref(),
             A2ARequest::GetTaskPushNotification(req) => req.id.as_ref(),
             A2ARequest::TaskResubscription(req) => req.id.as_ref(),
+            A2ARequest::GetExtendedCard(req) => req.id.as_ref(),
             A2ARequest::Generic(req) => req.id.as_ref(),
         }
     }

@@ -72,12 +72,12 @@ pub mod observability;
 
 // Public API exports
 pub use domain::{
-    A2AError, AgentCapabilities, AgentCard, AgentProvider, AgentSkill, Artifact,
-    AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow, FileContent, ImplicitOAuthFlow,
-    Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part, PasswordOAuthFlow,
-    PushNotificationAuthenticationInfo, PushNotificationConfig, Role, SecurityScheme, Task,
-    TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-    TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
+    A2AError, AgentCapabilities, AgentCard, AgentCardSignature, AgentProvider, AgentSkill,
+    Artifact, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow, FileContent,
+    ImplicitOAuthFlow, Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part,
+    PasswordOAuthFlow, PushNotificationAuthenticationInfo, PushNotificationConfig, Role,
+    SecurityScheme, Task, TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig,
+    TaskQueryParams, TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 
 // Port traits for better separation of concerns

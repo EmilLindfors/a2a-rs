@@ -9,24 +9,25 @@ use async_trait::async_trait;
 use crate::{
     application::{
         json_rpc::{
-            self, A2ARequest, CancelTaskRequest, GetTaskPushNotificationRequest, GetTaskRequest,
-            SendTaskRequest, SendTaskStreamingRequest, SetTaskPushNotificationRequest,
-            TaskResubscriptionRequest,
+            self, A2ARequest, CancelTaskRequest, GetExtendedCardRequest,
+            GetTaskPushNotificationRequest, GetTaskRequest, SendTaskRequest,
+            SendTaskStreamingRequest, SetTaskPushNotificationRequest, TaskResubscriptionRequest,
         },
         JSONRPCError, JSONRPCResponse,
     },
     domain::A2AError,
     port::{AsyncMessageHandler, AsyncNotificationManager, AsyncTaskManager},
-    services::server::AsyncA2ARequestProcessor,
+    services::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
 };
 
 /// Default implementation of a request processor that routes requests to business handlers
 #[derive(Clone)]
-pub struct DefaultRequestProcessor<M, T, N>
+pub struct DefaultRequestProcessor<M, T, N, A = crate::adapter::SimpleAgentInfo>
 where
     M: AsyncMessageHandler + Send + Sync + 'static,
     T: AsyncTaskManager + Send + Sync + 'static,
     N: AsyncNotificationManager + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
 {
     /// Message handler
     message_handler: Arc<M>,
@@ -34,44 +35,51 @@ where
     task_manager: Arc<T>,
     /// Notification manager
     notification_manager: Arc<N>,
+    /// Agent info provider
+    agent_info: Arc<A>,
 }
 
-impl<M, T, N> DefaultRequestProcessor<M, T, N>
+impl<M, T, N, A> DefaultRequestProcessor<M, T, N, A>
 where
     M: AsyncMessageHandler + Send + Sync + 'static,
     T: AsyncTaskManager + Send + Sync + 'static,
     N: AsyncNotificationManager + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
 {
     /// Create a new request processor with the given handlers
-    pub fn new(message_handler: M, task_manager: T, notification_manager: N) -> Self {
+    pub fn new(message_handler: M, task_manager: T, notification_manager: N, agent_info: A) -> Self {
         Self {
             message_handler: Arc::new(message_handler),
             task_manager: Arc::new(task_manager),
             notification_manager: Arc::new(notification_manager),
+            agent_info: Arc::new(agent_info),
         }
     }
 }
 
-impl<H> DefaultRequestProcessor<H, H, H>
+impl<H, A> DefaultRequestProcessor<H, H, H, A>
 where
     H: AsyncMessageHandler + AsyncTaskManager + AsyncNotificationManager + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
 {
     /// Create a new request processor with a single handler that implements all traits
-    pub fn with_handler(handler: H) -> Self {
+    pub fn with_handler(handler: H, agent_info: A) -> Self {
         let handler_arc = Arc::new(handler);
         Self {
             message_handler: handler_arc.clone(),
             task_manager: handler_arc.clone(),
             notification_manager: handler_arc,
+            agent_info: Arc::new(agent_info),
         }
     }
 }
 
-impl<M, T, N> DefaultRequestProcessor<M, T, N>
+impl<M, T, N, A> DefaultRequestProcessor<M, T, N, A>
 where
     M: AsyncMessageHandler + Send + Sync + 'static,
     T: AsyncTaskManager + Send + Sync + 'static,
     N: AsyncNotificationManager + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
 {
     /// Process a send task request
     async fn process_send_task(
@@ -195,14 +203,32 @@ where
             serde_json::to_value(task)?,
         ))
     }
+
+    /// Process a get extended card request (v0.3.0)
+    async fn process_get_extended_card(
+        &self,
+        request: &GetExtendedCardRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        // Get the agent card from the agent info provider
+        // For v0.3.0, this method should return extended information
+        // that may only be available to authenticated clients.
+        // Authentication checking should be handled by middleware.
+        let card = self.agent_info.get_agent_card().await?;
+
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::to_value(card)?,
+        ))
+    }
 }
 
 #[async_trait]
-impl<M, T, N> AsyncA2ARequestProcessor for DefaultRequestProcessor<M, T, N>
+impl<M, T, N, A> AsyncA2ARequestProcessor for DefaultRequestProcessor<M, T, N, A>
 where
     M: AsyncMessageHandler + Send + Sync + 'static,
     T: AsyncTaskManager + Send + Sync + 'static,
     N: AsyncNotificationManager + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
 {
     async fn process_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
         // Parse the request
@@ -261,6 +287,7 @@ where
                     "Message streaming not yet implemented".to_string(),
                 ))
             }
+            A2ARequest::GetExtendedCard(req) => self.process_get_extended_card(req).await,
             A2ARequest::Generic(req) => {
                 // Handle unknown method
                 Err(A2AError::MethodNotFound(format!(
