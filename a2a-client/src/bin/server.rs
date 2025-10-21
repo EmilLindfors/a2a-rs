@@ -153,6 +153,7 @@ async fn send_message(
         message_id: Uuid::new_v4().to_string(),
         task_id: Some(form.task_id.clone()),
         context_id: None,
+        extensions: None,
         kind: "message".to_string(),
     };
 

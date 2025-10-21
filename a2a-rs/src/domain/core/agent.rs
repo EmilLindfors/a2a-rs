@@ -138,7 +138,7 @@ pub enum SecurityScheme {
         description: Option<String>,
     },
     /// Mutual TLS authentication (v0.3.0)
-    #[serde(rename = "mutualTls")]
+    #[serde(rename = "mutualTLS")]
     MutualTls {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -467,7 +467,7 @@ mod tests {
         };
 
         let json_value = serde_json::to_value(&scheme).unwrap();
-        assert_eq!(json_value["type"], "mutualTls");
+        assert_eq!(json_value["type"], "mutualTLS");
         assert_eq!(json_value["description"], "Mutual TLS authentication");
     }
 
@@ -606,7 +606,7 @@ mod tests {
         let json_value = serde_json::to_value(&card).unwrap();
         assert!(json_value["securitySchemes"].is_object());
         assert_eq!(json_value["securitySchemes"]["bearer"]["type"], "http");
-        assert_eq!(json_value["securitySchemes"]["mtls"]["type"], "mutualTls");
+        assert_eq!(json_value["securitySchemes"]["mtls"]["type"], "mutualTLS");
         assert!(json_value["security"].is_array());
     }
 }
