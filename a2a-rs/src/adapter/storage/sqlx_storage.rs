@@ -1,5 +1,5 @@
 //! SQLx-based task storage implementation
-//! 
+//!
 //! This module provides a persistent storage solution using SQLx, supporting
 //! SQLite, PostgreSQL, and MySQL databases.
 
@@ -9,9 +9,9 @@ use std::collections::HashMap;
 #[cfg(feature = "sqlx-storage")]
 use async_trait::async_trait;
 #[cfg(feature = "sqlx-storage")]
-use sqlx::{Row, SqlitePool};
-#[cfg(feature = "sqlx-storage")]
 use serde_json;
+#[cfg(feature = "sqlx-storage")]
+use sqlx::{Row, SqlitePool};
 
 #[cfg(feature = "sqlx-storage")]
 use crate::adapter::business::push_notification::{
@@ -78,9 +78,9 @@ pub struct SqlxTaskStorage {
 impl SqlxTaskStorage {
     /// Create a new SQLx task storage with the given database URL
     pub async fn new(database_url: &str) -> Result<Self, A2AError> {
-        let pool = SqlitePool::connect(database_url)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to connect to database: {}", e)))?;
+        let pool = SqlitePool::connect(database_url).await.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
+        })?;
 
         // Run base migrations
         Self::run_base_migrations(&pool).await?;
@@ -105,9 +105,9 @@ impl SqlxTaskStorage {
         database_url: &str,
         push_sender: impl PushNotificationSender + 'static,
     ) -> Result<Self, A2AError> {
-        let pool = SqlitePool::connect(database_url)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to connect to database: {}", e)))?;
+        let pool = SqlitePool::connect(database_url).await.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
+        })?;
 
         // Run migrations
         Self::run_base_migrations(&pool).await?;
@@ -126,13 +126,13 @@ impl SqlxTaskStorage {
         database_url: &str,
         additional_migrations: &[&str],
     ) -> Result<Self, A2AError> {
-        let pool = SqlitePool::connect(database_url)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to connect to database: {}", e)))?;
+        let pool = SqlitePool::connect(database_url).await.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
+        })?;
 
         // Run base migrations
         Self::run_base_migrations(&pool).await?;
-        
+
         // Run additional migrations
         Self::run_additional_migrations(&pool, additional_migrations).await?;
 
@@ -172,24 +172,32 @@ impl SqlxTaskStorage {
             sqlx::query(migration_sql)
                 .execute(pool)
                 .await
-                .map_err(|e| A2AError::DatabaseError(format!("Additional migration {} failed: {}", i + 1, e)))?;
+                .map_err(|e| {
+                    A2AError::DatabaseError(format!("Additional migration {} failed: {}", i + 1, e))
+                })?;
         }
         Ok(())
     }
 
     /// Convert database row to Task
     fn row_to_task(row: &sqlx::sqlite::SqliteRow) -> Result<Task, A2AError> {
-        let task_id: String = row.try_get("id")
+        let task_id: String = row
+            .try_get("id")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get task_id: {}", e)))?;
-        let context_id: String = row.try_get("context_id")
+        let context_id: String = row
+            .try_get("context_id")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get context_id: {}", e)))?;
-        let status_state: String = row.try_get("status_state")
+        let status_state: String = row
+            .try_get("status_state")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get status_state: {}", e)))?;
-        let status_message_json: Option<String> = row.try_get("status_message")
+        let status_message_json: Option<String> = row
+            .try_get("status_message")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get status_message: {}", e)))?;
-        let metadata_json: Option<String> = row.try_get("metadata")
+        let metadata_json: Option<String> = row
+            .try_get("metadata")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get metadata: {}", e)))?;
-        let artifacts_json: Option<String> = row.try_get("artifacts")
+        let artifacts_json: Option<String> = row
+            .try_get("artifacts")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get artifacts: {}", e)))?;
 
         // Parse task state
@@ -208,24 +216,28 @@ impl SqlxTaskStorage {
 
         // Parse status message
         let status_message = if let Some(msg_str) = status_message_json {
-            Some(serde_json::from_str(&msg_str)
-                .map_err(|e| A2AError::DatabaseError(format!("Failed to parse status message: {}", e)))?)
+            Some(serde_json::from_str(&msg_str).map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to parse status message: {}", e))
+            })?)
         } else {
             None
         };
 
         // Parse metadata
-        let metadata = if let Some(meta_str) = metadata_json {
-            Some(serde_json::from_str(&meta_str)
-                .map_err(|e| A2AError::DatabaseError(format!("Failed to parse metadata: {}", e)))?)
-        } else {
-            None
-        };
+        let metadata =
+            if let Some(meta_str) = metadata_json {
+                Some(serde_json::from_str(&meta_str).map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to parse metadata: {}", e))
+                })?)
+            } else {
+                None
+            };
 
         // Parse artifacts
         let artifacts = if let Some(artifacts_str) = artifacts_json {
-            Some(serde_json::from_str(&artifacts_str)
-                .map_err(|e| A2AError::DatabaseError(format!("Failed to parse artifacts: {}", e)))?)
+            Some(serde_json::from_str(&artifacts_str).map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to parse artifacts: {}", e))
+            })?)
         } else {
             None
         };
@@ -250,7 +262,11 @@ impl SqlxTaskStorage {
     }
 
     /// Load task history from database
-    async fn load_task_history(&self, task_id: &str, limit: Option<u32>) -> Result<Vec<Message>, A2AError> {
+    async fn load_task_history(
+        &self,
+        task_id: &str,
+        limit: Option<u32>,
+    ) -> Result<Vec<Message>, A2AError> {
         let query_str = if let Some(limit) = limit {
             format!(
                 "SELECT timestamp, status_state, message FROM task_history WHERE task_id = ? ORDER BY timestamp DESC LIMIT {}",
@@ -259,7 +275,7 @@ impl SqlxTaskStorage {
         } else {
             "SELECT timestamp, status_state, message FROM task_history WHERE task_id = ? ORDER BY timestamp DESC".to_string()
         };
-        
+
         let query = sqlx::query(&query_str);
 
         let rows = query
@@ -270,12 +286,14 @@ impl SqlxTaskStorage {
 
         let mut history = Vec::new();
         for row in rows {
-            let message_json: Option<String> = row.try_get("message")
-                .map_err(|e| A2AError::DatabaseError(format!("Failed to get message from history: {}", e)))?;
+            let message_json: Option<String> = row.try_get("message").map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to get message from history: {}", e))
+            })?;
 
             if let Some(msg_str) = message_json {
-                let message: Message = serde_json::from_str(&msg_str)
-                    .map_err(|e| A2AError::DatabaseError(format!("Failed to parse message from history: {}", e)))?;
+                let message: Message = serde_json::from_str(&msg_str).map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to parse message from history: {}", e))
+                })?;
                 history.push(message);
             }
         }
@@ -286,7 +304,12 @@ impl SqlxTaskStorage {
     }
 
     /// Add entry to task history
-    async fn add_to_history(&self, task_id: &str, state: TaskState, message: Option<Message>) -> Result<(), A2AError> {
+    async fn add_to_history(
+        &self,
+        task_id: &str,
+        state: TaskState,
+        message: Option<Message>,
+    ) -> Result<(), A2AError> {
         let state_str = match state {
             TaskState::Submitted => "submitted",
             TaskState::Working => "working",
@@ -300,8 +323,9 @@ impl SqlxTaskStorage {
         };
 
         let message_json = if let Some(msg) = message {
-            Some(serde_json::to_string(&msg)
-                .map_err(|e| A2AError::DatabaseError(format!("Failed to serialize message: {}", e)))?)
+            Some(serde_json::to_string(&msg).map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to serialize message: {}", e))
+            })?)
         } else {
             None
         };
@@ -419,7 +443,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
             .bind(task_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to check existing task: {}", e)))?;
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to check existing task: {}", e))
+            })?;
 
         if existing.is_some() {
             return Err(A2AError::TaskNotFound(format!(
@@ -432,12 +458,20 @@ impl AsyncTaskManager for SqlxTaskStorage {
         let task = Task::new(task_id.to_string(), context_id.to_string());
 
         // Convert metadata and artifacts to JSON strings
-        let metadata_json = task.metadata.as_ref()
+        let metadata_json = task
+            .metadata
+            .as_ref()
             .map(|m| serde_json::to_string(m).unwrap_or_default());
-        let artifacts_json = task.artifacts.as_ref()
+        let artifacts_json = task
+            .artifacts
+            .as_ref()
             .map(|a| serde_json::to_string(a).unwrap_or_default());
-        let status_message_str = task.status.message.as_ref().map(|m| serde_json::to_string(m).unwrap_or_default());
-        
+        let status_message_str = task
+            .status
+            .message
+            .as_ref()
+            .map(|m| serde_json::to_string(m).unwrap_or_default());
+
         // Insert into database
         sqlx::query("INSERT INTO tasks (id, context_id, status_state, status_message, metadata, artifacts) VALUES (?, ?, ?, ?, ?, ?)")
             .bind(&task.id)
@@ -451,7 +485,8 @@ impl AsyncTaskManager for SqlxTaskStorage {
             .map_err(|e| A2AError::DatabaseError(format!("Failed to create task: {}", e)))?;
 
         // Add initial history entry
-        self.add_to_history(task_id, TaskState::Submitted, None).await?;
+        self.add_to_history(task_id, TaskState::Submitted, None)
+            .await?;
 
         Ok(task)
     }
@@ -505,7 +540,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
             .bind(task_id)
             .fetch_optional(&self.pool)
             .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to check task existence: {}", e)))?;
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to check task existence: {}", e))
+            })?;
 
         Ok(row.is_some())
     }
@@ -531,7 +568,11 @@ impl AsyncTaskManager for SqlxTaskStorage {
         // Load history
         if history_length.is_some() || history_length.is_none() {
             let history = self.load_task_history(task_id, history_length).await?;
-            task.history = if history.is_empty() { None } else { Some(history) };
+            task.history = if history.is_empty() {
+                None
+            } else {
+                Some(history)
+            };
         }
 
         Ok(task)
@@ -573,7 +614,8 @@ impl AsyncTaskManager for SqlxTaskStorage {
             .map_err(|e| A2AError::DatabaseError(format!("Failed to cancel task: {}", e)))?;
 
         // Add to history with cancellation message
-        self.add_to_history(task_id, TaskState::Canceled, Some(cancel_message)).await?;
+        self.add_to_history(task_id, TaskState::Canceled, Some(cancel_message))
+            .await?;
 
         // Get updated task
         let updated_task = self.get_task(task_id, None).await?;
@@ -594,12 +636,16 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         config: &'a TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Store in database
-        sqlx::query("INSERT OR REPLACE INTO push_notification_configs (task_id, webhook_url) VALUES (?, ?)")
-            .bind(&config.task_id)
-            .bind(&config.push_notification_config.url)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to set push notification config: {}", e)))?;
+        sqlx::query(
+            "INSERT OR REPLACE INTO push_notification_configs (task_id, webhook_url) VALUES (?, ?)",
+        )
+        .bind(&config.task_id)
+        .bind(&config.push_notification_config.url)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to set push notification config: {}", e))
+        })?;
 
         // Register with the push notification registry
         self.push_notification_registry
@@ -614,15 +660,22 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         task_id: &'a str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Get from database
-        let row = sqlx::query("SELECT webhook_url FROM push_notification_configs WHERE task_id = ?")
-            .bind(task_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to get push notification config: {}", e)))?;
+        let row =
+            sqlx::query("SELECT webhook_url FROM push_notification_configs WHERE task_id = ?")
+                .bind(task_id)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| {
+                    A2AError::DatabaseError(format!(
+                        "Failed to get push notification config: {}",
+                        e
+                    ))
+                })?;
 
         if let Some(row) = row {
-            let webhook_url: String = row.try_get("webhook_url")
-                .map_err(|e| A2AError::DatabaseError(format!("Failed to get webhook_url: {}", e)))?;
+            let webhook_url: String = row.try_get("webhook_url").map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to get webhook_url: {}", e))
+            })?;
 
             Ok(TaskPushNotificationConfig {
                 task_id: task_id.to_string(),
@@ -643,7 +696,9 @@ impl AsyncNotificationManager for SqlxTaskStorage {
             .bind(task_id)
             .execute(&self.pool)
             .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to remove push notification config: {}", e)))?;
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to remove push notification config: {}", e))
+            })?;
 
         // Unregister from registry
         self.push_notification_registry.unregister(task_id).await?;

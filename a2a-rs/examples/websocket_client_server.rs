@@ -1,19 +1,19 @@
 //! A complete WebSocket example that runs both server and client together
 
+use futures::StreamExt;
 use std::time::Duration;
 use tokio::time::sleep;
-use futures::StreamExt;
 
 use a2a_rs::adapter::{
-    DefaultRequestProcessor, InMemoryTaskStorage,
-    NoopPushNotificationSender, SimpleAgentInfo, WebSocketClient, WebSocketServer,
+    DefaultRequestProcessor, InMemoryTaskStorage, NoopPushNotificationSender, SimpleAgentInfo,
+    WebSocketClient, WebSocketServer,
 };
 
 mod common;
-use common::SimpleAgentHandler;
 use a2a_rs::domain::{Message, Part, Role};
-use a2a_rs::services::{AsyncA2AClient, StreamItem};
 use a2a_rs::observability;
+use a2a_rs::services::{AsyncA2AClient, StreamItem};
+use common::SimpleAgentHandler;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -54,7 +54,11 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     let push_sender = NoopPushNotificationSender;
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);
     let handler = SimpleAgentHandler::with_storage(storage.clone());
-    let processor = DefaultRequestProcessor::with_handler(handler.clone());
+    let test_agent_info = SimpleAgentInfo::new(
+        "test-agent".to_string(),
+        "ws://localhost:8081".to_string(),
+    );
+    let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     // Create agent info
     let agent_info = SimpleAgentInfo::new(
@@ -83,7 +87,10 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     let server = WebSocketServer::new(processor, agent_info, handler, "127.0.0.1:8081".to_string());
 
     println!("🔗 WebSocket server listening on ws://127.0.0.1:8081");
-    server.start().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    server
+        .start()
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
 async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
@@ -97,17 +104,22 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 2: Create and send message to task
     println!("📨 Testing task creation and messaging...");
-    
+
     let task_id = uuid::Uuid::new_v4().to_string();
     let task_id = format!("task-{}", task_id);
 
     let message = Message::builder()
         .role(Role::User)
-        .parts(vec![Part::text("Hello from WebSocket client! Please echo this message with streaming.".to_string())])
+        .parts(vec![Part::text(
+            "Hello from WebSocket client! Please echo this message with streaming.".to_string(),
+        )])
         .message_id(uuid::Uuid::new_v4().to_string())
         .build();
 
-    match client.send_task_message(&task_id, &message, None, None).await {
+    match client
+        .send_task_message(&task_id, &message, None, None)
+        .await
+    {
         Ok(response) => {
             println!("✅ Task created with ID: {}", task_id);
             println!("   Status: {:?}", response.status.state);
@@ -120,7 +132,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 3: Subscribe to streaming updates
     println!("📡 Testing streaming updates...");
-    
+
     let mut stream = client.subscribe_to_task(&task_id, None).await?;
     println!("✅ Subscribed to task updates");
 
@@ -129,11 +141,14 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     let max_updates = 3;
     let timeout_duration = Duration::from_secs(5);
 
-    println!("🎯 Waiting for streaming updates (max {} seconds)...", timeout_duration.as_secs());
-    
+    println!(
+        "🎯 Waiting for streaming updates (max {} seconds)...",
+        timeout_duration.as_secs()
+    );
+
     let timeout_future = sleep(timeout_duration);
     tokio::pin!(timeout_future);
-    
+
     loop {
         tokio::select! {
             item = stream.next() => {
@@ -147,7 +162,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                             StreamItem::StatusUpdate(update) => {
                                 println!("📈 Status update #{}: {:?}", update_count + 1, update.status.state);
                                 update_count += 1;
-                                
+
                                 // Check if this is the final update
                                 if update.final_ {
                                     println!("🏁 Final update received");
@@ -157,7 +172,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                             StreamItem::ArtifactUpdate(artifact_event) => {
                                 println!("🎁 Artifact update: {}", artifact_event.artifact.artifact_id);
                                 update_count += 1;
-                                
+
                                 // Check if this is the last chunk
                                 if artifact_event.last_chunk.unwrap_or(false) {
                                     println!("🏁 Final artifact chunk received");
@@ -165,7 +180,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        
+
                         if update_count >= max_updates {
                             println!("📊 Received {} updates, stopping", update_count);
                             break;

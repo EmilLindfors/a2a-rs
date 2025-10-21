@@ -31,9 +31,7 @@ pub enum ReimbursementRequest {
         notes: Option<String>,
     },
     /// Status query
-    StatusQuery {
-        request_id: String,
-    },
+    StatusQuery { request_id: String },
 }
 
 /// Money type with proper validation

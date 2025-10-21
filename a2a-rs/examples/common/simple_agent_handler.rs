@@ -1,8 +1,8 @@
 //! Simple agent handler for examples and testing
-//! 
+//!
 //! This provides a complete agent implementation that bundles all business capabilities
 //! (message handling, task management, notifications, and streaming) with in-memory storage.
-//! 
+//!
 //! For production agents, you typically want to implement your own message handler
 //! and compose it with the storage implementations directly.
 
@@ -25,13 +25,13 @@ use a2a_rs::{
 
 /// Simple agent handler that coordinates all business capability traits
 /// by delegating to InMemoryTaskStorage which implements the actual functionality.
-/// 
+///
 /// This is useful for:
 /// - Quick prototyping
 /// - Simple echo/test agents
 /// - Examples and demos
 /// - Agents that don't need custom message processing
-/// 
+///
 /// For production agents with custom business logic, implement your own
 /// `AsyncMessageHandler` and compose it with storage using `DefaultRequestProcessor`.
 #[derive(Clone)]
@@ -95,7 +95,12 @@ impl TaskManager for SimpleAgentHandler {
         ))
     }
 
-    fn update_task_status(&self, _task_id: &str, _state: TaskState, _message: Option<Message>) -> Result<Task, A2AError> {
+    fn update_task_status(
+        &self,
+        _task_id: &str,
+        _state: TaskState,
+        _message: Option<Message>,
+    ) -> Result<Task, A2AError> {
         Err(A2AError::UnsupportedOperation(
             "Synchronous task status update not supported. Use async version.".to_string(),
         ))
@@ -223,7 +228,9 @@ impl AsyncTaskManager for SimpleAgentHandler {
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
-        self.storage.update_task_status(task_id, state, message).await
+        self.storage
+            .update_task_status(task_id, state, message)
+            .await
     }
 
     async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
@@ -295,9 +302,7 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
         task_id: &'a str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.storage
-            .broadcast_status_update(task_id, update)
-            .await
+        self.storage.broadcast_status_update(task_id, update).await
     }
 
     async fn broadcast_artifact_update<'a>(

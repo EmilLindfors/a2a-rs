@@ -2,13 +2,12 @@
 
 #[cfg(feature = "auth")]
 use oauth2::{
-    basic::BasicClient, AuthUrl, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope,
-    TokenUrl,
+    basic::BasicClient, AuthUrl, ClientId, ClientSecret, CsrfToken, RedirectUrl, Scope, TokenUrl,
 };
 #[cfg(feature = "auth")]
 use openidconnect::{
-    core::{CoreClient, CoreProviderMetadata, CoreAuthenticationFlow},
-    IssuerUrl, Nonce, 
+    core::{CoreAuthenticationFlow, CoreClient, CoreProviderMetadata},
+    IssuerUrl, Nonce,
 };
 
 use async_trait::async_trait;
@@ -74,6 +73,7 @@ impl OAuth2Authenticator {
                 ..Default::default()
             }),
             description: Some("OAuth2 Authorization Code Flow".to_string()),
+            metadata_url: None,
         };
 
         Self {
@@ -90,7 +90,12 @@ impl OAuth2Authenticator {
         token_url: TokenUrl,
         scopes: HashMap<String, String>,
     ) -> Self {
-        let client = BasicClient::new(client_id, Some(client_secret), AuthUrl::new("".to_string()).unwrap(), Some(token_url));
+        let client = BasicClient::new(
+            client_id,
+            Some(client_secret),
+            AuthUrl::new("".to_string()).unwrap(),
+            Some(token_url),
+        );
 
         let flow = ClientCredentialsOAuthFlow {
             token_url: client.token_url().unwrap().url().to_string(),
@@ -104,6 +109,7 @@ impl OAuth2Authenticator {
                 ..Default::default()
             }),
             description: Some("OAuth2 Client Credentials Flow".to_string()),
+            metadata_url: None,
         };
 
         Self {
@@ -126,7 +132,7 @@ impl OAuth2Authenticator {
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new("read".to_string()))
             .url();
-        
+
         (auth_url.to_string(), csrf_token)
     }
 }
@@ -138,23 +144,23 @@ impl Authenticator for OAuth2Authenticator {
         self.validate_context(context)?;
 
         let token = &context.credential;
-        
+
         // In a real implementation, you would validate the token against the OAuth2 server
         // For now, we'll just check if it's in our list of valid tokens
         if self.valid_tokens.contains(token) {
-            let mut principal = AuthPrincipal::new(
-                format!("oauth2:{}", token),
-                "oauth2".to_string(),
-            );
-            
+            let mut principal =
+                AuthPrincipal::new(format!("oauth2:{}", token), "oauth2".to_string());
+
             // Add OAuth2-specific attributes
             if let Some(scope) = context.get_metadata("scope") {
                 principal = principal.with_attribute("scope".to_string(), scope.clone());
             }
-            
+
             Ok(principal)
         } else {
-            Err(A2AError::Internal("Invalid OAuth2 access token".to_string()))
+            Err(A2AError::Internal(
+                "Invalid OAuth2 access token".to_string(),
+            ))
         }
     }
 
@@ -164,9 +170,10 @@ impl Authenticator for OAuth2Authenticator {
 
     fn validate_context(&self, context: &AuthContext) -> Result<(), A2AError> {
         if context.scheme_type != "oauth2" {
-            return Err(A2AError::Internal(
-                format!("Invalid authentication scheme: expected 'oauth2', got '{}'", context.scheme_type),
-            ));
+            return Err(A2AError::Internal(format!(
+                "Invalid authentication scheme: expected 'oauth2', got '{}'",
+                context.scheme_type
+            )));
         }
         Ok(())
     }
@@ -194,13 +201,17 @@ impl OpenIdConnectAuthenticator {
         redirect_url: RedirectUrl,
     ) -> Result<Self, A2AError> {
         // Discover OpenID Connect provider metadata
-        let provider_metadata = CoreProviderMetadata::discover_async(issuer_url.clone(), async_http_client)
-            .await
-            .map_err(|e| A2AError::Internal(format!("Failed to discover OIDC provider: {}", e)))?;
+        let provider_metadata =
+            CoreProviderMetadata::discover_async(issuer_url.clone(), async_http_client)
+                .await
+                .map_err(|e| {
+                    A2AError::Internal(format!("Failed to discover OIDC provider: {}", e))
+                })?;
 
         // Create OpenID Connect client
-        let client = CoreClient::from_provider_metadata(provider_metadata, client_id, client_secret)
-            .set_redirect_uri(redirect_url);
+        let client =
+            CoreClient::from_provider_metadata(provider_metadata, client_id, client_secret)
+                .set_redirect_uri(redirect_url);
 
         let scheme = SecurityScheme::OpenIdConnect {
             open_id_connect_url: issuer_url.url().to_string(),
@@ -230,7 +241,7 @@ impl OpenIdConnectAuthenticator {
                 Nonce::new_random,
             )
             .url();
-        
+
         (auth_url.to_string(), csrf_token, nonce)
     }
 }
@@ -242,18 +253,18 @@ impl Authenticator for OpenIdConnectAuthenticator {
         self.validate_context(context)?;
 
         let token = &context.credential;
-        
+
         // In a real implementation, you would validate the ID token
         // For now, we'll just check if it's in our list of valid tokens
         if self.valid_tokens.contains(token) {
-            let principal = AuthPrincipal::new(
-                format!("oidc:{}", token),
-                "openidconnect".to_string(),
-            );
-            
+            let principal =
+                AuthPrincipal::new(format!("oidc:{}", token), "openidconnect".to_string());
+
             Ok(principal)
         } else {
-            Err(A2AError::Internal("Invalid OpenID Connect ID token".to_string()))
+            Err(A2AError::Internal(
+                "Invalid OpenID Connect ID token".to_string(),
+            ))
         }
     }
 
@@ -263,9 +274,10 @@ impl Authenticator for OpenIdConnectAuthenticator {
 
     fn validate_context(&self, context: &AuthContext) -> Result<(), A2AError> {
         if context.scheme_type != "openidconnect" {
-            return Err(A2AError::Internal(
-                format!("Invalid authentication scheme: expected 'openidconnect', got '{}'", context.scheme_type),
-            ));
+            return Err(A2AError::Internal(format!(
+                "Invalid authentication scheme: expected 'openidconnect', got '{}'",
+                context.scheme_type
+            )));
         }
         Ok(())
     }
@@ -291,7 +303,7 @@ impl AuthContextExtractor for OAuth2Extractor {
                 }
             })
     }
-    
+
     #[cfg(not(feature = "http-server"))]
     async fn extract_from_headers(&self, headers: &HashMap<String, String>) -> Option<AuthContext> {
         headers
@@ -306,7 +318,7 @@ impl AuthContextExtractor for OAuth2Extractor {
                 }
             })
     }
-    
+
     async fn extract_from_query(&self, params: &HashMap<String, String>) -> Option<AuthContext> {
         // OAuth2 tokens can be passed as access_token query parameter
         params.get("access_token").map(|token| {
@@ -314,7 +326,7 @@ impl AuthContextExtractor for OAuth2Extractor {
                 .with_metadata("location".to_string(), "query".to_string())
         })
     }
-    
+
     async fn extract_from_cookies(&self, _cookies: &str) -> Option<AuthContext> {
         // OAuth2 tokens can be stored in cookies, but we'll keep this simple
         None
@@ -338,7 +350,11 @@ pub struct OpenIdConnectAuthenticator;
 
 #[cfg(not(feature = "auth"))]
 impl OAuth2Authenticator {
-    pub fn new_authorization_code(_client_id: String, _auth_url: String, _token_url: String) -> Self {
+    pub fn new_authorization_code(
+        _client_id: String,
+        _auth_url: String,
+        _token_url: String,
+    ) -> Self {
         compile_error!("OAuth2 authentication requires the 'auth' feature");
     }
 }

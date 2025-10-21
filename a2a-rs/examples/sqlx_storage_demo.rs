@@ -1,17 +1,17 @@
 //! Example demonstrating SQLx-based persistent storage
-//! 
+//!
 //! This example shows how to use the SqlxTaskStorage with different databases:
 //! - SQLite (file and in-memory)
 //! - PostgreSQL
-//! 
+//!
 //! Run with:
 //! ```bash
 //! # SQLite in-memory (default)
 //! cargo run --example sqlx_storage_demo --features sqlite
-//! 
+//!
 //! # SQLite file
 //! DATABASE_URL=sqlite:tasks.db cargo run --example sqlx_storage_demo --features sqlite
-//! 
+//!
 //! # PostgreSQL (requires running PostgreSQL server)
 //! DATABASE_URL=postgres://user:password@localhost/a2a_test cargo run --example sqlx_storage_demo --features postgres
 //! ```
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(config) => {
             println!("📡 Using database configuration from environment");
             config
-        },
+        }
         Err(_) => {
             println!("📋 Using default configuration (SQLite in-memory)");
             DatabaseConfig::default()
@@ -45,7 +45,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Validate configuration
-    config.validate()
+    config
+        .validate()
         .map_err(|e| format!("Invalid database configuration: {}", e))?;
 
     println!("🔧 Database type: {}", config.database_type());
@@ -62,30 +63,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Demo: Create tasks
     println!("📝 Creating tasks...");
     let task_ids = vec!["demo-task-1", "demo-task-2", "demo-task-3"];
-    
+
     for task_id in &task_ids {
         let task = storage.create_task(task_id, "demo-context").await?;
-        println!("  ✓ Created task: {} (status: {:?})", task.id, task.status.state);
+        println!(
+            "  ✓ Created task: {} (status: {:?})",
+            task.id, task.status.state
+        );
     }
     println!();
 
     // Demo: Update task statuses
     println!("🔄 Updating task statuses...");
-    storage.update_task_status("demo-task-1", TaskState::Working, None).await?;
+    storage
+        .update_task_status("demo-task-1", TaskState::Working, None)
+        .await?;
     println!("  ✓ Updated demo-task-1 to Working");
-    
-    storage.update_task_status("demo-task-2", TaskState::Working, None).await?;
-    storage.update_task_status("demo-task-2", TaskState::Completed, None).await?;
+
+    storage
+        .update_task_status("demo-task-2", TaskState::Working, None)
+        .await?;
+    storage
+        .update_task_status("demo-task-2", TaskState::Completed, None)
+        .await?;
     println!("  ✓ Updated demo-task-2 to Working, then Completed");
-    
-    storage.update_task_status("demo-task-3", TaskState::Working, None).await?;
+
+    storage
+        .update_task_status("demo-task-3", TaskState::Working, None)
+        .await?;
     println!("  ✓ Updated demo-task-3 to Working");
     println!();
 
     // Demo: Cancel a task
     println!("❌ Canceling a task...");
     let canceled_task = storage.cancel_task("demo-task-3").await?;
-    println!("  ✓ Canceled task: {} (status: {:?})", canceled_task.id, canceled_task.status.state);
+    println!(
+        "  ✓ Canceled task: {} (status: {:?})",
+        canceled_task.id, canceled_task.status.state
+    );
     println!();
 
     // Demo: Retrieve tasks and show history
@@ -93,10 +108,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for task_id in &task_ids {
         let task = storage.get_task(task_id, Some(10)).await?;
         println!("  📋 Task: {} (status: {:?})", task.id, task.status.state);
-        
+
         if let Some(history) = &task.history {
             println!("     History entries: {}", history.len());
-            
+
             for (i, message) in history.iter().enumerate() {
                 println!("       {}. Message ID: {}", i + 1, message.message_id);
             }
@@ -112,7 +127,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let exists = storage.task_exists(task_id).await?;
         println!("  {} exists: {}", task_id, exists);
     }
-    
+
     let exists = storage.task_exists("non-existent-task").await?;
     println!("  non-existent-task exists: {}", exists);
     println!();

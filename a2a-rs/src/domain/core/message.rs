@@ -27,7 +27,7 @@ pub enum Role {
 /// # Example
 /// ```rust
 /// use a2a_rs::FileContent;
-/// 
+///
 /// // Embedded file content
 /// let embedded = FileContent {
 ///     name: Some("example.txt".to_string()),
@@ -35,7 +35,7 @@ pub enum Role {
 ///     bytes: Some("SGVsbG8gV29ybGQ=".to_string()), // "Hello World" in base64
 ///     uri: None,
 /// };
-/// 
+///
 /// // URI-based file content  
 /// let uri_based = FileContent {
 ///     name: Some("document.pdf".to_string()),
@@ -173,7 +173,7 @@ impl Part {
 /// # Example
 /// ```rust
 /// use a2a_rs::{Message, Role, Part};
-/// 
+///
 /// let message = Message::builder()
 ///     .role(Role::User)
 ///     .parts(vec![Part::Text {
@@ -211,7 +211,7 @@ pub struct Message {
 /// # Example
 /// ```rust
 /// use a2a_rs::{Artifact, Part};
-/// 
+///
 /// let artifact = Artifact {
 ///     artifact_id: "artifact-123".to_string(),
 ///     name: Some("Generated Report".to_string()),

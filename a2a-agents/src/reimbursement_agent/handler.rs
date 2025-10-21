@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use serde_json::{json, Map, Value};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use uuid::Uuid;
 use tracing::{debug, error, info, instrument, warn};
+use uuid::Uuid;
 
 use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatus};
 use a2a_rs::port::message_handler::AsyncMessageHandler;
@@ -85,10 +85,10 @@ impl HandlerMetrics {
             forms_generated = self.forms_generated,
             approvals_processed = self.approvals_processed,
             auto_approvals = self.auto_approvals,
-            success_rate = if self.total_requests > 0 { 
-                (self.successful_requests as f64 / self.total_requests as f64) * 100.0 
-            } else { 
-                0.0 
+            success_rate = if self.total_requests > 0 {
+                (self.successful_requests as f64 / self.total_requests as f64) * 100.0
+            } else {
+                0.0
             },
             "Handler metrics"
         );
@@ -135,7 +135,8 @@ impl ReimbursementHandler {
                 }
                 _ => {
                     // Store other metadata for reference
-                    if !key.starts_with("_") { // Skip internal metadata
+                    if !key.starts_with("_") {
+                        // Skip internal metadata
                         target.insert(key.clone(), value.clone());
                     }
                 }
@@ -160,10 +161,7 @@ impl ReimbursementHandler {
 
     /// Get current metrics
     pub fn get_metrics(&self) -> HandlerMetrics {
-        self.metrics
-            .lock()
-            .map(|m| m.clone())
-            .unwrap_or_default()
+        self.metrics.lock().map(|m| m.clone()).unwrap_or_default()
     }
 
     /// Log current metrics
@@ -177,7 +175,7 @@ impl ReimbursementHandler {
     fn update_metrics(&self, response: &ReimbursementResponse, auto_approved: bool) {
         if let Ok(mut metrics) = self.metrics.lock() {
             metrics.increment_requests();
-            
+
             match response {
                 ReimbursementResponse::Form { .. } => {
                     metrics.increment_forms();
@@ -189,8 +187,8 @@ impl ReimbursementHandler {
                         metrics.increment_auto_approvals();
                     }
                     match status {
-                        super::types::ProcessingStatus::Approved |
-                        super::types::ProcessingStatus::Pending => {
+                        super::types::ProcessingStatus::Approved
+                        | super::types::ProcessingStatus::Pending => {
                             metrics.increment_success();
                         }
                         _ => {}
@@ -219,7 +217,11 @@ impl ReimbursementHandler {
         for (idx, part) in message.parts.iter().enumerate() {
             match part {
                 Part::Text { text, metadata } => {
-                    debug!(part_index = idx, text_length = text.len(), "Processing text part");
+                    debug!(
+                        part_index = idx,
+                        text_length = text.len(),
+                        "Processing text part"
+                    );
                     text_content.push(text.clone());
                     // Extract any metadata hints for processing
                     if let Some(meta) = metadata {
@@ -252,7 +254,7 @@ impl ReimbursementHandler {
                     };
                     info!(part_index = idx, file_id = %file_id, mime_type = ?file.mime_type, "Processing file part");
                     file_ids.push(file_id.clone());
-                    
+
                     // Store file metadata for later processing
                     if let Some(meta) = metadata {
                         let mut file_meta = meta.clone();
@@ -281,13 +283,16 @@ impl ReimbursementHandler {
         // Try to parse structured data first
         if let Some(data) = data_content {
             // Try parsing as complete request types
-            if let Ok(request) = serde_json::from_value::<ReimbursementRequest>(Value::Object(data.clone())) {
+            if let Ok(request) =
+                serde_json::from_value::<ReimbursementRequest>(Value::Object(data.clone()))
+            {
                 return Ok(request);
             }
 
             // Check if it's a status query
             if let Some(request_id) = data.get("request_id").and_then(|v| v.as_str()) {
-                if data.len() == 1 || data.get("action").and_then(|v| v.as_str()) == Some("status") {
+                if data.len() == 1 || data.get("action").and_then(|v| v.as_str()) == Some("status")
+                {
                     return Ok(ReimbursementRequest::StatusQuery {
                         request_id: request_id.to_string(),
                     });
@@ -296,20 +301,28 @@ impl ReimbursementHandler {
 
             // Try to build an initial or form submission request
             let request_id = data.get("request_id").and_then(|v| v.as_str());
-            let date = data.get("date").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let date = data
+                .get("date")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
             let amount = self.parse_money_from_value(data.get("amount"));
-            let purpose = data.get("purpose").and_then(|v| v.as_str()).map(|s| s.to_string());
-            
+            let purpose = data
+                .get("purpose")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             // Check for category from both direct field and metadata hints
-            let category = data.get("category")
+            let category = data
+                .get("category")
                 .and_then(|v| serde_json::from_value::<ExpenseCategory>(v.clone()).ok())
                 .or_else(|| {
                     // Try category_hint from metadata
                     data.get("category_hint")
                         .and_then(|v| v.as_str())
-                        .and_then(|s| serde_json::from_value::<ExpenseCategory>(
-                            Value::String(s.to_string())
-                        ).ok())
+                        .and_then(|s| {
+                            serde_json::from_value::<ExpenseCategory>(Value::String(s.to_string()))
+                                .ok()
+                        })
                 })
                 .or_else(|| {
                     // Try expense_type from metadata
@@ -324,8 +337,11 @@ impl ReimbursementHandler {
                             _ => Some(ExpenseCategory::Other),
                         })
                 });
-            
-            let notes = data.get("notes").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+            let notes = data
+                .get("notes")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
 
             let receipt_files = if !file_ids.is_empty() {
                 Some(file_ids.clone())
@@ -336,8 +352,12 @@ impl ReimbursementHandler {
 
             if let Some(request_id) = request_id {
                 // Form submission with request_id
-                if let (Some(date), Some(amount), Some(purpose), Some(category)) = 
-                    (date.clone(), amount.clone(), purpose.clone(), category.clone()) {
+                if let (Some(date), Some(amount), Some(purpose), Some(category)) = (
+                    date.clone(),
+                    amount.clone(),
+                    purpose.clone(),
+                    category.clone(),
+                ) {
                     return Ok(ReimbursementRequest::FormSubmission {
                         request_id: request_id.to_string(),
                         date,
@@ -367,18 +387,23 @@ impl ReimbursementHandler {
         }
 
         Err(A2AError::InvalidParams(
-            "No valid request data found in message".to_string()
+            "No valid request data found in message".to_string(),
         ))
     }
 
     /// Parse money from various JSON value formats with metadata awareness
-    fn parse_money_from_value_with_metadata(&self, value: Option<&Value>, metadata: &Map<String, Value>) -> Option<Money> {
+    fn parse_money_from_value_with_metadata(
+        &self,
+        value: Option<&Value>,
+        metadata: &Map<String, Value>,
+    ) -> Option<Money> {
         // Check for currency hint in metadata
-        let default_currency = metadata.get("currency")
+        let default_currency = metadata
+            .get("currency")
             .and_then(|v| v.as_str())
             .unwrap_or("USD")
             .to_string();
-        
+
         match value? {
             Value::String(s) => Some(Money::String(s.clone())),
             Value::Number(n) => n.as_f64().map(|amount| Money::Number {
@@ -387,7 +412,8 @@ impl ReimbursementHandler {
             }),
             Value::Object(obj) => {
                 let amount = obj.get("amount")?.as_f64()?;
-                let currency = obj.get("currency")
+                let currency = obj
+                    .get("currency")
                     .and_then(|v| v.as_str())
                     .unwrap_or(&default_currency)
                     .to_string();
@@ -396,14 +422,18 @@ impl ReimbursementHandler {
             _ => None,
         }
     }
-    
+
     /// Parse money from various JSON value formats (legacy method for compatibility)
     fn parse_money_from_value(&self, value: Option<&Value>) -> Option<Money> {
         self.parse_money_from_value_with_metadata(value, &Map::new())
     }
 
     /// Parse text content for reimbursement information
-    fn parse_text_request(&self, text: &str, file_ids: Vec<String>) -> Result<ReimbursementRequest, A2AError> {
+    fn parse_text_request(
+        &self,
+        text: &str,
+        file_ids: Vec<String>,
+    ) -> Result<ReimbursementRequest, A2AError> {
         let lower_text = text.to_lowercase();
 
         // Check if it's a status query
@@ -461,9 +491,15 @@ impl ReimbursementHandler {
         }
 
         // Detect category from keywords
-        if lower_text.contains("travel") || lower_text.contains("flight") || lower_text.contains("hotel") {
+        if lower_text.contains("travel")
+            || lower_text.contains("flight")
+            || lower_text.contains("hotel")
+        {
             category = Some(ExpenseCategory::Travel);
-        } else if lower_text.contains("meal") || lower_text.contains("lunch") || lower_text.contains("dinner") {
+        } else if lower_text.contains("meal")
+            || lower_text.contains("lunch")
+            || lower_text.contains("dinner")
+        {
             category = Some(ExpenseCategory::Meals);
         } else if lower_text.contains("supply") || lower_text.contains("supplies") {
             category = Some(ExpenseCategory::Supplies);
@@ -505,8 +541,12 @@ impl ReimbursementHandler {
                 }
                 Ok(())
             }
-            ReimbursementRequest::FormSubmission { 
-                date, amount, purpose, category, .. 
+            ReimbursementRequest::FormSubmission {
+                date,
+                amount,
+                purpose,
+                category,
+                ..
             } => {
                 // Validate required fields
                 if date.trim().is_empty() {
@@ -540,7 +580,7 @@ impl ReimbursementHandler {
                 }
 
                 // TODO: Add more validation (date range, amount limits, etc.)
-                
+
                 Ok(())
             }
             ReimbursementRequest::StatusQuery { request_id } => {
@@ -557,19 +597,34 @@ impl ReimbursementHandler {
 
     /// Process a reimbursement request and generate appropriate response
     #[instrument(skip(self, request), fields(request_type = ?std::mem::discriminant(&request)))]
-    fn process_request(&self, request: ReimbursementRequest) -> Result<ReimbursementResponse, A2AError> {
+    fn process_request(
+        &self,
+        request: ReimbursementRequest,
+    ) -> Result<ReimbursementResponse, A2AError> {
         match &request {
-            ReimbursementRequest::Initial { date, amount, purpose, category, receipt_files } => {
+            ReimbursementRequest::Initial {
+                date,
+                amount,
+                purpose,
+                category,
+                receipt_files,
+            } => {
                 // Generate a new request ID
                 let request_id = format!("req_{}", Uuid::new_v4().simple());
-                
+
                 // Create form data with any partial information
                 let form_data = FormData {
                     request_id: request_id.clone(),
                     date: date.clone().or_else(|| Some(String::new())),
-                    amount: amount.as_ref().map(|m| m.to_formatted_string()).or_else(|| Some(String::new())),
+                    amount: amount
+                        .as_ref()
+                        .map(|m| m.to_formatted_string())
+                        .or_else(|| Some(String::new())),
                     purpose: purpose.clone().or_else(|| Some(String::new())),
-                    category: category.as_ref().map(|c| format!("{:?}", c).to_lowercase()).or_else(|| Some("other".to_string())),
+                    category: category
+                        .as_ref()
+                        .map(|c| format!("{:?}", c).to_lowercase())
+                        .or_else(|| Some("other".to_string())),
                     receipt_files: receipt_files.clone(),
                     notes: None,
                 };
@@ -583,12 +638,18 @@ impl ReimbursementHandler {
                     instructions: Some(
                         "Please complete all required fields for your reimbursement request. \
                         Receipts are required for expenses over $25."
-                            .to_string()
+                            .to_string(),
                     ),
                 })
             }
-            ReimbursementRequest::FormSubmission { 
-                request_id, date: _, amount, purpose: _, category: _, receipt_files, notes: _ 
+            ReimbursementRequest::FormSubmission {
+                request_id,
+                date: _,
+                amount,
+                purpose: _,
+                category: _,
+                receipt_files,
+                notes: _,
             } => {
                 // Store the request
                 // Process receipt files with metadata
@@ -598,17 +659,21 @@ impl ReimbursementHandler {
                         if let Some(metadata) = self.get_file_metadata(file_id) {
                             receipts.push(ReceiptMetadata {
                                 file_id: file_id.clone(),
-                                file_name: metadata.get("file_name")
+                                file_name: metadata
+                                    .get("file_name")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or(file_id)
                                     .to_string(),
-                                mime_type: metadata.get("mime_type")
+                                mime_type: metadata
+                                    .get("mime_type")
                                     .and_then(|v| v.as_str())
                                     .unwrap_or("application/octet-stream")
                                     .to_string(),
-                                size_bytes: metadata.get("size_bytes")
+                                size_bytes: metadata
+                                    .get("size_bytes")
                                     .and_then(|v| v.as_u64())
-                                    .unwrap_or(0) as usize,
+                                    .unwrap_or(0)
+                                    as usize,
                                 upload_timestamp: Some(Utc::now().to_rfc3339()),
                                 extracted_data: None, // TODO: OCR integration
                             });
@@ -617,7 +682,9 @@ impl ReimbursementHandler {
                 }
 
                 // Check for auto-approval in metadata
-                let auto_approve = self.store.requests
+                let auto_approve = self
+                    .store
+                    .requests
                     .lock()
                     .ok()
                     .and_then(|_store| {
@@ -629,13 +696,13 @@ impl ReimbursementHandler {
                         }
                     })
                     .unwrap_or(false);
-                
+
                 let status = if auto_approve {
                     ProcessingStatus::Approved
                 } else {
                     ProcessingStatus::Pending
                 };
-                
+
                 let stored_request = StoredRequest {
                     request: request.clone(),
                     status: status.clone(),
@@ -649,7 +716,8 @@ impl ReimbursementHandler {
                     }),
                 };
 
-                self.store.requests
+                self.store
+                    .requests
                     .lock()
                     .map_err(|_| A2AError::Internal("Failed to acquire lock".to_string()))?
                     .insert(request_id.clone(), stored_request);
@@ -667,7 +735,8 @@ impl ReimbursementHandler {
                     request_id: request_id.clone(),
                     status,
                     message: Some(if auto_approve {
-                        "Your reimbursement request has been auto-approved for amounts under $100.".to_string()
+                        "Your reimbursement request has been auto-approved for amounts under $100."
+                            .to_string()
                     } else {
                         "Your reimbursement request has been submitted for review.".to_string()
                     }),
@@ -676,7 +745,9 @@ impl ReimbursementHandler {
             }
             ReimbursementRequest::StatusQuery { request_id } => {
                 // Look up the request
-                let requests = self.store.requests
+                let requests = self
+                    .store
+                    .requests
                     .lock()
                     .map_err(|_| A2AError::Internal("Failed to acquire lock".to_string()))?;
 
@@ -702,51 +773,69 @@ impl ReimbursementHandler {
         let mut properties = Map::new();
 
         // Date field
-        properties.insert("date".to_string(), json!({
-            "type": "string",
-            "format": "date",
-            "title": "Expense Date",
-            "description": "Date when the expense was incurred"
-        }));
+        properties.insert(
+            "date".to_string(),
+            json!({
+                "type": "string",
+                "format": "date",
+                "title": "Expense Date",
+                "description": "Date when the expense was incurred"
+            }),
+        );
 
         // Amount field
-        properties.insert("amount".to_string(), json!({
-            "type": "string",
-            "format": "money",
-            "title": "Amount",
-            "description": "Total amount to be reimbursed",
-            "pattern": r"^\$?\d+(\.\d{2})?$"
-        }));
+        properties.insert(
+            "amount".to_string(),
+            json!({
+                "type": "string",
+                "format": "money",
+                "title": "Amount",
+                "description": "Total amount to be reimbursed",
+                "pattern": r"^\$?\d+(\.\d{2})?$"
+            }),
+        );
 
         // Purpose field
-        properties.insert("purpose".to_string(), json!({
-            "type": "string",
-            "title": "Business Purpose",
-            "description": "Business justification for the expense",
-            "minLength": 10
-        }));
+        properties.insert(
+            "purpose".to_string(),
+            json!({
+                "type": "string",
+                "title": "Business Purpose",
+                "description": "Business justification for the expense",
+                "minLength": 10
+            }),
+        );
 
         // Category field
-        properties.insert("category".to_string(), json!({
-            "type": "string",
-            "title": "Expense Category",
-            "enum": ["travel", "meals", "supplies", "equipment", "training", "other"],
-            "description": "Category of the expense"
-        }));
+        properties.insert(
+            "category".to_string(),
+            json!({
+                "type": "string",
+                "title": "Expense Category",
+                "enum": ["travel", "meals", "supplies", "equipment", "training", "other"],
+                "description": "Category of the expense"
+            }),
+        );
 
         // Notes field (optional)
-        properties.insert("notes".to_string(), json!({
-            "type": "string",
-            "title": "Additional Notes",
-            "description": "Any additional information (optional)"
-        }));
+        properties.insert(
+            "notes".to_string(),
+            json!({
+                "type": "string",
+                "title": "Additional Notes",
+                "description": "Any additional information (optional)"
+            }),
+        );
 
         // Request ID (hidden/readonly)
-        properties.insert("request_id".to_string(), json!({
-            "type": "string",
-            "title": "Request ID",
-            "readOnly": true
-        }));
+        properties.insert(
+            "request_id".to_string(),
+            json!({
+                "type": "string",
+                "title": "Request ID",
+                "readOnly": true
+            }),
+        );
 
         FormSchema {
             schema_type: "object".to_string(),
@@ -769,13 +858,22 @@ impl ReimbursementHandler {
                 // Serialize as JSON for both text and data parts
                 if let Ok(json_str) = serde_json::to_string_pretty(&response) {
                     let mut metadata = Map::new();
-                    metadata.insert("response_type".to_string(), Value::String("form".to_string()));
-                    metadata.insert("form_id".to_string(), Value::String(form.properties.get("request_id")
-                        .and_then(|v| v.get("default"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string()));
-                    
+                    metadata.insert(
+                        "response_type".to_string(),
+                        Value::String("form".to_string()),
+                    );
+                    metadata.insert(
+                        "form_id".to_string(),
+                        Value::String(
+                            form.properties
+                                .get("request_id")
+                                .and_then(|v| v.get("default"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("unknown")
+                                .to_string(),
+                        ),
+                    );
+
                     vec![
                         Part::text_with_metadata(json_str.clone(), metadata.clone()),
                         Part::Data {
@@ -788,13 +886,20 @@ impl ReimbursementHandler {
                     vec![Part::text("Failed to serialize response".to_string())]
                 }
             }
-            ReimbursementResponse::Result { ref request_id, ref status, .. } => {
+            ReimbursementResponse::Result {
+                ref request_id,
+                ref status,
+                ..
+            } => {
                 if let Ok(json_str) = serde_json::to_string_pretty(&response) {
                     let mut metadata = Map::new();
-                    metadata.insert("response_type".to_string(), Value::String("result".to_string()));
+                    metadata.insert(
+                        "response_type".to_string(),
+                        Value::String("result".to_string()),
+                    );
                     metadata.insert("request_id".to_string(), Value::String(request_id.clone()));
                     metadata.insert("status".to_string(), Value::String(format!("{:?}", status)));
-                    
+
                     vec![
                         Part::text_with_metadata(json_str.clone(), metadata.clone()),
                         Part::Data {
@@ -807,11 +912,18 @@ impl ReimbursementHandler {
                     vec![Part::text("Failed to serialize response".to_string())]
                 }
             }
-            ReimbursementResponse::Error { ref message, ref code, .. } => {
+            ReimbursementResponse::Error {
+                ref message,
+                ref code,
+                ..
+            } => {
                 let mut metadata = Map::new();
-                metadata.insert("response_type".to_string(), Value::String("error".to_string()));
+                metadata.insert(
+                    "response_type".to_string(),
+                    Value::String("error".to_string()),
+                );
                 metadata.insert("error_code".to_string(), Value::String(code.clone()));
-                
+
                 vec![Part::text_with_metadata(message.clone(), metadata)]
             }
         }
@@ -868,20 +980,18 @@ impl AsyncMessageHandler for ReimbursementHandler {
                 error!(error = %e, "Failed to process request");
                 // Convert error to response
                 let resp = match e {
-                    A2AError::ValidationError { field, message } => {
-                        ReimbursementResponse::Error {
-                            code: "VALIDATION_ERROR".to_string(),
-                            message,
-                            field: Some(field),
-                            suggestions: None,
-                        }
-                    }
+                    A2AError::ValidationError { field, message } => ReimbursementResponse::Error {
+                        code: "VALIDATION_ERROR".to_string(),
+                        message,
+                        field: Some(field),
+                        suggestions: None,
+                    },
                     _ => ReimbursementResponse::Error {
                         code: "PROCESSING_ERROR".to_string(),
                         message: e.to_string(),
                         field: None,
                         suggestions: None,
-                    }
+                    },
                 };
                 (resp, false)
             }
@@ -893,12 +1003,10 @@ impl AsyncMessageHandler for ReimbursementHandler {
         // Determine task state based on response type
         let task_state = match &response {
             ReimbursementResponse::Form { .. } => TaskState::InputRequired,
-            ReimbursementResponse::Result { status, .. } => {
-                match status {
-                    ProcessingStatus::RequiresAdditionalInfo => TaskState::InputRequired,
-                    _ => TaskState::Completed,
-                }
-            }
+            ReimbursementResponse::Result { status, .. } => match status {
+                ProcessingStatus::RequiresAdditionalInfo => TaskState::InputRequired,
+                _ => TaskState::Completed,
+            },
             ReimbursementResponse::Error { .. } => TaskState::Failed,
         };
 
@@ -929,7 +1037,12 @@ impl AsyncMessageHandler for ReimbursementHandler {
         // Build and return task
         let task = Task::builder()
             .id(task_id.to_string())
-            .context_id(message.context_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()))
+            .context_id(
+                message
+                    .context_id
+                    .clone()
+                    .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            )
             .status(status)
             .build();
 
@@ -971,21 +1084,24 @@ impl AsyncMessageHandler for ReimbursementHandler {
                             message: "File must have either bytes or URI".to_string(),
                         });
                     }
-                    
+
                     // Validate mime type for receipts
                     if let Some(ref mime) = file.mime_type {
                         let supported_types = [
-                            "image/jpeg", "image/png", "image/gif", "image/webp",
-                            "application/pdf", "image/heic", "image/heif"
+                            "image/jpeg",
+                            "image/png",
+                            "image/gif",
+                            "image/webp",
+                            "application/pdf",
+                            "image/heic",
+                            "image/heif",
                         ];
                         if !supported_types.contains(&mime.as_str()) {
-                            return Err(A2AError::ContentTypeNotSupported(
-                                format!(
-                                    "Unsupported file type '{}'. Supported types: {}",
-                                    mime,
-                                    supported_types.join(", ")
-                                )
-                            ));
+                            return Err(A2AError::ContentTypeNotSupported(format!(
+                                "Unsupported file type '{}'. Supported types: {}",
+                                mime,
+                                supported_types.join(", ")
+                            )));
                         }
                     }
                 }

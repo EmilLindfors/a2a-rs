@@ -4,8 +4,8 @@
 mod sqlx_tests {
     use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
     use a2a_rs::domain::TaskState;
-    use a2a_rs::port::{AsyncTaskManager, AsyncNotificationManager, AsyncStreamingHandler};
-    use a2a_rs::{A2AError, TaskPushNotificationConfig, PushNotificationConfig};
+    use a2a_rs::port::{AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager};
+    use a2a_rs::{A2AError, PushNotificationConfig, TaskPushNotificationConfig};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -15,7 +15,7 @@ mod sqlx_tests {
             .url("sqlite::memory:".to_string())
             .max_connections(1)
             .build();
-        
+
         SqlxTaskStorage::new(&config.url).await
     }
 
@@ -36,17 +36,21 @@ mod sqlx_tests {
         assert!(!storage.task_exists("non-existent").await?);
 
         // Test status updates
-        let working_task = storage.update_task_status(&task_id, TaskState::Working, None).await?;
+        let working_task = storage
+            .update_task_status(&task_id, TaskState::Working, None)
+            .await?;
         assert_eq!(working_task.status.state, TaskState::Working);
 
-        let completed_task = storage.update_task_status(&task_id, TaskState::Completed, None).await?;
+        let completed_task = storage
+            .update_task_status(&task_id, TaskState::Completed, None)
+            .await?;
         assert_eq!(completed_task.status.state, TaskState::Completed);
 
         // Test task retrieval with history
         let retrieved_task = storage.get_task(&task_id, Some(10)).await?;
         assert_eq!(retrieved_task.id, task_id);
         assert_eq!(retrieved_task.status.state, TaskState::Completed);
-        // Should have history: Submitted -> Working -> Completed  
+        // Should have history: Submitted -> Working -> Completed
         // Note: We're not loading full history in the current implementation
         // assert_eq!(retrieved_task.history.len(), 3);
 
@@ -60,7 +64,9 @@ mod sqlx_tests {
 
         // Create and start working on task
         storage.create_task(&task_id, "test-context").await?;
-        storage.update_task_status(&task_id, TaskState::Working, None).await?;
+        storage
+            .update_task_status(&task_id, TaskState::Working, None)
+            .await?;
 
         // Cancel the working task
         let canceled_task = storage.cancel_task(&task_id).await?;
@@ -82,13 +88,17 @@ mod sqlx_tests {
 
         // Create, work on, and complete task
         storage.create_task(&task_id, "test-context").await?;
-        storage.update_task_status(&task_id, TaskState::Working, None).await?;
-        storage.update_task_status(&task_id, TaskState::Completed, None).await?;
+        storage
+            .update_task_status(&task_id, TaskState::Working, None)
+            .await?;
+        storage
+            .update_task_status(&task_id, TaskState::Completed, None)
+            .await?;
 
         // Try to cancel completed task - should fail
         let result = storage.cancel_task(&task_id).await;
         assert!(result.is_err());
-        
+
         if let Err(A2AError::TaskNotCancelable(_)) = result {
             // Expected error type
         } else {
@@ -113,7 +123,10 @@ mod sqlx_tests {
         if let Err(A2AError::TaskNotFound(_)) = result {
             // Expected error type (reused for "already exists")
         } else {
-            panic!("Expected TaskNotFound error for duplicate, got: {:?}", result);
+            panic!(
+                "Expected TaskNotFound error for duplicate, got: {:?}",
+                result
+            );
         }
 
         Ok(())
@@ -126,10 +139,18 @@ mod sqlx_tests {
 
         // Create task and make several status changes
         storage.create_task(&task_id, "test-context").await?;
-        storage.update_task_status(&task_id, TaskState::Working, None).await?;
-        storage.update_task_status(&task_id, TaskState::InputRequired, None).await?;
-        storage.update_task_status(&task_id, TaskState::Working, None).await?;
-        storage.update_task_status(&task_id, TaskState::Completed, None).await?;
+        storage
+            .update_task_status(&task_id, TaskState::Working, None)
+            .await?;
+        storage
+            .update_task_status(&task_id, TaskState::InputRequired, None)
+            .await?;
+        storage
+            .update_task_status(&task_id, TaskState::Working, None)
+            .await?;
+        storage
+            .update_task_status(&task_id, TaskState::Completed, None)
+            .await?;
 
         // Note: We're not fully implementing history loading in this version
         // In a full implementation, you'd test history limits here
@@ -156,15 +177,21 @@ mod sqlx_tests {
                 authentication: None,
             },
         };
-        
+
         let set_config = storage.set_task_notification(&config).await?;
         assert_eq!(set_config.task_id, task_id);
-        assert_eq!(set_config.push_notification_config.url, "https://example.com/webhook");
+        assert_eq!(
+            set_config.push_notification_config.url,
+            "https://example.com/webhook"
+        );
 
         // Get push notification config
         let retrieved_config = storage.get_task_notification(&task_id).await?;
         assert_eq!(retrieved_config.task_id, task_id);
-        assert_eq!(retrieved_config.push_notification_config.url, "https://example.com/webhook");
+        assert_eq!(
+            retrieved_config.push_notification_config.url,
+            "https://example.com/webhook"
+        );
 
         // Remove push notification config
         storage.remove_task_notification(&task_id).await?;
@@ -187,9 +214,7 @@ mod sqlx_tests {
         assert!(valid_config.validate().is_ok());
 
         // Test invalid config
-        let invalid_config = DatabaseConfig::builder()
-            .url("".to_string())
-            .build();
+        let invalid_config = DatabaseConfig::builder().url("".to_string()).build();
         assert!(invalid_config.validate().is_err());
 
         // Test database type detection
@@ -235,9 +260,15 @@ mod sqlx_tests {
             let storage_clone = storage.clone();
             let handle = tokio::spawn(async move {
                 let task_id = format!("concurrent-task-{}", i);
-                let task = storage_clone.create_task(&task_id, "concurrent-context").await?;
-                storage_clone.update_task_status(&task_id, TaskState::Working, None).await?;
-                storage_clone.update_task_status(&task_id, TaskState::Completed, None).await?;
+                let task = storage_clone
+                    .create_task(&task_id, "concurrent-context")
+                    .await?;
+                storage_clone
+                    .update_task_status(&task_id, TaskState::Working, None)
+                    .await?;
+                storage_clone
+                    .update_task_status(&task_id, TaskState::Completed, None)
+                    .await?;
                 Ok::<_, A2AError>(task)
             });
             handles.push(handle);

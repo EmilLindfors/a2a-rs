@@ -1,5 +1,5 @@
 //! Test business handler for integration tests
-//! 
+//!
 //! This provides a complete agent implementation that bundles all business capabilities
 //! for use in integration tests.
 
@@ -8,10 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use a2a_rs::{
-    adapter::{
-        business::DefaultMessageHandler,
-        storage::InMemoryTaskStorage,
-    },
+    adapter::{business::DefaultMessageHandler, storage::InMemoryTaskStorage},
     domain::{
         A2AError, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskState,
         TaskStatusUpdateEvent,
@@ -86,7 +83,12 @@ impl TaskManager for TestBusinessHandler {
         ))
     }
 
-    fn update_task_status(&self, _task_id: &str, _state: TaskState, _message: Option<Message>) -> Result<Task, A2AError> {
+    fn update_task_status(
+        &self,
+        _task_id: &str,
+        _state: TaskState,
+        _message: Option<Message>,
+    ) -> Result<Task, A2AError> {
         Err(A2AError::UnsupportedOperation(
             "Synchronous task status update not supported. Use async version.".to_string(),
         ))
@@ -213,7 +215,9 @@ impl AsyncTaskManager for TestBusinessHandler {
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
-        self.storage.update_task_status(task_id, state, message).await
+        self.storage
+            .update_task_status(task_id, state, message)
+            .await
     }
 
     async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
@@ -285,9 +289,7 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         task_id: &'a str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.storage
-            .broadcast_status_update(task_id, update)
-            .await
+        self.storage.broadcast_status_update(task_id, update).await
     }
 
     async fn broadcast_artifact_update<'a>(

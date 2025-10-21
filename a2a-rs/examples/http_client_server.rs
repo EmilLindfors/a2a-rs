@@ -4,15 +4,15 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use a2a_rs::adapter::{
-    DefaultRequestProcessor, HttpClient, HttpServer,
-    InMemoryTaskStorage, NoopPushNotificationSender, SimpleAgentInfo, BearerTokenAuthenticator,
+    BearerTokenAuthenticator, DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage,
+    NoopPushNotificationSender, SimpleAgentInfo,
 };
 
 mod common;
-use common::SimpleAgentHandler;
 use a2a_rs::domain::{Message, Part, Role};
-use a2a_rs::services::AsyncA2AClient;
 use a2a_rs::observability;
+use a2a_rs::services::AsyncA2AClient;
+use common::SimpleAgentHandler;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,7 +53,11 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     let push_sender = NoopPushNotificationSender;
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);
     let handler = SimpleAgentHandler::with_storage(storage);
-    let processor = DefaultRequestProcessor::with_handler(handler);
+    let test_agent_info = SimpleAgentInfo::new(
+        "test-agent".to_string(),
+        "http://localhost:8080".to_string(),
+    );
+    let processor = DefaultRequestProcessor::with_handler(handler, test_agent_info);
 
     // Create agent info
     let agent_info = SimpleAgentInfo::new(
@@ -88,7 +92,10 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     println!("🔗 HTTP server listening on http://127.0.0.1:8080");
-    server.start().await.map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+    server
+        .start()
+        .await
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
 async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
@@ -105,17 +112,22 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 3: Create and send message to task
     println!("📨 Testing task creation and messaging...");
-    
+
     let task_id = uuid::Uuid::new_v4().to_string();
     let task_id = format!("task-{}", task_id);
 
     let message = Message::builder()
         .role(Role::User)
-        .parts(vec![Part::text("Hello from HTTP client! Please echo this message.".to_string())])
+        .parts(vec![Part::text(
+            "Hello from HTTP client! Please echo this message.".to_string(),
+        )])
         .message_id(uuid::Uuid::new_v4().to_string())
         .build();
 
-    match client.send_task_message(&task_id, &message, None, None).await {
+    match client
+        .send_task_message(&task_id, &message, None, None)
+        .await
+    {
         Ok(response) => {
             println!("✅ Task created with ID: {}", task_id);
             println!("   Status: {:?}", response.status.state);

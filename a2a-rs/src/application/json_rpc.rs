@@ -105,8 +105,8 @@ impl<'de> Deserialize<'de> for A2ARequest {
             "agent/getExtendedCard" => {
                 // Re-parse as GetExtendedCardRequest (v0.3.0)
                 let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = GetExtendedCardRequest::deserialize(value)
-                    .map_err(serde::de::Error::custom)?;
+                let req =
+                    GetExtendedCardRequest::deserialize(value).map_err(serde::de::Error::custom)?;
                 A2ARequest::GetExtendedCard(req)
             }
             _ => {
@@ -171,14 +171,14 @@ impl A2ARequest {
 /// # Example
 /// ```rust
 /// use a2a_rs::application::parse_request;
-/// 
+///
 /// let json = r#"{
 ///     "jsonrpc": "2.0",
 ///     "id": "req-123",
 ///     "method": "agent/sendMessage",
 ///     "params": { "taskId": "task-456", "message": {...} }
 /// }"#;
-/// 
+///
 /// match parse_request(json) {
 ///     Ok(request) => println!("Parsed request: {:?}", request),
 ///     Err(err) => eprintln!("Parse error: {}", err),
@@ -206,10 +206,10 @@ pub fn parse_request(json: &str) -> Result<A2ARequest, A2AError> {
 /// # Example
 /// ```rust
 /// use a2a_rs::application::{serialize_request, A2ARequest};
-/// 
+///
 /// // Assuming you have an A2ARequest instance
 /// // let request = A2ARequest::SendMessage(...);
-/// 
+///
 /// // match serialize_request(&request) {
 /// //     Ok(json) => println!("Request JSON: {}", json),
 /// //     Err(err) => eprintln!("Serialization error: {}", err),

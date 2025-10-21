@@ -44,7 +44,7 @@ where
     ) -> Result<Task, A2AError> {
         // Check if task exists
         let task_exists = self.task_manager.task_exists(task_id).await?;
-        
+
         if !task_exists {
             // Create a new task
             let context_id = session_id.unwrap_or("default");
@@ -59,11 +59,14 @@ where
         // Create a simple echo response
         let response_message = Message::builder()
             .role(crate::domain::Role::Agent)
-            .parts(vec![crate::domain::Part::text(format!("Echo: {}", 
-                message.parts.iter()
+            .parts(vec![crate::domain::Part::text(format!(
+                "Echo: {}",
+                message
+                    .parts
+                    .iter()
                     .filter_map(|p| match p {
                         crate::domain::Part::Text { text, .. } => Some(text.as_str()),
-                        _ => None
+                        _ => None,
                     })
                     .collect::<Vec<_>>()
                     .join(" ")
@@ -75,7 +78,8 @@ where
 
         // For the default handler, we'll add the response message to history but keep the task in Working state
         // Real agents would process the message and determine the appropriate final state
-        let final_task = self.task_manager
+        let final_task = self
+            .task_manager
             .update_task_status(task_id, TaskState::Working, Some(response_message))
             .await?;
 

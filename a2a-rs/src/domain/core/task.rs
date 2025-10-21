@@ -50,7 +50,7 @@ pub enum TaskState {
 /// ```rust
 /// use a2a_rs::{TaskStatus, TaskState};
 /// use chrono::Utc;
-/// 
+///
 /// let status = TaskStatus {
 ///     state: TaskState::Working,
 ///     message: None,
@@ -88,7 +88,7 @@ impl Default for TaskStatus {
 /// # Example
 /// ```rust
 /// use a2a_rs::{Task, TaskStatus, TaskState};
-/// 
+///
 /// let task = Task::builder()
 ///     .id("task-123".to_string())
 ///     .context_id("ctx-456".to_string())

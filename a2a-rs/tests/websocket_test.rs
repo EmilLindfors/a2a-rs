@@ -6,8 +6,8 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, InMemoryTaskStorage,
-        SimpleAgentInfo, WebSocketClient, WebSocketServer,
+        DefaultRequestProcessor, InMemoryTaskStorage, SimpleAgentInfo, WebSocketClient,
+        WebSocketServer,
     },
     domain::Message,
     services::{AsyncA2AClient, StreamItem},
@@ -32,8 +32,14 @@ async fn test_websocket_streaming() {
     // Create business handler with the storage
     let handler = TestBusinessHandler::with_storage(storage.clone());
 
+    // Create agent info for the processor
+    let test_agent_info = SimpleAgentInfo::new(
+        "test-agent".to_string(),
+        "ws://localhost:8183".to_string(),
+    );
+
     // Create a processor
-    let processor = DefaultRequestProcessor::with_handler(handler.clone());
+    let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(
@@ -103,9 +109,7 @@ async fn test_websocket_streaming() {
 
     // Now test streaming
     println!("Testing streaming...");
-    let subscribe_result = client
-        .subscribe_to_task(&task_id, None)
-        .await;
+    let subscribe_result = client.subscribe_to_task(&task_id, None).await;
 
     if let Err(ref e) = subscribe_result {
         println!("Warning: Subscription failed: {}", e);

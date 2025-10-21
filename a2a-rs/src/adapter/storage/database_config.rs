@@ -29,36 +29,53 @@ impl DatabaseConfig {
     /// Example configurations for different environments and databases
     pub fn examples() -> HashMap<&'static str, Self> {
         [
-            ("sqlite_memory", Self::builder()
-                .url("sqlite::memory:".to_string())
-                .max_connections(1)
-                .enable_logging(true)
-                .build()),
-            ("sqlite_file", Self::builder()
-                .url("sqlite:a2a_tasks.db".to_string())
-                .max_connections(5)
-                .build()),
-            ("postgres_dev", Self::builder()
-                .url("postgres://user:password@localhost/a2a_dev".to_string())
-                .max_connections(10)
-                .timeout_seconds(10)
-                .build()),
-            ("postgres_prod", Self::builder()
-                .url("postgres://user:password@prod-db/a2a_prod".to_string())
-                .max_connections(50)
-                .timeout_seconds(5)
-                .enable_logging(false)
-                .build()),
-            ("mysql_dev", Self::builder()
-                .url("mysql://user:password@localhost/a2a_dev".to_string())
-                .max_connections(10)
-                .timeout_seconds(10)
-                .build()),
-        ].into_iter().collect()
+            (
+                "sqlite_memory",
+                Self::builder()
+                    .url("sqlite::memory:".to_string())
+                    .max_connections(1)
+                    .enable_logging(true)
+                    .build(),
+            ),
+            (
+                "sqlite_file",
+                Self::builder()
+                    .url("sqlite:a2a_tasks.db".to_string())
+                    .max_connections(5)
+                    .build(),
+            ),
+            (
+                "postgres_dev",
+                Self::builder()
+                    .url("postgres://user:password@localhost/a2a_dev".to_string())
+                    .max_connections(10)
+                    .timeout_seconds(10)
+                    .build(),
+            ),
+            (
+                "postgres_prod",
+                Self::builder()
+                    .url("postgres://user:password@prod-db/a2a_prod".to_string())
+                    .max_connections(50)
+                    .timeout_seconds(5)
+                    .enable_logging(false)
+                    .build(),
+            ),
+            (
+                "mysql_dev",
+                Self::builder()
+                    .url("mysql://user:password@localhost/a2a_dev".to_string())
+                    .max_connections(10)
+                    .timeout_seconds(10)
+                    .build(),
+            ),
+        ]
+        .into_iter()
+        .collect()
     }
 
     /// Create a new configuration from environment variables
-    /// 
+    ///
     /// Expected environment variables:
     /// - `DATABASE_URL`: Required - the database connection URL
     /// - `DATABASE_MAX_CONNECTIONS`: Optional - defaults to 10
@@ -66,17 +83,17 @@ impl DatabaseConfig {
     /// - `DATABASE_ENABLE_LOGGING`: Optional - defaults to false
     pub fn from_env() -> Result<Self, std::env::VarError> {
         let url = std::env::var("DATABASE_URL")?;
-        
+
         let max_connections = std::env::var("DATABASE_MAX_CONNECTIONS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(10);
-            
+
         let timeout_seconds = std::env::var("DATABASE_TIMEOUT_SECONDS")
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(30);
-            
+
         let enable_logging = std::env::var("DATABASE_ENABLE_LOGGING")
             .ok()
             .and_then(|s| s.parse().ok())
@@ -106,7 +123,10 @@ impl DatabaseConfig {
 
         // Basic URL validation
         if !self.url.contains("://") && !self.url.starts_with("sqlite:") {
-            return Err("Database URL must contain a protocol (e.g., sqlite://, postgres://, mysql://)".to_string());
+            return Err(
+                "Database URL must contain a protocol (e.g., sqlite://, postgres://, mysql://)"
+                    .to_string(),
+            );
         }
 
         Ok(())
@@ -129,9 +149,7 @@ impl DatabaseConfig {
 #[cfg(feature = "sqlx-storage")]
 impl Default for DatabaseConfig {
     fn default() -> Self {
-        Self::builder()
-            .url("sqlite::memory:".to_string())
-            .build()
+        Self::builder().url("sqlite::memory:".to_string()).build()
     }
 }
 
@@ -149,9 +167,7 @@ mod tests {
         assert!(config.validate().is_ok());
 
         // Empty URL
-        let config = DatabaseConfig::builder()
-            .url("".to_string())
-            .build();
+        let config = DatabaseConfig::builder().url("".to_string()).build();
         assert!(config.validate().is_err());
 
         // Invalid max connections
@@ -185,10 +201,14 @@ mod tests {
         let examples = DatabaseConfig::examples();
         assert!(examples.contains_key("sqlite_memory"));
         assert!(examples.contains_key("postgres_dev"));
-        
+
         // Validate all examples
         for (name, config) in examples {
-            assert!(config.validate().is_ok(), "Example '{}' failed validation", name);
+            assert!(
+                config.validate().is_ok(),
+                "Example '{}' failed validation",
+                name
+            );
         }
     }
 }

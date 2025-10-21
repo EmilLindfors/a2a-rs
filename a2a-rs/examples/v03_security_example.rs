@@ -51,10 +51,7 @@ fn main() {
     // Add OAuth2 with metadata URL (new in v0.3.0)
     let mut scopes = HashMap::new();
     scopes.insert("read:data".to_string(), "Read access to data".to_string());
-    scopes.insert(
-        "write:data".to_string(),
-        "Write access to data".to_string(),
-    );
+    scopes.insert("write:data".to_string(), "Write access to data".to_string());
 
     let oauth_flows = OAuthFlows {
         authorization_code: Some(AuthorizationCodeOAuthFlow {

@@ -229,6 +229,7 @@ impl AgentSkill {
     }
 
     /// Create a comprehensive skill with all details in one call
+    #[allow(clippy::too_many_arguments)]
     pub fn comprehensive(
         id: String,
         name: String,
@@ -312,7 +313,7 @@ pub struct PushNotificationAuthenticationInfo {
 /// # Example
 /// ```rust
 /// use a2a_rs::PushNotificationConfig;
-/// 
+///
 /// let config = PushNotificationConfig {
 ///     url: "https://client.example.com/notifications".to_string(),
 ///     token: Some("bearer-token-123".to_string()),
@@ -431,10 +432,7 @@ mod tests {
 
         let json_value = serde_json::to_value(&card).unwrap();
         assert!(json_value["signature"].is_object());
-        assert_eq!(
-            json_value["signature"]["protected"],
-            "eyJhbGciOiJSUzI1NiJ9"
-        );
+        assert_eq!(json_value["signature"]["protected"], "eyJhbGciOiJSUzI1NiJ9");
         assert_eq!(json_value["supportsAuthenticatedExtendedCard"], true);
     }
 

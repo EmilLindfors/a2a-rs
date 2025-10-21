@@ -47,7 +47,12 @@ where
     A: AgentInfoProvider + Send + Sync + 'static,
 {
     /// Create a new request processor with the given handlers
-    pub fn new(message_handler: M, task_manager: T, notification_manager: N, agent_info: A) -> Self {
+    pub fn new(
+        message_handler: M,
+        task_manager: T,
+        notification_manager: N,
+        agent_info: A,
+    ) -> Self {
         Self {
             message_handler: Arc::new(message_handler),
             task_manager: Arc::new(task_manager),

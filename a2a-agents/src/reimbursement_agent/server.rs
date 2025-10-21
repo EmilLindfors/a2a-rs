@@ -110,13 +110,6 @@ impl ReimbursementServer {
         S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
         H: a2a_rs::port::message_handler::AsyncMessageHandler + Clone + Send + Sync + 'static,
     {
-        // Create processor with separate handlers
-        let processor = DefaultRequestProcessor::new(
-            message_handler,
-            storage.clone(), // storage implements AsyncTaskManager
-            storage,         // storage also implements AsyncNotificationManager
-        );
-
         // Create agent info with reimbursement capabilities
         let agent_info = SimpleAgentInfo::new(
             "Reimbursement Agent".to_string(),
@@ -146,6 +139,14 @@ impl ReimbursementServer {
             ]),
             Some(vec!["text".to_string(), "data".to_string()]),
             Some(vec!["text".to_string(), "data".to_string()]),
+        );
+
+        // Create processor with separate handlers and agent info
+        let processor = DefaultRequestProcessor::new(
+            message_handler,
+            storage.clone(), // storage implements AsyncTaskManager
+            storage,         // storage also implements AsyncNotificationManager
+            agent_info.clone(),
         );
 
         // Create HTTP server

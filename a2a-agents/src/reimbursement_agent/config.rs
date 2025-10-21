@@ -170,7 +170,7 @@ impl AuthConfig {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            
+
             if !tokens.is_empty() {
                 return Self::BearerToken {
                     tokens,
@@ -186,14 +186,13 @@ impl AuthConfig {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
                 .collect();
-            
+
             if !keys.is_empty() {
                 return Self::ApiKey {
                     keys,
                     location: env::var("AUTH_API_KEY_LOCATION")
                         .unwrap_or_else(|_| default_api_key_location()),
-                    name: env::var("AUTH_API_KEY_NAME")
-                        .unwrap_or_else(|_| default_api_key_name()),
+                    name: env::var("AUTH_API_KEY_NAME").unwrap_or_else(|_| default_api_key_name()),
                 };
             }
         }

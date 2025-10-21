@@ -7,8 +7,7 @@ pub mod task;
 pub use agent::{
     AgentCapabilities, AgentCard, AgentCardSignature, AgentProvider, AgentSkill,
     AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow, ImplicitOAuthFlow, OAuthFlows,
-    PasswordOAuthFlow, PushNotificationAuthenticationInfo, PushNotificationConfig,
-    SecurityScheme,
+    PasswordOAuthFlow, PushNotificationAuthenticationInfo, PushNotificationConfig, SecurityScheme,
 };
 pub use message::{Artifact, FileContent, Message, Part, Role};
 pub use task::{

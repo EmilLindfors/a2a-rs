@@ -6,8 +6,7 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer,
-        InMemoryTaskStorage, SimpleAgentInfo,
+        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::{Message, Part, TaskState},
     services::AsyncA2AClient,
@@ -27,8 +26,14 @@ async fn test_http_client_server_interaction() {
     // Create business handler with the storage
     let handler = TestBusinessHandler::with_storage(storage);
 
+    // Create agent info for the processor
+    let test_agent_info = SimpleAgentInfo::new(
+        "test-agent".to_string(),
+        "http://localhost:8182".to_string(),
+    );
+
     // Create a processor
-    let processor = DefaultRequestProcessor::with_handler(handler);
+    let processor = DefaultRequestProcessor::with_handler(handler, test_agent_info);
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(

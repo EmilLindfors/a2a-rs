@@ -17,10 +17,7 @@ use tokio_tungstenite::{accept_async, tungstenite::Message as WsMessage};
 use tracing::{debug, error, info, instrument};
 
 use crate::{
-    adapter::{
-        auth::NoopAuthenticator,
-        error::WebSocketServerError,
-    },
+    adapter::{auth::NoopAuthenticator, error::WebSocketServerError},
     domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent},
     port::{streaming_handler::Subscriber, AsyncStreamingHandler, Authenticator},
     services::server::{AgentInfoProvider, AsyncA2ARequestProcessor},

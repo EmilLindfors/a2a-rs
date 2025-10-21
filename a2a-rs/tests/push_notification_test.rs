@@ -6,8 +6,8 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer,
-        InMemoryTaskStorage, PushNotificationSender, SimpleAgentInfo,
+        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage,
+        PushNotificationSender, SimpleAgentInfo,
     },
     domain::{
         A2AError, Message, Part, PushNotificationConfig, TaskArtifactUpdateEvent,
@@ -15,8 +15,8 @@ use a2a_rs::{
     },
     services::AsyncA2AClient,
 };
-use common::TestBusinessHandler;
 use async_trait::async_trait;
+use common::TestBusinessHandler;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -90,8 +90,14 @@ async fn test_push_notifications() {
     // Create business handler with the storage
     let handler = TestBusinessHandler::with_storage(storage);
 
+    // Create agent info for the processor
+    let test_agent_info = SimpleAgentInfo::new(
+        "test-agent".to_string(),
+        "http://localhost:8184".to_string(),
+    );
+
     // Create a processor
-    let processor = DefaultRequestProcessor::with_handler(handler);
+    let processor = DefaultRequestProcessor::with_handler(handler, test_agent_info);
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(

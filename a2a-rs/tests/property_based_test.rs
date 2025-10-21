@@ -6,12 +6,12 @@
 
 use a2a_rs::{
     adapter::SimpleAgentInfo,
-    domain::{Message, Part, Task, TaskState, AgentSkill, Role},
+    domain::{AgentSkill, Message, Part, Role, Task, TaskState},
     MessageSendParams,
 };
+use base64::Engine;
 use proptest::prelude::*;
 use serde_json::{self};
-use base64::Engine;
 
 // Custom generators for A2A protocol types
 
@@ -103,7 +103,7 @@ prop_compose! {
             Role::User => Message::user_text("placeholder".to_string(), message_id),
             Role::Agent => Message::agent_text("placeholder".to_string(), message_id),
         };
-        
+
         // Replace the placeholder text part with our generated parts
         message.parts = parts;
         message.context_id = context_id;
@@ -129,6 +129,7 @@ prop_compose! {
             tags,
             input_modes,
             output_modes,
+            security: None,
         }
     }
 }
@@ -145,10 +146,10 @@ proptest! {
     ) {
         // Serialize the message
         let json_value = serde_json::to_value(&message)?;
-        
+
         // Deserialize it back
         let deserialized: Message = serde_json::from_value(json_value)?;
-        
+
         // Core properties should be preserved
         prop_assert_eq!(message.message_id, deserialized.message_id);
         prop_assert_eq!(message.role, deserialized.role);
@@ -171,7 +172,7 @@ proptest! {
         }
 
         let mut task = Task::new(task_id.clone(), context_id.clone());
-        
+
         // Apply state transitions
         for (i, state) in states.iter().enumerate() {
             let maybe_message = if messages.is_empty() {
@@ -181,19 +182,19 @@ proptest! {
             };
             task.update_status(state.clone(), maybe_message);
         }
-        
+
         // Invariants that should always hold
         prop_assert_eq!(task.id, task_id);
         prop_assert_eq!(task.context_id, context_id);
         prop_assert_eq!(task.kind, "task");
-        
+
         // History should contain messages that were actually added to the task
         if let Some(history) = &task.history {
             // The history length should be at most the number of state updates that included messages
             let updates_with_messages = if messages.is_empty() { 0 } else { states.len() };
             prop_assert!(history.len() <= updates_with_messages);
         }
-        
+
         // Status should be the last applied state
         if let Some(last_state) = states.last() {
             prop_assert_eq!(&task.status.state, last_state);
@@ -215,13 +216,13 @@ proptest! {
             Role::User => Message::user_text(text.clone(), message_id.clone()),
             Role::Agent => Message::agent_text(text.clone(), message_id.clone()),
         };
-        
+
         // Basic invariants
         prop_assert_eq!(message.message_id, message_id);
         prop_assert_eq!(message.role, role);
         prop_assert_eq!(message.kind, "message");
         prop_assert!(!message.parts.is_empty());
-        
+
         // First part should be the text we provided
         if let Part::Text { text: part_text, .. } = &message.parts[0] {
             prop_assert_eq!(part_text, &text);
@@ -244,22 +245,22 @@ proptest! {
         }
 
         let mut agent_info = SimpleAgentInfo::new(name.clone(), url.clone());
-        
+
         if let Some(desc) = description {
             agent_info = agent_info.with_description(desc);
         }
         if let Some(ver) = version {
             agent_info = agent_info.with_version(ver);
         }
-        
+
         // Add skills
         for skill in skills {
             agent_info = agent_info.add_skill(skill.id, skill.name, Some(skill.description));
         }
-        
+
         // Test that we can get an agent card (this is async, so we'll test the builder properties)
         // The actual agent card retrieval would need to be tested in an async context
-        
+
         // For now, test that the agent info maintains its essential properties
         // through a serialization roundtrip would require async context
         prop_assert!(true); // Placeholder - this test validates the input generation works
@@ -279,18 +280,18 @@ proptest! {
             configuration: None,
             metadata: None,
         };
-        
+
         let request = a2a_rs::application::SendMessageRequest {
             jsonrpc: "2.0".to_string(),
             method: "message/send".to_string(),
             id: Some(id_value.clone()),
             params,
         };
-        
+
         // Serialize and deserialize
         let json = serde_json::to_value(&request)?;
         let deserialized: a2a_rs::application::SendMessageRequest = serde_json::from_value(json)?;
-        
+
         // ID should be preserved
         prop_assert_eq!(request.id, deserialized.id);
         prop_assert_eq!(request.jsonrpc, deserialized.jsonrpc);
@@ -305,7 +306,7 @@ proptest! {
         // Serialize and deserialize the part
         let json_value = serde_json::to_value(&part)?;
         let deserialized: Part = serde_json::from_value(json_value)?;
-        
+
         // Test based on part type
         match (&part, &deserialized) {
             (Part::Text { text: t1, .. }, Part::Text { text: t2, .. }) => {
@@ -341,21 +342,21 @@ proptest! {
         }
 
         let mut task = Task::new(task_id, context_id);
-        
+
         // Add all messages
         for message in messages.iter() {
             task.update_status(TaskState::Working, Some(message.clone()));
         }
-        
+
         // Apply history limit
         let limited_task = task.with_limited_history(Some(limit as u32));
-        
+
         if limit == 0 {
             prop_assert!(limited_task.history.is_none());
         } else if let Some(history) = limited_task.history {
             prop_assert!(history.len() <= limit);
             prop_assert!(history.len() <= messages.len());
-            
+
             // Should have the most recent messages
             if !messages.is_empty() && !history.is_empty() {
                 let expected_start = messages.len().saturating_sub(limit);
@@ -379,7 +380,7 @@ proptest! {
                 TaskState::Canceled,
                 TaskState::Failed,
                 TaskState::Rejected,
-            ]), 
+            ]),
             0..3
         ),
         working_state_message in arb_message()
@@ -389,21 +390,21 @@ proptest! {
         }
 
         let mut task = Task::new(task_id, context_id);
-        
+
         // Tasks should start in a working state typically
         task.update_status(TaskState::Working, Some(working_state_message));
-        
-        // Apply final states - once a task reaches a final state, 
+
+        // Apply final states - once a task reaches a final state,
         // it should maintain that final state
         for final_state in final_states {
             task.update_status(final_state.clone(), None);
-            
+
             // After setting a final state, the task should be in that state
             prop_assert_eq!(&task.status.state, &final_state);
-            
+
             // Final states should be final (this is more of a business logic test)
             match &final_state {
-                TaskState::Completed | TaskState::Canceled | 
+                TaskState::Completed | TaskState::Canceled |
                 TaskState::Failed | TaskState::Rejected => {
                     // These are considered final states in most business logic
                     prop_assert!(true);
@@ -448,7 +449,7 @@ mod edge_case_properties {
                 Some("test.bin".to_string()),
                 Some("application/octet-stream".to_string())
             );
-            
+
             if let Part::File { file, .. } = file_part {
                 prop_assert_eq!(file.bytes, Some(encoded));
                 prop_assert_eq!(file.name, Some("test.bin".to_string()));
@@ -467,11 +468,11 @@ mod edge_case_properties {
         ) {
             if !message_id.is_empty() {
                 let message = Message::user_text(unicode_text.clone(), message_id.clone());
-                
+
                 // Serialize and deserialize
                 let json = serde_json::to_value(&message).unwrap();
                 let deserialized: Message = serde_json::from_value(json).unwrap();
-                
+
                 prop_assert_eq!(message.message_id, deserialized.message_id);
                 if let Part::Text { text, .. } = &deserialized.parts[0] {
                     prop_assert_eq!(text, &unicode_text);

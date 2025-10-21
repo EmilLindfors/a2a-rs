@@ -1,8 +1,4 @@
-use a2a_rs::{
-    domain::Part as MessagePart,
-    services::AsyncA2AClient,
-    HttpClient,
-};
+use a2a_rs::{domain::Part as MessagePart, services::AsyncA2AClient, HttpClient};
 use askama::Template;
 use askama_axum::IntoResponse;
 use axum::{
@@ -59,8 +55,8 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let agent_url = std::env::var("AGENT_URL")
-        .unwrap_or_else(|_| "http://localhost:8080".to_string());
+    let agent_url =
+        std::env::var("AGENT_URL").unwrap_or_else(|_| "http://localhost:8080".to_string());
 
     let a2a_client = HttpClient::new(agent_url);
     let state = AppState { a2a_client };
@@ -98,7 +94,7 @@ async fn new_chat(
 ) -> Result<AxumResponse, AppError> {
     // Create a new task
     let task_id = Uuid::new_v4().to_string();
-    
+
     // Redirect to the chat page
     Ok(axum::response::Redirect::to(&format!("/chat/{}", task_id)).into_response())
 }
@@ -115,14 +111,16 @@ async fn chat_page(
                 .into_iter()
                 .map(|msg| {
                     // Extract text content from message parts
-                    let content = msg.parts.iter()
+                    let content = msg
+                        .parts
+                        .iter()
                         .filter_map(|part| match part {
                             MessagePart::Text { text, .. } => Some(text.clone()),
                             _ => None,
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
-                    
+
                     MessageView {
                         id: msg.message_id,
                         role: format!("{:?}", msg.role),
@@ -145,8 +143,8 @@ async fn send_message(
     State(state): State<Arc<AppState>>,
     Form(form): Form<SendMessageForm>,
 ) -> Result<AxumResponse, AppError> {
-    use a2a_rs::domain::{Message, Role, Part};
-    
+    use a2a_rs::domain::{Message, Part, Role};
+
     let message = Message {
         role: Role::User,
         parts: vec![Part::text(form.message)],
@@ -158,7 +156,8 @@ async fn send_message(
         kind: "message".to_string(),
     };
 
-    state.a2a_client
+    state
+        .a2a_client
         .send_task_message(&form.task_id, &message, None, Some(50))
         .await
         .map_err(|e| AppError(anyhow::anyhow!("Failed to send message: {}", e)))?;
