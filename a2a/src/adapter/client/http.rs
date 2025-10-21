@@ -37,9 +37,14 @@ pub struct HttpClient {
 impl HttpClient {
     /// Create a new HTTP client with the given base URL
     pub fn new(base_url: String) -> Self {
+        let client = Client::builder()
+        .pool_max_idle_per_host(10)
+        .timeout(Duration::from_secs(30))
+        .build()
+        .unwrap_or_default();
         Self {
             base_url,
-            client: Client::new(),
+            client,
             auth_token: None,
             timeout: 30, // Default timeout in seconds
         }
@@ -124,10 +129,10 @@ impl AsyncA2AClient for HttpClient {
             history_length,
             metadata: None,
         };
-
+    
         let request = SendTaskRequest::new(params);
         let response = self.send_request(&A2ARequest::SendTask(request)).await?;
-
+    
         match response.result {
             Some(value) => {
                 let task: Task = serde_json::from_value(value)?;

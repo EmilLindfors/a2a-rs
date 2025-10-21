@@ -1,6 +1,6 @@
 //! A simple HTTP client example
 
-use a2a_rs::{
+use a2a::{
     adapter::client::HttpClient,
     domain::{Message, Part},
     port::client::AsyncA2AClient,
@@ -20,7 +20,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Send a task message
     println!("Sending message to task...");
-    let task = client.send_task_message(&task_id, &message, None, None).await?;
+    let task = client
+        .send_task_message(&task_id, &message, None, None)
+        .await?;
     println!("Got response with status: {:?}", task.status.state);
 
     if let Some(response_message) = task.status.message {
@@ -33,10 +35,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Get the task again to verify it's stored
-    println!("\nRetrieving task...");
-    let task = client.get_task(&task_id, None).await?;
-    println!("Retrieved task with ID: {} and state: {:?}", task.id, task.status.state);
+    // Get the task again to verify it's stored and show history
+    println!("\nRetrieving task with history...");
+    let task = client.get_task(&task_id, Some(10)).await?;
+    println!(
+        "Retrieved task with ID: {} and state: {:?}",
+        task.id, task.status.state
+    );
+
+    // Display the conversation history
+    if let Some(history) = task.history {
+        println!("\nConversation history:");
+        for (i, msg) in history.iter().enumerate() {
+            println!("  Message {}: Role: {:?}", i + 1, msg.role);
+            for part in &msg.parts {
+                match part {
+                    Part::Text { text, .. } => println!("    {}", text),
+                    _ => println!("    [Non-text content]"),
+                }
+            }
+        }
+    } else {
+        println!("\nNo conversation history available.");
+    }
 
     // Cancel the task
     println!("\nCanceling task...");

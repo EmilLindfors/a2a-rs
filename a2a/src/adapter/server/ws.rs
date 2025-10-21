@@ -5,7 +5,7 @@
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    sync::Arc,
+    sync::Arc, time::Duration,
 };
 
 use async_trait::async_trait;
@@ -28,6 +28,7 @@ use crate::{
     },
     port::server::{AgentInfoProvider, AsyncA2ARequestProcessor, AsyncTaskHandler, Subscriber},
 };
+
 
 type ClientMap = Arc<Mutex<HashMap<String, mpsc::Sender<WsMessage>>>>;
 
@@ -65,6 +66,23 @@ where
             address,
             clients: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Create a WebSocket subscriber with retry capabilities
+    fn create_subscriber(
+        &self,
+        client_id: String,
+        request_id: Option<Value>,
+        task_id: String,
+    ) -> Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync> {
+        let subscriber = WebSocketSubscriber {
+            client_id,
+            request_id,
+            clients: self.clients.clone(),
+        };
+        
+        
+        Box::new(subscriber)
     }
 
     /// Start the WebSocket server

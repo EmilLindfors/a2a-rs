@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-a2a-rs = { path = "../a2a-rs", features = ["full"] }
+a2a = { path = "../a2a", features = ["full"] }
 
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }
@@ -20,7 +20,7 @@ clap = { version = "4.4", features = ["derive"] }
 tracing-subscriber = "0.3"
 
 # Async foundation
-tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal"] }
 async-trait = { version = "0.1" }
 futures = { version = "0.3" }
 

@@ -127,10 +127,21 @@ where
         let session_id = params.session_id.as_deref();
         
         let task = self.task_handler.handle_message(&params.id, &params.message, session_id).await?;
-        
+
         Ok(JSONRPCResponse::success(
             request.id.clone(),
             serde_json::to_value(task)?,
+        ))
+    }
+
+    /// Process a get extended card request (v0.3.0)
+    /// This method should be overridden to provide extended card with sensitive information
+    /// For now, returns UnsupportedOperation error as authentication is required
+    async fn process_get_extended_card(&self, _request: &crate::application::json_rpc::GetExtendedCardRequest) -> Result<JSONRPCResponse, A2AError> {
+        // This method requires authentication and should be implemented by the server
+        // if it supports extended cards. For now, return an error.
+        Err(A2AError::UnsupportedOperation(
+            "Extended card retrieval is not supported or requires authentication".to_string()
         ))
     }
 }
@@ -176,6 +187,7 @@ where
             A2ARequest::GetTaskPushNotification(req) => self.process_get_push_notification(req).await,
             A2ARequest::TaskResubscription(req) => self.process_task_resubscription(req).await,
             A2ARequest::SendTaskStreaming(req) => self.process_send_task_streaming(req).await,
+            A2ARequest::GetExtendedCard(req) => self.process_get_extended_card(req).await,
             A2ARequest::Generic(req) => {
                 // Handle unknown method
                 Err(A2AError::MethodNotFound(format!("Method '{}' not found", req.method)))

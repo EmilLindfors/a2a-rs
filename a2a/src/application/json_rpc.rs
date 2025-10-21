@@ -373,6 +373,40 @@ impl TaskResubscriptionRequest {
     }
 }
 
+/// Request to get extended agent card (v0.3.0)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetExtendedCardRequest {
+    pub jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Value>,
+    pub method: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<Value>,
+}
+
+impl GetExtendedCardRequest {
+    pub fn new() -> Self {
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id: Some(Value::String(uuid::Uuid::new_v4().to_string())),
+            method: "agent/getExtendedCard".to_string(),
+            params: None,
+        }
+    }
+}
+
+/// Response to get extended agent card request (v0.3.0)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetExtendedCardResponse {
+    pub jsonrpc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub result: Option<crate::domain::AgentCard>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JSONRPCError>,
+}
+
 /// Any A2A protocol request
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -384,6 +418,7 @@ pub enum A2ARequest {
     GetTaskPushNotification(GetTaskPushNotificationRequest),
     TaskResubscription(TaskResubscriptionRequest),
     SendTaskStreaming(SendTaskStreamingRequest),
+    GetExtendedCard(GetExtendedCardRequest),
     Generic(JSONRPCRequest),
 }
 
@@ -398,6 +433,7 @@ impl A2ARequest {
             A2ARequest::GetTaskPushNotification(req) => &req.method,
             A2ARequest::TaskResubscription(req) => &req.method,
             A2ARequest::SendTaskStreaming(req) => &req.method,
+            A2ARequest::GetExtendedCard(req) => &req.method,
             A2ARequest::Generic(req) => &req.method,
         }
     }
@@ -412,6 +448,7 @@ impl A2ARequest {
             A2ARequest::GetTaskPushNotification(req) => req.id.as_ref(),
             A2ARequest::TaskResubscription(req) => req.id.as_ref(),
             A2ARequest::SendTaskStreaming(req) => req.id.as_ref(),
+            A2ARequest::GetExtendedCard(req) => req.id.as_ref(),
             A2ARequest::Generic(req) => req.id.as_ref(),
         }
     }

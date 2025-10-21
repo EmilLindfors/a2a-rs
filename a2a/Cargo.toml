@@ -1,5 +1,5 @@
 [package]
-name = "a2a-rs"
+name = "a2a"
 version = "0.1.0"
 edition = "2021"
 authors = ["Emil Lindfors <emil@lindfors.no>"]
@@ -30,22 +30,27 @@ reqwest = { version = "0.11", features = ["json"], optional = true }
 
 # WebSocket - optional
 tokio-tungstenite = { version = "0.20", optional = true }
+tokio-stream = { version = "0.1.17", optional = true }
 
 # HTTP server - optional
 axum = { version = "0.8", optional = true }
 
 # Logging - optional
 tracing = { version = "0.1", optional = true }
+rand = "0.9.0"
+ctrlc = "3.4.6"
+
 
 [features]
 default = ["full"]
 client = ["dep:tokio", "dep:async-trait", "dep:futures"]
 http-client = ["client", "dep:reqwest"]
-ws-client = ["client", "dep:tokio-tungstenite"]
+ws-client = ["client", "dep:tokio-tungstenite", "dep:tokio-stream"]
 server = ["dep:tokio", "dep:async-trait", "dep:futures"]
 http-server = ["server", "dep:axum"]
 ws-server = ["server", "dep:tokio-tungstenite"]
 full = ["http-client", "ws-client", "http-server", "ws-server", "dep:tracing"]
+tokio-stream = ["dep:tokio-stream"]
 
 
 [[example]]
@@ -67,3 +72,6 @@ required-features = ["http-client"]
 name = "websocket_client"
 path = "examples/websocket_client.rs"
 required-features = ["ws-client"]
+
+[dev-dependencies]
+tracing-subscriber = "0.3.19"

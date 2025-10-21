@@ -1,5 +1,7 @@
 //! Server port (interface) for the A2A protocol
 
+use std::any::Any;
+
 #[cfg(feature = "server")]
 use async_trait::async_trait;
 
@@ -120,7 +122,23 @@ pub trait AgentInfoProvider: Send + Sync {
 #[cfg(feature = "server")]
 #[async_trait]
 /// A trait for subscribing to updates
-pub trait Subscriber<T>: Send + Sync {
+pub trait Subscriber<T: Sized>: Send + Sync {
     /// Handle an update
     async fn on_update(&self, update: T) -> Result<(), A2AError>;
 }
+
+/// Extension trait for dynamic type inspection
+pub trait SubscriberExt<T>: Subscriber<T> {
+    /// Get a reference to Any for downcasting
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
+impl<T, S> SubscriberExt<T> for S 
+where 
+    S: Subscriber<T> + Any + 'static,
+{
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+

@@ -2,15 +2,33 @@
 
 A Rust implementation of the Agent-to-Agent (A2A) Protocol that follows idiomatic Rust practices and hexagonal architecture principles.
 
+## Protocol Compliance
+
+**✅ A2A Protocol v0.3.0 Compliant**
+
+This implementation fully supports the A2A Protocol v0.3.0 specification, including all new security features:
+
+- ✅ **Enhanced Security Schemes**: Support for API Key, HTTP Bearer, OAuth2, OpenID Connect, and Mutual TLS (mTLS)
+- ✅ **Agent Card Signatures**: RFC 7515 (JSON Web Signature) support for card integrity verification
+- ✅ **Per-Skill Security**: Skills can specify their own authentication requirements
+- ✅ **OAuth2 Metadata Discovery**: RFC 8414 support for OAuth2 metadata URLs
+- ✅ **Extended Card Support**: Authenticated clients can request extended agent information
+- ✅ **Well-Known URIs**: RFC 8615 compliant discovery endpoint (`/.well-known/agent-card.json`)
+- ✅ **Backward Compatible**: Full compatibility with v0.2.x clients and servers
+
+See [examples/v03_security_example.rs](a2a/examples/v03_security_example.rs) for a complete demonstration of v0.3.0 security features.
+
 ## Features
 
-- Complete implementation of the A2A protocol as specified in the JSON schema
+- Complete implementation of the A2A protocol v0.2.x and v0.3.0
 - Support for both client and server roles
 - Multiple transport options:
   - HTTP client and server
   - WebSocket client and server with streaming support
 - Async and sync interfaces
 - Feature flags for optional dependencies
+- Comprehensive security scheme support
+- Agent card digital signatures
 
 ## Architecture
 

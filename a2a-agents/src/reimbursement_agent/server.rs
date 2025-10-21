@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use a2a_rs::adapter::server::{DefaultRequestProcessor, HttpServer, WebSocketServer};
-use a2a_rs::domain::{AgentCapabilities, AgentCard, AgentSkill};
+use a2a::adapter::server::{DefaultRequestProcessor, HttpServer, WebSocketServer};
+use a2a::domain::{AgentCapabilities, AgentCard, AgentSkill};
 use crate::reimbursement_agent::agent::ReimbursementAgent;
 use crate::reimbursement_agent::task_manager::AgentTaskManager;
 
@@ -19,8 +19,8 @@ pub struct SimpleAgentInfo {
 }
 
 #[async_trait::async_trait]
-impl a2a_rs::port::server::AgentInfoProvider for SimpleAgentInfo {
-    async fn get_agent_card(&self) -> Result<AgentCard, a2a_rs::domain::A2AError> {
+impl a2a::port::server::AgentInfoProvider for SimpleAgentInfo {
+    async fn get_agent_card(&self) -> Result<AgentCard, a2a::domain::A2AError> {
         Ok(self.card.clone())
     }
 }

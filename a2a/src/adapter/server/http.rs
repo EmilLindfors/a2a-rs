@@ -55,7 +55,11 @@ where
 
         let app = Router::new()
             .route("/", post(handle_request))
+            // v0.3.0 standard well-known URI per RFC 8615
+            .route("/.well-known/agent-card.json", get(handle_agent_card))
+            // Backward compatibility routes
             .route("/agent-card", get(handle_agent_card))
+            .route("/.well-known/agent.json", get(handle_agent_card))
             .with_state(ServerState {
                 processor: processor.clone(),
                 agent_info: agent_info.clone(),

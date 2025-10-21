@@ -1,6 +1,6 @@
 //! A simple WebSocket server example
 
-use a2a_rs::{
+use a2a::{
     adapter::server::{DefaultRequestProcessor, InMemoryTaskStorage, SimpleAgentInfo, WebSocketServer},
 };
 

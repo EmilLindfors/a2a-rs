@@ -30,6 +30,13 @@ pub struct TaskStatus {
     pub timestamp: Option<DateTime<Utc>>,
 }
 
+impl TaskState {
+    /// Check if the task is in a terminal state (completed, canceled, or failed)
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, TaskState::Completed | TaskState::Canceled | TaskState::Failed)
+    }
+}
+
 /// A task in the A2A protocol
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
@@ -39,6 +46,8 @@ pub struct Task {
     pub status: TaskStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifacts: Option<Vec<Artifact>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub history: Option<Vec<Message>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
@@ -67,6 +76,7 @@ pub struct TaskSendParams {
     pub id: String,
     #[serde(skip_serializing_if = "Option::is_none", rename = "sessionId")]
     pub session_id: Option<String>,
+
     pub message: Message,
     #[serde(skip_serializing_if = "Option::is_none", rename = "pushNotification")]
     pub push_notification: Option<PushNotificationConfig>,
@@ -116,6 +126,7 @@ impl Task {
                 timestamp: Some(Utc::now()),
             },
             artifacts: None,
+            history: None,
             metadata: None,
         }
     }
@@ -131,12 +142,18 @@ impl Task {
                 timestamp: Some(Utc::now()),
             },
             artifacts: None,
+            history: None,
             metadata: None,
         }
     }
 
     /// Update the task status
     pub fn update_status(&mut self, state: TaskState, message: Option<Message>) {
+        // Store the previous message in history if available
+        if let Some(prev_message) = &self.status.message {
+            self.add_to_history(prev_message.clone());
+        }
+
         self.status = TaskStatus {
             state,
             message,
@@ -150,6 +167,28 @@ impl Task {
             artifacts.push(artifact);
         } else {
             self.artifacts = Some(vec![artifact]);
+        }
+    }
+
+    /// Add a message to the task history
+    pub fn add_to_history(&mut self, message: Message) {
+        if let Some(history) = &mut self.history {
+            history.push(message);
+        } else {
+            self.history = Some(vec![message]);
+        }
+    }
+
+    /// Limit the history to the specified length
+    pub fn limit_history(&mut self, length: u32) {
+        if let Some(history) = &mut self.history {
+            if history.len() > length as usize {
+                *history = history
+                    .iter()
+                    .skip(history.len() - length as usize)
+                    .cloned()
+                    .collect();
+            }
         }
     }
 }

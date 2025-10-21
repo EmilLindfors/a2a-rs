@@ -1,5 +1,5 @@
 use clap::Parser;
-use a2a_rs::domain::{AgentCapabilities, AgentCard, AgentSkill};
+use a2a::domain::{AgentCapabilities, AgentCard, AgentSkill};
 use a2a_agents::reimbursement_agent::agent::ReimbursementAgent;
 use a2a_agents::reimbursement_agent::task_manager::AgentTaskManager;
 use a2a_agents::reimbursement_agent::server::A2AServer;

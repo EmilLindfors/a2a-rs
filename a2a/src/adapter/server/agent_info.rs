@@ -6,7 +6,8 @@ use async_trait::async_trait;
 
 use crate::{
     domain::{
-        A2AError, AgentAuthentication, AgentCapabilities, AgentCard, AgentProvider, AgentSkill,
+        A2AError, AgentAuthentication, AgentCapabilities, AgentCard, AgentCardSignature,
+        AgentProvider, AgentSkill, SecurityRequirement, SecuritySchemes,
     },
     port::server::AgentInfoProvider,
 };
@@ -34,6 +35,10 @@ impl SimpleAgentInfo {
                 default_input_modes: vec!["text".to_string()],
                 default_output_modes: vec!["text".to_string()],
                 skills: Vec::new(),
+                security_schemes: None,
+                security: None,
+                signature: None,
+                supports_authenticated_extended_card: None,
             },
         }
     }
@@ -114,7 +119,32 @@ impl SimpleAgentInfo {
             examples: None,
             input_modes: None,
             output_modes: None,
+            security: None,
         });
+        self
+    }
+
+    /// Set the security schemes for the agent (v0.3.0)
+    pub fn with_security_schemes(mut self, schemes: SecuritySchemes) -> Self {
+        self.card.security_schemes = Some(schemes);
+        self
+    }
+
+    /// Set the security requirements for the agent (v0.3.0)
+    pub fn with_security(mut self, requirements: Vec<SecurityRequirement>) -> Self {
+        self.card.security = Some(requirements);
+        self
+    }
+
+    /// Set the signature for the agent card (v0.3.0)
+    pub fn with_signature(mut self, signature: AgentCardSignature) -> Self {
+        self.card.signature = Some(signature);
+        self
+    }
+
+    /// Enable authenticated extended card support (v0.3.0)
+    pub fn with_extended_card_support(mut self, enabled: bool) -> Self {
+        self.card.supports_authenticated_extended_card = Some(enabled);
         self
     }
 }
