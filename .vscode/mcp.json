@@ -1,0 +1,8 @@
+{
+  "servers": {
+    "datapilot": {
+      "url": "http://localhost:7704/sse",
+      "type": "sse"
+    }
+  }
+}

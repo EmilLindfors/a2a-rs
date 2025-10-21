@@ -37,8 +37,12 @@
         },
         {
           "$ref": "#/definitions/InvalidAgentResponseError"
+        },
+        {
+          "$ref": "#/definitions/AuthenticatedExtendedCardNotConfiguredError"
         }
-      ]
+      ],
+      "description": "A discriminated union of all standard JSON-RPC and A2A-specific error types."
     },
     "JSONParseError": {
       "description": "JSON-RPC error indicating invalid JSON was received by the server.",
@@ -284,6 +288,29 @@
         "message": {
           "default": "Invalid agent response",
           "description": "A String providing a short description of the error.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ],
+      "type": "object"
+    },
+    "AuthenticatedExtendedCardNotConfiguredError": {
+      "description": "An A2A-specific error indicating that the agent does not have an Authenticated Extended Card configured",
+      "properties": {
+        "code": {
+          "const": -32007,
+          "description": "The error code for when an authenticated extended card is not configured.",
+          "type": "integer"
+        },
+        "data": {
+          "description": "A primitive or structured value containing additional information about the error.\nThis may be omitted."
+        },
+        "message": {
+          "default": "Authenticated Extended Card is not configured",
+          "description": "The error message.",
           "type": "string"
         }
       },

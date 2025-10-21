@@ -16,9 +16,12 @@
         },
         {
           "$ref": "#/definitions/OpenIdConnectSecurityScheme"
+        },
+        {
+          "$ref": "#/definitions/MutualTLSSecurityScheme"
         }
       ],
-      "description": "Mirrors the OpenAPI Security Scheme Object\n(https://swagger.io/specification/#security-scheme-object)"
+      "description": "Defines a security scheme that can be used to secure an agent's endpoints.\nThis is a discriminated union type based on the OpenAPI 3.0 Security Scheme Object."
     },
     "SecuritySchemeBase": {
       "description": "Base properties shared by all security schemes.",
@@ -89,18 +92,23 @@
       "type": "object"
     },
     "OAuth2SecurityScheme": {
-      "description": "OAuth2.0 security scheme configuration.",
+      "description": "Defines a security scheme using OAuth 2.0.",
       "properties": {
         "description": {
-          "description": "Description of this security scheme.",
+          "description": "An optional description for the security scheme.",
           "type": "string"
         },
         "flows": {
           "$ref": "#/definitions/OAuthFlows",
-          "description": "An object containing configuration information for the flow types supported."
+          "description": "An object containing configuration information for the supported OAuth 2.0 flows."
+        },
+        "oauth2MetadataUrl": {
+          "description": "URL to the oauth2 authorization server metadata\n[RFC8414](https://datatracker.ietf.org/doc/html/rfc8414). TLS is required.",
+          "type": "string"
         },
         "type": {
           "const": "oauth2",
+          "description": "The type of the security scheme. Must be 'oauth2'.",
           "type": "string"
         }
       },
@@ -235,27 +243,45 @@
       "type": "object"
     },
     "PasswordOAuthFlow": {
-      "description": "Configuration details for a supported OAuth Flow",
+      "description": "Defines configuration details for the OAuth 2.0 Resource Owner Password flow.",
       "properties": {
         "refreshUrl": {
-          "description": "The URL to be used for obtaining refresh tokens. This MUST be in the form of a URL. The OAuth2\nstandard requires the use of TLS.",
+          "description": "The URL to be used for obtaining refresh tokens. This MUST be a URL.",
           "type": "string"
         },
         "scopes": {
           "additionalProperties": {
             "type": "string"
           },
-          "description": "The available scopes for the OAuth2 security scheme. A map between the scope name and a short\ndescription for it. The map MAY be empty.",
+          "description": "The available scopes for the OAuth2 security scheme. A map between the scope\nname and a short description for it.",
           "type": "object"
         },
         "tokenUrl": {
-          "description": "The token URL to be used for this flow. This MUST be in the form of a URL. The OAuth2 standard\nrequires the use of TLS.",
+          "description": "The token URL to be used for this flow. This MUST be a URL.",
           "type": "string"
         }
       },
       "required": [
         "scopes",
         "tokenUrl"
+      ],
+      "type": "object"
+    },
+    "MutualTLSSecurityScheme": {
+      "description": "Defines a security scheme using mTLS authentication.",
+      "properties": {
+        "description": {
+          "description": "An optional description for the security scheme.",
+          "type": "string"
+        },
+        "type": {
+          "const": "mutualTLS",
+          "description": "The type of the security scheme. Must be 'mutualTLS'.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
       ],
       "type": "object"
     }

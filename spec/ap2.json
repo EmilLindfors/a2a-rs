@@ -1,0 +1,454 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AP2 (Agent Payments Protocol) Extension",
+  "description": "AP2 extension type definitions for agent-to-agent commerce capabilities. Extension URI: https://github.com/google-agentic-commerce/ap2/tree/v0.1",
+  "definitions": {
+    "Ap2Role": {
+      "description": "Roles that agents can fulfill in the AP2 ecosystem",
+      "type": "string",
+      "enum": [
+        "merchant",
+        "shopper",
+        "credentials-provider",
+        "payment-processor"
+      ]
+    },
+    "IntentMandate": {
+      "description": "Represents a user's purchase intent with constraints and requirements. This mandate is created by a shopper agent based on user input and sent to a merchant agent.",
+      "type": "object",
+      "properties": {
+        "user_cart_confirmation_required": {
+          "type": "boolean",
+          "description": "Controls whether the agent needs user approval before completing the purchase. Defaults to true.",
+          "default": true
+        },
+        "natural_language_description": {
+          "type": "string",
+          "description": "Human-readable summary of the purchase intent, verified by the user."
+        },
+        "merchants": {
+          "type": "array",
+          "description": "Optional list of allowed merchants. If unset, any merchant is acceptable.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "skus": {
+          "type": "array",
+          "description": "Optional list of specific product SKUs. If unset, products are unrestricted.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required_refundability": {
+          "type": "boolean",
+          "description": "Whether purchased items must be refundable. Defaults to false.",
+          "default": false
+        },
+        "intent_expiry": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Expiration timestamp for this intent in ISO 8601 format."
+        }
+      },
+      "required": [
+        "natural_language_description",
+        "intent_expiry"
+      ]
+    },
+    "PaymentCurrencyAmount": {
+      "description": "Currency amount representation following W3C Payment Request API",
+      "type": "object",
+      "properties": {
+        "currency": {
+          "type": "string",
+          "description": "Three-letter ISO 4217 currency code (e.g., 'USD', 'EUR', 'GBP').",
+          "pattern": "^[A-Z]{3}$"
+        },
+        "value": {
+          "type": "string",
+          "description": "String representation of the amount to avoid floating-point precision issues."
+        }
+      },
+      "required": ["currency", "value"]
+    },
+    "PaymentItem": {
+      "description": "Individual line item in a payment request",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "description": "Human-readable description of the item."
+        },
+        "amount": {
+          "$ref": "#/definitions/PaymentCurrencyAmount",
+          "description": "Cost of this line item."
+        },
+        "pending": {
+          "type": "boolean",
+          "description": "If true, indicates the amount is not yet final."
+        },
+        "refund_period": {
+          "type": "integer",
+          "description": "The refund duration for this item, in days. Defaults to 30.",
+          "default": 30,
+          "minimum": 0
+        }
+      },
+      "required": ["label", "amount"]
+    },
+    "ContactAddress": {
+      "description": "Physical address information",
+      "type": "object",
+      "properties": {
+        "country": {
+          "type": "string"
+        },
+        "addressLine": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "region": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "dependentLocality": {
+          "type": "string"
+        },
+        "postalCode": {
+          "type": "string"
+        },
+        "sortingCode": {
+          "type": "string"
+        },
+        "organization": {
+          "type": "string"
+        },
+        "recipient": {
+          "type": "string"
+        },
+        "phone": {
+          "type": "string"
+        }
+      }
+    },
+    "PaymentShippingOption": {
+      "description": "Shipping option for the payment",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "amount": {
+          "$ref": "#/definitions/PaymentCurrencyAmount"
+        },
+        "selected": {
+          "type": "boolean"
+        }
+      },
+      "required": ["id", "label", "amount"]
+    },
+    "PaymentResponse": {
+      "description": "User's chosen payment method and associated details",
+      "type": "object",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "The unique ID from the original PaymentRequest."
+        },
+        "method_name": {
+          "type": "string",
+          "description": "The payment method chosen by the user (e.g., 'basic-card', 'google-pay')."
+        },
+        "details": {
+          "type": "object",
+          "description": "Payment method-specific transaction data.",
+          "additionalProperties": true
+        },
+        "shipping_address": {
+          "$ref": "#/definitions/ContactAddress",
+          "description": "Shipping address if applicable."
+        },
+        "shipping_option": {
+          "$ref": "#/definitions/PaymentShippingOption",
+          "description": "Selected shipping option if applicable."
+        },
+        "payer_name": {
+          "type": "string"
+        },
+        "payer_email": {
+          "type": "string",
+          "format": "email"
+        },
+        "payer_phone": {
+          "type": "string"
+        }
+      },
+      "required": ["request_id", "method_name"]
+    },
+    "PaymentMethodData": {
+      "description": "Payment method information for a payment request",
+      "type": "object",
+      "properties": {
+        "supported_methods": {
+          "type": "array",
+          "description": "Payment method identifiers supported (e.g., 'basic-card', 'google-pay')",
+          "items": {
+            "type": "string"
+          }
+        },
+        "data": {
+          "type": "object",
+          "description": "Payment method-specific data",
+          "additionalProperties": true
+        }
+      },
+      "required": ["supported_methods"]
+    },
+    "PaymentDetailsInit": {
+      "description": "Details for a payment request following W3C Payment Request API",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this payment request"
+        },
+        "total": {
+          "$ref": "#/definitions/PaymentItem",
+          "description": "Total amount for the payment"
+        },
+        "displayItems": {
+          "type": "array",
+          "description": "Line items to display to user",
+          "items": {
+            "$ref": "#/definitions/PaymentItem"
+          }
+        },
+        "shippingOptions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/PaymentShippingOption"
+          }
+        },
+        "modifiers": {
+          "type": "array",
+          "description": "Modifiers to apply based on payment method",
+          "items": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "required": ["total"]
+    },
+    "PaymentOptions": {
+      "description": "Options for payment request",
+      "type": "object",
+      "properties": {
+        "requestPayerName": {
+          "type": "boolean"
+        },
+        "requestPayerEmail": {
+          "type": "boolean"
+        },
+        "requestPayerPhone": {
+          "type": "boolean"
+        },
+        "requestShipping": {
+          "type": "boolean"
+        },
+        "shippingType": {
+          "type": "string",
+          "enum": ["shipping", "delivery", "pickup"]
+        }
+      }
+    },
+    "PaymentRequest": {
+      "description": "Full payment request structure following W3C Payment Request API",
+      "type": "object",
+      "properties": {
+        "method_data": {
+          "type": "array",
+          "description": "Supported payment methods and their data",
+          "items": {
+            "$ref": "#/definitions/PaymentMethodData"
+          }
+        },
+        "details": {
+          "$ref": "#/definitions/PaymentDetailsInit",
+          "description": "Payment details including totals and line items"
+        },
+        "options": {
+          "$ref": "#/definitions/PaymentOptions",
+          "description": "Payment options for payer information and shipping"
+        }
+      },
+      "required": ["method_data", "details"]
+    },
+    "CartContents": {
+      "description": "Shopping cart contents including items and payment request. Merchants MUST NOT produce a CartMandate until all required payment-impacting information has been collected.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this cart."
+        },
+        "user_signature_required": {
+          "type": "boolean",
+          "description": "Whether user authorization signature is required for this cart."
+        },
+        "payment_request": {
+          "$ref": "#/definitions/PaymentRequest",
+          "description": "W3C Payment Request API structure containing payment details"
+        }
+      },
+      "required": ["id", "user_signature_required", "payment_request"],
+      "additionalProperties": true
+    },
+    "CartMandate": {
+      "description": "Merchant-signed cart containing items and payment request. This is created by a merchant agent in response to an IntentMandate.",
+      "type": "object",
+      "properties": {
+        "contents": {
+          "$ref": "#/definitions/CartContents",
+          "description": "Cart details and payment information."
+        },
+        "merchant_authorization": {
+          "type": "string",
+          "description": "Base64url-encoded JWT digitally signing cart contents with merchant's private key. Includes cart hash, timestamps, and unique identifier to prevent replay attacks."
+        }
+      },
+      "required": ["contents"]
+    },
+    "PaymentMandateContents": {
+      "description": "Core payment authorization details",
+      "type": "object",
+      "properties": {
+        "payment_mandate_id": {
+          "type": "string",
+          "description": "Unique identifier for this payment mandate."
+        },
+        "payment_details_id": {
+          "type": "string",
+          "description": "Reference to the payment request identifier."
+        },
+        "payment_details_total": {
+          "$ref": "#/definitions/PaymentItem",
+          "description": "Total amount being authorized."
+        },
+        "payment_response": {
+          "$ref": "#/definitions/PaymentResponse",
+          "description": "User's chosen payment method and details."
+        },
+        "merchant_agent": {
+          "type": "string",
+          "description": "Identifier of the merchant agent."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp in ISO 8601 format."
+        }
+      },
+      "required": [
+        "payment_mandate_id",
+        "payment_details_id",
+        "payment_details_total",
+        "payment_response",
+        "merchant_agent",
+        "timestamp"
+      ],
+      "additionalProperties": true
+    },
+    "PaymentMandate": {
+      "description": "Payment authorization mandate providing transaction visibility. This is created after user authorizes a cart and is sent to the payment processor.",
+      "type": "object",
+      "properties": {
+        "payment_mandate_contents": {
+          "$ref": "#/definitions/PaymentMandateContents",
+          "description": "Core payment authorization data."
+        },
+        "user_authorization": {
+          "type": "string",
+          "description": "Base64url-encoded verifiable credential presentation (such as sd-jwt-vc) binding the user to both cart and payment mandate hashes."
+        }
+      },
+      "required": ["payment_mandate_contents"]
+    },
+    "Ap2DataPart": {
+      "description": "Data part containing AP2 mandate. The 'data' field should contain one of the mandate types with the appropriate key.",
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "data"
+        },
+        "data": {
+          "type": "object",
+          "description": "Contains mandate data with keys: 'ap2.mandates.IntentMandate', 'ap2.mandates.CartMandate', 'ap2.mandates.PaymentMandate', or 'risk_data'",
+          "additionalProperties": true
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Optional metadata for this part",
+          "additionalProperties": true
+        }
+      },
+      "required": ["kind", "data"]
+    },
+    "Ap2ExtensionParameters": {
+      "description": "Extension parameters that must be included when declaring AP2 support. Merchants SHOULD set the AP2 extension to required.",
+      "type": "object",
+      "properties": {
+        "roles": {
+          "type": "array",
+          "description": "At least one role must be specified for AP2 support.",
+          "items": {
+            "$ref": "#/definitions/Ap2Role"
+          },
+          "minItems": 1
+        }
+      },
+      "required": ["roles"]
+    },
+    "Ap2ExtendedAgentCard": {
+      "description": "AgentCard extended with AP2-specific fields. Add these fields to your existing AgentCard to declare AP2 support.",
+      "type": "object",
+      "properties": {
+        "extensions": {
+          "type": "array",
+          "description": "Extension URIs supported by this agent. For AP2, include 'https://github.com/google-agentic-commerce/ap2/tree/v0.1'. Merchant agents SHOULD set this extension to required.",
+          "items": {
+            "type": "string",
+            "format": "uri"
+          },
+          "minItems": 1,
+          "contains": {
+            "const": "https://github.com/google-agentic-commerce/ap2/tree/v0.1"
+          }
+        },
+        "roles": {
+          "type": "array",
+          "description": "Roles this agent can fulfill. For AP2, use values from Ap2Role enum. At least one role is required.",
+          "items": {
+            "$ref": "#/definitions/Ap2Role"
+          },
+          "minItems": 1
+        }
+      },
+      "required": ["extensions", "roles"]
+    },
+    "RiskData": {
+      "description": "Optional implementation-specific risk signals. Structure is defined by implementers and may include fraud detection signals, user behavior analytics, or other risk assessment data.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  }
+}

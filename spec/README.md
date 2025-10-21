@@ -21,17 +21,31 @@ The specification has been organized into the following files:
 - **[notifications.json](./notifications.json)** - Push notification configuration and authentication
 - **[events.json](./events.json)** - Streaming events for status and artifact updates
 
+### Extensions
+- **[ap2.json](./ap2.json)** - AP2 (Agent Payments Protocol) extension for commerce capabilities
+
 ## Key A2A Protocol Methods
 
 The specification defines the following core methods:
 
+### Message Methods
 1. **`message/send`** - Send a message to an agent (blocking)
 2. **`message/stream`** - Send a message with streaming response
+
+### Task Management Methods
 3. **`tasks/get`** - Retrieve task information and history
-4. **`tasks/cancel`** - Cancel an active task
-5. **`tasks/pushNotificationConfig/set`** - Configure push notifications for a task
-6. **`tasks/pushNotificationConfig/get`** - Retrieve push notification configuration
-7. **`tasks/resubscribe`** - Resubscribe to task updates
+4. **`tasks/list`** - List tasks with filtering and pagination
+5. **`tasks/cancel`** - Cancel an active task
+6. **`tasks/resubscribe`** - Resubscribe to task updates
+
+### Push Notification Methods
+7. **`tasks/pushNotificationConfig/set`** - Configure push notifications for a task
+8. **`tasks/pushNotificationConfig/get`** - Retrieve push notification configuration
+9. **`tasks/pushNotificationConfig/list`** - List all push notification configurations for a task
+10. **`tasks/pushNotificationConfig/delete`** - Delete a push notification configuration
+
+### Agent Discovery Methods
+11. **`agent/getAuthenticatedExtendedCard`** - Retrieve extended agent card for authenticated users
 
 ## Task States
 
@@ -56,6 +70,7 @@ The protocol defines specific error codes:
 - `-32004` - Operation not supported
 - `-32005` - Content type not supported
 - `-32006` - Invalid agent response
+- `-32007` - Authenticated extended card not configured
 
 ## Usage for Implementation
 
@@ -70,3 +85,34 @@ When implementing the A2A protocol:
 7. Configure notifications via **notifications.json**
 
 Each file is self-contained with proper JSON Schema references to related files, making it easy to validate specific aspects of your implementation against the protocol specification.
+
+## AP2 (Agent Payments Protocol) Extension
+
+The AP2 extension enables commerce and payment capabilities between agents. See **[ap2.json](./ap2.json)** for the complete schema.
+
+### Key Concepts
+
+**Agent Roles:**
+- `merchant` - Handles payments and checkout
+- `shopper` - Makes purchases on behalf of users
+- `credentials-provider` - Supplies payment credentials
+- `payment-processor` - Processes transactions
+
+**Mandate Types:**
+1. **IntentMandate** (`ap2.mandates.IntentMandate`) - User's purchase intent with constraints
+2. **CartMandate** (`ap2.mandates.CartMandate`) - Merchant's cart and payment request
+3. **PaymentMandate** (`ap2.mandates.PaymentMandate`) - Authorized payment details
+
+### Extension URI
+
+`https://github.com/google-agentic-commerce/ap2/tree/v0.1`
+
+### Usage
+
+To declare AP2 support in your AgentCard:
+
+1. Add the extension URI to the `extensions` array
+2. Specify at least one role in the `roles` array
+3. Include mandates as Data parts in messages using the appropriate keys
+
+See the AP2 implementation plan and examples in the main repository for integration details.

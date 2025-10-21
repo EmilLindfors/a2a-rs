@@ -4,17 +4,22 @@
   "description": "Push notification configuration and authentication for the A2A protocol",
   "definitions": {
     "PushNotificationConfig": {
-      "description": "Configuration for setting up push notifications for task updates.",
+      "description": "Defines the configuration for setting up push notifications for task updates.",
       "properties": {
         "authentication": {
-          "$ref": "#/definitions/PushNotificationAuthenticationInfo"
+          "$ref": "#/definitions/PushNotificationAuthenticationInfo",
+          "description": "Optional authentication details for the agent to use when calling the notification URL."
+        },
+        "id": {
+          "description": "A unique identifier (e.g. UUID) for the push notification configuration, set by the client\nto support multiple notification callbacks.",
+          "type": "string"
         },
         "token": {
-          "description": "Token unique to this task/session.",
+          "description": "A unique token for this task or session to validate incoming push notifications.",
           "type": "string"
         },
         "url": {
-          "description": "URL for sending the push notifications.",
+          "description": "The callback URL where the agent should send push notifications.",
           "type": "string"
         }
       },
@@ -24,14 +29,14 @@
       "type": "object"
     },
     "PushNotificationAuthenticationInfo": {
-      "description": "Defines authentication details for push notifications.",
+      "description": "Defines authentication details for a push notification endpoint.",
       "properties": {
         "credentials": {
-          "description": "Optional credentials",
+          "description": "Optional credentials required by the push notification endpoint.",
           "type": "string"
         },
         "schemes": {
-          "description": "Supported authentication schemes - e.g. Basic, Bearer",
+          "description": "A list of supported authentication schemes (e.g., 'Basic', 'Bearer').",
           "items": {
             "type": "string"
           },
