@@ -32,10 +32,8 @@ async fn test_basic_streaming_functionality() {
 
     let storage = InMemoryTaskStorage::new();
     let handler = TestBusinessHandler::with_storage(storage.clone());
-    let test_agent_info = SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "ws://localhost:8192".to_string(),
-    );
+    let test_agent_info =
+        SimpleAgentInfo::new("test-agent".to_string(), "ws://localhost:8192".to_string());
     let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     let agent_info = SimpleAgentInfo::new(
@@ -153,10 +151,8 @@ async fn test_streaming_event_ordering() {
 
     let storage = InMemoryTaskStorage::new();
     let handler = TestBusinessHandler::with_storage(storage.clone());
-    let test_agent_info = SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "ws://localhost:8193".to_string(),
-    );
+    let test_agent_info =
+        SimpleAgentInfo::new("test-agent".to_string(), "ws://localhost:8193".to_string());
     let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     let agent_info = SimpleAgentInfo::new(
@@ -264,10 +260,8 @@ async fn test_streaming_artifact_updates() {
 
     let storage = InMemoryTaskStorage::new();
     let handler = TestBusinessHandler::with_storage(storage.clone());
-    let test_agent_info = SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "ws://localhost:8194".to_string(),
-    );
+    let test_agent_info =
+        SimpleAgentInfo::new("test-agent".to_string(), "ws://localhost:8194".to_string());
     let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     let agent_info = SimpleAgentInfo::new(
@@ -396,10 +390,8 @@ async fn test_websocket_connection_resilience() {
 
     let storage = InMemoryTaskStorage::new();
     let handler = TestBusinessHandler::with_storage(storage.clone());
-    let test_agent_info = SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "ws://localhost:8195".to_string(),
-    );
+    let test_agent_info =
+        SimpleAgentInfo::new("test-agent".to_string(), "ws://localhost:8195".to_string());
     let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     let agent_info = SimpleAgentInfo::new(
@@ -532,10 +524,8 @@ async fn test_streaming_with_history_limits() {
 
     let storage = InMemoryTaskStorage::new();
     let handler = TestBusinessHandler::with_storage(storage.clone());
-    let test_agent_info = SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "ws://localhost:8196".to_string(),
-    );
+    let test_agent_info =
+        SimpleAgentInfo::new("test-agent".to_string(), "ws://localhost:8196".to_string());
     let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     let agent_info = SimpleAgentInfo::new(
@@ -637,10 +627,8 @@ async fn test_streaming_event_specification_compliance() {
 
     let storage = InMemoryTaskStorage::new();
     let handler = TestBusinessHandler::with_storage(storage.clone());
-    let test_agent_info = SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "ws://localhost:8197".to_string(),
-    );
+    let test_agent_info =
+        SimpleAgentInfo::new("test-agent".to_string(), "ws://localhost:8197".to_string());
     let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     let agent_info = SimpleAgentInfo::new(

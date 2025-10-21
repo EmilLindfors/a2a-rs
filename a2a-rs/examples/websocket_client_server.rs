@@ -54,10 +54,8 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
     let push_sender = NoopPushNotificationSender;
     let storage = InMemoryTaskStorage::with_push_sender(push_sender);
     let handler = SimpleAgentHandler::with_storage(storage.clone());
-    let test_agent_info = SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "ws://localhost:8081".to_string(),
-    );
+    let test_agent_info =
+        SimpleAgentInfo::new("test-agent".to_string(), "ws://localhost:8081".to_string());
     let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
 
     // Create agent info

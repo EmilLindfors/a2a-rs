@@ -33,10 +33,8 @@ async fn test_websocket_streaming() {
     let handler = TestBusinessHandler::with_storage(storage.clone());
 
     // Create agent info for the processor
-    let test_agent_info = SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "ws://localhost:8183".to_string(),
-    );
+    let test_agent_info =
+        SimpleAgentInfo::new("test-agent".to_string(), "ws://localhost:8183".to_string());
 
     // Create a processor
     let processor = DefaultRequestProcessor::with_handler(handler.clone(), test_agent_info);
