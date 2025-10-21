@@ -46,6 +46,7 @@ struct SendMessageForm {
 
 #[derive(Deserialize)]
 struct NewChatForm {
+    #[allow(dead_code)]
     agent_url: String,
 }
 
@@ -81,11 +82,10 @@ async fn main() -> anyhow::Result<()> {
 }
 
 async fn index() -> impl IntoResponse {
-    let template = IndexTemplate {
+    IndexTemplate {
         agent_url: std::env::var("AGENT_URL")
             .unwrap_or_else(|_| "http://localhost:8080".to_string()),
-    };
-    template
+    }
 }
 
 async fn new_chat(

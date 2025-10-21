@@ -19,11 +19,16 @@ struct ReimbursementStore {
 
 #[derive(Debug, Clone)]
 struct StoredRequest {
+    #[allow(dead_code)]
     request: ReimbursementRequest,
     status: ProcessingStatus,
+    #[allow(dead_code)]
     created_at: DateTime<Utc>,
+    #[allow(dead_code)]
     updated_at: DateTime<Utc>,
+    #[allow(dead_code)]
     receipts: Vec<ReceiptMetadata>,
+    #[allow(dead_code)]
     metadata: Option<Map<String, Value>>,
 }
 
@@ -328,13 +333,13 @@ impl ReimbursementHandler {
                     // Try expense_type from metadata
                     data.get("expense_type")
                         .and_then(|v| v.as_str())
-                        .and_then(|s| match s.to_lowercase().as_str() {
-                            "travel" => Some(ExpenseCategory::Travel),
-                            "meals" | "meal" => Some(ExpenseCategory::Meals),
-                            "supplies" | "supply" => Some(ExpenseCategory::Supplies),
-                            "equipment" => Some(ExpenseCategory::Equipment),
-                            "training" => Some(ExpenseCategory::Training),
-                            _ => Some(ExpenseCategory::Other),
+                        .map(|s| match s.to_lowercase().as_str() {
+                            "travel" => ExpenseCategory::Travel,
+                            "meals" | "meal" => ExpenseCategory::Meals,
+                            "supplies" | "supply" => ExpenseCategory::Supplies,
+                            "equipment" => ExpenseCategory::Equipment,
+                            "training" => ExpenseCategory::Training,
+                            _ => ExpenseCategory::Other,
                         })
                 });
 
@@ -687,7 +692,7 @@ impl ReimbursementHandler {
                     .requests
                     .lock()
                     .ok()
-                    .and_then(|_store| {
+                    .and({
                         // In a real system, we'd get this from the message metadata
                         // For now, we'll auto-approve small amounts
                         match &amount {

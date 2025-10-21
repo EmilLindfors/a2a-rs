@@ -99,8 +99,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             Part::File {
                 file: file_content,
                 metadata: json!({"extracted_amount": "$75.50"})
-                    .as_object()
-                    .map(|o| o.clone()),
+                    .as_object().cloned(),
             },
         ])
         .message_id(Uuid::new_v4().to_string())
