@@ -165,6 +165,7 @@ fn main() {
             streaming: true,
             push_notifications: false,
             state_transition_history: true,
+            extensions: None,
         })
         .default_input_modes(vec!["text".to_string(), "json".to_string()])
         .default_output_modes(vec!["text".to_string(), "json".to_string()])
@@ -172,7 +173,7 @@ fn main() {
         // v0.3.0 fields
         .maybe_security_schemes(Some(security_schemes))
         .maybe_security(Some(agent_security))
-        .maybe_signature(Some(signature))
+        .maybe_signatures(Some(vec![signature]))
         .maybe_supports_authenticated_extended_card(Some(true))
         .build();
 
@@ -188,7 +189,7 @@ fn main() {
         agent_card.security.as_ref().unwrap().len()
     );
     println!("  - Skills: {}", agent_card.skills.len());
-    println!("  - Signed: {}", agent_card.signature.is_some());
+    println!("  - Signed: {}", agent_card.signatures.is_some());
     println!(
         "  - Extended Card Support: {}",
         agent_card

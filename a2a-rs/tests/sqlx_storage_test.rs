@@ -172,6 +172,7 @@ mod sqlx_tests {
         let config = TaskPushNotificationConfig {
             task_id: task_id.clone(),
             push_notification_config: PushNotificationConfig {
+                id: None,
                 url: "https://example.com/webhook".to_string(),
                 token: None,
                 authentication: None,

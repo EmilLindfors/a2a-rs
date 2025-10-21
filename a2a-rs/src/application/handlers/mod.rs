@@ -5,7 +5,10 @@ pub mod message;
 pub mod notification;
 pub mod task;
 
-pub use agent::{GetExtendedCardRequest, GetExtendedCardResponse};
+pub use agent::{
+    GetAuthenticatedExtendedCardRequest, GetAuthenticatedExtendedCardResponse,
+    GetExtendedCardRequest, GetExtendedCardResponse,
+};
 pub use message::{
     SendMessageRequest, SendMessageResponse, SendMessageStreamingRequest,
     SendMessageStreamingResponse, SendTaskRequest, SendTaskResponse, SendTaskStreamingRequest,
@@ -16,6 +19,9 @@ pub use notification::{
     SetTaskPushNotificationRequest, SetTaskPushNotificationResponse,
 };
 pub use task::{
-    CancelTaskRequest, CancelTaskResponse, GetTaskRequest, GetTaskResponse,
-    TaskResubscriptionRequest,
+    CancelTaskRequest, CancelTaskResponse, DeleteTaskPushNotificationConfigRequest,
+    DeleteTaskPushNotificationConfigResponse, GetTaskPushNotificationConfigRequest,
+    GetTaskPushNotificationConfigResponse, GetTaskRequest, GetTaskResponse,
+    ListTaskPushNotificationConfigRequest, ListTaskPushNotificationConfigResponse,
+    ListTasksRequest, ListTasksResponse, TaskResubscriptionRequest,
 };

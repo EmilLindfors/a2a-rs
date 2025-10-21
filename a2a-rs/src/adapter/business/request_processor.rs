@@ -225,6 +225,84 @@ where
             serde_json::to_value(card)?,
         ))
     }
+
+    // ===== v0.3.0 New Methods =====
+
+    async fn process_list_tasks(
+        &self,
+        request: &crate::application::handlers::task::ListTasksRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        let default_params = crate::domain::ListTasksParams::default();
+        let params = request.params.as_ref().unwrap_or(&default_params);
+        let result = self.task_manager.list_tasks_v3(params).await?;
+
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::to_value(result)?,
+        ))
+    }
+
+    async fn process_get_push_notification_config(
+        &self,
+        request: &crate::application::handlers::task::GetTaskPushNotificationConfigRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        if let Some(ref params) = request.params {
+            let result = self.task_manager.get_push_notification_config(params).await?;
+
+            Ok(JSONRPCResponse::success(
+                request.id.clone(),
+                serde_json::to_value(result)?,
+            ))
+        } else {
+            Err(A2AError::InvalidParams(
+                "Missing params for get push notification config".to_string(),
+            ))
+        }
+    }
+
+    async fn process_list_push_notification_configs(
+        &self,
+        request: &crate::application::handlers::task::ListTaskPushNotificationConfigRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        let result = self
+            .task_manager
+            .list_push_notification_configs(&request.params)
+            .await?;
+
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::to_value(result)?,
+        ))
+    }
+
+    async fn process_delete_push_notification_config(
+        &self,
+        request: &crate::application::handlers::task::DeleteTaskPushNotificationConfigRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        self.task_manager
+            .delete_push_notification_config(&request.params)
+            .await?;
+
+        // Return null on success
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::Value::Null,
+        ))
+    }
+
+    async fn process_get_authenticated_extended_card(
+        &self,
+        request: &crate::application::handlers::agent::GetAuthenticatedExtendedCardRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        // Get the authenticated extended card from the agent info provider
+        // Authentication checking should be handled by middleware before this point
+        let card = self.agent_info.get_authenticated_extended_card().await?;
+
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::to_value(card)?,
+        ))
+    }
 }
 
 #[async_trait]
@@ -293,6 +371,20 @@ where
                 ))
             }
             A2ARequest::GetExtendedCard(req) => self.process_get_extended_card(req).await,
+            // v0.3.0 new methods
+            A2ARequest::ListTasks(req) => self.process_list_tasks(req).await,
+            A2ARequest::GetTaskPushNotificationConfig(req) => {
+                self.process_get_push_notification_config(req).await
+            }
+            A2ARequest::ListTaskPushNotificationConfigs(req) => {
+                self.process_list_push_notification_configs(req).await
+            }
+            A2ARequest::DeleteTaskPushNotificationConfig(req) => {
+                self.process_delete_push_notification_config(req).await
+            }
+            A2ARequest::GetAuthenticatedExtendedCard(req) => {
+                self.process_get_authenticated_extended_card(req).await
+            }
             A2ARequest::Generic(req) => {
                 // Handle unknown method
                 Err(A2AError::MethodNotFound(format!(

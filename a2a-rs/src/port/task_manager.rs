@@ -4,7 +4,11 @@
 use async_trait::async_trait;
 
 use crate::{
-    domain::{A2AError, Task, TaskIdParams, TaskQueryParams, TaskState},
+    domain::{
+        A2AError, DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
+        ListTaskPushNotificationConfigParams, ListTasksParams, ListTasksResult, Task, TaskIdParams,
+        TaskPushNotificationConfig, TaskQueryParams, TaskState,
+    },
     Message,
 };
 
@@ -165,5 +169,51 @@ pub trait AsyncTaskManager: Send + Sync {
         }
 
         self.cancel_task(&params.id).await
+    }
+
+    // ===== v0.3.0 New Methods =====
+
+    /// List tasks with comprehensive filtering and pagination (v0.3.0)
+    async fn list_tasks_v3<'a>(
+        &self,
+        _params: &'a ListTasksParams,
+    ) -> Result<ListTasksResult, A2AError> {
+        // Default implementation returns unsupported error
+        Err(A2AError::UnsupportedOperation(
+            "Task listing with pagination not implemented".to_string(),
+        ))
+    }
+
+    /// Get push notification config by ID (v0.3.0)
+    async fn get_push_notification_config<'a>(
+        &self,
+        _params: &'a GetTaskPushNotificationConfigParams,
+    ) -> Result<TaskPushNotificationConfig, A2AError> {
+        // Default implementation returns unsupported error
+        Err(A2AError::UnsupportedOperation(
+            "Get push notification config not implemented".to_string(),
+        ))
+    }
+
+    /// List all push notification configs for a task (v0.3.0)
+    async fn list_push_notification_configs<'a>(
+        &self,
+        _params: &'a ListTaskPushNotificationConfigParams,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
+        // Default implementation returns unsupported error
+        Err(A2AError::UnsupportedOperation(
+            "List push notification configs not implemented".to_string(),
+        ))
+    }
+
+    /// Delete a specific push notification config (v0.3.0)
+    async fn delete_push_notification_config<'a>(
+        &self,
+        _params: &'a DeleteTaskPushNotificationConfigParams,
+    ) -> Result<(), A2AError> {
+        // Default implementation returns unsupported error
+        Err(A2AError::UnsupportedOperation(
+            "Delete push notification config not implemented".to_string(),
+        ))
     }
 }

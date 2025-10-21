@@ -4,14 +4,19 @@
 [![Documentation](https://docs.rs/a2a-rs/badge.svg)](https://docs.rs/a2a-rs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Rust implementation of the Agent-to-Agent (A2A) Protocol, providing a type-safe, idiomatic way to build agent communication systems.
+A Rust implementation of the Agent-to-Agent (A2A) Protocol v0.3.0, providing a type-safe, idiomatic way to build agent communication systems.
 
 ## Features
 
-- 🚀 **Complete A2A Protocol Implementation** - Full support for the A2A specification
+- 🚀 **A2A Protocol v0.3.0** - Full support for the latest A2A specification including:
+  - Enhanced push notification management with listing and deletion
+  - Task listing with comprehensive filtering and pagination
+  - Authenticated extended card support
+  - Protocol extensions framework
+  - Multi-transport support (JSONRPC, GRPC, HTTP+JSON)
 - 🔄 **Multiple Transport Options** - HTTP and WebSocket support
 - 📡 **Streaming Updates** - Real-time task and artifact updates
-- 🔐 **Authentication & Security** - JWT, OAuth2, OpenID Connect support
+- 🔐 **Authentication & Security** - JWT, OAuth2, OpenID Connect support with agent card signatures
 - 💾 **Persistent Storage** - SQLx integration for task persistence
 - 🎯 **Async-First Design** - Built on Tokio with async/await throughout
 - 🧩 **Modular Architecture** - Use only the features you need
@@ -39,14 +44,15 @@ a2a-rs = { version = "0.1.0", features = ["full"] }
 
 ```rust
 use a2a_rs::{HttpClient, Message};
+use a2a_rs::services::AsyncA2AClient;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = HttpClient::new("https://api.example.com".to_string());
-    
-    let message = Message::user_text("Hello, agent!".to_string());
+
+    let message = Message::user_text("Hello, agent!".to_string(), "msg-123".to_string());
     let task = client.send_task_message("task-123", &message, None, None).await?;
-    
+
     println!("Task created: {:?}", task);
     Ok(())
 }

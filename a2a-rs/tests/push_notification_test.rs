@@ -134,6 +134,7 @@ async fn test_push_notifications() {
     let push_config = a2a_rs::domain::TaskPushNotificationConfig {
         task_id: task_id.clone(),
         push_notification_config: PushNotificationConfig {
+            id: None,
             url: "https://example.com/webhook".to_string(),
             token: Some("test-token".to_string()),
             authentication: None,
@@ -166,6 +167,7 @@ async fn test_push_notifications() {
         description: Some("A test artifact".to_string()),
         parts: vec![artifact_part],
         metadata: None,
+        extensions: None,
     };
 
     let artifact_message_id = format!("msg-{}", uuid::Uuid::new_v4());
@@ -178,6 +180,7 @@ async fn test_push_notifications() {
         metadata: None,
         reference_task_ids: None,
         task_id: None,
+        extensions: None,
     };
 
     // Send the artifact message

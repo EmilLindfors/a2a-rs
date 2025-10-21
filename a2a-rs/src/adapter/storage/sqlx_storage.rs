@@ -602,6 +602,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
             message_id: uuid::Uuid::new_v4().to_string(),
             task_id: Some(task_id.to_string()),
             context_id: Some(task.context_id.clone()),
+            extensions: None,
             kind: "message".to_string(),
         };
 
@@ -680,6 +681,7 @@ impl AsyncNotificationManager for SqlxTaskStorage {
             Ok(TaskPushNotificationConfig {
                 task_id: task_id.to_string(),
                 push_notification_config: crate::domain::PushNotificationConfig {
+                    id: None,
                     url: webhook_url,
                     token: None,
                     authentication: None,

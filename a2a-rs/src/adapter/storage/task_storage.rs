@@ -304,6 +304,7 @@ impl AsyncTaskManager for InMemoryTaskStorage {
                     message_id: uuid::Uuid::new_v4().to_string(),
                     task_id: Some(task_id.to_string()),
                     context_id: Some(updated_task.context_id.clone()),
+                    extensions: None,
                     kind: "message".to_string(),
                 };
 
@@ -321,6 +322,132 @@ impl AsyncTaskManager for InMemoryTaskStorage {
             .await?;
 
         Ok(task)
+    }
+
+    // ===== v0.3.0 New Methods =====
+
+    async fn list_tasks_v3<'a>(
+        &self,
+        params: &'a crate::domain::ListTasksParams,
+    ) -> Result<crate::domain::ListTasksResult, A2AError> {
+        use crate::domain::ListTasksResult;
+
+        let tasks_guard = self.tasks.lock().await;
+
+        // Filter tasks based on parameters
+        let mut filtered_tasks: Vec<_> = tasks_guard
+            .values()
+            .filter(|task| {
+                // Filter by context_id if provided
+                if let Some(ref context_id) = params.context_id {
+                    if &task.context_id != context_id {
+                        return false;
+                    }
+                }
+
+                // Filter by status if provided
+                if let Some(ref status) = params.status {
+                    if &task.status.state != status {
+                        return false;
+                    }
+                }
+
+                // Filter by lastUpdatedAfter if provided
+                if let Some(last_updated_after) = params.last_updated_after {
+                    if let Some(timestamp) = task.status.timestamp {
+                        let task_time_ms = timestamp.timestamp_millis();
+                        if task_time_ms <= last_updated_after {
+                            return false;
+                        }
+                    }
+                }
+
+                true
+            })
+            .cloned()
+            .collect();
+
+        // Sort by timestamp (most recent first)
+        filtered_tasks.sort_by(|a, b| {
+            let a_time = a.status.timestamp.map(|t| t.timestamp_millis()).unwrap_or(0);
+            let b_time = b.status.timestamp.map(|t| t.timestamp_millis()).unwrap_or(0);
+            b_time.cmp(&a_time)
+        });
+
+        let total_size = filtered_tasks.len() as i32;
+
+        // Handle pagination
+        let page_size = params.page_size.unwrap_or(50).clamp(1, 100) as usize;
+        let page_start = if let Some(ref token) = params.page_token {
+            // Parse page token as a number (simple implementation)
+            token.parse::<usize>().unwrap_or(0)
+        } else {
+            0
+        };
+
+        let page_end = (page_start + page_size).min(filtered_tasks.len());
+        let has_more = page_end < filtered_tasks.len();
+
+        // Get the page of tasks
+        let mut page_tasks: Vec<_> = filtered_tasks[page_start..page_end].to_vec();
+
+        // Apply history length limit
+        let history_length = params.history_length.unwrap_or(0);
+        for task in &mut page_tasks {
+            *task = task.with_limited_history(Some(history_length as u32));
+
+            // Remove artifacts if not requested
+            if !params.include_artifacts.unwrap_or(false) {
+                task.artifacts = None;
+            }
+        }
+
+        // Generate next page token
+        let next_page_token = if has_more {
+            page_end.to_string()
+        } else {
+            String::new()
+        };
+
+        Ok(ListTasksResult {
+            tasks: page_tasks,
+            total_size,
+            page_size: page_size as i32,
+            next_page_token,
+        })
+    }
+
+    async fn get_push_notification_config<'a>(
+        &self,
+        params: &'a crate::domain::GetTaskPushNotificationConfigParams,
+    ) -> Result<crate::domain::TaskPushNotificationConfig, A2AError> {
+        // For in-memory storage, we don't support multiple configs per task yet
+        // Just use the existing get_task_notification method
+        self.get_task_notification(&params.id).await
+    }
+
+    async fn list_push_notification_configs<'a>(
+        &self,
+        params: &'a crate::domain::ListTaskPushNotificationConfigParams,
+    ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
+        // For in-memory storage, we only support one config per task
+        // Return it as a single-item vec
+        match self.push_notification_registry.get_config(&params.id).await? {
+            Some(config) => Ok(vec![crate::domain::TaskPushNotificationConfig {
+                task_id: params.id.clone(),
+                push_notification_config: config,
+            }]),
+            None => Ok(vec![]),
+        }
+    }
+
+    async fn delete_push_notification_config<'a>(
+        &self,
+        params: &'a crate::domain::DeleteTaskPushNotificationConfigParams,
+    ) -> Result<(), A2AError> {
+        // For in-memory storage, just remove the single config
+        // In a full implementation, would need to handle config_id
+        self.remove_task_notification(&params.id).await
     }
 }
 

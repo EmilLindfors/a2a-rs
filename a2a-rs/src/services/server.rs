@@ -30,6 +30,15 @@ pub trait AgentInfoProvider: Send + Sync {
         let skill = self.get_skill_by_id(id).await?;
         Ok(skill.is_some())
     }
+
+    /// Get the authenticated extended agent card (v0.3.0)
+    ///
+    /// Returns an extended version of the agent card with authenticated-only information.
+    /// By default, returns AuthenticatedExtendedCardNotConfigured error.
+    /// Override this method to provide authenticated extended card support.
+    async fn get_authenticated_extended_card(&self) -> Result<AgentCard, A2AError> {
+        Err(A2AError::AuthenticatedExtendedCardNotConfigured)
+    }
 }
 
 /// An async trait for processing A2A protocol requests

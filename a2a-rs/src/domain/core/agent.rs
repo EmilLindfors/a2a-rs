@@ -2,6 +2,74 @@ use bon::Builder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+/// Supported A2A transport protocols (v0.3.0).
+///
+/// Defines the transport protocols that agents can use for communication.
+/// Agents can support multiple transport protocols simultaneously.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum TransportProtocol {
+    #[serde(rename = "JSONRPC")]
+    JsonRpc,
+    #[serde(rename = "GRPC")]
+    Grpc,
+    #[serde(rename = "HTTP+JSON")]
+    HttpJson,
+}
+
+/// Declares a combination of URL and transport protocol for interacting with the agent (v0.3.0).
+///
+/// This allows agents to expose the same functionality over multiple transport mechanisms.
+/// Clients can select any interface based on their transport capabilities and preferences.
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::AgentInterface;
+///
+/// let interface = AgentInterface {
+///     url: "https://api.example.com/grpc".to_string(),
+///     transport: "GRPC".to_string(),
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentInterface {
+    /// The URL where this interface is available
+    pub url: String,
+    /// The transport protocol supported at this URL
+    pub transport: String,
+}
+
+/// Declaration of a protocol extension supported by an agent (v0.3.0).
+///
+/// Extensions provide a mechanism for agents to declare support for
+/// additional capabilities beyond the core A2A protocol specification.
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::AgentExtension;
+/// use std::collections::HashMap;
+///
+/// let extension = AgentExtension {
+///     uri: "https://example.com/extensions/custom-auth".to_string(),
+///     description: Some("Custom authentication extension".to_string()),
+///     required: Some(false),
+///     params: None,
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentExtension {
+    /// Unique URI identifying the extension
+    pub uri: String,
+    /// Human-readable description of the extension
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Whether the client must understand this extension to interact with the agent
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub required: Option<bool>,
+    /// Extension-specific configuration parameters
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<HashMap<String, serde_json::Value>>,
+}
+
 /// JSON Web Signature for AgentCard integrity verification (RFC 7515).
 ///
 /// This structure represents a digital signature that can be used to verify
@@ -161,6 +229,7 @@ pub struct PasswordOAuthFlow {
 /// - `streaming`: Whether the agent supports real-time streaming updates
 /// - `push_notifications`: Whether the agent can send push notifications
 /// - `state_transition_history`: Whether the agent maintains task state history
+/// - `extensions`: List of protocol extensions supported by the agent (v0.3.0)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentCapabilities {
     #[serde(default)]
@@ -169,6 +238,9 @@ pub struct AgentCapabilities {
     pub push_notifications: bool,
     #[serde(default, rename = "stateTransitionHistory")]
     pub state_transition_history: bool,
+    /// List of protocol extensions supported by the agent (v0.3.0)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extensions: Option<Vec<AgentExtension>>,
 }
 
 /// A skill provided by an agent with metadata and examples.\n///\n/// Skills define specific capabilities that an agent can perform,\n/// including natural language descriptions, categorization tags,\n/// usage examples, and supported input/output modes.\n///\n/// # Example\n/// ```rust\n/// use a2a_rs::AgentSkill;\n/// \n/// let skill = AgentSkill::new(\n///     \"text-generation\".to_string(),\n///     \"Text Generation\".to_string(), \n///     \"Generate natural language text based on prompts\".to_string(),\n///     vec![\"nlp\".to_string(), \"generation\".to_string()]\n/// );\n/// ```
@@ -262,6 +334,20 @@ pub struct AgentCard {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<AgentProvider>,
     pub version: String,
+    /// The version of the A2A protocol this agent supports (v0.3.0 required field)
+    #[serde(default = "default_protocol_version", rename = "protocolVersion")]
+    #[builder(default = default_protocol_version())]
+    pub protocol_version: String,
+    /// The transport protocol for the preferred endpoint (v0.3.0)
+    #[serde(default = "default_preferred_transport", rename = "preferredTransport")]
+    #[builder(default = default_preferred_transport())]
+    pub preferred_transport: String,
+    /// Additional supported interfaces (transport and URL combinations) (v0.3.0)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "additionalInterfaces")]
+    pub additional_interfaces: Option<Vec<AgentInterface>>,
+    /// Optional URL to an icon for the agent (v0.3.0)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "iconUrl")]
+    pub icon_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "documentationUrl")]
     pub documentation_url: Option<String>,
     pub capabilities: AgentCapabilities,
@@ -274,9 +360,9 @@ pub struct AgentCard {
     #[serde(default = "default_output_modes", rename = "defaultOutputModes")]
     pub default_output_modes: Vec<String>,
     pub skills: Vec<AgentSkill>,
-    /// Optional signature for card integrity verification (v0.3.0)
+    /// JSON Web Signatures for this AgentCard (v0.3.0 - changed from singular to plural)
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub signature: Option<AgentCardSignature>,
+    pub signatures: Option<Vec<AgentCardSignature>>,
     #[serde(
         skip_serializing_if = "Option::is_none",
         rename = "supportsAuthenticatedExtendedCard"
@@ -290,6 +376,14 @@ fn default_input_modes() -> Vec<String> {
 
 fn default_output_modes() -> Vec<String> {
     vec!["text".to_string()]
+}
+
+fn default_protocol_version() -> String {
+    "0.3.0".to_string()
+}
+
+fn default_preferred_transport() -> String {
+    "JSONRPC".to_string()
 }
 
 /// Authentication information for push notification endpoints.
@@ -315,6 +409,7 @@ pub struct PushNotificationAuthenticationInfo {
 /// use a2a_rs::PushNotificationConfig;
 ///
 /// let config = PushNotificationConfig {
+///     id: Some("config-123".to_string()),
 ///     url: "https://client.example.com/notifications".to_string(),
 ///     token: Some("bearer-token-123".to_string()),
 ///     authentication: None,
@@ -322,6 +417,10 @@ pub struct PushNotificationAuthenticationInfo {
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PushNotificationConfig {
+    /// Unique identifier for the push notification configuration (v0.3.0)
+    /// Allows multiple notification callbacks per task
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub url: String,
     pub token: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -419,6 +518,10 @@ mod tests {
             url: "https://example.com".to_string(),
             provider: None,
             version: "1.0.0".to_string(),
+            protocol_version: "0.3.0".to_string(),
+            preferred_transport: "JSONRPC".to_string(),
+            additional_interfaces: None,
+            icon_url: None,
             documentation_url: None,
             capabilities: AgentCapabilities::default(),
             security_schemes: None,
@@ -426,14 +529,15 @@ mod tests {
             default_input_modes: vec!["text".to_string()],
             default_output_modes: vec!["text".to_string()],
             skills: Vec::new(),
-            signature: Some(signature),
+            signatures: Some(vec![signature]),
             supports_authenticated_extended_card: Some(true),
         };
 
         let json_value = serde_json::to_value(&card).unwrap();
-        assert!(json_value["signature"].is_object());
-        assert_eq!(json_value["signature"]["protected"], "eyJhbGciOiJSUzI1NiJ9");
+        assert!(json_value["signatures"].is_array());
+        assert_eq!(json_value["signatures"][0]["protected"], "eyJhbGciOiJSUzI1NiJ9");
         assert_eq!(json_value["supportsAuthenticatedExtendedCard"], true);
+        assert_eq!(json_value["protocolVersion"], "0.3.0");
     }
 
     #[test]
@@ -484,6 +588,10 @@ mod tests {
             url: "https://example.com".to_string(),
             provider: None,
             version: "1.0.0".to_string(),
+            protocol_version: "0.3.0".to_string(),
+            preferred_transport: "JSONRPC".to_string(),
+            additional_interfaces: None,
+            icon_url: None,
             documentation_url: None,
             capabilities: AgentCapabilities::default(),
             security_schemes: Some(security_schemes),
@@ -491,7 +599,7 @@ mod tests {
             default_input_modes: vec!["text".to_string()],
             default_output_modes: vec!["text".to_string()],
             skills: Vec::new(),
-            signature: None,
+            signatures: None,
             supports_authenticated_extended_card: None,
         };
 

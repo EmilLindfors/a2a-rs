@@ -5,15 +5,19 @@ use crate::domain::{A2AError, JSONRPCRequest};
 
 // Re-export handler types
 pub use crate::application::handlers::{
-    CancelTaskRequest, CancelTaskResponse, GetExtendedCardRequest, GetExtendedCardResponse,
+    CancelTaskRequest, CancelTaskResponse, DeleteTaskPushNotificationConfigRequest,
+    DeleteTaskPushNotificationConfigResponse, GetAuthenticatedExtendedCardRequest,
+    GetAuthenticatedExtendedCardResponse, GetExtendedCardRequest, GetExtendedCardResponse,
+    GetTaskPushNotificationConfigRequest, GetTaskPushNotificationConfigResponse,
     GetTaskPushNotificationRequest, GetTaskPushNotificationResponse, GetTaskRequest,
-    GetTaskResponse, SendMessageRequest, SendMessageResponse, SendMessageStreamingRequest,
-    SendMessageStreamingResponse, SendTaskRequest, SendTaskResponse, SendTaskStreamingRequest,
-    SendTaskStreamingResponse, SetTaskPushNotificationRequest, SetTaskPushNotificationResponse,
-    TaskResubscriptionRequest,
+    GetTaskResponse, ListTaskPushNotificationConfigRequest, ListTaskPushNotificationConfigResponse,
+    ListTasksRequest, ListTasksResponse, SendMessageRequest, SendMessageResponse,
+    SendMessageStreamingRequest, SendMessageStreamingResponse, SendTaskRequest, SendTaskResponse,
+    SendTaskStreamingRequest, SendTaskStreamingResponse, SetTaskPushNotificationRequest,
+    SetTaskPushNotificationResponse, TaskResubscriptionRequest,
 };
 
-/// Union type representing any A2A protocol request.\n///\n/// This enum provides a unified interface for all possible A2A protocol requests,\n/// automatically handling method-based routing during deserialization. The enum\n/// covers all standard A2A operations including message sending, task management,\n/// and notification configuration.\n///\n/// # Supported Request Types\n/// - `SendMessage`: Send a message to an agent\n/// - `SendMessageStreaming`: Send a message with streaming response\n/// - `SendTask`: Legacy task sending (replaced by SendMessage)\n/// - `SendTaskStreaming`: Legacy streaming task (replaced by SendMessageStreaming)\n/// - `GetTask`: Retrieve task status and information\n/// - `CancelTask`: Cancel a running task\n/// - `SetTaskPushNotification`: Configure push notifications for a task\n/// - `GetTaskPushNotification`: Retrieve push notification configuration\n/// - `TaskResubscription`: Re-subscribe to task updates\n/// - `GetExtendedCard`: Get extended agent card (v0.3.0)\n/// - `Generic`: Fallback for custom or unknown requests
+/// Union type representing any A2A protocol request.\n///\n/// This enum provides a unified interface for all possible A2A protocol requests,\n/// automatically handling method-based routing during deserialization. The enum\n/// covers all standard A2A operations including message sending, task management,\n/// and notification configuration.\n///\n/// # Supported Request Types\n/// - `SendMessage`: Send a message to an agent\n/// - `SendMessageStreaming`: Send a message with streaming response\n/// - `SendTask`: Legacy task sending (replaced by SendMessage)\n/// - `SendTaskStreaming`: Legacy streaming task (replaced by SendMessageStreaming)\n/// - `GetTask`: Retrieve task status and information\n/// - `CancelTask`: Cancel a running task\n/// - `SetTaskPushNotification`: Configure push notifications for a task\n/// - `GetTaskPushNotification`: Retrieve push notification configuration\n/// - `TaskResubscription`: Re-subscribe to task updates\n/// - `GetExtendedCard`: Get extended agent card (v0.3.0)\n/// - `ListTasks`: List tasks with filtering and pagination (v0.3.0)\n/// - `GetTaskPushNotificationConfig`: Get specific push notification config (v0.3.0)\n/// - `ListTaskPushNotificationConfigs`: List all push notification configs (v0.3.0)\n/// - `DeleteTaskPushNotificationConfig`: Delete a push notification config (v0.3.0)\n/// - `GetAuthenticatedExtendedCard`: Get authenticated extended card (v0.3.0)\n/// - `Generic`: Fallback for custom or unknown requests
 #[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum A2ARequest {
@@ -27,6 +31,12 @@ pub enum A2ARequest {
     GetTaskPushNotification(GetTaskPushNotificationRequest),
     TaskResubscription(TaskResubscriptionRequest),
     GetExtendedCard(GetExtendedCardRequest),
+    // v0.3.0 new methods
+    ListTasks(ListTasksRequest),
+    GetTaskPushNotificationConfig(GetTaskPushNotificationConfigRequest),
+    ListTaskPushNotificationConfigs(ListTaskPushNotificationConfigRequest),
+    DeleteTaskPushNotificationConfig(DeleteTaskPushNotificationConfigRequest),
+    GetAuthenticatedExtendedCard(GetAuthenticatedExtendedCardRequest),
     Generic(JSONRPCRequest),
 }
 
@@ -109,6 +119,33 @@ impl<'de> Deserialize<'de> for A2ARequest {
                     GetExtendedCardRequest::deserialize(value).map_err(serde::de::Error::custom)?;
                 A2ARequest::GetExtendedCard(req)
             }
+            "agent/getAuthenticatedExtendedCard" => {
+                // Re-parse as GetAuthenticatedExtendedCardRequest (v0.3.0)
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = GetAuthenticatedExtendedCardRequest::deserialize(value)
+                    .map_err(serde::de::Error::custom)?;
+                A2ARequest::GetAuthenticatedExtendedCard(req)
+            }
+            "tasks/list" => {
+                // Re-parse as ListTasksRequest (v0.3.0)
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = ListTasksRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                A2ARequest::ListTasks(req)
+            }
+            "tasks/pushNotificationConfig/list" => {
+                // Re-parse as ListTaskPushNotificationConfigRequest (v0.3.0)
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = ListTaskPushNotificationConfigRequest::deserialize(value)
+                    .map_err(serde::de::Error::custom)?;
+                A2ARequest::ListTaskPushNotificationConfigs(req)
+            }
+            "tasks/pushNotificationConfig/delete" => {
+                // Re-parse as DeleteTaskPushNotificationConfigRequest (v0.3.0)
+                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
+                let req = DeleteTaskPushNotificationConfigRequest::deserialize(value)
+                    .map_err(serde::de::Error::custom)?;
+                A2ARequest::DeleteTaskPushNotificationConfig(req)
+            }
             _ => {
                 // For other methods, use Generic variant
                 A2ARequest::Generic(json_req)
@@ -133,6 +170,11 @@ impl A2ARequest {
             A2ARequest::GetTaskPushNotification(req) => &req.method,
             A2ARequest::TaskResubscription(req) => &req.method,
             A2ARequest::GetExtendedCard(req) => &req.method,
+            A2ARequest::ListTasks(req) => &req.method,
+            A2ARequest::GetTaskPushNotificationConfig(req) => &req.method,
+            A2ARequest::ListTaskPushNotificationConfigs(req) => &req.method,
+            A2ARequest::DeleteTaskPushNotificationConfig(req) => &req.method,
+            A2ARequest::GetAuthenticatedExtendedCard(req) => &req.method,
             A2ARequest::Generic(req) => &req.method,
         }
     }
@@ -150,6 +192,11 @@ impl A2ARequest {
             A2ARequest::GetTaskPushNotification(req) => req.id.as_ref(),
             A2ARequest::TaskResubscription(req) => req.id.as_ref(),
             A2ARequest::GetExtendedCard(req) => req.id.as_ref(),
+            A2ARequest::ListTasks(req) => req.id.as_ref(),
+            A2ARequest::GetTaskPushNotificationConfig(req) => req.id.as_ref(),
+            A2ARequest::ListTaskPushNotificationConfigs(req) => req.id.as_ref(),
+            A2ARequest::DeleteTaskPushNotificationConfig(req) => req.id.as_ref(),
+            A2ARequest::GetAuthenticatedExtendedCard(req) => req.id.as_ref(),
             A2ARequest::Generic(req) => req.id.as_ref(),
         }
     }

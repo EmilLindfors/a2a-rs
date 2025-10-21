@@ -143,14 +143,15 @@ pub struct TaskQueryParams {
 /// Configuration options for sending messages including output modes and notifications.
 ///
 /// Specifies how a message should be processed and delivered:
-/// - `accepted_output_modes`: Output formats the client can handle
+/// - `accepted_output_modes`: Output formats the client can handle (v0.3.0: now optional)
 /// - `history_length`: Limit on conversation history to include
 /// - `push_notification_config`: Settings for push notifications
 /// - `blocking`: Whether the request should wait for completion
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageSendConfiguration {
-    #[serde(rename = "acceptedOutputModes")]
-    pub accepted_output_modes: Vec<String>,
+    /// Output formats the client can handle (v0.3.0: changed to optional)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "acceptedOutputModes")]
+    pub accepted_output_modes: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "historyLength")]
     pub history_length: Option<u32>,
     #[serde(
@@ -197,6 +198,108 @@ pub struct TaskPushNotificationConfig {
     pub task_id: String,
     #[serde(rename = "pushNotificationConfig")]
     pub push_notification_config: PushNotificationConfig,
+}
+
+/// Parameters for listing tasks with filtering and pagination (v0.3.0).
+///
+/// Allows querying tasks with various filters and pagination support.
+/// Results can be filtered by context, status, and update time.
+///
+/// # Example
+/// ```rust
+/// use a2a_rs::{ListTasksParams, TaskState};
+///
+/// let params = ListTasksParams {
+///     context_id: Some("ctx-123".to_string()),
+///     status: Some(TaskState::Working),
+///     page_size: Some(20),
+///     page_token: None,
+///     history_length: Some(5),
+///     include_artifacts: Some(true),
+///     last_updated_after: None,
+///     metadata: None,
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ListTasksParams {
+    /// Filter tasks by context ID
+    #[serde(skip_serializing_if = "Option::is_none", rename = "contextId")]
+    pub context_id: Option<String>,
+    /// Filter tasks by their current status state
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskState>,
+    /// Maximum number of tasks to return (1-100, default 50)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "pageSize")]
+    pub page_size: Option<i32>,
+    /// Token for pagination from previous response
+    #[serde(skip_serializing_if = "Option::is_none", rename = "pageToken")]
+    pub page_token: Option<String>,
+    /// Number of recent messages to include in each task (default 0)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "historyLength")]
+    pub history_length: Option<i32>,
+    /// Whether to include artifacts in the response (default false)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "includeArtifacts")]
+    pub include_artifacts: Option<bool>,
+    /// Filter tasks updated after this timestamp (milliseconds since epoch)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "lastUpdatedAfter")]
+    pub last_updated_after: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
+}
+
+/// Result object for tasks/list method (v0.3.0).
+///
+/// Contains the list of tasks matching the query criteria along with
+/// pagination information for retrieving additional results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListTasksResult {
+    /// Array of tasks matching the criteria
+    pub tasks: Vec<Task>,
+    /// Total number of tasks available (before pagination)
+    #[serde(rename = "totalSize")]
+    pub total_size: i32,
+    /// Maximum number of tasks in this response
+    #[serde(rename = "pageSize")]
+    pub page_size: i32,
+    /// Token for next page (empty string if no more results)
+    #[serde(rename = "nextPageToken")]
+    pub next_page_token: String,
+}
+
+/// Parameters for getting a specific push notification config (v0.3.0).
+///
+/// Enhanced version that allows retrieving a specific config by ID,
+/// supporting multiple notification callbacks per task.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetTaskPushNotificationConfigParams {
+    /// Task ID
+    pub id: String,
+    /// Specific config ID to retrieve (optional)
+    #[serde(skip_serializing_if = "Option::is_none", rename = "pushNotificationConfigId")]
+    pub push_notification_config_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
+}
+
+/// Parameters for listing all push notification configs for a task (v0.3.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListTaskPushNotificationConfigParams {
+    /// Task ID
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
+}
+
+/// Parameters for deleting a push notification config (v0.3.0).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteTaskPushNotificationConfigParams {
+    /// Task ID
+    pub id: String,
+    /// Config ID to delete
+    #[serde(rename = "pushNotificationConfigId")]
+    pub push_notification_config_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
 }
 
 impl Task {
