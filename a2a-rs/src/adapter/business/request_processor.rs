@@ -9,8 +9,9 @@ use async_trait::async_trait;
 use crate::{
     application::{
         json_rpc::{
-            self, A2ARequest, CancelTaskRequest, GetExtendedCardRequest,
-            GetTaskPushNotificationRequest, GetTaskRequest, SendTaskRequest,
+            self, A2ARequest, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
+            GetExtendedCardRequest, GetTaskPushNotificationRequest, GetTaskRequest,
+            ListTaskPushNotificationConfigRequest, ListTasksRequest, SendTaskRequest,
             SendTaskStreamingRequest, SetTaskPushNotificationRequest, TaskResubscriptionRequest,
         },
         JSONRPCError, JSONRPCResponse,
@@ -209,6 +210,62 @@ where
         ))
     }
 
+    /// Process a list tasks request (v0.3.0)
+    async fn process_list_tasks(
+        &self,
+        request: &ListTasksRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        let params = request.params.as_ref().unwrap_or(&crate::domain::ListTasksParams {
+            context_id: None,
+            history_length: None,
+            include_artifacts: None,
+            last_updated_after: None,
+            metadata: None,
+            page_size: None,
+            page_token: None,
+            status: None,
+        });
+
+        let result = self.task_manager.list_tasks_filtered(params).await?;
+
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::to_value(result)?,
+        ))
+    }
+
+    /// Process a list push notification configs request (v0.3.0)
+    async fn process_list_push_notification_configs(
+        &self,
+        request: &ListTaskPushNotificationConfigRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        let configs = self
+            .notification_manager
+            .list_task_notification_configs(&request.params)
+            .await?;
+
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::to_value(configs)?,
+        ))
+    }
+
+    /// Process a delete push notification config request (v0.3.0)
+    async fn process_delete_push_notification_config(
+        &self,
+        request: &DeleteTaskPushNotificationConfigRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        self.notification_manager
+            .delete_task_notification_config(&request.params)
+            .await?;
+
+        // Return null on success as per spec
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::Value::Null,
+        ))
+    }
+
     /// Process a get extended card request (v0.3.0)
     async fn process_get_extended_card(
         &self,
@@ -276,12 +333,7 @@ where
                 ))
             }
             A2ARequest::GetTask(req) => self.process_get_task(req).await,
-            A2ARequest::ListTasks(_req) => {
-                // TODO: Implement tasks/list
-                Err(A2AError::UnsupportedOperation(
-                    "tasks/list not yet implemented".to_string(),
-                ))
-            }
+            A2ARequest::ListTasks(req) => self.process_list_tasks(req).await,
             A2ARequest::CancelTask(req) => self.process_cancel_task(req).await,
             A2ARequest::SetTaskPushNotification(req) => {
                 self.process_set_push_notification(req).await
@@ -289,17 +341,11 @@ where
             A2ARequest::GetTaskPushNotification(req) => {
                 self.process_get_push_notification(req).await
             }
-            A2ARequest::ListTaskPushNotificationConfig(_req) => {
-                // TODO: Implement tasks/pushNotificationConfig/list
-                Err(A2AError::UnsupportedOperation(
-                    "tasks/pushNotificationConfig/list not yet implemented".to_string(),
-                ))
+            A2ARequest::ListTaskPushNotificationConfig(req) => {
+                self.process_list_push_notification_configs(req).await
             }
-            A2ARequest::DeleteTaskPushNotificationConfig(_req) => {
-                // TODO: Implement tasks/pushNotificationConfig/delete
-                Err(A2AError::UnsupportedOperation(
-                    "tasks/pushNotificationConfig/delete not yet implemented".to_string(),
-                ))
+            A2ARequest::DeleteTaskPushNotificationConfig(req) => {
+                self.process_delete_push_notification_config(req).await
             }
             A2ARequest::TaskResubscription(req) => self.process_task_resubscription(req).await,
             A2ARequest::SendTaskStreaming(req) => self.process_send_task_streaming(req).await,

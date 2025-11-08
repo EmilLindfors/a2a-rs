@@ -4,7 +4,7 @@
 use async_trait::async_trait;
 
 use crate::{
-    domain::{A2AError, Task, TaskIdParams, TaskQueryParams, TaskState},
+    domain::{A2AError, ListTasksParams, ListTasksResult, Task, TaskIdParams, TaskQueryParams, TaskState},
     Message,
 };
 
@@ -165,5 +165,44 @@ pub trait AsyncTaskManager: Send + Sync {
         }
 
         self.cancel_task(&params.id).await
+    }
+
+    /// List tasks with filtering and pagination (v0.3.0)
+    async fn list_tasks_filtered<'a>(
+        &self,
+        params: &'a ListTasksParams,
+    ) -> Result<ListTasksResult, A2AError> {
+        // Default implementation - can be overridden by storage adapters
+        // This basic implementation doesn't support advanced filtering
+
+        // Validate page size
+        let page_size = params.page_size.unwrap_or(50);
+        if !(1..=100).contains(&page_size) {
+            return Err(A2AError::ValidationError {
+                field: "pageSize".to_string(),
+                message: "Page size must be between 1 and 100".to_string(),
+            });
+        }
+
+        // Basic implementation using simple list_tasks
+        let context_id = params.context_id.as_deref();
+        let tasks = self.list_tasks(context_id, Some(page_size as u32)).await?;
+
+        // Filter by status if specified
+        let filtered_tasks: Vec<Task> = if let Some(status) = &params.status {
+            tasks
+                .into_iter()
+                .filter(|t| &t.status.state == status)
+                .collect()
+        } else {
+            tasks
+        };
+
+        Ok(ListTasksResult {
+            tasks: filtered_tasks.clone(),
+            total_size: filtered_tasks.len() as i32,
+            page_size,
+            next_page_token: String::new(), // No pagination in basic implementation
+        })
     }
 }

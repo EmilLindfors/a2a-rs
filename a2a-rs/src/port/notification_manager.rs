@@ -3,7 +3,10 @@
 #[cfg(feature = "server")]
 use async_trait::async_trait;
 
-use crate::domain::{A2AError, PushNotificationConfig, TaskIdParams, TaskPushNotificationConfig};
+use crate::domain::{
+    A2AError, DeleteTaskPushNotificationConfigParams, ListTaskPushNotificationConfigParams,
+    PushNotificationConfig, TaskIdParams, TaskPushNotificationConfig,
+};
 
 /// A trait for managing push notification configurations and delivery
 pub trait NotificationManager {
@@ -194,5 +197,51 @@ pub trait AsyncNotificationManager: Send + Sync {
         let _config = self.get_task_notification(task_id).await?;
 
         Ok(())
+    }
+
+    /// List all push notification configurations for a task (v0.3.0)
+    async fn list_task_notification_configs<'a>(
+        &self,
+        params: &'a ListTaskPushNotificationConfigParams,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
+        // Default implementation - returns a single config if it exists
+        // Storage implementations can override to support multiple configs per task
+        if params.id.trim().is_empty() {
+            return Err(A2AError::ValidationError {
+                field: "id".to_string(),
+                message: "Task ID cannot be empty".to_string(),
+            });
+        }
+
+        match self.get_task_notification(&params.id).await {
+            Ok(config) => Ok(vec![config]),
+            Err(A2AError::TaskNotFound(_)) => Ok(vec![]), // No configs found
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Delete a specific push notification configuration (v0.3.0)
+    async fn delete_task_notification_config<'a>(
+        &self,
+        params: &'a DeleteTaskPushNotificationConfigParams,
+    ) -> Result<(), A2AError> {
+        // Default implementation - validates and removes the notification
+        if params.id.trim().is_empty() {
+            return Err(A2AError::ValidationError {
+                field: "id".to_string(),
+                message: "Task ID cannot be empty".to_string(),
+            });
+        }
+
+        if params.push_notification_config_id.trim().is_empty() {
+            return Err(A2AError::ValidationError {
+                field: "pushNotificationConfigId".to_string(),
+                message: "Push notification config ID cannot be empty".to_string(),
+            });
+        }
+
+        // In the basic implementation, we just remove the task notification
+        // Storage implementations can override to support config IDs
+        self.remove_task_notification(&params.id).await
     }
 }
