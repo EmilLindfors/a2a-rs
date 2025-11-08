@@ -276,12 +276,30 @@ where
                 ))
             }
             A2ARequest::GetTask(req) => self.process_get_task(req).await,
+            A2ARequest::ListTasks(_req) => {
+                // TODO: Implement tasks/list
+                Err(A2AError::UnsupportedOperation(
+                    "tasks/list not yet implemented".to_string(),
+                ))
+            }
             A2ARequest::CancelTask(req) => self.process_cancel_task(req).await,
             A2ARequest::SetTaskPushNotification(req) => {
                 self.process_set_push_notification(req).await
             }
             A2ARequest::GetTaskPushNotification(req) => {
                 self.process_get_push_notification(req).await
+            }
+            A2ARequest::ListTaskPushNotificationConfig(_req) => {
+                // TODO: Implement tasks/pushNotificationConfig/list
+                Err(A2AError::UnsupportedOperation(
+                    "tasks/pushNotificationConfig/list not yet implemented".to_string(),
+                ))
+            }
+            A2ARequest::DeleteTaskPushNotificationConfig(_req) => {
+                // TODO: Implement tasks/pushNotificationConfig/delete
+                Err(A2AError::UnsupportedOperation(
+                    "tasks/pushNotificationConfig/delete not yet implemented".to_string(),
+                ))
             }
             A2ARequest::TaskResubscription(req) => self.process_task_resubscription(req).await,
             A2ARequest::SendTaskStreaming(req) => self.process_send_task_streaming(req).await,

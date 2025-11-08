@@ -27,6 +27,7 @@ impl SimpleAgentInfo {
                 provider: None,
                 version: "1.0.0".to_string(),
                 documentation_url: None,
+                protocol_version: "0.3.0".to_string(),
                 capabilities: AgentCapabilities::default(),
                 security_schemes: None,
                 security: None,

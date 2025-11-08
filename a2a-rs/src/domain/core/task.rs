@@ -199,6 +199,57 @@ pub struct TaskPushNotificationConfig {
     pub push_notification_config: PushNotificationConfig,
 }
 
+/// Parameters for listing tasks with optional filtering (v0.3.0)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListTasksParams {
+    #[serde(skip_serializing_if = "Option::is_none", rename = "contextId")]
+    pub context_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "historyLength")]
+    pub history_length: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "includeArtifacts")]
+    pub include_artifacts: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "lastUpdatedAfter")]
+    pub last_updated_after: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "pageSize")]
+    pub page_size: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "pageToken")]
+    pub page_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskState>,
+}
+
+/// Result object for tasks/list method (v0.3.0)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListTasksResult {
+    #[serde(rename = "nextPageToken")]
+    pub next_page_token: String,
+    #[serde(rename = "pageSize")]
+    pub page_size: i32,
+    pub tasks: Vec<Task>,
+    #[serde(rename = "totalSize")]
+    pub total_size: i32,
+}
+
+/// Parameters for listing push notification configurations for a task (v0.3.0)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ListTaskPushNotificationConfigParams {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
+}
+
+/// Parameters for deleting a push notification configuration (v0.3.0)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DeleteTaskPushNotificationConfigParams {
+    pub id: String,
+    #[serde(rename = "pushNotificationConfigId")]
+    pub push_notification_config_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Map<String, Value>>,
+}
+
 impl Task {
     /// Create a new task with the given ID in the submitted state
     pub fn new(id: String, context_id: String) -> Self {

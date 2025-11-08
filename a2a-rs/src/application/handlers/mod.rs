@@ -16,6 +16,8 @@ pub use notification::{
     SetTaskPushNotificationRequest, SetTaskPushNotificationResponse,
 };
 pub use task::{
-    CancelTaskRequest, CancelTaskResponse, GetTaskRequest, GetTaskResponse,
-    TaskResubscriptionRequest,
+    CancelTaskRequest, CancelTaskResponse, DeleteTaskPushNotificationConfigRequest,
+    DeleteTaskPushNotificationConfigResponse, GetTaskRequest, GetTaskResponse,
+    ListTaskPushNotificationConfigRequest, ListTaskPushNotificationConfigResponse,
+    ListTasksRequest, ListTasksResponse, TaskResubscriptionRequest,
 };

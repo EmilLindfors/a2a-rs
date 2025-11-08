@@ -11,6 +11,7 @@ pub use agent::{
 };
 pub use message::{Artifact, FileContent, Message, Part, Role};
 pub use task::{
-    MessageSendConfiguration, MessageSendParams, Task, TaskIdParams, TaskPushNotificationConfig,
-    TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    DeleteTaskPushNotificationConfigParams, ListTaskPushNotificationConfigParams, ListTasksParams,
+    ListTasksResult, MessageSendConfiguration, MessageSendParams, Task, TaskIdParams,
+    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
 };

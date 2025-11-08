@@ -264,6 +264,10 @@ pub struct AgentCard {
     pub version: String,
     #[serde(skip_serializing_if = "Option::is_none", rename = "documentationUrl")]
     pub documentation_url: Option<String>,
+    /// The version of the A2A protocol this agent supports (v0.3.0)
+    #[serde(default = "default_protocol_version", rename = "protocolVersion")]
+    #[builder(default = default_protocol_version())]
+    pub protocol_version: String,
     pub capabilities: AgentCapabilities,
     #[serde(skip_serializing_if = "Option::is_none", rename = "securitySchemes")]
     pub security_schemes: Option<HashMap<String, SecurityScheme>>,
@@ -282,6 +286,10 @@ pub struct AgentCard {
         rename = "supportsAuthenticatedExtendedCard"
     )]
     pub supports_authenticated_extended_card: Option<bool>,
+}
+
+fn default_protocol_version() -> String {
+    "0.3.0".to_string()
 }
 
 fn default_input_modes() -> Vec<String> {
@@ -420,6 +428,7 @@ mod tests {
             provider: None,
             version: "1.0.0".to_string(),
             documentation_url: None,
+            protocol_version: "0.3.0".to_string(),
             capabilities: AgentCapabilities::default(),
             security_schemes: None,
             security: None,
@@ -485,6 +494,7 @@ mod tests {
             provider: None,
             version: "1.0.0".to_string(),
             documentation_url: None,
+            protocol_version: "0.3.0".to_string(),
             capabilities: AgentCapabilities::default(),
             security_schemes: Some(security_schemes),
             security: Some(vec![security_req]),
