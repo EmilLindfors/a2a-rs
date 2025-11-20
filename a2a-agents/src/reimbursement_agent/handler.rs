@@ -1017,7 +1017,8 @@ Example response when asking for info:
                 // Check for auto-approval based on amount
                 // In a real system, we'd get this from the message metadata or business rules
                 // For now, we'll auto-approve small amounts
-                let auto_approve = matches!(amount, Money::Number { amount, .. } if *amount < 100.0);
+                let auto_approve =
+                    matches!(amount, Money::Number { amount, .. } if *amount < 100.0);
 
                 let status = if auto_approve {
                     ProcessingStatus::Approved
