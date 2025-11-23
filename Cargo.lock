@@ -33,6 +33,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "a2a-ap2"
+version = "0.1.0"
+
+[[package]]
 name = "a2a-client"
 version = "0.1.0"
 dependencies = [
