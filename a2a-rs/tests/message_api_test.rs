@@ -70,7 +70,10 @@ fn test_message_send_request_serialization() {
     // Verify deserialization roundtrip
     let deserialized: SendMessageRequest = serde_json::from_value(request_json).unwrap();
     assert_eq!(deserialized.params.message.message_id, "msg-123");
-    assert_eq!(deserialized.params.message.task_id, Some("task-456".to_string()));
+    assert_eq!(
+        deserialized.params.message.task_id,
+        Some("task-456".to_string())
+    );
     assert_eq!(
         deserialized.params.message.context_id,
         Some("ctx-789".to_string())
@@ -106,7 +109,10 @@ fn test_message_send_minimal() {
 
     assert_eq!(request_json["jsonrpc"], "2.0");
     assert_eq!(request_json["method"], "message/send");
-    assert_eq!(request_json["params"]["message"]["messageId"], "msg-minimal");
+    assert_eq!(
+        request_json["params"]["message"]["messageId"],
+        "msg-minimal"
+    );
 
     // Configuration should not be present or be null
     assert!(
@@ -146,19 +152,18 @@ fn test_message_stream_request_serialization() {
     // Verify structure
     assert_eq!(request_json["jsonrpc"], "2.0");
     assert_eq!(request_json["method"], "message/stream");
-    assert_eq!(request_json["params"]["message"]["messageId"], "msg-stream-123");
+    assert_eq!(
+        request_json["params"]["message"]["messageId"],
+        "msg-stream-123"
+    );
     assert_eq!(
         request_json["params"]["message"]["taskId"],
         "task-stream-456"
     );
 
     // Verify deserialization
-    let deserialized: SendMessageStreamingRequest =
-        serde_json::from_value(request_json).unwrap();
-    assert_eq!(
-        deserialized.params.message.message_id,
-        "msg-stream-123"
-    );
+    let deserialized: SendMessageStreamingRequest = serde_json::from_value(request_json).unwrap();
+    assert_eq!(deserialized.params.message.message_id, "msg-stream-123");
     assert_eq!(
         deserialized.params.message.task_id,
         Some("task-stream-456".to_string())

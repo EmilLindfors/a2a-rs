@@ -7,7 +7,9 @@ mod common;
 
 use a2a_rs::{
     adapter::business::DefaultRequestProcessor,
-    application::json_rpc::{A2ARequest, SendMessageRequest, SendMessageStreamingRequest, SendTaskRequest},
+    application::json_rpc::{
+        A2ARequest, SendMessageRequest, SendMessageStreamingRequest, SendTaskRequest,
+    },
     domain::{Message, MessageSendConfiguration, MessageSendParams, Part, Role, TaskSendParams},
     services::server::AsyncA2ARequestProcessor,
 };
@@ -18,10 +20,10 @@ use common::test_handler::TestBusinessHandler;
 async fn test_message_send_creates_new_task() {
     // Setup
     let handler = TestBusinessHandler::new();
-    let processor = DefaultRequestProcessor::with_handler(handler, a2a_rs::SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "1.0.0".to_string(),
-    ));
+    let processor = DefaultRequestProcessor::with_handler(
+        handler,
+        a2a_rs::SimpleAgentInfo::new("test-agent".to_string(), "1.0.0".to_string()),
+    );
 
     // Create message without taskId (should create new task)
     let message = Message::builder()
@@ -42,7 +44,9 @@ async fn test_message_send_creates_new_task() {
     let request = SendMessageRequest::new(params);
 
     // Execute
-    let response = processor.process_request(&A2ARequest::SendMessage(request)).await;
+    let response = processor
+        .process_request(&A2ARequest::SendMessage(request))
+        .await;
 
     // Verify
     assert!(response.is_ok(), "Request should succeed");
@@ -73,10 +77,10 @@ async fn test_message_send_creates_new_task() {
 async fn test_message_send_continues_existing_task() {
     // Setup
     let handler = TestBusinessHandler::new();
-    let processor = DefaultRequestProcessor::with_handler(handler, a2a_rs::SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "1.0.0".to_string(),
-    ));
+    let processor = DefaultRequestProcessor::with_handler(
+        handler,
+        a2a_rs::SimpleAgentInfo::new("test-agent".to_string(), "1.0.0".to_string()),
+    );
 
     let existing_task_id = "task-existing-123";
 
@@ -100,7 +104,9 @@ async fn test_message_send_continues_existing_task() {
     let request = SendMessageRequest::new(params);
 
     // Execute
-    let response = processor.process_request(&A2ARequest::SendMessage(request)).await;
+    let response = processor
+        .process_request(&A2ARequest::SendMessage(request))
+        .await;
 
     // Verify
     assert!(response.is_ok(), "Request should succeed");
@@ -110,7 +116,10 @@ async fn test_message_send_continues_existing_task() {
     // Should use the provided task ID
     assert_eq!(result["id"], existing_task_id);
 
-    println!("✅ message/send continued existing task: {}", existing_task_id);
+    println!(
+        "✅ message/send continued existing task: {}",
+        existing_task_id
+    );
 }
 
 /// Test message/send preserves contextId when provided
@@ -118,10 +127,10 @@ async fn test_message_send_continues_existing_task() {
 async fn test_message_send_preserves_context_id() {
     // Setup
     let handler = TestBusinessHandler::new();
-    let processor = DefaultRequestProcessor::with_handler(handler, a2a_rs::SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "1.0.0".to_string(),
-    ));
+    let processor = DefaultRequestProcessor::with_handler(
+        handler,
+        a2a_rs::SimpleAgentInfo::new("test-agent".to_string(), "1.0.0".to_string()),
+    );
 
     let provided_context_id = "ctx-conversation-456";
 
@@ -145,7 +154,9 @@ async fn test_message_send_preserves_context_id() {
     let request = SendMessageRequest::new(params);
 
     // Execute
-    let response = processor.process_request(&A2ARequest::SendMessage(request)).await;
+    let response = processor
+        .process_request(&A2ARequest::SendMessage(request))
+        .await;
 
     // Verify - contextId should be preserved (though currently hardcoded to "default" - known issue)
     assert!(response.is_ok(), "Request should succeed");
@@ -164,10 +175,10 @@ async fn test_message_send_preserves_context_id() {
 async fn test_message_send_with_configuration() {
     // Setup
     let handler = TestBusinessHandler::new();
-    let processor = DefaultRequestProcessor::with_handler(handler, a2a_rs::SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "1.0.0".to_string(),
-    ));
+    let processor = DefaultRequestProcessor::with_handler(
+        handler,
+        a2a_rs::SimpleAgentInfo::new("test-agent".to_string(), "1.0.0".to_string()),
+    );
 
     // Create message with configuration
     let message = Message::builder()
@@ -180,7 +191,10 @@ async fn test_message_send_with_configuration() {
         .build();
 
     let configuration = MessageSendConfiguration {
-        accepted_output_modes: Some(vec!["text/plain".to_string(), "application/json".to_string()]),
+        accepted_output_modes: Some(vec![
+            "text/plain".to_string(),
+            "application/json".to_string(),
+        ]),
         history_length: Some(5),
         push_notification_config: None,
         blocking: Some(false),
@@ -195,10 +209,15 @@ async fn test_message_send_with_configuration() {
     let request = SendMessageRequest::new(params);
 
     // Execute
-    let response = processor.process_request(&A2ARequest::SendMessage(request)).await;
+    let response = processor
+        .process_request(&A2ARequest::SendMessage(request))
+        .await;
 
     // Verify
-    assert!(response.is_ok(), "Request with configuration should succeed");
+    assert!(
+        response.is_ok(),
+        "Request with configuration should succeed"
+    );
     let response_value = response.unwrap();
     let result = response_value.result.unwrap();
 
@@ -213,10 +232,10 @@ async fn test_message_send_with_configuration() {
 async fn test_message_stream_returns_task() {
     // Setup
     let handler = TestBusinessHandler::new();
-    let processor = DefaultRequestProcessor::with_handler(handler, a2a_rs::SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "1.0.0".to_string(),
-    ));
+    let processor = DefaultRequestProcessor::with_handler(
+        handler,
+        a2a_rs::SimpleAgentInfo::new("test-agent".to_string(), "1.0.0".to_string()),
+    );
 
     // Create streaming message
     let message = Message::builder()
@@ -237,7 +256,9 @@ async fn test_message_stream_returns_task() {
     let request = SendMessageStreamingRequest::new(params);
 
     // Execute
-    let response = processor.process_request(&A2ARequest::SendMessageStreaming(request)).await;
+    let response = processor
+        .process_request(&A2ARequest::SendMessageStreaming(request))
+        .await;
 
     // Verify
     assert!(response.is_ok(), "Streaming request should succeed");
@@ -257,10 +278,10 @@ async fn test_message_stream_returns_task() {
 async fn test_message_api_vs_legacy_api() {
     // Setup
     let handler = TestBusinessHandler::new();
-    let processor = DefaultRequestProcessor::with_handler(handler, a2a_rs::SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "1.0.0".to_string(),
-    ));
+    let processor = DefaultRequestProcessor::with_handler(
+        handler,
+        a2a_rs::SimpleAgentInfo::new("test-agent".to_string(), "1.0.0".to_string()),
+    );
 
     // Test new API
     let new_message = Message::builder()
@@ -279,7 +300,9 @@ async fn test_message_api_vs_legacy_api() {
     };
 
     let new_request = SendMessageRequest::new(new_params);
-    let new_response = processor.process_request(&A2ARequest::SendMessage(new_request)).await;
+    let new_response = processor
+        .process_request(&A2ARequest::SendMessage(new_request))
+        .await;
 
     // Test legacy API (for comparison)
 
@@ -302,7 +325,9 @@ async fn test_message_api_vs_legacy_api() {
     };
 
     let legacy_request = SendTaskRequest::new(legacy_params);
-    let legacy_response = processor.process_request(&A2ARequest::SendTask(legacy_request)).await;
+    let legacy_response = processor
+        .process_request(&A2ARequest::SendTask(legacy_request))
+        .await;
 
     // Verify both work
     assert!(new_response.is_ok(), "New message API should work");
@@ -316,10 +341,10 @@ async fn test_message_api_vs_legacy_api() {
 async fn test_message_send_with_multiple_parts() {
     // Setup
     let handler = TestBusinessHandler::new();
-    let processor = DefaultRequestProcessor::with_handler(handler, a2a_rs::SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "1.0.0".to_string(),
-    ));
+    let processor = DefaultRequestProcessor::with_handler(
+        handler,
+        a2a_rs::SimpleAgentInfo::new("test-agent".to_string(), "1.0.0".to_string()),
+    );
 
     // Create message with multiple parts
     let message = Message::builder()
@@ -334,7 +359,10 @@ async fn test_message_send_with_multiple_parts() {
                 data: serde_json::json!({
                     "type": "metadata",
                     "value": 42
-                }).as_object().unwrap().clone(),
+                })
+                .as_object()
+                .unwrap()
+                .clone(),
                 metadata: None,
             },
         ])
@@ -349,7 +377,9 @@ async fn test_message_send_with_multiple_parts() {
     let request = SendMessageRequest::new(params);
 
     // Execute
-    let response = processor.process_request(&A2ARequest::SendMessage(request)).await;
+    let response = processor
+        .process_request(&A2ARequest::SendMessage(request))
+        .await;
 
     // Verify
     assert!(response.is_ok(), "Message with multiple parts should work");
@@ -388,10 +418,10 @@ async fn test_message_send_performance() {
 
     // Setup
     let handler = TestBusinessHandler::new();
-    let processor = DefaultRequestProcessor::with_handler(handler, a2a_rs::SimpleAgentInfo::new(
-        "test-agent".to_string(),
-        "1.0.0".to_string(),
-    ));
+    let processor = DefaultRequestProcessor::with_handler(
+        handler,
+        a2a_rs::SimpleAgentInfo::new("test-agent".to_string(), "1.0.0".to_string()),
+    );
 
     let start = Instant::now();
 
@@ -413,16 +443,23 @@ async fn test_message_send_performance() {
         };
 
         let request = SendMessageRequest::new(params);
-        let response = processor.process_request(&A2ARequest::SendMessage(request)).await;
+        let response = processor
+            .process_request(&A2ARequest::SendMessage(request))
+            .await;
 
         assert!(response.is_ok(), "Message {} should succeed", i);
     }
 
     let duration = start.elapsed();
-    println!("✅ Processed 10 messages in {:?} ({:.2} msg/s)",
-             duration,
-             10.0 / duration.as_secs_f64());
+    println!(
+        "✅ Processed 10 messages in {:?} ({:.2} msg/s)",
+        duration,
+        10.0 / duration.as_secs_f64()
+    );
 
     // Should process messages reasonably quickly (< 1 second for 10 messages)
-    assert!(duration.as_secs() < 1, "Should process 10 messages in under 1 second");
+    assert!(
+        duration.as_secs() < 1,
+        "Should process 10 messages in under 1 second"
+    );
 }

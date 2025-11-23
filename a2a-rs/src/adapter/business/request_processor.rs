@@ -482,9 +482,7 @@ where
             }
             A2ARequest::TaskResubscription(req) => self.process_task_resubscription(req).await,
             A2ARequest::SendTaskStreaming(req) => self.process_send_task_streaming(req).await,
-            A2ARequest::SendMessageStreaming(req) => {
-                self.process_send_message_streaming(req).await
-            }
+            A2ARequest::SendMessageStreaming(req) => self.process_send_message_streaming(req).await,
             A2ARequest::GetExtendedCard(req) => self.process_get_extended_card(req).await,
             // v0.3.0 new methods
             A2ARequest::ListTasks(req) => self.process_list_tasks(req).await,
