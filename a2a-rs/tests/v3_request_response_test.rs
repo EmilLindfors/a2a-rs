@@ -463,7 +463,8 @@ fn test_push_notification_config_with_authentication() {
 #[test]
 fn test_task_status_serialization_all_states() {
     // Test serialization of all task states
-    let states = [TaskState::Submitted,
+    let states = [
+        TaskState::Submitted,
         TaskState::Working,
         TaskState::InputRequired,
         TaskState::Completed,
@@ -471,9 +472,11 @@ fn test_task_status_serialization_all_states() {
         TaskState::Failed,
         TaskState::Rejected,
         TaskState::AuthRequired,
-        TaskState::Unknown];
+        TaskState::Unknown,
+    ];
 
-    let expected_strings = ["submitted",
+    let expected_strings = [
+        "submitted",
         "working",
         "input-required",
         "completed",
@@ -481,7 +484,8 @@ fn test_task_status_serialization_all_states() {
         "failed",
         "rejected",
         "auth-required",
-        "unknown"];
+        "unknown",
+    ];
 
     for (state, expected) in states.iter().zip(expected_strings.iter()) {
         let state_json = serde_json::to_value(state).unwrap();

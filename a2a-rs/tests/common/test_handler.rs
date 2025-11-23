@@ -37,6 +37,7 @@ impl TestBusinessHandler {
     }
 
     /// Create with a custom storage implementation
+    #[allow(dead_code)]
     pub fn with_storage(storage: InMemoryTaskStorage) -> Self {
         Self {
             storage: Arc::new(storage),

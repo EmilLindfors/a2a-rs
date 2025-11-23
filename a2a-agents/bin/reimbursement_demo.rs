@@ -150,7 +150,10 @@ async fn main() -> anyhow::Result<()> {
     match args.mode.as_str() {
         "agent" | "frontend" | "all" => {}
         _ => {
-            eprintln!("❌ Invalid mode: {}. Use 'agent', 'frontend', or 'all'", args.mode);
+            eprintln!(
+                "❌ Invalid mode: {}. Use 'agent', 'frontend', or 'all'",
+                args.mode
+            );
             std::process::exit(1);
         }
     }
@@ -178,18 +181,30 @@ async fn start_agent_only(args: Args) -> anyhow::Result<()> {
     match args.transport.as_str() {
         "http" => {
             println!("🌐 Starting HTTP server only...");
-            server.start_http().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+            server
+                .start_http()
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
         "websocket" | "ws" => {
             println!("🔌 Starting WebSocket server only...");
-            server.start_websocket().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+            server
+                .start_websocket()
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
         "both" | "all" => {
             println!("🔄 Starting both HTTP and WebSocket servers...");
-            server.start_all().await.map_err(|e| anyhow::anyhow!("{}", e))?;
+            server
+                .start_all()
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
         _ => {
-            eprintln!("❌ Invalid transport: {}. Use 'http', 'websocket', or 'both'", args.transport);
+            eprintln!(
+                "❌ Invalid transport: {}. Use 'http', 'websocket', or 'both'",
+                args.transport
+            );
             std::process::exit(1);
         }
     }
@@ -209,7 +224,10 @@ async fn start_frontend_only(args: Args) -> anyhow::Result<()> {
     let ws_url = std::env::var("AGENT_WS_URL")
         .unwrap_or_else(|_| format!("ws://{}:{}", args.host, args.agent_ws_port));
 
-    println!("📍 Frontend URL: http://{}:{}", args.host, args.frontend_port);
+    println!(
+        "📍 Frontend URL: http://{}:{}",
+        args.host, args.frontend_port
+    );
     println!("🔗 Connecting to agent:");
     println!("   HTTP: {}", http_url);
     if args.frontend_use_websocket {
@@ -249,13 +267,19 @@ async fn start_all(args: Args) -> anyhow::Result<()> {
 
     println!("🌐 Web Frontend:");
     println!("   📍 URL: http://{}:{}", args.host, args.frontend_port);
-    println!("   🔗 Auto-connected to: http://{}:{}", args.host, args.agent_http_port);
+    println!(
+        "   🔗 Auto-connected to: http://{}:{}",
+        args.host, args.agent_http_port
+    );
     if args.frontend_use_websocket {
         println!("   📡 WebSocket: ws://{}:{}", args.host, args.agent_ws_port);
     }
     println!();
 
-    println!("✅ Ready! Open http://{}:{} in your browser", args.host, args.frontend_port);
+    println!(
+        "✅ Ready! Open http://{}:{} in your browser",
+        args.host, args.frontend_port
+    );
     println!();
 
     // Generate shared webhook token
@@ -279,9 +303,18 @@ async fn start_all(args: Args) -> anyhow::Result<()> {
 
     let agent_future = async move {
         match transport.as_str() {
-            "http" => agent_server.start_http().await.map_err(|e| anyhow::anyhow!("{}", e)),
-            "websocket" | "ws" => agent_server.start_websocket().await.map_err(|e| anyhow::anyhow!("{}", e)),
-            "both" | "all" => agent_server.start_all().await.map_err(|e| anyhow::anyhow!("{}", e)),
+            "http" => agent_server
+                .start_http()
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e)),
+            "websocket" | "ws" => agent_server
+                .start_websocket()
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e)),
+            "both" | "all" => agent_server
+                .start_all()
+                .await
+                .map_err(|e| anyhow::anyhow!("{}", e)),
             _ => {
                 eprintln!("❌ Invalid transport: {}", transport);
                 std::process::exit(1);

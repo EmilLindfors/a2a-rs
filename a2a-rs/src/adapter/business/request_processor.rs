@@ -11,8 +11,9 @@ use crate::{
         JSONRPCError, JSONRPCResponse,
         json_rpc::{
             self, A2ARequest, CancelTaskRequest, GetExtendedCardRequest,
-            GetTaskPushNotificationRequest, GetTaskRequest, SendTaskRequest,
-            SendTaskStreamingRequest, SetTaskPushNotificationRequest, TaskResubscriptionRequest,
+            GetTaskPushNotificationRequest, GetTaskRequest, SendMessageRequest,
+            SendMessageStreamingRequest, SendTaskRequest, SendTaskStreamingRequest,
+            SetTaskPushNotificationRequest, TaskResubscriptionRequest,
         },
     },
     domain::A2AError,
@@ -86,7 +87,7 @@ where
     N: AsyncNotificationManager + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
-    /// Process a send task request
+    /// Process a send task request (legacy API)
     async fn process_send_task(
         &self,
         request: &SendTaskRequest,
@@ -110,6 +111,48 @@ where
         tracing::info!(
             task_id = %params.id,
             "✅ DefaultRequestProcessor: Message handler returned successfully"
+        );
+
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::to_value(task)?,
+        ))
+    }
+
+    /// Process a send message request (v0.3.0 message/send API)
+    async fn process_send_message(
+        &self,
+        request: &SendMessageRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        let params = &request.params;
+
+        // Extract task_id from the message or generate a new one
+        let task_id = params
+            .message
+            .task_id
+            .as_ref()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        // Extract context_id (session_id) from the message
+        let session_id = params.message.context_id.as_deref();
+
+        tracing::info!(
+            task_id = %task_id,
+            message_id = %params.message.message_id,
+            has_context_id = session_id.is_some(),
+            "🔄 DefaultRequestProcessor: Processing message/send request"
+        );
+
+        // Process the message through the handler
+        let task = self
+            .message_handler
+            .process_message(&task_id, &params.message, session_id)
+            .await?;
+
+        tracing::info!(
+            task_id = %task_id,
+            "✅ DefaultRequestProcessor: message/send completed successfully"
         );
 
         Ok(JSONRPCResponse::success(
@@ -237,6 +280,50 @@ where
             .message_handler
             .process_message(&params.id, &params.message, session_id)
             .await?;
+
+        Ok(JSONRPCResponse::success(
+            request.id.clone(),
+            serde_json::to_value(task)?,
+        ))
+    }
+
+    /// Process a send message streaming request (v0.3.0 message/stream API)
+    async fn process_send_message_streaming(
+        &self,
+        request: &SendMessageStreamingRequest,
+    ) -> Result<JSONRPCResponse, A2AError> {
+        let params = &request.params;
+
+        // Extract task_id from the message or generate a new one
+        let task_id = params
+            .message
+            .task_id
+            .as_ref()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+        // Extract context_id (session_id) from the message
+        let session_id = params.message.context_id.as_deref();
+
+        tracing::info!(
+            task_id = %task_id,
+            message_id = %params.message.message_id,
+            has_context_id = session_id.is_some(),
+            "🔄 DefaultRequestProcessor: Processing message/stream request"
+        );
+
+        // Process the message through the handler
+        // The handler is responsible for managing history
+        // Streaming updates will be sent via WebSocket separately
+        let task = self
+            .message_handler
+            .process_message(&task_id, &params.message, session_id)
+            .await?;
+
+        tracing::info!(
+            task_id = %task_id,
+            "✅ DefaultRequestProcessor: message/stream completed successfully"
+        );
 
         Ok(JSONRPCResponse::success(
             request.id.clone(),
@@ -384,13 +471,7 @@ where
     ) -> Result<JSONRPCResponse, A2AError> {
         match request {
             A2ARequest::SendTask(req) => self.process_send_task(req).await,
-            A2ARequest::SendMessage(_req) => {
-                // Convert MessageSendParams to TaskSendParams for backwards compatibility
-                // TODO: Implement proper message handling
-                Err(A2AError::UnsupportedOperation(
-                    "Message sending not yet implemented".to_string(),
-                ))
-            }
+            A2ARequest::SendMessage(req) => self.process_send_message(req).await,
             A2ARequest::GetTask(req) => self.process_get_task(req).await,
             A2ARequest::CancelTask(req) => self.process_cancel_task(req).await,
             A2ARequest::SetTaskPushNotification(req) => {
@@ -401,13 +482,7 @@ where
             }
             A2ARequest::TaskResubscription(req) => self.process_task_resubscription(req).await,
             A2ARequest::SendTaskStreaming(req) => self.process_send_task_streaming(req).await,
-            A2ARequest::SendMessageStreaming(_req) => {
-                // Convert MessageSendParams to TaskSendParams for backwards compatibility
-                // TODO: Implement proper message streaming
-                Err(A2AError::UnsupportedOperation(
-                    "Message streaming not yet implemented".to_string(),
-                ))
-            }
+            A2ARequest::SendMessageStreaming(req) => self.process_send_message_streaming(req).await,
             A2ARequest::GetExtendedCard(req) => self.process_get_extended_card(req).await,
             // v0.3.0 new methods
             A2ARequest::ListTasks(req) => self.process_list_tasks(req).await,
