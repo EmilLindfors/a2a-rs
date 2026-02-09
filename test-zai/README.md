@@ -2,6 +2,8 @@
 
 This directory contains working examples of **A2A (Agent-to-Agent) protocol patterns** using the `genai` crate for multi-provider LLM support.
 
+All agents use the **CONSTRUCT pattern** for bounded, deterministic behavior with explicit constraints on output length, sentence count, and behavioral rules. Prompts can be generated dynamically using **ggen-inspired templates** instead of being hardcoded.
+
 ## 🎯 What's Included
 
 ### 1. **Multi-Provider LLM Testing** (`src/main.rs`)
@@ -136,10 +138,44 @@ These implementations are based on patterns from [jeremychone/rust-genai](https:
 3. **Streaming responses** (`c21-tooluse-streaming.rs`) → Future work
 4. **Multi-provider support** (`c00-readme.rs`) → `src/main.rs`
 
+### 4. **ggen-Style CONSTRUCT Prompt Generation** (`examples/ggen_construct_prompts.rs`)
+Generate CONSTRUCT prompts dynamically from specifications instead of hardcoding:
+- **Template-based generation**: Use Tera templates for consistent prompts
+- **Preset personas**: Pre-defined agent types (Math, Researcher, Socrates, Student)
+- **Custom generation**: Create specialized agents with custom constraints
+- **Data-driven**: Persona specs as structured data, not code
+
+```bash
+ZAI_API_KEY=your_key cargo run --example ggen_construct_prompts
+```
+
+**Example Output:**
+```
+🔧 Generating Math Agent prompt from preset...
+
+CONSTRUCT: Mathematical computation assistant.
+CONSTRAINTS:
+- Use calculate tool for ALL numeric operations
+- Show calculation then explain
+- No approximations, exact values only
+- Exactly 2-3 sentences per response
+- Maximum 150 characters total
+TOOLS: Calculate(a, b, operation)
+OUTPUT: Tool result + brief explanation
+```
+
+**Benefits:**
+- ✨ Prompts generated from specs, not hardcoded
+- 📦 Version control persona specifications as data
+- 🔄 Template consistency across agent types
+- 🎯 Enables ontology-driven agent generation (future: RDF/SPARQL)
+
 ## 🔮 Future Enhancements
 
+- [x] **ggen-inspired CONSTRUCT generation** - Template-based prompt generation
+- [ ] **Ontology-driven agents** - Generate agents from RDF/Turtle ontologies
 - [ ] **Streaming responses** - Real-time token streaming
-- [ ] **Multi-agent debates** - 3+ agents with moderator
+- [ ] **Multi-agent debates** - 3+ agents with moderator (basic version added)
 - [ ] **RAG integration** - Agents with retrieval capabilities
 - [ ] **Web search tools** - Real web search integration
 - [ ] **Vision capabilities** - Image understanding agents

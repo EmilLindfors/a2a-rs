@@ -11,3 +11,7 @@ genai = "0.6.0-alpha.1"
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tera = "1.19"
+sophia_api = "0.8"
+sophia_turtle = "0.8"
+sophia_inmem = "0.8"
