@@ -1,0 +1,11 @@
+[package]
+name = "test-zai"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+# Standalone workspace
+
+[dependencies]
+genai = "0.6.0-alpha.1"
+tokio = { version = "1.0", features = ["full"] }
