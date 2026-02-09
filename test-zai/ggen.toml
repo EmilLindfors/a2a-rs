@@ -1,0 +1,60 @@
+# ggen Configuration for CONSTRUCT Prompt Generation
+# Ontology-driven AI agent persona generation
+
+[ggen]
+name = "construct-prompt-generator"
+version = "0.1.0"
+description = "Generate CONSTRUCT prompts from RDF agent ontologies"
+
+# Ontology files defining agent personas
+[[ontology]]
+path = "ontologies/agents.ttl"
+format = "turtle"
+
+[[ontology]]
+path = "ontologies/tools.ttl"
+format = "turtle"
+
+# SPARQL queries to extract agent data
+[[query]]
+name = "all_agents"
+path = "queries/all_agents.rq"
+description = "Extract all agent definitions"
+
+[[query]]
+name = "tool_agents"
+path = "queries/tool_agents.rq"
+description = "Extract tool-enabled agents"
+
+[[query]]
+name = "dialogue_agents"
+path = "queries/dialogue_agents.rq"
+description = "Extract dialogue agents"
+
+# Tera templates for generating CONSTRUCT prompts
+[[template]]
+name = "construct_base"
+path = "templates/construct_base.tera"
+output_pattern = "generated/prompts/{agent_id}_prompt.txt"
+
+[[template]]
+name = "construct_tool_agent"
+path = "templates/construct_tool_agent.tera"
+output_pattern = "generated/prompts/{agent_id}_tool_prompt.txt"
+
+[[template]]
+name = "rust_agent_module"
+path = "templates/agent_module.rs.tera"
+output_pattern = "generated/agents/{agent_id}.rs"
+
+# Generation rules
+[generation]
+output_dir = "generated"
+clean_before_sync = true
+
+# Namespace mappings
+[namespaces]
+a2a = "http://example.org/a2a#"
+rdf = "http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+rdfs = "http://www.w3.org/2000/01/rdf-schema#"
+xsd = "http://www.w3.org/2001/XMLSchema#"

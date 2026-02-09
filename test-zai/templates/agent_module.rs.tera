@@ -1,0 +1,67 @@
+//! {{ label }} - Generated from ontology
+//!
+//! Role: {{ role }}
+//! Model: {{ model }}
+
+use genai::chat::{ChatMessage, ChatRequest};
+use genai::Client;
+
+/// {{ label }}
+///
+/// {{ description }}
+pub struct {{ agent_id | title | replace(from=" ", to="") }} {
+    name: String,
+    persona: String,
+    model: String,
+    history: Vec<ChatMessage>,
+}
+
+impl {{ agent_id | title | replace(from=" ", to="") }} {
+    pub fn new() -> Self {
+        let persona = r#"{{ description }}
+CONSTRAINTS:
+{% for rule in behavioral_rules | split(pat="|") -%}
+- {{ rule }}
+{% endfor -%}
+- Exactly {{ sentence_count }} per response
+- Maximum {{ max_chars }} characters total
+OUTPUT: {{ output_format }}"#;
+
+        Self {
+            name: "{{ label }}".to_string(),
+            persona: persona.to_string(),
+            model: "{{ model }}".to_string(),
+            history: vec![ChatMessage::system(persona)],
+        }
+    }
+
+    pub async fn respond(
+        &mut self,
+        client: &Client,
+        message: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        self.history.push(ChatMessage::user(message));
+
+        let chat_req = ChatRequest::new(self.history.clone());
+        let chat_res = client.exec_chat(&self.model, chat_req, None).await?;
+
+        let response = chat_res.first_text().ok_or("No response")?.to_string();
+        self.history.push(ChatMessage::assistant(&response));
+
+        Ok(response)
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn model(&self) -> &str {
+        &self.model
+    }
+}
+
+impl Default for {{ agent_id | title | replace(from=" ", to="") }} {
+    fn default() -> Self {
+        Self::new()
+    }
+}

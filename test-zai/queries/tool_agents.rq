@@ -1,0 +1,25 @@
+# Query to extract tool-enabled agents
+
+PREFIX a2a: <http://example.org/a2a#>
+PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+
+SELECT ?agent ?agent_id ?label ?role ?description ?max_chars ?sentence_count ?output_format ?model
+       (GROUP_CONCAT(DISTINCT ?behavioral_rule; separator="|") AS ?behavioral_rules)
+       (GROUP_CONCAT(DISTINCT ?tool_label; separator=", ") AS ?tools)
+WHERE {
+    ?agent rdf:type a2a:ToolAgent .
+    ?agent a2a:agentId ?agent_id .
+    ?agent rdfs:label ?label .
+    ?agent a2a:hasRole ?role .
+    ?agent a2a:hasDescription ?description .
+    ?agent a2a:maxCharacters ?max_chars .
+    ?agent a2a:sentenceCount ?sentence_count .
+    ?agent a2a:outputFormat ?output_format .
+    ?agent a2a:usesModel ?model .
+    ?agent a2a:hasBehavioralRule ?behavioral_rule .
+    ?agent a2a:hasTool ?tool .
+    ?tool rdfs:label ?tool_label .
+}
+GROUP BY ?agent ?agent_id ?label ?role ?description ?max_chars ?sentence_count ?output_format ?model
+ORDER BY ?agent_id

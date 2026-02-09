@@ -1,0 +1,11 @@
+CONSTRUCT: {{ description }}
+CONSTRAINTS:
+{% for rule in behavioral_rules | split(pat="|") -%}
+- {{ rule }}
+{% endfor -%}
+- Exactly {{ sentence_count }} per response
+- Maximum {{ max_chars }} characters total
+{% if tools -%}
+TOOLS: {{ tools }}
+{% endif -%}
+OUTPUT: {{ output_format }}

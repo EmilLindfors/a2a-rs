@@ -1,0 +1,68 @@
+@prefix a2a: <http://example.org/a2a#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+# Tool Class
+a2a:Tool a rdfs:Class ;
+    rdfs:label "Agent Tool" ;
+    rdfs:comment "A tool that agents can use" .
+
+# Tool Properties
+a2a:toolName a rdf:Property ;
+    rdfs:domain a2a:Tool ;
+    rdfs:range xsd:string ;
+    rdfs:label "tool name" .
+
+a2a:toolParameters a rdf:Property ;
+    rdfs:domain a2a:Tool ;
+    rdfs:range xsd:string ;
+    rdfs:label "tool parameters" .
+
+a2a:toolDescription a rdf:Property ;
+    rdfs:domain a2a:Tool ;
+    rdfs:range xsd:string ;
+    rdfs:label "tool description" .
+
+# Tool Instances
+a2a:CalculateTool a a2a:Tool ;
+    rdfs:label "Calculate" ;
+    a2a:toolName "calculate" ;
+    a2a:toolParameters "a: number, b: number, operation: string" ;
+    a2a:toolDescription "Performs mathematical calculations (add, subtract, multiply, divide)" .
+
+a2a:SearchTool a a2a:Tool ;
+    rdfs:label "Search" ;
+    a2a:toolName "search" ;
+    a2a:toolParameters "query: string" ;
+    a2a:toolDescription "Searches for information on a given topic" .
+
+a2a:SearchDatabaseTool a a2a:Tool ;
+    rdfs:label "Search Database" ;
+    a2a:toolName "search_database" ;
+    a2a:toolParameters "query: string, limit: integer" ;
+    a2a:toolDescription "Queries a database with optional result limit" .
+
+a2a:AnalyzeDataTool a a2a:Tool ;
+    rdfs:label "Analyze Data" ;
+    a2a:toolName "analyze_data" ;
+    a2a:toolParameters "data: array" ;
+    a2a:toolDescription "Performs statistical analysis on data" .
+
+a2a:GenerateCodeTool a a2a:Tool ;
+    rdfs:label "Generate Code" ;
+    a2a:toolName "generate_code" ;
+    a2a:toolParameters "task: string, language: string" ;
+    a2a:toolDescription "Generates code in a specified programming language" .
+
+a2a:CallAPITool a a2a:Tool ;
+    rdfs:label "Call API" ;
+    a2a:toolName "call_api" ;
+    a2a:toolParameters "endpoint: string, method: string, payload: object" ;
+    a2a:toolDescription "Makes HTTP API calls with specified method and payload" .
+
+a2a:ValidateResponseTool a a2a:Tool ;
+    rdfs:label "Validate Response" ;
+    a2a:toolName "validate_response" ;
+    a2a:toolParameters "response: object, schema: object" ;
+    a2a:toolDescription "Validates API responses against a schema" .
