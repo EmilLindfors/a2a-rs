@@ -119,14 +119,14 @@ impl SelfPlayOrchestrator {
             metadata: HashMap::new(),
         };
 
-        println!("\n{}, "", "=".repeat(80)));
+        println!("\n{}", "=".repeat(80));
         println!("🎭 STARTING SELF-PLAY CONVERSATION");
-        println!("{}, "", "=".repeat(80)));
+        println!("{}", "=".repeat(80));
         println!("Agent 1: {}", self.agents.get(agent1_id).unwrap().name);
         println!("Agent 2: {}", self.agents.get(agent2_id).unwrap().name);
         println!("Initial Topic: {}", initial_topic);
         println!("Max Turns: {}", max_turns);
-        println!(""=".repeat(80)\n", "");
+        println!("{}\n", "=".repeat(80));
 
         for turn in 0..max_turns {
             // Determine which agent should respond
@@ -135,13 +135,13 @@ impl SelfPlayOrchestrator {
             let agent = self.agents.get_mut(responding_agent_id)
                 .ok_or("Agent not found")?;
 
-            println!("\n{}, "", "-".repeat(80)));
+            println!("\n{}", "-".repeat(80));
             println!("Turn {}: {} → {}",
                 turn + 1,
                 current_message.from_agent,
                 responding_agent_id
             );
-            println!("{}, "", "-".repeat(80)));
+            println!("{}", "-".repeat(80));
             println!("📨 Incoming: {}", current_message.content);
 
             // Get response from agent
@@ -155,9 +155,9 @@ impl SelfPlayOrchestrator {
             current_message = response;
         }
 
-        println!("\n{}, "", "=".repeat(80)));
+        println!("\n{}", "=".repeat(80));
         println!("🏁 CONVERSATION COMPLETE");
-        println!(""=".repeat(80)\n", "");
+        println!("{}\n", "=".repeat(80));
 
         Ok(conversation_log)
     }
@@ -248,9 +248,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ).await?;
 
     // Print summary
-    println!("\n{}, "", "=".repeat(80)));
+    println!("\n{}", "=".repeat(80));
     println!("📊 CONVERSATION SUMMARY");
-    println!("{}, "", "=".repeat(80)));
+    println!("{}", "=".repeat(80));
     println!("Scenario 1: {} total messages", conversation1.len());
     println!("Scenario 2: {} total messages", conversation2.len());
     println!("\n✅ All scenarios completed successfully!");

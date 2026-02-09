@@ -134,18 +134,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "required": ["query"]
         }));
 
-    // Agent with calculator
+    // Agent with calculator using CONSTRUCT
     let mut math_agent = ToolAgent::new(
         "MathAgent",
-        "You are a helpful math assistant. Use the calculator tool when needed. Keep responses to 2-3 sentences.",
+        "CONSTRUCT: Mathematical computation assistant with bounded operations.\n\
+        CONSTRAINTS:\n\
+        - Use calculate tool for ALL numeric operations\n\
+        - Exactly 2-3 sentences in response\n\
+        - Maximum 150 characters\n\
+        - Show calculation then explain\n\
+        - No approximations, exact values only\n\
+        TOOLS: Calculate(a, b, operation)\n\
+        OUTPUT: Tool result + brief explanation.",
         "zai-coding::glm-4.6",
         vec![calc_tool],
     );
 
-    // Agent with search
+    // Agent with search using CONSTRUCT
     let mut researcher = ToolAgent::new(
         "Researcher",
-        "You are a research assistant. Use the search tool when needed. Keep responses to 2-3 sentences.",
+        "CONSTRUCT: Information retrieval specialist with bounded search.\n\
+        CONSTRAINTS:\n\
+        - Use search tool for information gathering\n\
+        - Exactly 2-3 sentences summary\n\
+        - Maximum 180 characters\n\
+        - Cite tool results explicitly\n\
+        - Focus on key facts only\n\
+        TOOLS: Search(query)\n\
+        OUTPUT: Synthesized facts from search results.",
         "zai-coding::glm-4.6",
         vec![search_tool],
     );

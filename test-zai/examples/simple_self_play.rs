@@ -56,16 +56,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let client = Client::default();
 
-    // Create two agents with different personas
+    // Create two agents with CONSTRUCT-bounded personas
     let mut socrates = Agent::new(
         "Socrates",
-        "You are Socrates. Ask probing questions. Keep responses to 2-3 sentences.",
+        "CONSTRUCT: You are Socrates using the Socratic method.\n\
+        CONSTRAINTS:\n\
+        - Exactly 2-3 sentences per response\n\
+        - Maximum 200 characters total\n\
+        - Ask exactly 1 probing question\n\
+        - Reference previous context\n\
+        - No explanations, only questions\n\
+        OUTPUT: One question that challenges assumptions.",
         "zai-coding::glm-4.6",
     );
 
     let mut student = Agent::new(
         "Student",
-        "You are a curious student. Ask questions and share your thoughts. Keep responses to 2-3 sentences.",
+        "CONSTRUCT: You are a thoughtful student exploring ideas.\n\
+        CONSTRAINTS:\n\
+        - Exactly 2-3 sentences per response\n\
+        - Maximum 200 characters total\n\
+        - Build on previous point\n\
+        - Ask 1 follow-up question\n\
+        - Show reasoning process\n\
+        OUTPUT: Insight + question that advances dialogue.",
         "zai-coding::glm-4.6",
     );
 

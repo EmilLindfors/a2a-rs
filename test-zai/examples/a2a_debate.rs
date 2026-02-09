@@ -93,9 +93,15 @@ impl DebateOrchestrator {
             "moderator",
             "Moderator",
             "Neutral",
-            "You are an impartial debate moderator. \
-            You keep the debate on track, ensure fair time, \
-            and summarize key points. Be concise (2-3 sentences).",
+            "CONSTRUCT: Impartial debate moderator with bounded facilitation.\n\
+            CONSTRAINTS:\n\
+            - Exactly 2-3 sentences per intervention\n\
+            - Maximum 200 characters total\n\
+            - Maintain strict neutrality\n\
+            - Ensure equal speaking time\n\
+            - Summarize key arguments only\n\
+            - No personal opinions expressed\n\
+            OUTPUT: Procedural guidance or balanced summary.",
             moderator_model,
         );
 
@@ -116,9 +122,9 @@ impl DebateOrchestrator {
         topic: &str,
         rounds: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        println!("\n{}, "", "=".repeat(80)));
+        println!("\n{}", "=".repeat(80));
         println!("⚖️  A2A AGENT DEBATE");
-        println!("{}, "", "=".repeat(80)));
+        println!("{}", "=".repeat(80));
         println!("Topic: {}", topic);
         println!("Rounds: {}", rounds);
 
@@ -126,7 +132,7 @@ impl DebateOrchestrator {
         for (_, agent) in &self.agents {
             println!("\n🎯 {}: {}", agent.name, agent.position);
         }
-        println!("\n"=".repeat(80)\n", "");
+        println!("{}\n", "=".repeat(80));
 
         // Opening statements
         println!("📢 OPENING STATEMENTS\n");
@@ -139,9 +145,9 @@ impl DebateOrchestrator {
                 message_type: MessageType::Opening,
             };
 
-            println!("{}, "", "-".repeat(80)));
+            println!("{}", "-".repeat(80));
             println!("🎤 {} ({})", agent.name, agent.position);
-            println!("{}, "", "-".repeat(80)));
+            println!("{}", "-".repeat(80));
 
             let response = agent.respond(&self.client, &opening, "Opening statement").await?;
             println!("{}", response.content);
@@ -152,9 +158,9 @@ impl DebateOrchestrator {
         let agent_ids: Vec<String> = self.agents.keys().cloned().collect();
 
         for round in 0..rounds {
-            println!("\n{}, "", "=".repeat(80)));
+            println!("\n{}", "=".repeat(80));
             println!("🔄 ROUND {}", round + 1);
-            println!(""=".repeat(80)\n", "");
+            println!("{}\n", "=".repeat(80));
 
             for (idx, agent_id) in agent_ids.iter().enumerate() {
                 let opponent_id = &agent_ids[(idx + 1) % agent_ids.len()];
@@ -166,9 +172,9 @@ impl DebateOrchestrator {
 
                 let agent = self.agents.get_mut(agent_id).unwrap();
 
-                println!("{}, "", "-".repeat(80)));
+                println!("{}", "-".repeat(80));
                 println!("💭 {} responds", agent.name);
-                println!("{}, "", "-".repeat(80)));
+                println!("{}", "-".repeat(80));
 
                 let prompt = DebateMessage {
                     from_agent: opponent_id.clone(),
@@ -188,9 +194,9 @@ impl DebateOrchestrator {
         }
 
         // Moderator summary
-        println!("\n{}, "", "=".repeat(80)));
+        println!("\n{}", "=".repeat(80));
         println!("📋 MODERATOR SUMMARY");
-        println!(""=".repeat(80)\n", "");
+        println!("{}\n", "=".repeat(80));
 
         let full_debate = self.transcript.iter()
             .map(|m| format!("{}: {}", m.from_agent, m.content))
@@ -208,9 +214,9 @@ impl DebateOrchestrator {
         let summary = self.moderator.respond(&self.client, &summary_prompt, &full_debate).await?;
         println!("{}", summary.content);
 
-        println!("\n{}, "", "=".repeat(80)));
+        println!("\n{}", "=".repeat(80));
         println!("✅ Debate complete! Total exchanges: {}", self.transcript.len());
-        println!(""=".repeat(80)\n", "");
+        println!("{}\n", "=".repeat(80));
 
         Ok(())
     }
@@ -235,9 +241,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "debater_pro",
         "AI Optimist",
         "Pro-AI Development",
-        "You argue that AI development should proceed rapidly. \
-        You emphasize benefits, opportunities, and human oversight. \
-        Be persuasive but respectful. Keep responses to 3-4 sentences.",
+        "CONSTRUCT: Pro-AI development advocate with bounded argumentation.\n\
+        CONSTRAINTS:\n\
+        - Exactly 3-4 sentences per argument\n\
+        - Maximum 250 characters total\n\
+        - Emphasize benefits and opportunities\n\
+        - Reference human oversight mechanisms\n\
+        - Remain respectful and evidence-based\n\
+        - Address opponent's concerns directly\n\
+        OUTPUT: Persuasive argument supporting rapid AI development.",
         "zai-coding::glm-4.6",
     );
 
@@ -246,9 +258,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "debater_cautious",
         "AI Realist",
         "Cautious AI Development",
-        "You argue for measured, carefully regulated AI development. \
-        You emphasize risks, ethics, and the need for safeguards. \
-        Be persuasive but respectful. Keep responses to 3-4 sentences.",
+        "CONSTRUCT: Cautious AI development advocate with bounded argumentation.\n\
+        CONSTRAINTS:\n\
+        - Exactly 3-4 sentences per argument\n\
+        - Maximum 250 characters total\n\
+        - Emphasize risks and ethical concerns\n\
+        - Reference need for regulatory safeguards\n\
+        - Remain respectful and evidence-based\n\
+        - Address opponent's claims directly\n\
+        OUTPUT: Persuasive argument supporting measured AI development.",
         "zai-coding::glm-4.6",
     );
 

@@ -173,11 +173,11 @@ impl ToolAgentOrchestrator {
         task: &str,
         max_turns: usize,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        println!("\n{}, "", "=".repeat(80)));
+        println!("\n{}", "=".repeat(80));
         println!("🛠️  A2A TOOL-ENABLED AGENT CONVERSATION");
-        println!("{}, "", "=".repeat(80)));
+        println!("{}", "=".repeat(80));
         println!("Task: {}", task);
-        println!(""=".repeat(80)\n", "");
+        println!("{}\n", "=".repeat(80));
 
         let mut current_message = A2AToolMessage {
             from_agent: agent1_id.to_string(),
@@ -193,9 +193,9 @@ impl ToolAgentOrchestrator {
             let agent = self.agents.get_mut(&responding_agent_id)
                 .ok_or("Agent not found")?;
 
-            println!("\n{}, "", "-".repeat(80)));
+            println!("\n{}", "-".repeat(80));
             println!("Turn {}: {} → {}", turn + 1, current_message.from_agent, responding_agent_id);
-            println!("{}, "", "-".repeat(80)));
+            println!("{}", "-".repeat(80));
             println!("📨 Request: {}", current_message.content);
 
             let response = agent.process_with_tools(&self.client, &current_message).await?;
@@ -214,9 +214,9 @@ impl ToolAgentOrchestrator {
             current_message = response;
         }
 
-        println!("\n{}, "", "=".repeat(80)));
+        println!("\n{}", "=".repeat(80));
         println!("✅ Tool conversation complete");
-        println!(""=".repeat(80)\n", "");
+        println!("{}\n", "=".repeat(80));
 
         Ok(())
     }
@@ -269,8 +269,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_specialist = ToolAgent::new(
         "agent_data",
         "Data Specialist",
-        "You are a data analyst. You can search databases and analyze data. \
-        Use your tools when appropriate. Keep responses concise (2-3 sentences).",
+        "CONSTRUCT: Data analysis specialist with database and analytical tools.\n\
+        CONSTRAINTS:\n\
+        - Use search_database tool for information queries\n\
+        - Use analyze_data tool for statistical analysis\n\
+        - Exactly 2-3 sentences per response\n\
+        - Maximum 180 characters total\n\
+        - Always cite tool results explicitly\n\
+        - Focus on data-driven insights only\n\
+        TOOLS: SearchDatabase(query, limit), AnalyzeData(data)\n\
+        OUTPUT: Tool-based findings with brief interpretation.",
         "zai-coding::glm-4.6",
         vec![database_tool, analysis_tool],
     );
@@ -296,8 +304,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let code_generator = ToolAgent::new(
         "agent_code",
         "Code Generator",
-        "You are a software engineer who can generate code. \
-        Use your code generation tool when asked. Keep responses concise (2-3 sentences).",
+        "CONSTRUCT: Software engineering specialist with code generation capabilities.\n\
+        CONSTRAINTS:\n\
+        - Use generate_code tool for ALL code creation tasks\n\
+        - Exactly 2-3 sentences per response\n\
+        - Maximum 180 characters total\n\
+        - Specify language and explain approach\n\
+        - No manual code writing, tool only\n\
+        TOOLS: GenerateCode(task, language)\n\
+        OUTPUT: Generated code summary with key features.",
         "zai-coding::glm-4.6",
         vec![code_tool],
     );
