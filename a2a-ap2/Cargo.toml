@@ -1,6 +1,6 @@
 [package]
 name = "a2a-ap2"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Emil Lindfors <emil@lindfors.no>"]
@@ -14,7 +14,7 @@ categories = ["api-bindings", "network-programming"]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"
-a2a-rs = { path = "../a2a-rs" }
+a2a-rs = { path = "../a2a-rs", version = "0.2" }
 
 [dev-dependencies]
 serde_json = "1.0"

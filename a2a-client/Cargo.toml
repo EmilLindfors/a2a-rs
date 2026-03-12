@@ -1,16 +1,19 @@
 [package]
 name = "a2a-client"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Emil Lindfors <emil@lindfors.no>"]
 description = "Generic web client library for building A2A agent frontends"
 license = "MIT"
+repository = "https://github.com/emillindfors/a2a-rs"
+keywords = ["a2a", "agent", "client", "web"]
+categories = ["api-bindings", "web-programming"]
 
 [dependencies]
 # A2A integration
 # Note: We need "server" feature for the port traits even though this is a client library
-a2a-rs = { path = "../a2a-rs", features = ["http-client", "ws-client", "server", "tracing"], default-features = false }
+a2a-rs = { path = "../a2a-rs", version = "0.2", features = ["http-client", "ws-client", "server", "tracing"], default-features = false }
 
 # Async runtime
 tokio = { version = "1", features = ["time"] }

@@ -1,18 +1,19 @@
 [package]
 name = "a2a-agents"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Emil Lindfors <emil@lindfors.no>"]
 description = "Framework for building A2A Protocol agents with declarative configuration"
 license = "MIT"
+repository = "https://github.com/emillindfors/a2a-rs"
+keywords = ["a2a", "agent", "framework", "toml"]
+categories = ["api-bindings", "network-programming"]
 
 [dependencies]
-a2a-rs = { path = "../a2a-rs", features = ["server", "http-server", "ws-server", "http-client", "tracing"] }
-a2a-ap2 = { path = "../a2a-ap2", optional = true }
-a2a-client = { path = "../a2a-client" }
-a2a-mcp = { path = "../a2a-mcp", optional = true }
-rmcp = { path = "../a2a-mcp/rust-sdk/crates/rmcp", optional = true, features = ["client", "transport-child-process"] }
+a2a-rs = { path = "../a2a-rs", version = "0.2", features = ["server", "http-server", "ws-server", "http-client", "tracing"] }
+a2a-ap2 = { path = "../a2a-ap2", version = "0.2", optional = true }
+a2a-client = { path = "../a2a-client", version = "0.2" }
 
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }
@@ -60,11 +61,11 @@ reimbursement-agent = []
 ap2 = ["dep:a2a-ap2"]
 sqlx = ["a2a-rs/sqlite"]
 auth = ["a2a-rs/auth", "dep:oauth2"]
-mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
-mcp-client = ["dep:a2a-mcp", "dep:rmcp"]
-# Future agent types can be added as features
-# document-agent = ["dep:reqwest"]
-# research-agent = ["dep:reqwest"]
+# MCP features require a local MCP SDK checkout (not yet published to crates.io).
+# These are declared so cfg(feature) checks compile, but cannot be enabled without
+# adding the rmcp dependency locally.
+mcp-server = []
+mcp-client = []
 
 
 [[bin]]
@@ -100,14 +101,5 @@ name = "ap2_merchant_agent"
 path = "examples/ap2_merchant_agent.rs"
 required-features = ["ap2"]
 
-[[example]]
-name = "mcp_server_agent"
-path = "examples/mcp_server_agent.rs"
-required-features = ["mcp-server"]
-
-[[example]]
-name = "mcp_client_agent"
-path = "examples/mcp_client_agent.rs"
-required-features = ["mcp-client"]
 
 

@@ -34,16 +34,16 @@ cd a2a-agents && cargo run --bin reimbursement_demo
 ```toml
 [dependencies]
 # Server with default features (in-memory storage, tracing)
-a2a-rs = "0.1.0"
+a2a-rs = "0.2.0"
 
 # HTTP client
-a2a-rs = { version = "0.1.0", features = ["http-client"] }
+a2a-rs = { version = "0.2.0", features = ["http-client"] }
 
 # HTTP server with Axum
-a2a-rs = { version = "0.1.0", features = ["http-server"] }
+a2a-rs = { version = "0.2.0", features = ["http-server"] }
 
 # All transports, auth, SQLite + PostgreSQL storage
-a2a-rs = { version = "0.1.0", features = ["full"] }
+a2a-rs = { version = "0.2.0", features = ["full"] }
 ```
 
 ## Features

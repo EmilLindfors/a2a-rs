@@ -1,0 +1,77 @@
+name: Publish to crates.io
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (skip actual publish)"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish crates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify workspace builds
+        run: cargo build --workspace
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      # Publish in dependency order with delays for crates.io index updates.
+      # On tag push, publish for real. On workflow_dispatch, respect dry_run input.
+      - name: Publish a2a-rs
+        run: cargo publish -p a2a-rs ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index
+        if: github.event_name == 'push' || inputs.dry_run == 'false'
+        run: sleep 30
+
+      - name: Publish a2a-ap2
+        run: cargo publish -p a2a-ap2 ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish a2a-client
+        run: cargo publish -p a2a-client ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index
+        if: github.event_name == 'push' || inputs.dry_run == 'false'
+        run: sleep 30
+
+      - name: Publish a2a-agents
+        run: cargo publish -p a2a-agents ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Wait for crates.io index
+        if: github.event_name == 'push' || inputs.dry_run == 'false'
+        run: sleep 30
+
+      - name: Publish a2a-agents-common
+        run: cargo publish -p a2a-agents-common ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
