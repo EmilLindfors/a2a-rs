@@ -16,4 +16,4 @@ pub use task_storage::InMemoryTaskStorage;
 pub use sqlx_storage::SqlxTaskStorage;
 
 #[cfg(feature = "sqlx-storage")]
-pub use database_config::DatabaseConfig;
+pub use database_config::{DatabaseConfig, DatabaseType};

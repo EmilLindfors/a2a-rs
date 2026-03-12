@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .validate()
         .map_err(|e| format!("Invalid database configuration: {}", e))?;
 
-    println!("🔧 Database type: {}", config.database_type());
+    println!("🔧 Database type: {:?}", config.database_type());
     println!("🔗 Database URL: {}", config.url);
     println!("📊 Max connections: {}", config.max_connections);
     println!();

@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             DatabaseConfig::default()
         });
 
-        println!("📊 Database: {} ({})", config.url, config.database_type());
+        println!("📊 Database: {} ({:?})", config.url, config.database_type());
 
         let sqlx_storage = SqlxTaskStorage::new(&config.url).await?;
         run_storage_tests(&sqlx_storage, "SQLx").await?;

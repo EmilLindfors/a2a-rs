@@ -75,9 +75,35 @@ pub struct SqlxTaskStorage {
 }
 
 #[cfg(feature = "sqlx-storage")]
+use super::database_config::DatabaseType;
+
+#[cfg(feature = "sqlx-storage")]
 impl SqlxTaskStorage {
-    /// Create a new SQLx task storage with the given database URL
+    /// Validate that the database URL is a supported SQLite URL.
+    ///
+    /// Returns an error if the URL points to a different database type
+    /// or if the required feature is not enabled.
+    fn validate_url(database_url: &str) -> Result<(), A2AError> {
+        match DatabaseType::from_url(database_url) {
+            Some(DatabaseType::Sqlite) => Ok(()),
+            Some(db_type) => Err(A2AError::DatabaseError(format!(
+                "{db_type} database detected from URL '{database_url}', but SqlxTaskStorage \
+                 currently only supports SQLite. For {db_type} support, see the project roadmap."
+            ))),
+            None => Err(A2AError::DatabaseError(format!(
+                "Unrecognized database URL scheme in '{database_url}'. \
+                 Expected a URL starting with sqlite:, e.g. 'sqlite::memory:' or 'sqlite:data.db'"
+            ))),
+        }
+    }
+
+    /// Create a new SQLx task storage with the given database URL.
+    ///
+    /// Currently only SQLite URLs are supported (e.g. `sqlite::memory:`, `sqlite:data.db`).
+    /// Passing a PostgreSQL or MySQL URL will return an error.
     pub async fn new(database_url: &str) -> Result<Self, A2AError> {
+        Self::validate_url(database_url)?;
+
         let pool = SqlitePool::connect(database_url).await.map_err(|e| {
             A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
         })?;
@@ -100,11 +126,15 @@ impl SqlxTaskStorage {
         })
     }
 
-    /// Create a new SQLx task storage with a custom push notification sender
+    /// Create a new SQLx task storage with a custom push notification sender.
+    ///
+    /// Currently only SQLite URLs are supported.
     pub async fn with_push_sender(
         database_url: &str,
         push_sender: impl PushNotificationSender + 'static,
     ) -> Result<Self, A2AError> {
+        Self::validate_url(database_url)?;
+
         let pool = SqlitePool::connect(database_url).await.map_err(|e| {
             A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
         })?;
@@ -121,11 +151,15 @@ impl SqlxTaskStorage {
         })
     }
 
-    /// Create a new SQLx task storage with additional migrations
+    /// Create a new SQLx task storage with additional migrations.
+    ///
+    /// Currently only SQLite URLs are supported.
     pub async fn with_migrations(
         database_url: &str,
         additional_migrations: &[&str],
     ) -> Result<Self, A2AError> {
+        Self::validate_url(database_url)?;
+
         let pool = SqlitePool::connect(database_url).await.map_err(|e| {
             A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
         })?;
@@ -151,16 +185,13 @@ impl SqlxTaskStorage {
         })
     }
 
-    /// Run base A2A framework migrations
+    /// Run base A2A framework migrations (SQLite dialect).
     async fn run_base_migrations(pool: &SqlitePool) -> Result<(), A2AError> {
-        // Currently only SQLite migrations are supported.
-        // For PostgreSQL/MySQL support, use DatabaseConfig::database_type() to select migrations.
         sqlx::query(include_str!("../../../migrations/001_initial_schema.sql"))
             .execute(pool)
             .await
             .map_err(|e| A2AError::DatabaseError(format!("Migration 001 failed: {}", e)))?;
 
-        // Run v0.3.0 migration for enhanced push notification configs
         sqlx::query(include_str!(
             "../../../migrations/002_v030_push_configs.sql"
         ))

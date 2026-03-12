@@ -20,9 +20,10 @@
 //!
 //! ### Basic HTTP Client
 //!
-//! ```rust,ignore
+//! ```rust,no_run
 //! use a2a_client::WebA2AClient;
 //! use a2a_rs::domain::Message;
+//! use a2a_rs::services::AsyncA2AClient;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> anyhow::Result<()> {
@@ -30,11 +31,9 @@
 //! let client = WebA2AClient::new_http("http://localhost:8080".to_string());
 //!
 //! // Send a message
-//! let message = Message::builder()
-//!     .text("Hello, agent!")
-//!     .build();
+//! let message = Message::user_text("Hello, agent!".to_string(), "msg-1".to_string());
 //!
-//! let task = client.http.send_message(&message, None).await?;
+//! let task = client.http.send_task_message("task-1", &message, None, None).await?;
 //! println!("Task ID: {}", task.id);
 //! # Ok(())
 //! # }
@@ -42,11 +41,9 @@
 //!
 //! ### With WebSocket Support
 //!
-//! ```rust,ignore
+//! ```rust
 //! use a2a_client::WebA2AClient;
 //!
-//! # #[tokio::main]
-//! # async fn main() -> anyhow::Result<()> {
 //! // Create client with both HTTP and WebSocket
 //! let client = WebA2AClient::new_with_websocket(
 //!     "http://localhost:8080".to_string(),
@@ -56,8 +53,6 @@
 //! if client.has_websocket() {
 //!     println!("WebSocket support available!");
 //! }
-//! # Ok(())
-//! # }
 //! ```
 //!
 //! ### SSE Streaming with Axum (requires `axum-components` feature)
@@ -152,7 +147,7 @@ use std::sync::Arc;
 ///
 /// ## Auto-detecting transports
 ///
-/// ```rust,ignore
+/// ```rust,no_run
 /// use a2a_client::WebA2AClient;
 ///
 /// # #[tokio::main]
@@ -239,7 +234,7 @@ impl WebA2AClient {
     ///
     /// # Examples
     ///
-    /// ```rust,ignore
+    /// ```rust,no_run
     /// use a2a_client::WebA2AClient;
     ///
     /// # #[tokio::main]
@@ -302,24 +297,15 @@ impl WebA2AClient {
 ///
 /// # Examples
 ///
-/// ```rust,ignore
+/// ```rust
 /// use a2a_client::{WebA2AClient, AppState};
-/// use axum::{Router, routing::get};
 /// use std::sync::Arc;
 ///
-/// # #[tokio::main]
-/// # async fn main() -> anyhow::Result<()> {
 /// let client = WebA2AClient::new_http("http://localhost:8080".to_string());
 /// let state = Arc::new(
 ///     AppState::new(client)
 ///         .with_webhook_token("secret-token".to_string())
 /// );
-///
-/// let app = Router::new()
-///     .route("/", get(|| async { "Hello!" }))
-///     .with_state(state);
-/// # Ok(())
-/// # }
 /// ```
 pub struct AppState {
     /// The A2A client for interacting with agents

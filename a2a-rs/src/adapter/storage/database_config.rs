@@ -7,6 +7,65 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "sqlx-storage")]
 use std::collections::HashMap;
 
+/// Supported database types, detected from the connection URL scheme.
+#[cfg(feature = "sqlx-storage")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DatabaseType {
+    /// SQLite database (URLs starting with `sqlite:`)
+    Sqlite,
+    /// PostgreSQL database (URLs starting with `postgres:` or `postgresql:`)
+    Postgres,
+    /// MySQL database (URLs starting with `mysql:`)
+    Mysql,
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl DatabaseType {
+    /// Detect the database type from a connection URL.
+    ///
+    /// Returns `None` if the URL scheme is not recognized.
+    pub fn from_url(url: &str) -> Option<Self> {
+        if url.starts_with("sqlite:") {
+            Some(Self::Sqlite)
+        } else if url.starts_with("postgres:") || url.starts_with("postgresql:") {
+            Some(Self::Postgres)
+        } else if url.starts_with("mysql:") || url.starts_with("mariadb:") {
+            Some(Self::Mysql)
+        } else {
+            None
+        }
+    }
+
+    /// Check whether this database type is supported by the currently compiled features.
+    pub fn is_feature_enabled(self) -> bool {
+        match self {
+            Self::Sqlite => cfg!(feature = "sqlite"),
+            Self::Postgres => cfg!(feature = "postgres"),
+            Self::Mysql => cfg!(feature = "mysql"),
+        }
+    }
+
+    /// Returns the feature flag name needed to enable this database type.
+    pub fn feature_name(self) -> &'static str {
+        match self {
+            Self::Sqlite => "sqlite",
+            Self::Postgres => "postgres",
+            Self::Mysql => "mysql",
+        }
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl std::fmt::Display for DatabaseType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Sqlite => write!(f, "SQLite"),
+            Self::Postgres => write!(f, "PostgreSQL"),
+            Self::Mysql => write!(f, "MySQL"),
+        }
+    }
+}
+
 #[cfg(feature = "sqlx-storage")]
 /// Database configuration with connection examples
 #[derive(Debug, Clone, Builder, Serialize, Deserialize)]
@@ -132,17 +191,36 @@ impl DatabaseConfig {
         Ok(())
     }
 
-    /// Get the database type from the URL
-    pub fn database_type(&self) -> &str {
-        if self.url.starts_with("sqlite:") {
-            "sqlite"
-        } else if self.url.starts_with("postgres:") || self.url.starts_with("postgresql:") {
-            "postgres"
-        } else if self.url.starts_with("mysql:") {
-            "mysql"
-        } else {
-            "unknown"
+    /// Get the database type from the URL.
+    ///
+    /// Returns `None` if the URL scheme is not recognized.
+    pub fn database_type(&self) -> Option<DatabaseType> {
+        DatabaseType::from_url(&self.url)
+    }
+
+    /// Validate that the database URL scheme matches a compiled feature.
+    ///
+    /// Returns an error if the URL scheme is unrecognized or if the corresponding
+    /// feature flag is not enabled.
+    pub fn validate_database_support(&self) -> Result<DatabaseType, String> {
+        let db_type = self.database_type().ok_or_else(|| {
+            format!(
+                "Unrecognized database URL scheme in '{}'. Expected sqlite:, postgres:, or mysql:",
+                self.url
+            )
+        })?;
+
+        if !db_type.is_feature_enabled() {
+            return Err(format!(
+                "{} database detected from URL but the '{}' feature is not enabled. \
+                 Add `features = [\"{}\"]` to your a2a-rs dependency.",
+                db_type,
+                db_type.feature_name(),
+                db_type.feature_name(),
+            ));
         }
+
+        Ok(db_type)
     }
 }
 
@@ -183,17 +261,59 @@ mod tests {
         let sqlite_config = DatabaseConfig::builder()
             .url("sqlite:test.db".to_string())
             .build();
-        assert_eq!(sqlite_config.database_type(), "sqlite");
+        assert_eq!(sqlite_config.database_type(), Some(DatabaseType::Sqlite));
 
         let postgres_config = DatabaseConfig::builder()
             .url("postgres://localhost/test".to_string())
             .build();
-        assert_eq!(postgres_config.database_type(), "postgres");
+        assert_eq!(postgres_config.database_type(), Some(DatabaseType::Postgres));
+
+        let postgresql_config = DatabaseConfig::builder()
+            .url("postgresql://localhost/test".to_string())
+            .build();
+        assert_eq!(
+            postgresql_config.database_type(),
+            Some(DatabaseType::Postgres)
+        );
 
         let mysql_config = DatabaseConfig::builder()
             .url("mysql://localhost/test".to_string())
             .build();
-        assert_eq!(mysql_config.database_type(), "mysql");
+        assert_eq!(mysql_config.database_type(), Some(DatabaseType::Mysql));
+
+        let unknown_config = DatabaseConfig::builder()
+            .url("http://localhost".to_string())
+            .build();
+        assert_eq!(unknown_config.database_type(), None);
+    }
+
+    #[test]
+    fn test_database_type_from_url() {
+        assert_eq!(
+            DatabaseType::from_url("sqlite::memory:"),
+            Some(DatabaseType::Sqlite)
+        );
+        assert_eq!(
+            DatabaseType::from_url("sqlite:data.db"),
+            Some(DatabaseType::Sqlite)
+        );
+        assert_eq!(
+            DatabaseType::from_url("postgres://user:pass@host/db"),
+            Some(DatabaseType::Postgres)
+        );
+        assert_eq!(
+            DatabaseType::from_url("postgresql://user:pass@host/db"),
+            Some(DatabaseType::Postgres)
+        );
+        assert_eq!(
+            DatabaseType::from_url("mysql://user:pass@host/db"),
+            Some(DatabaseType::Mysql)
+        );
+        assert_eq!(
+            DatabaseType::from_url("mariadb://user:pass@host/db"),
+            Some(DatabaseType::Mysql)
+        );
+        assert_eq!(DatabaseType::from_url("ftp://something"), None);
     }
 
     #[test]

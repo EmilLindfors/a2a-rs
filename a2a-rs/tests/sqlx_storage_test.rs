@@ -219,12 +219,16 @@ mod sqlx_tests {
         assert!(invalid_config.validate().is_err());
 
         // Test database type detection
-        assert_eq!(valid_config.database_type(), "sqlite");
+        use a2a_rs::adapter::storage::DatabaseType;
+        assert_eq!(valid_config.database_type(), Some(DatabaseType::Sqlite));
 
         let postgres_config = DatabaseConfig::builder()
             .url("postgres://localhost/test".to_string())
             .build();
-        assert_eq!(postgres_config.database_type(), "postgres");
+        assert_eq!(
+            postgres_config.database_type(),
+            Some(DatabaseType::Postgres)
+        );
 
         Ok(())
     }

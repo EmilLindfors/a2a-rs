@@ -31,7 +31,7 @@ async-trait = { version = "0.1", optional = true }
 futures = { version = "0.3", optional = true }
 
 # HTTP client - optional
-reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false, optional = true }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
 
 # WebSocket - optional
 tokio-tungstenite = { version = "0.20", features = ["rustls", "connect", "stream", "handshake"], default-features = false, optional = true }
@@ -41,8 +41,8 @@ axum = { version = "0.8", optional = true }
 
 # Authentication - optional
 jsonwebtoken = { version = "9.3", optional = true }
-oauth2 = { version = "4.4", optional = true }
-openidconnect = { version = "3.5", optional = true }
+oauth2 = { version = "5.0", optional = true }
+openidconnect = { version = "4.0", optional = true }
 
 # Logging - optional
 tracing = { version = "0.1", optional = true }

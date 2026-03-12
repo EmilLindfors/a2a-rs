@@ -103,9 +103,10 @@ impl SimpleAgentInfo {
     /// (with no additional scopes by default).
     ///
     /// # Example
-    /// ```ignore
+    /// ```rust
     /// use std::collections::HashMap;
     /// use a2a_rs::domain::SecurityScheme;
+    /// use a2a_rs::SimpleAgentInfo;
     ///
     /// let mut schemes = HashMap::new();
     /// schemes.insert("bearer".to_string(), SecurityScheme::Http {

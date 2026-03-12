@@ -34,12 +34,25 @@ pub struct OAuth2Token {
     pub scope: Option<String>,
 }
 
-/// OAuth2 authenticator using the oauth2 crate
+/// OAuth2 authenticator using the oauth2 crate.
+///
+/// Stores OAuth2 configuration and constructs typed clients on demand, since
+/// oauth2 5.0 uses a type-state pattern where each `.set_*()` call changes
+/// the generic type.
 #[cfg(feature = "auth")]
 #[derive(Clone)]
 pub struct OAuth2Authenticator {
-    /// OAuth2 client
-    client: BasicClient,
+    /// Client ID
+    client_id: ClientId,
+    /// Optional client secret
+    client_secret: Option<ClientSecret>,
+    /// Authorization URL
+    auth_url: AuthUrl,
+    /// Token URL (used for token exchange, not for authorize URL generation)
+    #[allow(dead_code)]
+    token_url: Option<TokenUrl>,
+    /// Redirect URL
+    redirect_url: Option<RedirectUrl>,
     /// Security scheme configuration
     scheme: SecurityScheme,
     /// Valid access tokens (in a real implementation, you'd validate against the OAuth2 server)
@@ -57,14 +70,9 @@ impl OAuth2Authenticator {
         redirect_url: RedirectUrl,
         scopes: HashMap<String, String>,
     ) -> Self {
-        let token_url_str = token_url.url().to_string();
-
-        let client = BasicClient::new(client_id, client_secret, auth_url, Some(token_url))
-            .set_redirect_uri(redirect_url);
-
         let flow = AuthorizationCodeOAuthFlow {
-            authorization_url: client.auth_url().url().to_string(),
-            token_url: token_url_str,
+            authorization_url: auth_url.as_str().to_string(),
+            token_url: token_url.as_str().to_string(),
             refresh_url: None,
             scopes,
         };
@@ -79,7 +87,11 @@ impl OAuth2Authenticator {
         };
 
         Self {
-            client,
+            client_id,
+            client_secret,
+            auth_url,
+            token_url: Some(token_url),
+            redirect_url: Some(redirect_url),
             scheme,
             valid_tokens: Vec::new(),
         }
@@ -96,15 +108,8 @@ impl OAuth2Authenticator {
         let auth_url = AuthUrl::new("http://localhost".to_string())
             .expect("localhost URL should always be valid");
 
-        let client = BasicClient::new(
-            client_id,
-            Some(client_secret),
-            auth_url,
-            Some(token_url.clone()),
-        );
-
         let flow = ClientCredentialsOAuthFlow {
-            token_url: token_url.url().to_string(),
+            token_url: token_url.as_str().to_string(),
             refresh_url: None,
             scopes,
         };
@@ -119,7 +124,11 @@ impl OAuth2Authenticator {
         };
 
         Self {
-            client,
+            client_id,
+            client_secret: Some(client_secret),
+            auth_url,
+            token_url: Some(token_url),
+            redirect_url: None,
             scheme,
             valid_tokens: Vec::new(),
         }
@@ -133,8 +142,18 @@ impl OAuth2Authenticator {
 
     /// Generate authorization URL for authorization code flow
     pub fn authorize_url(&self) -> (String, CsrfToken) {
-        let (auth_url, csrf_token) = self
-            .client
+        // Only set auth_uri here; token_uri is not needed for generating the
+        // authorize URL and would change the client's type-state parameter.
+        let mut client = BasicClient::new(self.client_id.clone())
+            .set_auth_uri(self.auth_url.clone());
+        if let Some(ref secret) = self.client_secret {
+            client = client.set_client_secret(secret.clone());
+        }
+        if let Some(ref redirect_url) = self.redirect_url {
+            client = client.set_redirect_uri(redirect_url.clone());
+        }
+
+        let (auth_url, csrf_token) = client
             .authorize_url(CsrfToken::new_random)
             .add_scope(Scope::new("read".to_string()))
             .url();
@@ -189,8 +208,14 @@ impl Authenticator for OAuth2Authenticator {
 #[cfg(feature = "auth")]
 #[derive(Clone)]
 pub struct OpenIdConnectAuthenticator {
-    /// OpenID Connect client
-    client: CoreClient,
+    /// Client ID (stored for authorize_url reconstruction)
+    client_id: ClientId,
+    /// Optional client secret
+    client_secret: Option<ClientSecret>,
+    /// Provider metadata (contains all OIDC endpoints)
+    provider_metadata: CoreProviderMetadata,
+    /// Redirect URL
+    redirect_url: RedirectUrl,
     /// Security scheme configuration
     scheme: SecurityScheme,
     /// Valid ID tokens (in a real implementation, you'd validate against the OIDC provider)
@@ -206,26 +231,29 @@ impl OpenIdConnectAuthenticator {
         client_secret: Option<ClientSecret>,
         redirect_url: RedirectUrl,
     ) -> Result<Self, A2AError> {
-        // Discover OpenID Connect provider metadata
+        // Discover OpenID Connect provider metadata.
+        // Disable redirects to prevent SSRF during OIDC discovery.
+        let http_client = reqwest::ClientBuilder::new()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .map_err(|e| A2AError::Internal(format!("Failed to build HTTP client: {}", e)))?;
         let provider_metadata =
-            CoreProviderMetadata::discover_async(issuer_url.clone(), async_http_client)
+            CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
                 .await
                 .map_err(|e| {
                     A2AError::Internal(format!("Failed to discover OIDC provider: {}", e))
                 })?;
 
-        // Create OpenID Connect client
-        let client =
-            CoreClient::from_provider_metadata(provider_metadata, client_id, client_secret)
-                .set_redirect_uri(redirect_url);
-
         let scheme = SecurityScheme::OpenIdConnect {
-            open_id_connect_url: issuer_url.url().to_string(),
+            open_id_connect_url: issuer_url.as_str().to_string(),
             description: Some("OpenID Connect authentication".to_string()),
         };
 
         Ok(Self {
-            client,
+            client_id,
+            client_secret,
+            provider_metadata,
+            redirect_url,
             scheme,
             valid_tokens: Vec::new(),
         })
@@ -239,8 +267,14 @@ impl OpenIdConnectAuthenticator {
 
     /// Generate authorization URL for OpenID Connect
     pub fn authorize_url(&self) -> (String, CsrfToken, Nonce) {
-        let (auth_url, csrf_token, nonce) = self
-            .client
+        let client = CoreClient::from_provider_metadata(
+            self.provider_metadata.clone(),
+            self.client_id.clone(),
+            self.client_secret.clone(),
+        )
+        .set_redirect_uri(self.redirect_url.clone());
+
+        let (auth_url, csrf_token, nonce) = client
             .authorize_url(
                 CoreAuthenticationFlow::AuthorizationCode,
                 CsrfToken::new_random,
@@ -337,14 +371,6 @@ impl AuthContextExtractor for OAuth2Extractor {
         // OAuth2 tokens can be stored in cookies, but we'll keep this simple
         None
     }
-}
-
-#[cfg(feature = "auth")]
-async fn async_http_client(
-    request: openidconnect::HttpRequest,
-) -> Result<openidconnect::HttpResponse, openidconnect::reqwest::Error<reqwest::Error>> {
-    use openidconnect::reqwest::async_http_client;
-    async_http_client(request).await
 }
 
 // Placeholder implementations when auth feature is not enabled

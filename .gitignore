@@ -14,3 +14,6 @@ a2a-client/leptos/
 *.db-shm
 *.db-wal
 
+# Embedded git repos (a2a-mcp uses a local clone of the MCP Rust SDK)
+a2a-mcp/rust-sdk/
+

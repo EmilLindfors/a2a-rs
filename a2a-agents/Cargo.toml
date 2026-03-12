@@ -8,7 +8,7 @@ description = "Framework for building A2A Protocol agents with declarative confi
 license = "MIT"
 
 [dependencies]
-a2a-rs = { path = "../a2a-rs", features = ["full"] }
+a2a-rs = { path = "../a2a-rs", features = ["server", "http-server", "ws-server", "http-client", "tracing"] }
 a2a-ap2 = { path = "../a2a-ap2", optional = true }
 a2a-client = { path = "../a2a-client" }
 a2a-mcp = { path = "../a2a-mcp", optional = true }
@@ -40,7 +40,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 regex = "1.10"  # Used for text parsing and config env var expansion
 
 # AI integration (OpenAI-compatible API)
-reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # OAuth2 support (optional, for auth feature)
 oauth2 = { version = "4.4", optional = true }
@@ -58,7 +58,7 @@ anyhow = "1.0"
 default = ["reimbursement-agent", "sqlx"]
 reimbursement-agent = []
 ap2 = ["dep:a2a-ap2"]
-sqlx = ["a2a-rs/sqlx-storage"]
+sqlx = ["a2a-rs/sqlite"]
 auth = ["a2a-rs/auth", "dep:oauth2"]
 mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
 mcp-client = ["dep:a2a-mcp", "dep:rmcp"]

@@ -42,9 +42,10 @@
 //! Implement the [`AgentPlugin`](traits::AgentPlugin) trait to create agents that
 //! integrate seamlessly with the framework:
 //!
-//! ```rust,ignore
+//! ```rust
 //! use a2a_agents::traits::{AgentPlugin, SkillDefinition};
 //! use a2a_rs::port::AsyncMessageHandler;
+//! use a2a_rs::domain::{A2AError, Message, Task};
 //! use async_trait::async_trait;
 //!
 //! #[derive(Clone)]
@@ -54,6 +55,18 @@
 //!     fn name(&self) -> &str { "My Agent" }
 //!     fn description(&self) -> &str { "An example agent" }
 //!     fn skills(&self) -> Vec<SkillDefinition> { vec![] }
+//! }
+//!
+//! #[async_trait]
+//! impl AsyncMessageHandler for MyAgent {
+//!     async fn process_message(
+//!         &self,
+//!         _task_id: &str,
+//!         _message: &Message,
+//!         _session_id: Option<&str>,
+//!     ) -> Result<Task, A2AError> {
+//!         todo!()
+//!     }
 //! }
 //! ```
 //!
