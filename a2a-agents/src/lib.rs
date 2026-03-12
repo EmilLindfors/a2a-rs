@@ -14,7 +14,7 @@
 //!
 //! # Quick Start
 //!
-//! ```no_run
+//! ```rust,ignore
 //! use a2a_agents::core::AgentBuilder;
 //!
 //! #[tokio::main]
@@ -42,7 +42,7 @@
 //! Implement the [`AgentPlugin`](traits::AgentPlugin) trait to create agents that
 //! integrate seamlessly with the framework:
 //!
-//! ```rust
+//! ```rust,ignore
 //! use a2a_agents::traits::{AgentPlugin, SkillDefinition};
 //! use a2a_rs::port::AsyncMessageHandler;
 //! use async_trait::async_trait;

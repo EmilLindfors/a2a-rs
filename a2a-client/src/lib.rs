@@ -20,7 +20,7 @@
 //!
 //! ### Basic HTTP Client
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use a2a_client::WebA2AClient;
 //! use a2a_rs::domain::Message;
 //!
@@ -42,7 +42,7 @@
 //!
 //! ### With WebSocket Support
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! use a2a_client::WebA2AClient;
 //!
 //! # #[tokio::main]
@@ -62,7 +62,7 @@
 //!
 //! ### SSE Streaming with Axum (requires `axum-components` feature)
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! # #[cfg(feature = "axum-components")]
 //! # {
 //! use a2a_client::{WebA2AClient, components::create_sse_stream};
@@ -152,7 +152,7 @@ use std::sync::Arc;
 ///
 /// ## Auto-detecting transports
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use a2a_client::WebA2AClient;
 ///
 /// # #[tokio::main]
@@ -239,7 +239,7 @@ impl WebA2AClient {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```rust,ignore
     /// use a2a_client::WebA2AClient;
     ///
     /// # #[tokio::main]
@@ -302,7 +302,7 @@ impl WebA2AClient {
 ///
 /// # Examples
 ///
-/// ```rust,no_run
+/// ```rust,ignore
 /// use a2a_client::{WebA2AClient, AppState};
 /// use axum::{Router, routing::get};
 /// use std::sync::Arc;

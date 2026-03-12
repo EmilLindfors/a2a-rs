@@ -101,11 +101,13 @@ pub enum QueryIntent {
     Watch,
 }
 
-/// Candle/OHLCV data point (re-export from yfinance-rs)
-pub use yfinance_rs::Candle;
+// Note: When using yfinance-rs, you can re-export these types:
+// pub use yfinance_rs::Candle;
+// pub use yfinance_rs::Period;
 
-/// Time period for historical data (re-export from yfinance-rs)
-pub use yfinance_rs::Period;
+fn main() {
+    println!("Stock agent types - see source for type definitions");
+}
 
 // Example usage in your handler:
 //

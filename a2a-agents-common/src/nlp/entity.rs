@@ -65,7 +65,7 @@ impl EntityExtractor {
     /// use a2a_agents_common::nlp::EntityExtractor;
     ///
     /// let extractor = EntityExtractor::new()
-    ///     .with_pattern("stock_symbol", r"[A-Z]{1,5}");
+    ///     .with_pattern("stock_symbol", r"\b[A-Z]{2,5}\b");
     ///
     /// let entities = extractor.extract("Check AAPL and MSFT");
     /// assert_eq!(entities.get("stock_symbol").unwrap().len(), 2);

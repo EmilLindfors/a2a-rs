@@ -15,10 +15,12 @@
 //! ```no_run
 //! use a2a_agent_reimbursement::ReimbursementHandler;
 //! use a2a_agents::core::AgentBuilder;
+//! use a2a_rs::adapter::InMemoryTaskStorage;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let handler = ReimbursementHandler::new();
+//!     let storage = InMemoryTaskStorage::new();
+//!     let handler = ReimbursementHandler::new(storage);
 //!
 //!     AgentBuilder::from_file("reimbursement.toml")?
 //!         .with_handler(handler)

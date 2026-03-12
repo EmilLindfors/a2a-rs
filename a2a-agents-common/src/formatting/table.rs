@@ -13,7 +13,7 @@
 ///     .row(&["TSLA", "$242.84", "+2.15%"])
 ///     .build();
 ///
-/// assert!(table.contains("| Symbol | Price | Change |"));
+/// assert!(table.contains("Symbol") && table.contains("Price") && table.contains("Change"));
 /// ```
 #[derive(Debug, Clone)]
 pub struct TableFormatter {

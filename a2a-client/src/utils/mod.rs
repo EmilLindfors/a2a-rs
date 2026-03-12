@@ -15,7 +15,7 @@
 //! assert_eq!(format_task_state(&state), "Working");
 //!
 //! // Format message parts as text
-//! let parts = vec![Part::text("Hello, world!")];
+//! let parts = vec![Part::text("Hello, world!".to_string())];
 //! let content = format_message_content(&parts);
 //! assert_eq!(content, "Hello, world!");
 //!

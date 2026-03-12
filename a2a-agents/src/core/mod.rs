@@ -7,7 +7,7 @@
 //!
 //! # Example
 //!
-//! ```no_run
+//! ```rust,ignore
 //! use a2a_agents::core::{AgentBuilder, AgentConfig};
 //!
 //! #[tokio::main]

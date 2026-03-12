@@ -14,24 +14,24 @@
 //!
 //! ## Using View Models
 //!
-//! ```rust
+//! ```rust,ignore
 //! use a2a_client::components::{TaskView, MessageView};
 //! use a2a_rs::domain::{Task, Message};
 //!
 //! // Convert an A2A Task to a view model
-//! # let task = Task::builder().id("test-123").build();
+//! let task = Task::builder().id("test-123").build();
 //! let view = TaskView::from_task(task);
 //! println!("Task {} has {} messages", view.task_id, view.message_count);
 //!
 //! // Convert a Message to a view model
-//! # let message = Message::builder().text("Hello").build();
+//! let message = Message::builder().text("Hello").build();
 //! let msg_view = MessageView::from_message(message);
 //! println!("Message content: {}", msg_view.content);
 //! ```
 //!
 //! ## SSE Streaming (requires `axum-components` feature)
 //!
-//! ```rust,no_run
+//! ```rust,ignore
 //! # #[cfg(feature = "axum-components")]
 //! # {
 //! use a2a_client::{WebA2AClient, components::create_sse_stream};

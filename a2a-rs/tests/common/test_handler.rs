@@ -230,28 +230,28 @@ impl AsyncTaskManager for TestBusinessHandler {
 
     async fn list_tasks_v3(
         &self,
-        params: &'a a2a_rs::domain::ListTasksParams,
+        params: &a2a_rs::domain::ListTasksParams,
     ) -> Result<a2a_rs::domain::ListTasksResult, A2AError> {
         self.storage.list_tasks_v3(params).await
     }
 
     async fn get_push_notification_config(
         &self,
-        params: &'a a2a_rs::domain::GetTaskPushNotificationConfigParams,
+        params: &a2a_rs::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
         self.storage.get_push_notification_config(params).await
     }
 
     async fn list_push_notification_configs(
         &self,
-        params: &'a a2a_rs::domain::ListTaskPushNotificationConfigParams,
+        params: &a2a_rs::domain::ListTaskPushNotificationConfigParams,
     ) -> Result<Vec<a2a_rs::domain::TaskPushNotificationConfig>, A2AError> {
         self.storage.list_push_notification_configs(params).await
     }
 
     async fn delete_push_notification_config(
         &self,
-        params: &'a a2a_rs::domain::DeleteTaskPushNotificationConfigParams,
+        params: &a2a_rs::domain::DeleteTaskPushNotificationConfigParams,
     ) -> Result<(), A2AError> {
         self.storage.delete_push_notification_config(params).await
     }
