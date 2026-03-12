@@ -55,6 +55,10 @@ base64 = "0.22"
 futures = "0.3"
 anyhow = "1.0"
 
+[package.metadata.docs.rs]
+features = ["reimbursement-agent", "sqlx", "ap2", "auth"]
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
 default = ["reimbursement-agent", "sqlx"]
 reimbursement-agent = []

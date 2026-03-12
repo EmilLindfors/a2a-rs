@@ -16,6 +16,10 @@ serde_json = "1.0"
 thiserror = "1.0"
 a2a-rs = { path = "../a2a-rs", version = "0.2" }
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dev-dependencies]
 serde_json = "1.0"
 

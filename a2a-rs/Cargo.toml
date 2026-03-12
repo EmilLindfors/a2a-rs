@@ -73,6 +73,10 @@ mysql = ["sqlx-storage", "sqlx/mysql"]
 full = ["http-client", "ws-client", "http-server", "ws-server", "tracing", "auth", "sqlite", "postgres"]
 
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [[example]]
 name = "http_client_server"
 path = "examples/http_client_server.rs"

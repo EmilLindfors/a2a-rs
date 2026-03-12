@@ -42,6 +42,10 @@ async-stream = { version = "0.3", optional = true }
 # UUID generation
 uuid = { version = "1", features = ["v4"] }
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 

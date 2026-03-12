@@ -34,6 +34,10 @@ thiserror = "1.0"
 # Caching (optional)
 moka = { version = "0.12", features = ["future"], optional = true }
 
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
 [dev-dependencies]
 tokio = { version = "1.32", features = ["rt", "macros", "test-util"] }
 
