@@ -3,6 +3,7 @@
 pub mod ai_client;
 pub mod config;
 pub mod handler;
+pub mod plugin;
 pub mod server;
 pub mod types;
 

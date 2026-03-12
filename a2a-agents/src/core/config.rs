@@ -483,10 +483,12 @@ fn default_formats() -> Vec<String> {
 /// Expand environment variables in the config string
 /// Supports ${VAR_NAME} and ${VAR_NAME:-default} syntax
 fn expand_env_vars(content: &str) -> Result<String, ConfigError> {
-    let mut result = content.to_string();
+    use std::sync::LazyLock;
+    static ENV_VAR_RE: LazyLock<regex::Regex> =
+        LazyLock::new(|| regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap());
 
-    // Simple regex-based expansion (we could use shellexpand crate for more complex cases)
-    let re = regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)\}").unwrap();
+    let mut result = content.to_string();
+    let re = &*ENV_VAR_RE;
 
     for cap in re.captures_iter(content) {
         let full_match = &cap[0];

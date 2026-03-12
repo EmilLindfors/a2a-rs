@@ -3,10 +3,10 @@
 //! This module provides the AgentPlugin trait implementation, which enables
 //! automatic skill discovery and metadata provisioning.
 
-use a2a_agents::traits::{AgentPlugin, SkillDefinition};
+use crate::traits::{AgentPlugin, SkillDefinition};
 use async_trait::async_trait;
 
-use crate::handler::ReimbursementHandler;
+use super::handler::ReimbursementHandler;
 
 /// Implement AgentPlugin for ReimbursementHandler with InMemoryTaskStorage
 #[async_trait]

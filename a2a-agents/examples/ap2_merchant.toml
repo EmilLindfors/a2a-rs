@@ -1,0 +1,28 @@
+# AP2 Merchant Agent Configuration
+# A merchant agent that handles shopping requests via the Agent Payments Protocol (AP2)
+
+[agent]
+name = "AP2 Shoe Store"
+description = "A demo merchant agent that sells shoes using the AP2 payment protocol"
+
+[server]
+host = "127.0.0.1"
+http_port = 8080
+
+[features.extensions.ap2]
+roles = ["merchant"]
+required = true
+
+[[skills]]
+id = "browse_catalog"
+name = "Browse Catalog"
+description = "Browse available shoes and get pricing"
+keywords = ["browse", "catalog", "shoes", "products", "show", "list"]
+examples = ["Show me your shoes", "What do you have under $100?"]
+
+[[skills]]
+id = "purchase"
+name = "Purchase Items"
+description = "Complete a purchase using AP2 payment flow"
+keywords = ["buy", "purchase", "checkout", "order", "pay"]
+examples = ["I want to buy the red sneakers", "Add to cart and checkout"]

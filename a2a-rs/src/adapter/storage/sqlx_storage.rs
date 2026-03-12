@@ -153,8 +153,8 @@ impl SqlxTaskStorage {
 
     /// Run base A2A framework migrations
     async fn run_base_migrations(pool: &SqlitePool) -> Result<(), A2AError> {
-        // For now, assume SQLite and run the SQLite migrations
-        // In a real implementation, you'd detect the database type from the URL
+        // Currently only SQLite migrations are supported.
+        // For PostgreSQL/MySQL support, use DatabaseConfig::database_type() to select migrations.
         sqlx::query(include_str!("../../../migrations/001_initial_schema.sql"))
             .execute(pool)
             .await
@@ -349,6 +349,17 @@ impl SqlxTaskStorage {
         Ok(())
     }
 
+    /// Look up the context_id for a task from the database
+    async fn get_task_context_id(&self, task_id: &str) -> String {
+        sqlx::query_scalar::<_, String>("SELECT context_id FROM tasks WHERE id = ?")
+            .bind(task_id)
+            .fetch_optional(&self.pool)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "default".to_string())
+    }
+
     /// Send a status update to all subscribers for a task
     pub(crate) async fn broadcast_status_update(
         &self,
@@ -356,10 +367,12 @@ impl SqlxTaskStorage {
         status: TaskStatus,
         final_: bool,
     ) -> Result<(), A2AError> {
+        let context_id = self.get_task_context_id(task_id).await;
+
         // Create the update event
         let event = TaskStatusUpdateEvent {
             task_id: task_id.to_string(),
-            context_id: "default".to_string(), // TODO: get actual context_id
+            context_id,
             kind: "status-update".to_string(),
             status,
             final_,
@@ -400,10 +413,12 @@ impl SqlxTaskStorage {
         _index: Option<u32>,
         _final: bool,
     ) -> Result<(), A2AError> {
+        let context_id = self.get_task_context_id(task_id).await;
+
         // Create the update event
         let event = TaskArtifactUpdateEvent {
             task_id: task_id.to_string(),
-            context_id: "default".to_string(), // TODO: get actual context_id
+            context_id,
             kind: "artifact-update".to_string(),
             artifact,
             append: None,
@@ -667,7 +682,12 @@ impl AsyncTaskManager for SqlxTaskStorage {
         let timestamp_str = if let Some(last_updated_after) = params.last_updated_after {
             // Convert milliseconds to SQLite timestamp
             let timestamp = chrono::DateTime::from_timestamp_millis(last_updated_after)
-                .unwrap_or(chrono::Utc::now());
+                .ok_or_else(|| {
+                    A2AError::DatabaseError(format!(
+                        "Invalid timestamp value: {}",
+                        last_updated_after
+                    ))
+                })?;
             where_conditions.push("updated_at > ?".to_string());
             Some(timestamp.format("%Y-%m-%d %H:%M:%S").to_string())
         } else {

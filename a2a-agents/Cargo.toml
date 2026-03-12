@@ -9,6 +9,7 @@ license = "MIT"
 
 [dependencies]
 a2a-rs = { path = "../a2a-rs", features = ["full"] }
+a2a-ap2 = { path = "../a2a-ap2", optional = true }
 a2a-client = { path = "../a2a-client" }
 a2a-mcp = { path = "../a2a-mcp", optional = true }
 rmcp = { path = "../a2a-mcp/rust-sdk/crates/rmcp", optional = true, features = ["client", "transport-child-process"] }
@@ -36,8 +37,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Required dependencies
-lazy_static = "1.4"  # Used for static request ID storage in message_handler
-regex = "1.10"  # Used for text parsing in improved handler
+regex = "1.10"  # Used for text parsing and config env var expansion
 
 # AI integration (OpenAI-compatible API)
 reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
@@ -57,6 +57,7 @@ anyhow = "1.0"
 [features]
 default = ["reimbursement-agent", "sqlx"]
 reimbursement-agent = []
+ap2 = ["dep:a2a-ap2"]
 sqlx = ["a2a-rs/sqlx-storage"]
 auth = ["a2a-rs/auth", "dep:oauth2"]
 mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
@@ -93,6 +94,11 @@ path = "examples/auto_storage_agent.rs"
 name = "auto_storage_sqlx"
 path = "examples/auto_storage_sqlx.rs"
 required-features = ["sqlx"]
+
+[[example]]
+name = "ap2_merchant_agent"
+path = "examples/ap2_merchant_agent.rs"
+required-features = ["ap2"]
 
 [[example]]
 name = "mcp_server_agent"

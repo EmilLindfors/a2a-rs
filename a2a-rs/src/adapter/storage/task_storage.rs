@@ -112,6 +112,15 @@ impl Default for InMemoryTaskStorage {
 }
 
 impl InMemoryTaskStorage {
+    /// Look up the context_id for a task
+    async fn get_task_context_id(&self, task_id: &str) -> String {
+        let tasks_guard = self.tasks.lock().await;
+        tasks_guard
+            .get(task_id)
+            .map(|t| t.context_id.clone())
+            .unwrap_or_else(|| "default".to_string())
+    }
+
     /// Send a status update to all subscribers for a task
     pub(crate) async fn broadcast_status_update(
         &self,
@@ -119,10 +128,12 @@ impl InMemoryTaskStorage {
         status: TaskStatus,
         final_: bool,
     ) -> Result<(), A2AError> {
+        let context_id = self.get_task_context_id(task_id).await;
+
         // Create the update event
         let event = TaskStatusUpdateEvent {
             task_id: task_id.to_string(),
-            context_id: "default".to_string(), // TODO: get actual context_id
+            context_id,
             kind: "status-update".to_string(),
             status: status.clone(),
             final_,
@@ -208,10 +219,12 @@ impl InMemoryTaskStorage {
         _index: Option<u32>,
         _final: bool,
     ) -> Result<(), A2AError> {
+        let context_id = self.get_task_context_id(task_id).await;
+
         // Create the update event
         let event = TaskArtifactUpdateEvent {
             task_id: task_id.to_string(),
-            context_id: "default".to_string(), // TODO: get actual context_id
+            context_id,
             kind: "artifact-update".to_string(),
             artifact,
             append: None,

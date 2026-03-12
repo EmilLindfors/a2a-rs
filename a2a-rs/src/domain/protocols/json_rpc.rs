@@ -38,7 +38,7 @@ impl From<A2AError> for JSONRPCError {
             let code = map
                 .get("code")
                 .and_then(|v| v.as_i64())
-                .map(|v| v as i32)
+                .map(|v| i32::try_from(v).unwrap_or(-32603))
                 .unwrap_or(-32603); // Internal error code as fallback
 
             let message = map

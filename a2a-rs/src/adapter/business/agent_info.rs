@@ -4,8 +4,13 @@
 
 use async_trait::async_trait;
 
+use std::collections::HashMap;
+
 use crate::{
-    domain::{A2AError, AgentCapabilities, AgentCard, AgentExtension, AgentProvider, AgentSkill},
+    domain::{
+        A2AError, AgentCapabilities, AgentCard, AgentExtension, AgentProvider, AgentSkill,
+        SecurityScheme,
+    },
     services::server::AgentInfoProvider,
 };
 
@@ -91,10 +96,73 @@ impl SimpleAgentInfo {
         self
     }
 
-    /// Set the authentication schemes
-    pub fn with_authentication(self, _schemes: Vec<String>) -> Self {
-        // TODO: Implement SecurityScheme integration
-        // For now, just return self since we removed AgentAuthentication
+    /// Set the security schemes for the agent card.
+    ///
+    /// Accepts a map of scheme names to `SecurityScheme` definitions.
+    /// Also sets the agent-level `security` field to require any one of the provided schemes
+    /// (with no additional scopes by default).
+    ///
+    /// # Example
+    /// ```ignore
+    /// use std::collections::HashMap;
+    /// use a2a_rs::domain::SecurityScheme;
+    ///
+    /// let mut schemes = HashMap::new();
+    /// schemes.insert("bearer".to_string(), SecurityScheme::Http {
+    ///     scheme: "bearer".to_string(),
+    ///     bearer_format: Some("JWT".to_string()),
+    ///     description: None,
+    /// });
+    ///
+    /// let agent = SimpleAgentInfo::new("agent".into(), "http://localhost".into())
+    ///     .with_security_schemes(schemes);
+    /// ```
+    pub fn with_security_schemes(
+        mut self,
+        schemes: HashMap<String, SecurityScheme>,
+    ) -> Self {
+        // Build security requirements: each scheme is an OR alternative (no scopes required by default)
+        let security: Vec<HashMap<String, Vec<String>>> = schemes
+            .keys()
+            .map(|name| {
+                let mut req = HashMap::new();
+                req.insert(name.clone(), Vec::new());
+                req
+            })
+            .collect();
+
+        self.card.security_schemes = if schemes.is_empty() {
+            None
+        } else {
+            Some(schemes)
+        };
+        self.card.security = if security.is_empty() {
+            None
+        } else {
+            Some(security)
+        };
+        self
+    }
+
+    /// Set the security schemes with explicit security requirements.
+    ///
+    /// Unlike `with_security_schemes`, this allows specifying custom security requirements
+    /// (e.g., requiring specific OAuth2 scopes).
+    pub fn with_security(
+        mut self,
+        schemes: HashMap<String, SecurityScheme>,
+        security: Vec<HashMap<String, Vec<String>>>,
+    ) -> Self {
+        self.card.security_schemes = if schemes.is_empty() {
+            None
+        } else {
+            Some(schemes)
+        };
+        self.card.security = if security.is_empty() {
+            None
+        } else {
+            Some(security)
+        };
         self
     }
 

@@ -399,7 +399,7 @@ impl Task {
         #[cfg(feature = "tracing")]
         let _span = tracing::Span::current();
 
-        let limit = history_length.unwrap() as usize;
+        let limit: usize = history_length.unwrap().try_into().unwrap_or(usize::MAX);
 
         #[cfg(feature = "tracing")]
         let mut task_copy = measure_duration!(_span, "operation.duration_ms", { self.clone() });

@@ -16,7 +16,7 @@ pub mod storage;
 pub mod transport;
 
 // Legacy re-exports for backward compatibility
-// TODO: Remove these in a future version
+// These will be removed in a future major version
 
 // Client re-exports (from transport)
 #[cfg(feature = "http-client")]

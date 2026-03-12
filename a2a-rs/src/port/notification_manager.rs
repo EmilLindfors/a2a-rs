@@ -5,6 +5,47 @@ use async_trait::async_trait;
 
 use crate::domain::{A2AError, PushNotificationConfig, TaskIdParams, TaskPushNotificationConfig};
 
+/// Validate a push notification config URL.
+///
+/// Checks that the URL is non-empty, well-formed, and uses HTTPS
+/// (HTTP is allowed only for localhost for development purposes).
+fn validate_push_notification_url(config: &PushNotificationConfig) -> Result<(), A2AError> {
+    if config.url.trim().is_empty() {
+        return Err(A2AError::ValidationError {
+            field: "url".to_string(),
+            message: "Webhook URL cannot be empty".to_string(),
+        });
+    }
+
+    match url::Url::parse(&config.url) {
+        Ok(parsed_url) => {
+            let scheme = parsed_url.scheme();
+            if scheme != "https" {
+                let is_localhost = parsed_url
+                    .host_str()
+                    .map(|h| h == "localhost" || h == "127.0.0.1" || h == "::1")
+                    .unwrap_or(false);
+
+                if scheme != "http" || !is_localhost {
+                    return Err(A2AError::ValidationError {
+                        field: "url".to_string(),
+                        message: "Webhook URL must use HTTPS (HTTP is only allowed for localhost)"
+                            .to_string(),
+                    });
+                }
+            }
+        }
+        Err(_) => {
+            return Err(A2AError::ValidationError {
+                field: "url".to_string(),
+                message: "Invalid webhook URL format".to_string(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
 /// A trait for managing push notification configurations and delivery
 pub trait NotificationManager {
     /// Set up push notifications for a task
@@ -33,22 +74,7 @@ pub trait NotificationManager {
         &self,
         config: &PushNotificationConfig,
     ) -> Result<(), A2AError> {
-        if config.url.trim().is_empty() {
-            return Err(A2AError::ValidationError {
-                field: "url".to_string(),
-                message: "Webhook URL cannot be empty".to_string(),
-            });
-        }
-
-        // Validate URL format
-        if url::Url::parse(&config.url).is_err() {
-            return Err(A2AError::ValidationError {
-                field: "url".to_string(),
-                message: "Invalid webhook URL format".to_string(),
-            });
-        }
-
-        Ok(())
+        validate_push_notification_url(config)
     }
 
     /// Send a test notification to verify configuration
@@ -93,22 +119,7 @@ pub trait AsyncNotificationManager: Send + Sync {
         &self,
         config: &PushNotificationConfig,
     ) -> Result<(), A2AError> {
-        if config.url.trim().is_empty() {
-            return Err(A2AError::ValidationError {
-                field: "url".to_string(),
-                message: "Webhook URL cannot be empty".to_string(),
-            });
-        }
-
-        // Validate URL format
-        if url::Url::parse(&config.url).is_err() {
-            return Err(A2AError::ValidationError {
-                field: "url".to_string(),
-                message: "Invalid webhook URL format".to_string(),
-            });
-        }
-
-        Ok(())
+        validate_push_notification_url(config)
     }
 
     /// Send a test notification to verify configuration

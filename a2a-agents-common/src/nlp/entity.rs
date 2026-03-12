@@ -1,35 +1,30 @@
 //! Entity extraction from text using regex patterns.
 
-use lazy_static::lazy_static;
 use regex::Regex;
 use std::collections::HashMap;
+use std::sync::LazyLock;
 
-lazy_static! {
-    /// Regex for extracting email addresses
-    static ref EMAIL_REGEX: Regex = Regex::new(
-        r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-    ).unwrap();
+/// Regex for extracting email addresses
+static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap()
+});
 
-    /// Regex for extracting URLs
-    static ref URL_REGEX: Regex = Regex::new(
-        r"https?://[^\s]+"
-    ).unwrap();
+/// Regex for extracting URLs
+static URL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
 
-    /// Regex for extracting numbers (including decimals and negatives)
-    static ref NUMBER_REGEX: Regex = Regex::new(
-        r"-?\d+\.?\d*"
-    ).unwrap();
+/// Regex for extracting numbers (including decimals and negatives)
+static NUMBER_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-?\d+\.?\d*").unwrap());
 
-    /// Regex for extracting currency amounts (e.g., $100, €50.99)
-    static ref CURRENCY_REGEX: Regex = Regex::new(
-        r"[$€£¥]\s*\d+(?:\.\d{2})?"
-    ).unwrap();
+/// Regex for extracting currency amounts (e.g., $100, €50.99)
+static CURRENCY_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[$€£¥]\s*\d+(?:\.\d{2})?").unwrap());
 
-    /// Regex for extracting dates (simple formats: YYYY-MM-DD, MM/DD/YYYY, DD.MM.YYYY)
-    static ref DATE_REGEX: Regex = Regex::new(
-        r"\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\.\d{1,2}\.\d{4}"
-    ).unwrap();
-}
+/// Regex for extracting dates (simple formats: YYYY-MM-DD, MM/DD/YYYY, DD.MM.YYYY)
+static DATE_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"\d{4}-\d{2}-\d{2}|\d{1,2}/\d{1,2}/\d{4}|\d{1,2}\.\d{1,2}\.\d{4}").unwrap()
+});
 
 /// Entity extractor for finding structured data in text.
 ///

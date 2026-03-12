@@ -3,24 +3,20 @@
 //! Common helpers for extracting information from user messages.
 
 use regex::Regex;
-use lazy_static::lazy_static;
+use std::sync::LazyLock;
 
-lazy_static! {
-    /// Regex for extracting email addresses
-    static ref EMAIL_REGEX: Regex = Regex::new(
-        r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-    ).unwrap();
+/// Regex for extracting email addresses
+static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap()
+});
 
-    /// Regex for extracting URLs
-    static ref URL_REGEX: Regex = Regex::new(
-        r"https?://[^\s]+"
-    ).unwrap();
+/// Regex for extracting URLs
+static URL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
 
-    /// Regex for extracting numbers (including decimals)
-    static ref NUMBER_REGEX: Regex = Regex::new(
-        r"-?\d+\.?\d*"
-    ).unwrap();
-}
+/// Regex for extracting numbers (including decimals)
+static NUMBER_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-?\d+\.?\d*").unwrap());
 
 /// Extract email addresses from text
 pub fn extract_emails(text: &str) -> Vec<String> {
