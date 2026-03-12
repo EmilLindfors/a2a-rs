@@ -8,7 +8,7 @@ version = "0.2.0"
 dependencies = [
  "a2a-ap2",
  "a2a-rs",
- "a2a-rs-client",
+ "a2a-web-client",
  "anyhow",
  "askama",
  "askama_axum",
@@ -92,7 +92,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "a2a-rs-client"
+name = "a2a-web-client"
 version = "0.2.0"
 dependencies = [
  "a2a-rs",

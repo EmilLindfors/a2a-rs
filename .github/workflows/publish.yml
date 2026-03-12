@@ -38,8 +38,10 @@ jobs:
         run: cargo test --workspace
 
       # Publish in dependency order with delays for crates.io index updates.
+      # continue-on-error allows re-runs when some crates are already published.
       # On tag push, publish for real. On workflow_dispatch, respect dry_run input.
       - name: Publish a2a-rs
+        continue-on-error: true
         run: cargo publish -p a2a-rs ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -49,12 +51,14 @@ jobs:
         run: sleep 30
 
       - name: Publish a2a-ap2
+        continue-on-error: true
         run: cargo publish -p a2a-ap2 ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish a2a-rs-client
-        run: cargo publish -p a2a-rs-client ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
+      - name: Publish a2a-web-client
+        continue-on-error: true
+        run: cargo publish -p a2a-web-client ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
@@ -63,6 +67,7 @@ jobs:
         run: sleep 30
 
       - name: Publish a2a-agents
+        continue-on-error: true
         run: cargo publish -p a2a-agents ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -72,6 +77,7 @@ jobs:
         run: sleep 30
 
       - name: Publish a2a-agents-common
+        continue-on-error: true
         run: cargo publish -p a2a-agents-common ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
