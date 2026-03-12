@@ -1,0 +1,118 @@
+# Keycloak OAuth2 Authentication Example
+# This demonstrates OAuth2 authorization code flow with Keycloak
+
+[agent]
+name = "Keycloak OAuth2 Agent"
+description = "Agent with Keycloak OAuth2 authorization code flow"
+version = "1.0.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8080
+ws_port = 8081
+
+# In-memory storage for this example
+[server.storage]
+type = "inmemory"
+
+# OAuth2 Authentication with Keycloak
+[server.auth]
+type = "oauth2"
+
+# Keycloak client credentials
+# Get these from: Clients → a2a-agent → Credentials
+client_id = "a2a-agent"
+client_secret = "${KEYCLOAK_CLIENT_SECRET}"
+
+# Keycloak OAuth2 endpoints for the realm
+# Format: http://KEYCLOAK_HOST:PORT/realms/REALM_NAME/protocol/openid-connect/...
+authorization_url = "http://localhost:8180/realms/a2a-agents/protocol/openid-connect/auth"
+token_url = "http://localhost:8180/realms/a2a-agents/protocol/openid-connect/token"
+
+# Callback URL that Keycloak will redirect to after authentication
+# Must be registered in Keycloak's "Valid Redirect URIs"
+redirect_url = "http://localhost:8080/oauth/callback"
+
+# OAuth2 flow type - authorization code for user authentication
+flow = "authorization_code"
+
+# OpenID Connect scopes
+# - openid: Required for OIDC
+# - profile: User profile information
+# - email: User email address
+# - roles: User roles (Keycloak-specific)
+scopes = ["openid", "profile", "email"]
+
+# Skills
+[[skills]]
+id = "user_specific_operation"
+name = "User-Specific Operation"
+description = "Requires user to authenticate via Keycloak"
+keywords = ["oauth2", "keycloak", "user"]
+examples = ["Perform user operation"]
+
+[features]
+streaming = true
+push_notifications = true
+state_history = true
+
+# ==========================================
+# Environment Variables
+# ==========================================
+#
+# Create a .env file:
+# KEYCLOAK_CLIENT_SECRET=your-client-secret-from-keycloak
+#
+# Get client secret from:
+# Keycloak Admin → Clients → a2a-agent → Credentials → Client secret
+#
+# ==========================================
+# Keycloak Client Configuration Required
+# ==========================================
+#
+# In Keycloak Admin Console:
+#
+# 1. Create Client:
+#    - Client ID: a2a-agent
+#    - Client type: OpenID Connect
+#    - Client authentication: ON
+#
+# 2. Capability Config:
+#    ✅ Standard flow (Authorization Code)
+#    ✅ Direct access grants (for testing)
+#    □ Implicit flow (not recommended)
+#
+# 3. Login Settings:
+#    - Root URL: http://localhost:8080
+#    - Valid redirect URIs:
+#      • http://localhost:8080/*
+#      • http://localhost:8080/oauth/callback
+#    - Web origins: http://localhost:8080
+#
+# ==========================================
+# Testing OAuth2 Flow
+# ==========================================
+#
+# Step 1: Get authorization code (in browser)
+# http://localhost:8180/realms/a2a-agents/protocol/openid-connect/auth?client_id=a2a-agent&redirect_uri=http://localhost:8080/oauth/callback&response_type=code&scope=openid
+#
+# Step 2: User will be redirected to login page
+# - Login with your Keycloak user credentials
+#
+# Step 3: After login, redirected to:
+# http://localhost:8080/oauth/callback?code=AUTHORIZATION_CODE
+#
+# Step 4: Exchange code for token (backend/curl):
+# curl -X POST \
+#   'http://localhost:8180/realms/a2a-agents/protocol/openid-connect/token' \
+#   -H 'Content-Type: application/x-www-form-urlencoded' \
+#   -d 'client_id=a2a-agent' \
+#   -d "client_secret=$KEYCLOAK_CLIENT_SECRET" \
+#   -d 'code=AUTHORIZATION_CODE' \
+#   -d 'grant_type=authorization_code' \
+#   -d 'redirect_uri=http://localhost:8080/oauth/callback' \
+#   | jq
+#
+# Step 5: Use access token with agent:
+# curl -H "Authorization: Bearer ACCESS_TOKEN" \
+#   http://localhost:8080/agent/card | jq

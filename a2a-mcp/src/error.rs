@@ -1,86 +1,80 @@
-//! Error types for a2a-mcp integration
+//! Error types for A2A-MCP integration
 
 use thiserror::Error;
 
-/// Errors that can occur in a2a-mcp integration
+/// Result type for A2A-MCP operations
+pub type Result<T> = std::result::Result<T, A2aMcpError>;
+
+/// Errors that can occur during A2A-MCP bridging
 #[derive(Error, Debug)]
-pub enum Error {
-    /// Error related to A2A protocol
-    #[error("A2A error: {0}")]
-    A2a(String),
+pub enum A2aMcpError {
+    /// Error during protocol conversion
+    #[error("Protocol conversion error: {0}")]
+    Conversion(String),
 
-    /// Error related to RMCP protocol
-    #[error("RMCP error: {0}")]
-    Rmcp(String),
+    /// Error from A2A protocol operations
+    #[error("A2A protocol error: {0}")]
+    A2AError(#[from] a2a_rs::domain::error::A2AError),
 
-    /// Error in protocol translation
-    #[error("Protocol translation error: {0}")]
-    Translation(String),
+    /// Error from MCP protocol operations
+    #[error("MCP protocol error: {0}")]
+    McpError(#[from] rmcp::ErrorData),
 
-    /// Task not found
-    #[error("Task not found: {0}")]
-    TaskNotFound(String),
+    /// Tool not found
+    #[error("Tool not found: {0}")]
+    ToolNotFound(String),
 
-    /// Error in task processing
-    #[error("Task processing error: {0}")]
-    TaskProcessing(String),
+    /// Skill not found
+    #[error("Skill not found: {0}")]
+    SkillNotFound(String),
 
-    /// Agent not found
-    #[error("Agent not found: {0}")]
-    AgentNotFound(String),
+    /// Invalid message format
+    #[error("Invalid message format: {0}")]
+    InvalidMessage(String),
 
-    /// Invalid tool method format
-    #[error("Invalid tool method format: {0}")]
-    InvalidToolMethod(String),
+    /// Invalid tool call
+    #[error("Invalid tool call: {0}")]
+    InvalidToolCall(String),
 
-    /// Server error
-    #[error("Server error: {0}")]
-    Server(String),
+    /// Agent communication error
+    #[error("Agent communication error: {0}")]
+    AgentCommunication(String),
 
-    /// RMCP tool call error
-    #[error("RMCP tool call error: {0}")]
-    RmcpToolCall(String),
+    /// MCP server error
+    #[error("MCP server error: {0}")]
+    McpServer(String),
 
-    /// JSON serialization/deserialization error
-    #[error("JSON error: {0}")]
-    Json(#[from] serde_json::Error),
-
-    /// HTTP request error
-    #[error("HTTP error: {0}")]
-    Http(#[from] reqwest::Error),
+    /// Serialization error
+    #[error("Serialization error: {0}")]
+    Serialization(#[from] serde_json::Error),
 
     /// IO error
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
+
+    /// Other error
+    #[error("{0}")]
+    Other(String),
 }
 
-/// Result type for a2a-mcp operations
-pub type Result<T> = std::result::Result<T, Error>;
-
-/// Convenience function to convert a string error to an Error
-pub fn err<E: ToString>(e: E) -> Error {
-    Error::Translation(e.to_string())
-}
-
-/// Convert a2a_rs error to our Error type
-impl From<a2a_rs::Error> for Error {
-    fn from(e: a2a_rs::Error) -> Self {
-        Error::A2a(e.to_string())
-    }
-}
-
-// A utility function to convert an RMCP error to A2A error code
-pub(crate) fn rmcp_error_to_a2a_code(rmcp_err: &rmcp::ServerJsonRpcMessage) -> i32 {
-    if let Some(error) = &rmcp_err.error {
-        match error.code {
-            -32700 => -32700, // Parse error
-            -32600 => -32600, // Invalid request
-            -32601 => -32601, // Method not found
-            -32602 => -32602, // Invalid params
-            -32603 => -32603, // Internal error
-            _ => -32000, // Server error
+impl A2aMcpError {
+    /// Convert this error into an MCP ErrorData
+    pub fn to_mcp_error(&self) -> rmcp::ErrorData {
+        match self {
+            A2aMcpError::ToolNotFound(name) => {
+                rmcp::ErrorData::internal_error(format!("Tool not found: {}", name), None)
+            }
+            A2aMcpError::InvalidToolCall(msg) => {
+                rmcp::ErrorData::invalid_params(msg.clone(), None)
+            }
+            A2aMcpError::McpError(e) => e.clone(),
+            _ => rmcp::ErrorData::internal_error(self.to_string(), None),
         }
-    } else {
-        -32000 // Default server error
+    }
+
+    /// Convert this error into an A2A error
+    pub fn to_a2a_error(&self) -> a2a_rs::domain::error::A2AError {
+        // A2AError doesn't implement Clone, so we just wrap everything as Internal
+        a2a_rs::domain::error::A2AError::Internal(self.to_string())
     }
 }

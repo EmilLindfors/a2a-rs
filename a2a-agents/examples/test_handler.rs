@@ -1,4 +1,4 @@
-use a2a_agents::reimbursement_agent::handler::ReimbursementHandler;
+use a2a_agents::agents::reimbursement::handler::ReimbursementHandler;
 use a2a_rs::adapter::storage::InMemoryTaskStorage;
 use a2a_rs::domain::{Message, Part, Role};
 use a2a_rs::port::message_handler::AsyncMessageHandler;

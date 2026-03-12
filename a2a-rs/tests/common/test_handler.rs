@@ -177,11 +177,11 @@ impl StreamingHandler for TestBusinessHandler {
 
 #[async_trait]
 impl AsyncMessageHandler for TestBusinessHandler {
-    async fn process_message<'a>(
+    async fn process_message(
         &self,
-        task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
+        task_id: &str,
+        message: &Message,
+        session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
         // Create a message handler and delegate
         let message_handler = DefaultMessageHandler::new((*self.storage).clone());
@@ -193,25 +193,25 @@ impl AsyncMessageHandler for TestBusinessHandler {
 
 #[async_trait]
 impl AsyncTaskManager for TestBusinessHandler {
-    async fn create_task<'a>(
+    async fn create_task(
         &self,
-        task_id: &'a str,
-        context_id: &'a str,
+        task_id: &str,
+        context_id: &str,
     ) -> Result<Task, A2AError> {
         self.storage.create_task(task_id, context_id).await
     }
 
-    async fn get_task<'a>(
+    async fn get_task(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         history_length: Option<u32>,
     ) -> Result<Task, A2AError> {
         self.storage.get_task(task_id, history_length).await
     }
 
-    async fn update_task_status<'a>(
+    async fn update_task_status(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
@@ -220,36 +220,36 @@ impl AsyncTaskManager for TestBusinessHandler {
             .await
     }
 
-    async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
+    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
         self.storage.cancel_task(task_id).await
     }
 
-    async fn task_exists<'a>(&self, task_id: &'a str) -> Result<bool, A2AError> {
+    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError> {
         self.storage.task_exists(task_id).await
     }
 
-    async fn list_tasks_v3<'a>(
+    async fn list_tasks_v3(
         &self,
         params: &'a a2a_rs::domain::ListTasksParams,
     ) -> Result<a2a_rs::domain::ListTasksResult, A2AError> {
         self.storage.list_tasks_v3(params).await
     }
 
-    async fn get_push_notification_config<'a>(
+    async fn get_push_notification_config(
         &self,
         params: &'a a2a_rs::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
         self.storage.get_push_notification_config(params).await
     }
 
-    async fn list_push_notification_configs<'a>(
+    async fn list_push_notification_configs(
         &self,
         params: &'a a2a_rs::domain::ListTaskPushNotificationConfigParams,
     ) -> Result<Vec<a2a_rs::domain::TaskPushNotificationConfig>, A2AError> {
         self.storage.list_push_notification_configs(params).await
     }
 
-    async fn delete_push_notification_config<'a>(
+    async fn delete_push_notification_config(
         &self,
         params: &'a a2a_rs::domain::DeleteTaskPushNotificationConfigParams,
     ) -> Result<(), A2AError> {
@@ -259,30 +259,30 @@ impl AsyncTaskManager for TestBusinessHandler {
 
 #[async_trait]
 impl AsyncNotificationManager for TestBusinessHandler {
-    async fn set_task_notification<'a>(
+    async fn set_task_notification(
         &self,
-        config: &'a TaskPushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         self.storage.set_task_notification(config).await
     }
 
-    async fn get_task_notification<'a>(
+    async fn get_task_notification(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         self.storage.get_task_notification(task_id).await
     }
 
-    async fn remove_task_notification<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError> {
         self.storage.remove_task_notification(task_id).await
     }
 }
 
 #[async_trait]
 impl AsyncStreamingHandler for TestBusinessHandler {
-    async fn add_status_subscriber<'a>(
+    async fn add_status_subscriber(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
         self.storage
@@ -290,9 +290,9 @@ impl AsyncStreamingHandler for TestBusinessHandler {
             .await
     }
 
-    async fn add_artifact_subscriber<'a>(
+    async fn add_artifact_subscriber(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
         self.storage
@@ -300,29 +300,29 @@ impl AsyncStreamingHandler for TestBusinessHandler {
             .await
     }
 
-    async fn remove_subscription<'a>(&self, subscription_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError> {
         self.storage.remove_subscription(subscription_id).await
     }
 
-    async fn remove_task_subscribers<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
         self.storage.remove_task_subscribers(task_id).await
     }
 
-    async fn get_subscriber_count<'a>(&self, task_id: &'a str) -> Result<usize, A2AError> {
+    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
         self.storage.get_subscriber_count(task_id).await
     }
 
-    async fn broadcast_status_update<'a>(
+    async fn broadcast_status_update(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         self.storage.broadcast_status_update(task_id, update).await
     }
 
-    async fn broadcast_artifact_update<'a>(
+    async fn broadcast_artifact_update(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         update: TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
         self.storage
@@ -330,9 +330,9 @@ impl AsyncStreamingHandler for TestBusinessHandler {
             .await
     }
 
-    async fn status_update_stream<'a>(
+    async fn status_update_stream(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>,
@@ -342,9 +342,9 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         self.storage.status_update_stream(task_id).await
     }
 
-    async fn artifact_update_stream<'a>(
+    async fn artifact_update_stream(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>,
@@ -354,9 +354,9 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         self.storage.artifact_update_stream(task_id).await
     }
 
-    async fn combined_update_stream<'a>(
+    async fn combined_update_stream(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<

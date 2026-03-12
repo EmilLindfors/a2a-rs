@@ -2,5 +2,23 @@
 name = "a2a-ap2"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+authors = ["Emil Lindfors <emil@lindfors.no>"]
+description = "AP2 (Agent Payments Protocol) extension for the A2A Protocol"
+license = "MIT"
+repository = "https://github.com/emillindfors/a2a-rs"
+keywords = ["a2a", "ap2", "payments", "agent", "commerce"]
+categories = ["api-bindings", "network-programming"]
 
 [dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+a2a-rs = { path = "../a2a-rs" }
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[[example]]
+name = "payment_flow"
+path = "examples/payment_flow.rs"

@@ -1,0 +1,48 @@
+# Agent with JWT Authentication Example
+# This demonstrates how to configure JWT-based authentication
+
+[agent]
+name = "Secure JWT Agent"
+description = "An agent protected with JWT authentication"
+version = "1.0.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8080
+ws_port = 8081
+
+# In-memory storage for this example
+[server.storage]
+type = "inmemory"
+
+# JWT Authentication Configuration
+[server.auth]
+type = "jwt"
+
+# Option 1: HMAC-based JWT (HS256) - use a secret
+secret = "${JWT_SECRET}"  # Environment variable containing the secret
+algorithm = "HS256"  # Default, can be HS256, HS384, or HS512
+
+# Option 2: RSA-based JWT (RS256) - use a public key file
+# Uncomment these lines and comment out 'secret' above to use RSA:
+# rsa_pem_path = "path/to/public_key.pem"
+# algorithm = "RS256"  # Can be RS256, RS384, or RS512
+
+# Optional: Validate issuer claim
+issuer = "https://auth.example.com"
+
+# Optional: Validate audience claim
+audience = "api://my-agent"
+
+# Skills
+[[skills]]
+id = "secure_echo"
+name = "Secure Echo"
+description = "Echoes messages (requires valid JWT)"
+keywords = ["echo", "secure"]
+examples = ["Echo this securely"]
+
+[features]
+streaming = true
+push_notifications = true
+state_history = true

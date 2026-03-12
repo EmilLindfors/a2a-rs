@@ -61,7 +61,7 @@ impl ReimbursementServer {
 
         // Include reimbursement-specific migrations
         let reimbursement_migrations = &[include_str!(
-            "../../migrations/001_create_reimbursements.sql"
+            "../../../migrations/001_create_reimbursements.sql"
         )];
 
         // SqlxTaskStorage uses HttpPushNotificationSender by default

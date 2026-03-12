@@ -1,0 +1,55 @@
+# Reimbursement Agent Configuration
+# This file demonstrates the declarative agent configuration format
+
+[agent]
+name = "Reimbursement Agent"
+description = "An intelligent agent that handles employee reimbursement requests, from form generation to approval processing"
+version = "1.0.0"
+
+[agent.provider]
+name = "Example Organization"
+url = "https://example.org"
+
+# Server configuration
+[server]
+host = "127.0.0.1"
+http_port = 8080
+ws_port = 8081
+
+# Storage backend
+[server.storage]
+type = "sqlx"
+url = "${DATABASE_URL}"  # Environment variable interpolation
+max_connections = 10
+enable_logging = false
+
+# Authentication (optional)
+[server.auth]
+type = "none"  # Options: "none", "bearer", "apikey"
+
+# Example with bearer token (commented out):
+# [server.auth]
+# type = "bearer"
+# tokens = ["${AUTH_TOKEN}"]
+# format = "JWT"
+
+# Skills exposed by this agent
+[[skills]]
+id = "process_reimbursement"
+name = "Process Reimbursement"
+description = "Helps with the reimbursement process for users given the amount and purpose of the reimbursement. Generates forms, validates submissions, and processes approvals."
+keywords = ["reimbursement", "expense", "finance", "forms"]
+examples = [
+    "Can you reimburse me $20 for my lunch with the clients?",
+    "I need to submit a reimbursement for $150 for office supplies",
+    "Process my travel expense of $500 for the conference"
+]
+input_formats = ["text", "data", "file"]
+output_formats = ["text", "data"]
+
+# Features configuration
+[features]
+streaming = true
+push_notifications = true
+state_history = true
+authenticated_card = false

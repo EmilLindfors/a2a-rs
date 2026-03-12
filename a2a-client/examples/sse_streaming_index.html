@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>A2A SSE Streaming Example</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+            max-width: 800px;
+            width: 100%;
+            padding: 30px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            font-size: 28px;
+        }
+
+        .subtitle {
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 14px;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        input[type="text"] {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 14px;
+            transition: border-color 0.2s;
+        }
+
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .status {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status.info {
+            background: #e3f2fd;
+            color: #1976d2;
+            display: block;
+        }
+
+        .status.success {
+            background: #e8f5e9;
+            color: #388e3c;
+            display: block;
+        }
+
+        .status.error {
+            background: #ffebee;
+            color: #d32f2f;
+            display: block;
+        }
+
+        .messages {
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 20px;
+            min-height: 300px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .message {
+            padding: 12px;
+            margin-bottom: 12px;
+            border-radius: 8px;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            background: #f5f5f5;
+            border-left: 4px solid #667eea;
+        }
+
+        .message.agent {
+            background: #e3f2fd;
+            border-left: 4px solid #1976d2;
+        }
+
+        .message .role {
+            font-weight: 600;
+            margin-bottom: 4px;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+        }
+
+        .message.user .role {
+            color: #667eea;
+        }
+
+        .message.agent .role {
+            color: #1976d2;
+        }
+
+        .message .content {
+            color: #333;
+            line-height: 1.5;
+        }
+
+        .empty-state {
+            text-align: center;
+            color: #999;
+            padding: 60px 20px;
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>A2A SSE Streaming Example</h1>
+        <p class="subtitle">Send messages to the A2A agent and see real-time streaming responses</p>
+
+        <div class="input-group">
+            <input
+                type="text"
+                id="messageInput"
+                placeholder="Type your message here..."
+                onkeypress="if(event.key === 'Enter') sendMessage()"
+            >
+            <button onclick="sendMessage()" id="sendBtn">Send Message</button>
+        </div>
+
+        <div id="status" class="status"></div>
+
+        <div class="messages" id="messages">
+            <div class="empty-state">
+                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                </svg>
+                <p>No messages yet. Send a message to start!</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentEventSource = null;
+        const messagesContainer = document.getElementById('messages');
+        const statusDiv = document.getElementById('status');
+        const messageInput = document.getElementById('messageInput');
+        const sendBtn = document.getElementById('sendBtn');
+
+        function showStatus(message, type = 'info') {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        function clearEmptyState() {
+            const emptyState = messagesContainer.querySelector('.empty-state');
+            if (emptyState) {
+                emptyState.remove();
+            }
+        }
+
+        function addMessage(role, content) {
+            clearEmptyState();
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${role.toLowerCase()}`;
+            messageDiv.innerHTML = `
+                <div class="role">${role}</div>
+                <div class="content">${content}</div>
+            `;
+            messagesContainer.appendChild(messageDiv);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        async function sendMessage() {
+            const text = messageInput.value.trim();
+            if (!text) return;
+
+            // Disable input while sending
+            messageInput.disabled = true;
+            sendBtn.disabled = true;
+            showStatus('Sending message...', 'info');
+
+            // Add user message to UI
+            addMessage('User', text);
+            messageInput.value = '';
+
+            try {
+                // Send message to backend
+                const response = await fetch('/send', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Failed to send message');
+                }
+
+                const { task_id } = await response.json();
+                showStatus(`Connected to task stream (${task_id})`, 'success');
+
+                // Close existing SSE connection if any
+                if (currentEventSource) {
+                    currentEventSource.close();
+                }
+
+                // Subscribe to task updates via SSE
+                currentEventSource = new EventSource(`/stream/${task_id}`);
+
+                currentEventSource.addEventListener('task-update', (event) => {
+                    const task = JSON.parse(event.data);
+                    if (task.history && task.history.length > 0) {
+                        const lastMessage = task.history[task.history.length - 1];
+                        if (lastMessage.role !== 'User') {
+                            const content = lastMessage.parts
+                                .filter(p => p.Text)
+                                .map(p => p.Text.text)
+                                .join('\n');
+                            if (content) {
+                                addMessage('Agent', content);
+                            }
+                        }
+                    }
+                });
+
+                currentEventSource.addEventListener('task-status', (event) => {
+                    const status = JSON.parse(event.data);
+                    console.log('Task status:', status.state);
+                });
+
+                currentEventSource.onerror = () => {
+                    console.log('SSE connection closed');
+                    currentEventSource.close();
+                    currentEventSource = null;
+                };
+
+            } catch (error) {
+                showStatus(`Error: ${error.message}`, 'error');
+                console.error('Error:', error);
+            } finally {
+                messageInput.disabled = false;
+                sendBtn.disabled = false;
+                messageInput.focus();
+            }
+        }
+
+        // Focus input on load
+        messageInput.focus();
+    </script>
+</body>
+</html>

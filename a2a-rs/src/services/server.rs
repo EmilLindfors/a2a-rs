@@ -45,11 +45,11 @@ pub trait AgentInfoProvider: Send + Sync {
 #[async_trait]
 pub trait AsyncA2ARequestProcessor: Send + Sync {
     /// Process a raw JSON-RPC request string
-    async fn process_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError>;
+    async fn process_raw_request(&self, request: &str) -> Result<String, A2AError>;
 
     /// Process a parsed A2A request
-    async fn process_request<'a>(
+    async fn process_request(
         &self,
-        request: &'a A2ARequest,
+        request: &A2ARequest,
     ) -> Result<JSONRPCResponse, A2AError>;
 }

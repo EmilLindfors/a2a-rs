@@ -1,0 +1,86 @@
+# Keycloak JWT Authentication Example
+# This demonstrates JWT authentication using Keycloak as the identity provider
+
+[agent]
+name = "Keycloak JWT Protected Agent"
+description = "Agent protected with Keycloak-issued JWT tokens"
+version = "1.0.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8080
+ws_port = 8081
+
+# In-memory storage for this example
+[server.storage]
+type = "inmemory"
+
+# JWT Authentication with Keycloak
+[server.auth]
+type = "jwt"
+
+# Keycloak uses RSA signatures - provide path to the public key
+# Extract from: http://localhost:8180/realms/a2a-agents/protocol/openid-connect/certs
+rsa_pem_path = "keycloak_public.pem"
+
+# Algorithm used by Keycloak (typically RS256)
+algorithm = "RS256"
+
+# Issuer validation - must match Keycloak realm URL exactly
+# Format: http://KEYCLOAK_HOST:PORT/realms/REALM_NAME
+issuer = "http://localhost:8180/realms/a2a-agents"
+
+# Audience validation (optional)
+# Common values: "account", "a2a-agent", or your client ID
+audience = "account"
+
+# Skills
+[[skills]]
+id = "protected_operation"
+name = "Protected Operation"
+description = "Requires valid Keycloak JWT token"
+keywords = ["secure", "keycloak"]
+examples = ["Perform secure operation"]
+
+[features]
+streaming = true
+push_notifications = true
+state_history = true
+
+# ==========================================
+# How to get the Keycloak public key:
+# ==========================================
+#
+# Option 1: Via JWKS endpoint
+# curl http://localhost:8180/realms/a2a-agents/protocol/openid-connect/certs | jq
+#
+# Option 2: Via Admin Console
+# 1. Go to Realm Settings → Keys
+# 2. Find RSA key with Use: "sig"
+# 3. Click "Public key" button
+#
+# Convert to PEM:
+# PUBKEY=$(curl -s http://localhost:8180/realms/a2a-agents/protocol/openid-connect/certs | jq -r '.keys[0].x5c[0]')
+# cat > keycloak_public.pem <<EOF
+# -----BEGIN CERTIFICATE-----
+# $PUBKEY
+# -----END CERTIFICATE-----
+# EOF
+#
+# ==========================================
+# How to get a JWT token for testing:
+# ==========================================
+#
+# Using Direct Access Grants (Resource Owner Password):
+# TOKEN=$(curl -s -X POST \
+#   'http://localhost:8180/realms/a2a-agents/protocol/openid-connect/token' \
+#   -H 'Content-Type: application/x-www-form-urlencoded' \
+#   -d 'client_id=a2a-agent' \
+#   -d 'client_secret=YOUR_CLIENT_SECRET' \
+#   -d 'username=testuser' \
+#   -d 'password=testpass123' \
+#   -d 'grant_type=password' \
+#   | jq -r '.access_token')
+#
+# Test the agent:
+# curl -H "Authorization: Bearer $TOKEN" http://localhost:8080/agent/card | jq

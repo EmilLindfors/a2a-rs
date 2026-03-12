@@ -1,0 +1,64 @@
+# Example A2A Agent that uses MCP Tools
+#
+# This configuration shows how to make an A2A agent that can call tools
+# from MCP servers, effectively orchestrating multiple MCP tools.
+
+[agent]
+name = "MCP Tool Orchestrator"
+description = "An A2A agent that can call tools from connected MCP servers"
+version = "1.0.0"
+
+[agent.provider]
+name = "Example Provider"
+url = "https://example.com"
+
+[server]
+host = "127.0.0.1"
+http_port = 8081
+ws_port = 0
+
+[server.storage]
+type = "inmemory"
+
+# Skills that this agent provides
+# These skills can internally call MCP tools to accomplish their tasks
+[[skills]]
+id = "orchestrate"
+name = "Orchestrate Tools"
+description = "Orchestrates multiple MCP tools to accomplish complex tasks"
+keywords = ["orchestrate", "combine", "workflow"]
+examples = [
+    "Use the calculator to compute something",
+    "Read a file and summarize it"
+]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true
+
+# Enable MCP client to connect to MCP servers
+[features.mcp_client]
+enabled = true
+
+# Example: Connect to a filesystem MCP server
+# Uncomment and configure based on your MCP servers
+# [[features.mcp_client.servers]]
+# name = "filesystem"
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+# [[features.mcp_client.servers]]
+# name = "calculator"
+# command = "node"
+# args = ["/path/to/calculator-mcp-server.js"]
+
+# Example: Connect to the MCP server agent we built earlier
+[[features.mcp_client.servers]]
+name = "example-agent"
+command = "cargo"
+args = ["run", "--example", "mcp_server_agent", "--features", "mcp-server"]
+# Working directory should be the a2a-agents directory
+# cwd = "/path/to/a2a-rs/a2a-agents"

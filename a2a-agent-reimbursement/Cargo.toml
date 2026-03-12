@@ -1,0 +1,65 @@
+[package]
+name = "a2a-agent-reimbursement"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Emil Lindfors <emil@lindfors.no>"]
+description = "Expense reimbursement agent for the A2A Protocol"
+license = "MIT"
+repository = "https://github.com/yourusername/a2a-rs"
+keywords = ["a2a", "agent", "reimbursement", "expense"]
+categories = ["api-bindings"]
+
+[dependencies]
+# Core framework
+a2a-rs = { path = "../a2a-rs", features = ["full"] }
+a2a-agents = { path = "../a2a-agents", version = "0.1.0" }
+a2a-agents-common = { path = "../a2a-agents-common", version = "0.1.0" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# UUID generation
+uuid = { version = "1.4", features = ["v4", "serde"] }
+
+# Async runtime
+tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+async-trait = "0.1"
+
+# Text processing
+regex = "1.10"
+lazy_static = "1.4"
+
+# AI integration (OpenAI-compatible API)
+reqwest = { version = "0.11", features = ["json", "rustls-tls"], default-features = false }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Command line interface
+clap = { version = "4.4", features = ["derive"] }
+
+# Environment variables
+dotenvy = "0.15.7"
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = ["sqlx"]
+sqlx = ["a2a-rs/sqlx-storage", "a2a-agents/sqlx"]
+auth = ["a2a-rs/auth", "a2a-agents/auth"]
+
+[[bin]]
+name = "reimbursement-agent"
+path = "bin/reimbursement_agent.rs"

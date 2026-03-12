@@ -1,0 +1,75 @@
+# Agent with OAuth2 Authentication Example
+# This demonstrates how to configure OAuth2-based authentication
+
+[agent]
+name = "OAuth2 Protected Agent"
+description = "An agent protected with OAuth2 authentication"
+version = "1.0.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8080
+ws_port = 8081
+
+# In-memory storage for this example
+[server.storage]
+type = "inmemory"
+
+# OAuth2 Authentication Configuration
+[server.auth]
+type = "oauth2"
+
+# OAuth2 client credentials
+client_id = "${OAUTH_CLIENT_ID}"  # From your OAuth2 provider
+client_secret = "${OAUTH_CLIENT_SECRET}"  # Keep this secret!
+
+# OAuth2 endpoints - examples for common providers:
+# Google: https://accounts.google.com/o/oauth2/v2/auth
+# GitHub: https://github.com/login/oauth/authorize
+# Auth0: https://YOUR_DOMAIN.auth0.com/authorize
+authorization_url = "https://provider.com/oauth/authorize"
+token_url = "https://provider.com/oauth/token"
+
+# OAuth2 flow type
+flow = "authorization_code"  # Options: "authorization_code" or "client_credentials"
+
+# For authorization_code flow, specify redirect URL
+redirect_url = "http://localhost:8080/oauth/callback"
+
+# Required scopes
+scopes = ["read", "write"]
+
+# Skills
+[[skills]]
+id = "protected_operation"
+name = "Protected Operation"
+description = "Performs operations (requires OAuth2 token)"
+keywords = ["operation", "secure"]
+examples = ["Do something secure"]
+
+[features]
+streaming = true
+push_notifications = true
+state_history = true
+
+# === Common OAuth2 Provider Examples ===
+
+# GitHub:
+# authorization_url = "https://github.com/login/oauth/authorize"
+# token_url = "https://github.com/login/oauth/access_token"
+# scopes = ["user", "repo"]
+
+# Google:
+# authorization_url = "https://accounts.google.com/o/oauth2/v2/auth"
+# token_url = "https://oauth2.googleapis.com/token"
+# scopes = ["openid", "email", "profile"]
+
+# Microsoft/Azure AD:
+# authorization_url = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize"
+# token_url = "https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+# scopes = ["openid", "profile", "email"]
+
+# Auth0:
+# authorization_url = "https://YOUR_DOMAIN.auth0.com/authorize"
+# token_url = "https://YOUR_DOMAIN.auth0.com/oauth/token"
+# scopes = ["openid", "profile", "email"]

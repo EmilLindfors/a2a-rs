@@ -1,3 +1,4 @@
 [workspace]
 resolver = "2"
-members = ["a2a-rs", "a2a-agents", "a2a-client", "a2a-ap2"]
+members = ["a2a-rs", "a2a-agents", "a2a-client", "a2a-ap2", "a2a-agents-common", "a2a-agent-reimbursement"]
+exclude = ["a2a-mcp"]

@@ -1,4 +1,4 @@
-use a2a_agents::reimbursement_agent::{
+use a2a_agents::agents::reimbursement::{
     config::{ServerConfig, StorageConfig},
     server::ReimbursementServer,
 };

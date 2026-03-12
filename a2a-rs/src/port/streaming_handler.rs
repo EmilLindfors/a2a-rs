@@ -65,71 +65,71 @@ pub trait StreamingHandler {
 /// An async trait for managing streaming connections and real-time updates
 pub trait AsyncStreamingHandler: Send + Sync {
     /// Add a status update subscriber for a task
-    async fn add_status_subscriber<'a>(
+    async fn add_status_subscriber(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError>; // Returns subscription ID
 
     /// Add an artifact update subscriber for a task
-    async fn add_artifact_subscriber<'a>(
+    async fn add_artifact_subscriber(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError>; // Returns subscription ID
 
     /// Remove a specific subscription
-    async fn remove_subscription<'a>(&self, subscription_id: &'a str) -> Result<(), A2AError>;
+    async fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError>;
 
     /// Remove all subscribers for a task
-    async fn remove_task_subscribers<'a>(&self, task_id: &'a str) -> Result<(), A2AError>;
+    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError>;
 
     /// Get the number of active subscribers for a task
-    async fn get_subscriber_count<'a>(&self, task_id: &'a str) -> Result<usize, A2AError>;
+    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError>;
 
     /// Check if a task has any active subscribers
-    async fn has_subscribers<'a>(&self, task_id: &'a str) -> Result<bool, A2AError> {
+    async fn has_subscribers(&self, task_id: &str) -> Result<bool, A2AError> {
         let count = self.get_subscriber_count(task_id).await?;
         Ok(count > 0)
     }
 
     /// Broadcast a status update to all subscribers of a task
-    async fn broadcast_status_update<'a>(
+    async fn broadcast_status_update(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError>;
 
     /// Broadcast an artifact update to all subscribers of a task
-    async fn broadcast_artifact_update<'a>(
+    async fn broadcast_artifact_update(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         update: TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError>;
 
     /// Create a stream of status updates for a task
-    async fn status_update_stream<'a>(
+    async fn status_update_stream(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError>;
 
     /// Create a stream of artifact updates for a task
-    async fn artifact_update_stream<'a>(
+    async fn artifact_update_stream(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<
         Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>,
         A2AError,
     >;
 
     /// Create a combined stream of all updates for a task
-    async fn combined_update_stream<'a>(
+    async fn combined_update_stream(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError>;
 
     /// Validate streaming parameters
-    async fn validate_streaming_params<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn validate_streaming_params(&self, task_id: &str) -> Result<(), A2AError> {
         if task_id.trim().is_empty() {
             return Err(A2AError::ValidationError {
                 field: "task_id".to_string(),
@@ -140,16 +140,16 @@ pub trait AsyncStreamingHandler: Send + Sync {
     }
 
     /// Start streaming for a task with automatic cleanup
-    async fn start_task_streaming<'a>(
+    async fn start_task_streaming(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError> {
         self.validate_streaming_params(task_id).await?;
         self.combined_update_stream(task_id).await
     }
 
     /// Stop all streaming for a task
-    async fn stop_task_streaming<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn stop_task_streaming(&self, task_id: &str) -> Result<(), A2AError> {
         self.remove_task_subscribers(task_id).await
     }
 }
@@ -163,6 +163,7 @@ pub enum UpdateEvent {
 
 impl UpdateEvent {
     /// Get the task ID from the update event
+    #[inline]
     pub fn task_id(&self) -> &str {
         match self {
             UpdateEvent::StatusUpdate(event) => &event.task_id,
@@ -171,6 +172,7 @@ impl UpdateEvent {
     }
 
     /// Get the context ID from the update event
+    #[inline]
     pub fn context_id(&self) -> &str {
         match self {
             UpdateEvent::StatusUpdate(event) => &event.context_id,
@@ -179,6 +181,7 @@ impl UpdateEvent {
     }
 
     /// Check if this is a final update
+    #[inline]
     pub fn is_final(&self) -> bool {
         match self {
             UpdateEvent::StatusUpdate(event) => event.final_,

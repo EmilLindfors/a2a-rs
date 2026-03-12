@@ -46,109 +46,93 @@ impl<'de> Deserialize<'de> for A2ARequest {
     where
         D: serde::Deserializer<'de>,
     {
-        // First deserialize into a JSONRPCRequest to get the method
-        let json_req = JSONRPCRequest::deserialize(deserializer)?;
+        // Deserialize into a Value first (single parse from input)
+        let value = Value::deserialize(deserializer)?;
 
-        // Based on the method field, determine the appropriate variant
-        let result = match json_req.method.as_str() {
+        // Extract the method field to determine request type
+        let method = value
+            .get("method")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| serde::de::Error::missing_field("method"))?;
+
+        // Based on the method field, deserialize directly into the appropriate variant
+        // This avoids the serialize->deserialize round-trip
+        let result = match method {
             "message/send" => {
-                // Re-parse as SendMessageRequest
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req =
-                    SendMessageRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                let req = SendMessageRequest::deserialize(&value)
+                    .map_err(serde::de::Error::custom)?;
                 A2ARequest::SendMessage(req)
             }
             "message/stream" => {
-                // Re-parse as SendMessageStreamingRequest
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = SendMessageStreamingRequest::deserialize(value)
+                let req = SendMessageStreamingRequest::deserialize(&value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::SendMessageStreaming(req)
             }
             "tasks/send" => {
-                // Re-parse as SendTaskRequest (legacy)
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = SendTaskRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                let req = SendTaskRequest::deserialize(&value)
+                    .map_err(serde::de::Error::custom)?;
                 A2ARequest::SendTask(req)
             }
             "tasks/get" => {
-                // Re-parse as GetTaskRequest
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = GetTaskRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                let req = GetTaskRequest::deserialize(&value)
+                    .map_err(serde::de::Error::custom)?;
                 A2ARequest::GetTask(req)
             }
             "tasks/cancel" => {
-                // Re-parse as CancelTaskRequest
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req =
-                    CancelTaskRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                let req = CancelTaskRequest::deserialize(&value)
+                    .map_err(serde::de::Error::custom)?;
                 A2ARequest::CancelTask(req)
             }
             "tasks/pushNotificationConfig/set" => {
-                // Re-parse as SetTaskPushNotificationRequest
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = SetTaskPushNotificationRequest::deserialize(value)
+                let req = SetTaskPushNotificationRequest::deserialize(&value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::SetTaskPushNotification(req)
             }
             "tasks/pushNotificationConfig/get" => {
-                // Re-parse as GetTaskPushNotificationRequest
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = GetTaskPushNotificationRequest::deserialize(value)
+                let req = GetTaskPushNotificationRequest::deserialize(&value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::GetTaskPushNotification(req)
             }
             "tasks/resubscribe" => {
-                // Re-parse as TaskResubscriptionRequest
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = TaskResubscriptionRequest::deserialize(value)
+                let req = TaskResubscriptionRequest::deserialize(&value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::TaskResubscription(req)
             }
             "tasks/sendSubscribe" => {
-                // Re-parse as SendTaskStreamingRequest (legacy)
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = SendTaskStreamingRequest::deserialize(value)
+                let req = SendTaskStreamingRequest::deserialize(&value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::SendTaskStreaming(req)
             }
             "agent/getExtendedCard" => {
-                // Re-parse as GetExtendedCardRequest (v0.3.0)
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req =
-                    GetExtendedCardRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                let req = GetExtendedCardRequest::deserialize(&value)
+                    .map_err(serde::de::Error::custom)?;
                 A2ARequest::GetExtendedCard(req)
             }
             "agent/getAuthenticatedExtendedCard" => {
-                // Re-parse as GetAuthenticatedExtendedCardRequest (v0.3.0)
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = GetAuthenticatedExtendedCardRequest::deserialize(value)
+                let req = GetAuthenticatedExtendedCardRequest::deserialize(&value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::GetAuthenticatedExtendedCard(req)
             }
             "tasks/list" => {
-                // Re-parse as ListTasksRequest (v0.3.0)
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = ListTasksRequest::deserialize(value).map_err(serde::de::Error::custom)?;
+                let req = ListTasksRequest::deserialize(&value)
+                    .map_err(serde::de::Error::custom)?;
                 A2ARequest::ListTasks(req)
             }
             "tasks/pushNotificationConfig/list" => {
-                // Re-parse as ListTaskPushNotificationConfigRequest (v0.3.0)
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = ListTaskPushNotificationConfigRequest::deserialize(value)
+                let req = ListTaskPushNotificationConfigRequest::deserialize(&value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::ListTaskPushNotificationConfigs(req)
             }
             "tasks/pushNotificationConfig/delete" => {
-                // Re-parse as DeleteTaskPushNotificationConfigRequest (v0.3.0)
-                let value = serde_json::to_value(&json_req).map_err(serde::de::Error::custom)?;
-                let req = DeleteTaskPushNotificationConfigRequest::deserialize(value)
+                let req = DeleteTaskPushNotificationConfigRequest::deserialize(&value)
                     .map_err(serde::de::Error::custom)?;
                 A2ARequest::DeleteTaskPushNotificationConfig(req)
             }
             _ => {
-                // For other methods, use Generic variant
-                A2ARequest::Generic(json_req)
+                // For other methods, deserialize as Generic
+                let req = JSONRPCRequest::deserialize(&value)
+                    .map_err(serde::de::Error::custom)?;
+                A2ARequest::Generic(req)
             }
         };
 
@@ -158,6 +142,7 @@ impl<'de> Deserialize<'de> for A2ARequest {
 
 impl A2ARequest {
     /// Get the method of the request
+    #[inline]
     pub fn method(&self) -> &str {
         match self {
             A2ARequest::SendMessage(req) => &req.method,
@@ -180,6 +165,7 @@ impl A2ARequest {
     }
 
     /// Get the ID of the request, if any
+    #[inline]
     pub fn id(&self) -> Option<&Value> {
         match self {
             A2ARequest::SendMessage(req) => req.id.as_ref(),

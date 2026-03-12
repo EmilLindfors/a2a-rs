@@ -39,15 +39,15 @@ pub trait MessageHandler {
 /// An async trait for handling message processing operations
 pub trait AsyncMessageHandler: Send + Sync {
     /// Process a message for a specific task
-    async fn process_message<'a>(
+    async fn process_message(
         &self,
-        task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
+        task_id: &str,
+        message: &Message,
+        session_id: Option<&str>,
     ) -> Result<Task, A2AError>;
 
     /// Validate a message before processing
-    async fn validate_message<'a>(&self, message: &'a Message) -> Result<(), A2AError> {
+    async fn validate_message(&self, message: &Message) -> Result<(), A2AError> {
         // Default implementation - can be overridden
         if message.parts.is_empty() {
             return Err(A2AError::ValidationError {
@@ -65,11 +65,11 @@ pub trait AsyncMessageHandler: Send + Sync {
     }
 
     /// Handle message processing with validation and transformation
-    async fn handle_message_flow<'a>(
+    async fn handle_message_flow(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         message: Message,
-        session_id: Option<&'a str>,
+        session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
         // Validate the message
         self.validate_message(&message).await?;

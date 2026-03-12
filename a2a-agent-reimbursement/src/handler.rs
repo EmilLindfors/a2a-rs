@@ -1238,11 +1238,11 @@ where
         session_id = ?_session_id,
         parts_count = message.parts.len()
     ))]
-    async fn process_message<'a>(
+    async fn process_message(
         &self,
-        task_id: &'a str,
-        message: &'a Message,
-        _session_id: Option<&'a str>,
+        task_id: &str,
+        message: &Message,
+        _session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
         error!(
             "🚨 HANDLER CALLED: Processing reimbursement request for task_id={}",
@@ -1434,7 +1434,7 @@ where
         Ok(final_task)
     }
 
-    async fn validate_message<'a>(&self, message: &'a Message) -> Result<(), A2AError> {
+    async fn validate_message(&self, message: &Message) -> Result<(), A2AError> {
         if message.parts.is_empty() {
             return Err(A2AError::ValidationError {
                 field: "message.parts".to_string(),

@@ -57,12 +57,14 @@ impl OAuth2Authenticator {
         redirect_url: RedirectUrl,
         scopes: HashMap<String, String>,
     ) -> Self {
+        let token_url_str = token_url.url().to_string();
+
         let client = BasicClient::new(client_id, client_secret, auth_url, Some(token_url))
             .set_redirect_uri(redirect_url);
 
         let flow = AuthorizationCodeOAuthFlow {
             authorization_url: client.auth_url().url().to_string(),
-            token_url: client.token_url().unwrap().url().to_string(),
+            token_url: token_url_str,
             refresh_url: None,
             scopes,
         };
@@ -90,15 +92,19 @@ impl OAuth2Authenticator {
         token_url: TokenUrl,
         scopes: HashMap<String, String>,
     ) -> Self {
+        // Use a placeholder auth URL since client credentials flow doesn't need it
+        let auth_url = AuthUrl::new("http://localhost".to_string())
+            .expect("localhost URL should always be valid");
+
         let client = BasicClient::new(
             client_id,
             Some(client_secret),
-            AuthUrl::new("".to_string()).unwrap(),
-            Some(token_url),
+            auth_url,
+            Some(token_url.clone()),
         );
 
         let flow = ClientCredentialsOAuthFlow {
-            token_url: client.token_url().unwrap().url().to_string(),
+            token_url: token_url.url().to_string(),
             refresh_url: None,
             scopes,
         };

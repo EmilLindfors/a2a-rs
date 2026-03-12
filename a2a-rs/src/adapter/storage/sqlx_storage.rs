@@ -441,10 +441,10 @@ impl SqlxTaskStorage {
 #[cfg(feature = "sqlx-storage")]
 #[async_trait]
 impl AsyncTaskManager for SqlxTaskStorage {
-    async fn create_task<'a>(
+    async fn create_task(
         &self,
-        task_id: &'a str,
-        context_id: &'a str,
+        task_id: &str,
+        context_id: &str,
     ) -> Result<Task, A2AError> {
         // Check if task already exists
         let existing = sqlx::query("SELECT id FROM tasks WHERE id = ?")
@@ -499,9 +499,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(task)
     }
 
-    async fn update_task_status<'a>(
+    async fn update_task_status(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
@@ -536,14 +536,17 @@ impl AsyncTaskManager for SqlxTaskStorage {
         // Get updated task
         let task = self.get_task(task_id, None).await?;
 
+        // Clone status before broadcasting to avoid double clone
+        let status = task.status.clone();
+
         // Broadcast status update
-        self.broadcast_status_update(task_id, task.status.clone(), false)
+        self.broadcast_status_update(task_id, status, false)
             .await?;
 
         Ok(task)
     }
 
-    async fn task_exists<'a>(&self, task_id: &'a str) -> Result<bool, A2AError> {
+    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError> {
         let row = sqlx::query("SELECT id FROM tasks WHERE id = ?")
             .bind(task_id)
             .fetch_optional(&self.pool)
@@ -555,9 +558,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(row.is_some())
     }
 
-    async fn get_task<'a>(
+    async fn get_task(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         history_length: Option<u32>,
     ) -> Result<Task, A2AError> {
         // Get task from database
@@ -586,7 +589,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(task)
     }
 
-    async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
+    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
         // Get current task
         let task = self.get_task(task_id, None).await?;
 
@@ -629,8 +632,11 @@ impl AsyncTaskManager for SqlxTaskStorage {
         // Get updated task
         let updated_task = self.get_task(task_id, None).await?;
 
+        // Clone status before broadcasting to avoid double clone
+        let status = updated_task.status.clone();
+
         // Broadcast status update (with final flag set to true)
-        self.broadcast_status_update(task_id, updated_task.status.clone(), true)
+        self.broadcast_status_update(task_id, status, true)
             .await?;
 
         Ok(updated_task)
@@ -638,9 +644,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
 
     // ===== v0.3.0 Methods =====
 
-    async fn list_tasks_v3<'a>(
+    async fn list_tasks_v3(
         &self,
-        params: &'a crate::domain::ListTasksParams,
+        params: &crate::domain::ListTasksParams,
     ) -> Result<crate::domain::ListTasksResult, A2AError> {
         use crate::domain::ListTasksResult;
 
@@ -800,9 +806,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
         })
     }
 
-    async fn get_push_notification_config<'a>(
+    async fn get_push_notification_config(
         &self,
-        params: &'a crate::domain::GetTaskPushNotificationConfigParams,
+        params: &crate::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<crate::domain::TaskPushNotificationConfig, A2AError> {
         // Query the database for the specific config
         // Note: push_notification_config_id filtering requires migration 002 to be applied
@@ -852,9 +858,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
         }
     }
 
-    async fn list_push_notification_configs<'a>(
+    async fn list_push_notification_configs(
         &self,
-        params: &'a crate::domain::ListTaskPushNotificationConfigParams,
+        params: &crate::domain::ListTaskPushNotificationConfigParams,
     ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
         // Query all configs for the task
         let rows = sqlx::query(
@@ -894,9 +900,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(configs)
     }
 
-    async fn delete_push_notification_config<'a>(
+    async fn delete_push_notification_config(
         &self,
-        params: &'a crate::domain::DeleteTaskPushNotificationConfigParams,
+        params: &crate::domain::DeleteTaskPushNotificationConfigParams,
     ) -> Result<(), A2AError> {
         // Delete the specific config
         let _result =
@@ -917,9 +923,9 @@ impl AsyncTaskManager for SqlxTaskStorage {
 #[cfg(feature = "sqlx-storage")]
 #[async_trait]
 impl AsyncNotificationManager for SqlxTaskStorage {
-    async fn set_task_notification<'a>(
+    async fn set_task_notification(
         &self,
-        config: &'a TaskPushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Generate ID if not provided
         let config_id = config
@@ -961,9 +967,9 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         Ok(result_config)
     }
 
-    async fn get_task_notification<'a>(
+    async fn get_task_notification(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Get from database (get first config for backwards compatibility)
         let row =
@@ -1011,7 +1017,7 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         }
     }
 
-    async fn remove_task_notification<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError> {
         // Remove from database
         sqlx::query("DELETE FROM push_notification_configs WHERE task_id = ?")
             .bind(task_id)
@@ -1030,9 +1036,9 @@ impl AsyncNotificationManager for SqlxTaskStorage {
 #[cfg(feature = "sqlx-storage")]
 #[async_trait]
 impl AsyncStreamingHandler for SqlxTaskStorage {
-    async fn add_status_subscriber<'a>(
+    async fn add_status_subscriber(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
         // Add the subscriber
@@ -1057,9 +1063,9 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         Ok(format!("status-{}-{}", task_id, uuid::Uuid::new_v4()))
     }
 
-    async fn add_artifact_subscriber<'a>(
+    async fn add_artifact_subscriber(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
         // Add the subscriber
@@ -1088,13 +1094,13 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         Ok(format!("artifact-{}-{}", task_id, uuid::Uuid::new_v4()))
     }
 
-    async fn remove_subscription<'a>(&self, _subscription_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_subscription(&self, _subscription_id: &str) -> Result<(), A2AError> {
         Err(A2AError::UnsupportedOperation(
             "Subscription removal by ID requires storage layer refactoring".to_string(),
         ))
     }
 
-    async fn remove_task_subscribers<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
         // Remove all subscribers
         {
             let mut subscribers_guard = self.subscribers.lock().await;
@@ -1104,7 +1110,7 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         Ok(())
     }
 
-    async fn get_subscriber_count<'a>(&self, task_id: &'a str) -> Result<usize, A2AError> {
+    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
         let subscribers_guard = self.subscribers.lock().await;
 
         if let Some(task_subscribers) = subscribers_guard.get(task_id) {
@@ -1114,18 +1120,18 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         }
     }
 
-    async fn broadcast_status_update<'a>(
+    async fn broadcast_status_update(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         self.broadcast_status_update(task_id, update.status, update.final_)
             .await
     }
 
-    async fn broadcast_artifact_update<'a>(
+    async fn broadcast_artifact_update(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         update: TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
         self.broadcast_artifact_update(
@@ -1137,9 +1143,9 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         .await
     }
 
-    async fn status_update_stream<'a>(
+    async fn status_update_stream(
         &self,
-        _task_id: &'a str,
+        _task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>,
@@ -1151,9 +1157,9 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         ))
     }
 
-    async fn artifact_update_stream<'a>(
+    async fn artifact_update_stream(
         &self,
-        _task_id: &'a str,
+        _task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>,
@@ -1165,9 +1171,9 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         ))
     }
 
-    async fn combined_update_stream<'a>(
+    async fn combined_update_stream(
         &self,
-        _task_id: &'a str,
+        _task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<

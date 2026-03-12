@@ -83,37 +83,37 @@ pub trait TaskManager {
 /// An async trait for managing task lifecycle and operations
 pub trait AsyncTaskManager: Send + Sync {
     /// Create a new task
-    async fn create_task<'a>(
+    async fn create_task(
         &self,
-        task_id: &'a str,
-        context_id: &'a str,
+        task_id: &str,
+        context_id: &str,
     ) -> Result<Task, A2AError>;
 
     /// Get a task by ID with optional history
-    async fn get_task<'a>(
+    async fn get_task(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         history_length: Option<u32>,
     ) -> Result<Task, A2AError>;
 
     /// Update task status with an optional message to add to history
-    async fn update_task_status<'a>(
+    async fn update_task_status(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError>;
 
     /// Cancel a task
-    async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError>;
+    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError>;
 
     /// Check if a task exists
-    async fn task_exists<'a>(&self, task_id: &'a str) -> Result<bool, A2AError>;
+    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError>;
 
     /// List tasks with optional filtering
-    async fn list_tasks<'a>(
+    async fn list_tasks(
         &self,
-        _context_id: Option<&'a str>,
+        _context_id: Option<&str>,
         _limit: Option<u32>,
     ) -> Result<Vec<Task>, A2AError> {
         // Default implementation - can be overridden
@@ -124,16 +124,16 @@ pub trait AsyncTaskManager: Send + Sync {
     }
 
     /// Get task metadata
-    async fn get_task_metadata<'a>(
+    async fn get_task_metadata(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<serde_json::Map<String, serde_json::Value>, A2AError> {
         let task = self.get_task(task_id, None).await?;
         Ok(task.metadata.unwrap_or_default())
     }
 
     /// Validate task parameters
-    async fn validate_task_params<'a>(&self, params: &'a TaskQueryParams) -> Result<(), A2AError> {
+    async fn validate_task_params(&self, params: &TaskQueryParams) -> Result<(), A2AError> {
         if params.id.trim().is_empty() {
             return Err(A2AError::ValidationError {
                 field: "task_id".to_string(),
@@ -154,13 +154,13 @@ pub trait AsyncTaskManager: Send + Sync {
     }
 
     /// Get task with validation
-    async fn get_task_validated<'a>(&self, params: &'a TaskQueryParams) -> Result<Task, A2AError> {
+    async fn get_task_validated(&self, params: &TaskQueryParams) -> Result<Task, A2AError> {
         self.validate_task_params(params).await?;
         self.get_task(&params.id, params.history_length).await
     }
 
     /// Cancel task with validation
-    async fn cancel_task_validated<'a>(&self, params: &'a TaskIdParams) -> Result<Task, A2AError> {
+    async fn cancel_task_validated(&self, params: &TaskIdParams) -> Result<Task, A2AError> {
         if params.id.trim().is_empty() {
             return Err(A2AError::ValidationError {
                 field: "task_id".to_string(),
@@ -174,9 +174,9 @@ pub trait AsyncTaskManager: Send + Sync {
     // ===== v0.3.0 New Methods =====
 
     /// List tasks with comprehensive filtering and pagination (v0.3.0)
-    async fn list_tasks_v3<'a>(
+    async fn list_tasks_v3(
         &self,
-        _params: &'a ListTasksParams,
+        _params: &ListTasksParams,
     ) -> Result<ListTasksResult, A2AError> {
         // Default implementation returns unsupported error
         Err(A2AError::UnsupportedOperation(
@@ -185,9 +185,9 @@ pub trait AsyncTaskManager: Send + Sync {
     }
 
     /// Get push notification config by ID (v0.3.0)
-    async fn get_push_notification_config<'a>(
+    async fn get_push_notification_config(
         &self,
-        _params: &'a GetTaskPushNotificationConfigParams,
+        _params: &GetTaskPushNotificationConfigParams,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Default implementation returns unsupported error
         Err(A2AError::UnsupportedOperation(
@@ -196,9 +196,9 @@ pub trait AsyncTaskManager: Send + Sync {
     }
 
     /// List all push notification configs for a task (v0.3.0)
-    async fn list_push_notification_configs<'a>(
+    async fn list_push_notification_configs(
         &self,
-        _params: &'a ListTaskPushNotificationConfigParams,
+        _params: &ListTaskPushNotificationConfigParams,
     ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
         // Default implementation returns unsupported error
         Err(A2AError::UnsupportedOperation(
@@ -207,9 +207,9 @@ pub trait AsyncTaskManager: Send + Sync {
     }
 
     /// Delete a specific push notification config (v0.3.0)
-    async fn delete_push_notification_config<'a>(
+    async fn delete_push_notification_config(
         &self,
-        _params: &'a DeleteTaskPushNotificationConfigParams,
+        _params: &DeleteTaskPushNotificationConfigParams,
     ) -> Result<(), A2AError> {
         // Default implementation returns unsupported error
         Err(A2AError::UnsupportedOperation(

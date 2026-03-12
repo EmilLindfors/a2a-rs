@@ -1,0 +1,18 @@
+# Agent with automatic SQLx storage creation
+# The builder will create SQLx storage and run migrations automatically
+
+[agent]
+name = "SQLx Auto Storage Agent"
+description = "Demonstrates automatic SQLx storage with migrations"
+
+# SQLx storage is automatically created from this config
+[server.storage]
+type = "sqlx"
+url = "${DATABASE_URL}"  # Use env var or default to "sqlite:auto_storage.db"
+max_connections = 10
+enable_logging = true
+
+[[skills]]
+id = "persistent_echo"
+name = "Persistent Echo"
+description = "Echoes messages with persistent storage"

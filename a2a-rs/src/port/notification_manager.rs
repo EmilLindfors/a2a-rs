@@ -65,22 +65,22 @@ pub trait NotificationManager {
 /// An async trait for managing push notification configurations and delivery
 pub trait AsyncNotificationManager: Send + Sync {
     /// Set up push notifications for a task
-    async fn set_task_notification<'a>(
+    async fn set_task_notification(
         &self,
-        config: &'a TaskPushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError>;
 
     /// Get the push notification configuration for a task
-    async fn get_task_notification<'a>(
+    async fn get_task_notification(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError>;
 
     /// Remove push notification configuration for a task
-    async fn remove_task_notification<'a>(&self, task_id: &'a str) -> Result<(), A2AError>;
+    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError>;
 
     /// Check if push notifications are configured for a task
-    async fn has_task_notification<'a>(&self, task_id: &'a str) -> Result<bool, A2AError> {
+    async fn has_task_notification(&self, task_id: &str) -> Result<bool, A2AError> {
         match self.get_task_notification(task_id).await {
             Ok(_) => Ok(true),
             Err(A2AError::TaskNotFound(_)) => Ok(false),
@@ -89,9 +89,9 @@ pub trait AsyncNotificationManager: Send + Sync {
     }
 
     /// Validate push notification configuration
-    async fn validate_notification_config<'a>(
+    async fn validate_notification_config(
         &self,
-        config: &'a PushNotificationConfig,
+        config: &PushNotificationConfig,
     ) -> Result<(), A2AError> {
         if config.url.trim().is_empty() {
             return Err(A2AError::ValidationError {
@@ -112,9 +112,9 @@ pub trait AsyncNotificationManager: Send + Sync {
     }
 
     /// Send a test notification to verify configuration
-    async fn send_test_notification<'a>(
+    async fn send_test_notification(
         &self,
-        config: &'a PushNotificationConfig,
+        config: &PushNotificationConfig,
     ) -> Result<(), A2AError> {
         // Default implementation - can be overridden
         self.validate_notification_config(config).await?;
@@ -123,9 +123,9 @@ pub trait AsyncNotificationManager: Send + Sync {
     }
 
     /// Set task notification with validation
-    async fn set_task_notification_validated<'a>(
+    async fn set_task_notification_validated(
         &self,
-        config: &'a TaskPushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Validate the task ID
         if config.task_id.trim().is_empty() {
@@ -144,9 +144,9 @@ pub trait AsyncNotificationManager: Send + Sync {
     }
 
     /// Get task notification with validation
-    async fn get_task_notification_validated<'a>(
+    async fn get_task_notification_validated(
         &self,
-        params: &'a TaskIdParams,
+        params: &TaskIdParams,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         if params.id.trim().is_empty() {
             return Err(A2AError::ValidationError {
@@ -159,10 +159,10 @@ pub trait AsyncNotificationManager: Send + Sync {
     }
 
     /// Send notification for task status update
-    async fn notify_task_status_update<'a>(
+    async fn notify_task_status_update(
         &self,
-        task_id: &'a str,
-        _status_update: &'a crate::domain::TaskStatusUpdateEvent,
+        task_id: &str,
+        _status_update: &crate::domain::TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         // Default implementation - can be overridden
         // Check if notifications are configured for this task
@@ -178,10 +178,10 @@ pub trait AsyncNotificationManager: Send + Sync {
     }
 
     /// Send notification for task artifact update
-    async fn notify_task_artifact_update<'a>(
+    async fn notify_task_artifact_update(
         &self,
-        task_id: &'a str,
-        _artifact_update: &'a crate::domain::TaskArtifactUpdateEvent,
+        task_id: &str,
+        _artifact_update: &crate::domain::TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
         // Default implementation - can be overridden
         // Check if notifications are configured for this task

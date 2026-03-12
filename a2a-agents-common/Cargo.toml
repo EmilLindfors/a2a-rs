@@ -1,0 +1,46 @@
+[package]
+name = "a2a-agents-common"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Emil Lindfors <emil@lindfors.no>"]
+description = "Common utilities for building A2A Protocol agents"
+license = "MIT"
+repository = "https://github.com/yourusername/a2a-rs"
+keywords = ["a2a", "agent", "utilities", "nlp", "formatting"]
+categories = ["api-bindings", "text-processing"]
+
+[dependencies]
+# Core dependency on the a2a-agents framework
+a2a-agents = { path = "../a2a-agents", version = "0.1.0" }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Text processing and regex
+regex = "1.10"
+lazy_static = "1.4"
+
+# Date and time utilities
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async support
+tokio = { version = "1.32", features = ["sync", "time"], optional = true }
+async-trait = { version = "0.1", optional = true }
+
+# Error handling
+thiserror = "1.0"
+
+# Caching (optional)
+moka = { version = "0.12", features = ["future"], optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.32", features = ["rt", "macros", "test-util"] }
+
+[features]
+default = []
+# Enable async utilities (caching, etc.)
+async = ["dep:tokio", "dep:async-trait", "dep:moka"]
+# Enable all features
+full = ["async"]

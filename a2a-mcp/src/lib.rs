@@ -1,70 +1,99 @@
-//! # A2A-RMCP Integration
+//! # A2A-MCP Integration
 //!
-//! This crate provides integration between the Agent-to-Agent (A2A) protocol
-//! and Rusty Model Context Protocol (RMCP), enabling bidirectional
-//! communication between these protocols.
+//! This crate provides **bidirectional integration** between the Agent-to-Agent (A2A) protocol
+//! and the Model Context Protocol (MCP), enabling seamless communication between these protocols.
 //!
 //! ## Core Features
 //!
-//! - Use A2A agents as RMCP tools
-//! - Expose RMCP tools as A2A agents
-//! - Bidirectional message conversion
-//! - State management across protocols
+//! ### 1. A2A Agents → MCP Tools (`AgentToMcpBridge`)
+//!
+//! Expose A2A agent skills as callable MCP tools, allowing MCP clients (like Claude Desktop)
+//! to invoke A2A agent capabilities.
+//!
+//! ```rust,ignore
+//! use a2a_mcp::{AgentToMcpBridge, Result};
+//! use a2a_rs::services::client::A2AClient;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     // Create A2A client
+//!     let client = A2AClient::new("https://my-agent.example.com");
+//!     let agent_card = client.get_agent_card().await?;
+//!
+//!     // Create MCP bridge
+//!     let bridge = AgentToMcpBridge::new(client, agent_card, "https://my-agent.example.com".to_string());
+//!
+//!     // Serve as MCP server via stdio
+//!     use rmcp::{ServiceExt, transport::stdio};
+//!     bridge.serve(stdio()).await?.waiting().await?;
+//!     Ok(())
+//! }
+//! ```
+//!
+//! ### 2. MCP Tools → A2A Agents (`McpToA2ABridge`)
+//!
+//! Augment A2A agents with MCP tool capabilities, allowing agents to call external MCP tools
+//! as part of their processing.
+//!
+//! ```rust,ignore
+//! use a2a_mcp::{McpToA2ABridge, create_tool_call_message};
+//! use a2a_rs::port::AsyncMessageHandler;
+//!
+//! #[tokio::main]
+//! async fn main() -> Result<()> {
+//!     // Connect to MCP server
+//!     use rmcp::{ServiceExt, transport::TokioChildProcess};
+//!     use tokio::process::Command;
+//!
+//!     let mcp_client = ().serve(TokioChildProcess::new(
+//!         Command::new("mcp-server-binary")
+//!     )?).await?;
+//!
+//!     // Wrap your existing A2A handler with MCP tools
+//!     let handler = MyA2AHandler::new();
+//!     let augmented_handler = McpToA2ABridge::new(mcp_client, handler).await?;
+//!
+//!     // Use augmented handler in your A2A server
+//!     // Now messages can call MCP tools using: "TOOL_CALL: tool_name"
+//!     Ok(())
+//! }
+//! ```
 //!
 //! ## Architecture
 //!
-//! The crate follows a bridge pattern with adapter layers:
-//!
 //! ```text
-//! ┌─────────────────────────────────────────────┐
-//! │               a2a-mcp Crate                 │
-//! ├─────────────┬─────────────┬─────────────────┤
-//! │ RMCP Client │ Translation │    A2A Client   │
-//! │ Interface   │    Layer    │    Interface    │
-//! ├─────────────┼─────────────┼─────────────────┤
-//! │ RMCP Server │ Conversion  │    A2A Server   │
-//! │ Interface   │    Layer    │    Interface    │
-//! └─────────────┴─────────────┴─────────────────┘
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                      a2a-mcp Crate                          │
+//! ├──────────────────────┬──────────────────────────────────────┤
+//! │  Direction 1:        │  Direction 2:                        │
+//! │  A2A → MCP           │  MCP → A2A                           │
+//! ├──────────────────────┼──────────────────────────────────────┤
+//! │  AgentToMcpBridge    │  McpToA2ABridge                      │
+//! │  - Wraps A2A agent   │  - Wraps MCP ServerHandler           │
+//! │  - Implements        │  - Implements AsyncMessageHandler    │
+//! │    ServerHandler     │  - Calls MCP tools from A2A tasks    │
+//! │  - Maps skills to    │  - Augments agents with MCP tools    │
+//! │    MCP tools         │                                      │
+//! └──────────────────────┴──────────────────────────────────────┘
 //! ```
+//!
+//! ## Protocol Converters
+//!
+//! The crate provides transparent conversion between A2A and MCP types:
+//!
+//! - **Messages**: `A2A Message` ↔ `MCP Content`
+//! - **Skills/Tools**: `A2A AgentSkill` ↔ `MCP Tool`
+//! - **Results**: `A2A Task` ↔ `MCP CallToolResult`
 
-// For the initial implementation, we'll provide the basic structure
-// and a simple example. In a full implementation, this would be expanded
-// to include all the modules listed below.
+pub mod error;
+pub mod converters;
+pub mod bridge;
 
-/*
-mod error;
-mod message;
-mod transport;
-mod adapter;
-mod client;
-mod server;
-mod util;
-#[cfg(test)]
-mod tests;
+// Re-export key types
+pub use error::{A2aMcpError, Result};
+pub use bridge::{AgentToMcpBridge, McpToA2ABridge};
+pub use bridge::mcp_to_a2a::create_tool_call_message;
+pub use converters::{MessageConverter, SkillToolConverter, TaskResultConverter};
 
-// Re-export key components
-pub use error::{Error, Result};
-pub use client::A2aRmcpClient;
-pub use server::RmcpA2aServer;
-pub use adapter::{AgentToToolAdapter, ToolToAgentAdapter};
-pub use message::MessageConverter;
-*/
-
-// Version information
 /// Current crate version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-// Simple placeholder for now
-pub fn add(a: i32, b: i32) -> i32 {
-    a + b
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_add() {
-        assert_eq!(add(2, 2), 4);
-    }
-}

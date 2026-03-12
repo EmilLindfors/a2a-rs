@@ -1,0 +1,15 @@
+# Agent with automatic storage configuration
+# The builder will create the storage based on this config
+
+[agent]
+name = "Auto Storage Echo Agent"
+description = "Demonstrates automatic storage creation from config"
+
+# Storage is automatically created based on type
+[server.storage]
+type = "inmemory"  # Or "sqlx" with url = "sqlite:data.db"
+
+[[skills]]
+id = "echo"
+name = "Echo"
+description = "Echoes back messages"

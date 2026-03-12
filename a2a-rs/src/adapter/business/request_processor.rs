@@ -351,7 +351,7 @@ where
     N: AsyncNotificationManager + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
-    async fn process_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
+    async fn process_raw_request(&self, request: &str) -> Result<String, A2AError> {
         // Parse the request
         let request = match json_rpc::parse_request(request) {
             Ok(req) => req,
@@ -378,9 +378,9 @@ where
         Ok(serde_json::to_string(&response)?)
     }
 
-    async fn process_request<'a>(
+    async fn process_request(
         &self,
-        request: &'a A2ARequest,
+        request: &A2ARequest,
     ) -> Result<JSONRPCResponse, A2AError> {
         match request {
             A2ARequest::SendTask(req) => self.process_send_task(req).await,

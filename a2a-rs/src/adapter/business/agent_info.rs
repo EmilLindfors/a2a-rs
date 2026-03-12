@@ -5,7 +5,7 @@
 use async_trait::async_trait;
 
 use crate::{
-    domain::{A2AError, AgentCapabilities, AgentCard, AgentProvider, AgentSkill},
+    domain::{A2AError, AgentCapabilities, AgentCard, AgentExtension, AgentProvider, AgentSkill},
     services::server::AgentInfoProvider,
 };
 
@@ -95,6 +95,25 @@ impl SimpleAgentInfo {
     pub fn with_authentication(self, _schemes: Vec<String>) -> Self {
         // TODO: Implement SecurityScheme integration
         // For now, just return self since we removed AgentAuthentication
+        self
+    }
+
+    /// Add a protocol extension to the agent capabilities
+    pub fn add_extension(mut self, extension: AgentExtension) -> Self {
+        match &mut self.card.capabilities.extensions {
+            Some(exts) => exts.push(extension),
+            None => self.card.capabilities.extensions = Some(vec![extension]),
+        }
+        self
+    }
+
+    /// Set protocol extensions on the agent capabilities, replacing any existing ones
+    pub fn with_extensions(mut self, extensions: Vec<AgentExtension>) -> Self {
+        self.card.capabilities.extensions = if extensions.is_empty() {
+            None
+        } else {
+            Some(extensions)
+        };
         self
     }
 

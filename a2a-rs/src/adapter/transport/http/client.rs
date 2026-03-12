@@ -66,32 +66,34 @@ impl HttpClient {
     }
 
     /// Get the headers for a request
-    fn get_headers(&self) -> HeaderMap {
+    fn get_headers(&self) -> Result<HeaderMap, A2AError> {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         if let Some(token) = &self.auth_token {
+            let auth_value = HeaderValue::from_str(&format!("Bearer {}", token))
+                .map_err(|e| A2AError::Internal(format!("Invalid auth token for HTTP header: {}", e)))?;
             headers.insert(
                 reqwest::header::AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+                auth_value,
             );
         }
 
-        headers
+        Ok(headers)
     }
 }
 
 #[async_trait]
 impl AsyncA2AClient for HttpClient {
     #[cfg_attr(feature = "tracing", instrument(skip(self, request), fields(url = %self.base_url, request_len = request.len())))]
-    async fn send_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
+    async fn send_raw_request(&self, request: &str) -> Result<String, A2AError> {
         #[cfg(feature = "tracing")]
         debug!("Sending HTTP request");
 
         let response = self
             .client
             .post(&self.base_url)
-            .headers(self.get_headers())
+            .headers(self.get_headers()?)
             .body(request.to_string())
             .timeout(Duration::from_secs(self.timeout))
             .send()
@@ -121,7 +123,7 @@ impl AsyncA2AClient for HttpClient {
     }
 
     #[cfg_attr(feature = "tracing", instrument(skip(self, request), fields(method = ?request)))]
-    async fn send_request<'a>(&self, request: &'a A2ARequest) -> Result<JSONRPCResponse, A2AError> {
+    async fn send_request(&self, request: &A2ARequest) -> Result<JSONRPCResponse, A2AError> {
         let json = json_rpc::serialize_request(request)?;
         let response_text = self.send_raw_request(&json).await?;
         let response: JSONRPCResponse = serde_json::from_str(&response_text)?;
@@ -132,11 +134,11 @@ impl AsyncA2AClient for HttpClient {
         feature = "tracing",
         instrument(skip(self, message), fields(task_id, session_id, history_length))
     )]
-    async fn send_task_message<'a>(
+    async fn send_task_message(
         &self,
-        task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
+        task_id: &str,
+        message: &Message,
+        session_id: Option<&str>,
         history_length: Option<u32>,
     ) -> Result<Task, A2AError> {
         let params = TaskSendParams {
@@ -174,9 +176,9 @@ impl AsyncA2AClient for HttpClient {
         feature = "tracing",
         instrument(skip(self), fields(task_id, history_length))
     )]
-    async fn get_task<'a>(
+    async fn get_task(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         history_length: Option<u32>,
     ) -> Result<Task, A2AError> {
         let params = TaskQueryParams {
@@ -208,7 +210,7 @@ impl AsyncA2AClient for HttpClient {
     }
 
     #[cfg_attr(feature = "tracing", instrument(skip(self), fields(task_id)))]
-    async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
+    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
         let params = TaskIdParams {
             id: task_id.to_string(),
             metadata: None,
@@ -236,9 +238,9 @@ impl AsyncA2AClient for HttpClient {
         }
     }
 
-    async fn set_task_push_notification<'a>(
+    async fn set_task_push_notification(
         &self,
-        config: &'a TaskPushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         let request = json_rpc::SetTaskPushNotificationRequest::new(config.clone());
         let response = self
@@ -264,9 +266,9 @@ impl AsyncA2AClient for HttpClient {
         }
     }
 
-    async fn get_task_push_notification<'a>(
+    async fn get_task_push_notification(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         let params = TaskIdParams {
             id: task_id.to_string(),
@@ -299,9 +301,9 @@ impl AsyncA2AClient for HttpClient {
 
     /// List tasks with filtering and pagination (v0.3.0)
     #[cfg_attr(feature = "tracing", instrument(skip(self, params)))]
-    async fn list_tasks<'a>(
+    async fn list_tasks(
         &self,
-        params: &'a ListTasksParams,
+        params: &ListTasksParams,
     ) -> Result<ListTasksResult, A2AError> {
         let request = json_rpc::ListTasksRequest::new(Some(params.clone()));
         let response = self.send_request(&A2ARequest::ListTasks(request)).await?;
@@ -327,9 +329,9 @@ impl AsyncA2AClient for HttpClient {
 
     /// List all push notification configs for a task (v0.3.0)
     #[cfg_attr(feature = "tracing", instrument(skip(self)))]
-    async fn list_push_notification_configs<'a>(
+    async fn list_push_notification_configs(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
         use crate::domain::ListTaskPushNotificationConfigParams;
 
@@ -364,10 +366,10 @@ impl AsyncA2AClient for HttpClient {
 
     /// Get a specific push notification config by ID (v0.3.0)
     #[cfg_attr(feature = "tracing", instrument(skip(self)))]
-    async fn get_push_notification_config<'a>(
+    async fn get_push_notification_config(
         &self,
-        task_id: &'a str,
-        config_id: &'a str,
+        task_id: &str,
+        config_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         use crate::domain::GetTaskPushNotificationConfigParams;
 
@@ -403,10 +405,10 @@ impl AsyncA2AClient for HttpClient {
 
     /// Delete a specific push notification config (v0.3.0)
     #[cfg_attr(feature = "tracing", instrument(skip(self)))]
-    async fn delete_push_notification_config<'a>(
+    async fn delete_push_notification_config(
         &self,
-        task_id: &'a str,
-        config_id: &'a str,
+        task_id: &str,
+        config_id: &str,
     ) -> Result<(), A2AError> {
         use crate::domain::DeleteTaskPushNotificationConfigParams;
 
@@ -435,9 +437,9 @@ impl AsyncA2AClient for HttpClient {
 
     // HTTP clients can't directly support streaming, so this method returns
     // an error indicating that streaming is not supported via HTTP
-    async fn subscribe_to_task<'a>(
+    async fn subscribe_to_task(
         &self,
-        _task_id: &'a str,
+        _task_id: &str,
         _history_length: Option<u32>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
         Err(A2AError::UnsupportedOperation(

@@ -248,10 +248,10 @@ impl InMemoryTaskStorage {
 
 #[async_trait]
 impl AsyncTaskManager for InMemoryTaskStorage {
-    async fn create_task<'a>(
+    async fn create_task(
         &self,
-        task_id: &'a str,
-        context_id: &'a str,
+        task_id: &str,
+        context_id: &str,
     ) -> Result<Task, A2AError> {
         let mut tasks_guard = self.tasks.lock().await;
 
@@ -268,9 +268,9 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         Ok(task)
     }
 
-    async fn update_task_status<'a>(
+    async fn update_task_status(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
@@ -283,27 +283,28 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         // Update the task status with the optional message
         task.update_status(state, message);
 
-        // Return a clone of the updated task
+        // Clone status before cloning the entire task to avoid double clone
+        let status_for_broadcast = task.status.clone();
         let updated_task = task.clone();
 
         // Release the lock before broadcasting
         drop(tasks_guard);
 
         // Broadcast status update
-        self.broadcast_status_update(task_id, updated_task.status.clone(), false)
+        self.broadcast_status_update(task_id, status_for_broadcast, false)
             .await?;
 
         Ok(updated_task)
     }
 
-    async fn task_exists<'a>(&self, task_id: &'a str) -> Result<bool, A2AError> {
+    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError> {
         let tasks_guard = self.tasks.lock().await;
         Ok(tasks_guard.contains_key(task_id))
     }
 
-    async fn get_task<'a>(
+    async fn get_task(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         history_length: Option<u32>,
     ) -> Result<Task, A2AError> {
         // Get the task
@@ -321,9 +322,9 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         Ok(task)
     }
 
-    async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
+    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
         // Get and update the task
-        let task = {
+        let (task, status_for_broadcast) = {
             let mut tasks_guard = self.tasks.lock().await;
 
             let Some(task) = tasks_guard.get(task_id) else {
@@ -358,12 +359,18 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 
             // Update the status with the cancellation message to track in history
             updated_task.update_status(TaskState::Canceled, Some(cancel_message));
+
+            // Clone status before updating storage to avoid cloning task twice
+            let status_for_broadcast = updated_task.status.clone();
             tasks_guard.insert(task_id.to_string(), updated_task.clone());
-            updated_task
+
+            // Drop guard early and return status for use after broadcasting
+            drop(tasks_guard);
+            (updated_task, status_for_broadcast)
         }; // Lock is dropped here
 
         // Broadcast status update (with final flag set to true)
-        self.broadcast_status_update(task_id, task.status.clone(), true)
+        self.broadcast_status_update(task_id, status_for_broadcast, true)
             .await?;
 
         Ok(task)
@@ -371,9 +378,9 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 
     // ===== v0.3.0 New Methods =====
 
-    async fn list_tasks_v3<'a>(
+    async fn list_tasks_v3(
         &self,
-        params: &'a crate::domain::ListTasksParams,
+        params: &crate::domain::ListTasksParams,
     ) -> Result<crate::domain::ListTasksResult, A2AError> {
         use crate::domain::ListTasksResult;
 
@@ -470,18 +477,18 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         })
     }
 
-    async fn get_push_notification_config<'a>(
+    async fn get_push_notification_config(
         &self,
-        params: &'a crate::domain::GetTaskPushNotificationConfigParams,
+        params: &crate::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<crate::domain::TaskPushNotificationConfig, A2AError> {
         // For in-memory storage, we don't support multiple configs per task yet
         // Just use the existing get_task_notification method
         self.get_task_notification(&params.id).await
     }
 
-    async fn list_push_notification_configs<'a>(
+    async fn list_push_notification_configs(
         &self,
-        params: &'a crate::domain::ListTaskPushNotificationConfigParams,
+        params: &crate::domain::ListTaskPushNotificationConfigParams,
     ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
         // For in-memory storage, we only support one config per task
         // Return it as a single-item vec
@@ -498,9 +505,9 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         }
     }
 
-    async fn delete_push_notification_config<'a>(
+    async fn delete_push_notification_config(
         &self,
-        params: &'a crate::domain::DeleteTaskPushNotificationConfigParams,
+        params: &crate::domain::DeleteTaskPushNotificationConfigParams,
     ) -> Result<(), A2AError> {
         // For in-memory storage, just remove the single config
         // In a full implementation, would need to handle config_id
@@ -511,9 +518,9 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 // AsyncNotificationManager implementation
 #[async_trait]
 impl AsyncNotificationManager for InMemoryTaskStorage {
-    async fn set_task_notification<'a>(
+    async fn set_task_notification(
         &self,
-        config: &'a TaskPushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         #[cfg(feature = "tracing")]
         tracing::info!(
@@ -536,9 +543,9 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
         Ok(config.clone())
     }
 
-    async fn get_task_notification<'a>(
+    async fn get_task_notification(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Get the push notification config from the registry
         match self.push_notification_registry.get_config(task_id).await? {
@@ -550,7 +557,7 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
         }
     }
 
-    async fn remove_task_notification<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError> {
         self.push_notification_registry.unregister(task_id).await?;
         Ok(())
     }
@@ -559,9 +566,9 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
 // AsyncStreamingHandler implementation
 #[async_trait]
 impl AsyncStreamingHandler for InMemoryTaskStorage {
-    async fn add_status_subscriber<'a>(
+    async fn add_status_subscriber(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
         #[cfg(feature = "tracing")]
@@ -599,9 +606,9 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         Ok(format!("status-{}-{}", task_id, uuid::Uuid::new_v4()))
     }
 
-    async fn add_artifact_subscriber<'a>(
+    async fn add_artifact_subscriber(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
         // Add the subscriber
@@ -630,13 +637,13 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         Ok(format!("artifact-{}-{}", task_id, uuid::Uuid::new_v4()))
     }
 
-    async fn remove_subscription<'a>(&self, _subscription_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_subscription(&self, _subscription_id: &str) -> Result<(), A2AError> {
         Err(A2AError::UnsupportedOperation(
             "Subscription removal by ID requires storage layer refactoring".to_string(),
         ))
     }
 
-    async fn remove_task_subscribers<'a>(&self, task_id: &'a str) -> Result<(), A2AError> {
+    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
         // Remove all subscribers
         {
             let mut subscribers_guard = self.subscribers.lock().await;
@@ -646,7 +653,7 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         Ok(())
     }
 
-    async fn get_subscriber_count<'a>(&self, task_id: &'a str) -> Result<usize, A2AError> {
+    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
         let subscribers_guard = self.subscribers.lock().await;
 
         if let Some(task_subscribers) = subscribers_guard.get(task_id) {
@@ -656,18 +663,18 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         }
     }
 
-    async fn broadcast_status_update<'a>(
+    async fn broadcast_status_update(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         self.broadcast_status_update(task_id, update.status, update.final_)
             .await
     }
 
-    async fn broadcast_artifact_update<'a>(
+    async fn broadcast_artifact_update(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         update: TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
         self.broadcast_artifact_update(
@@ -679,9 +686,9 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         .await
     }
 
-    async fn status_update_stream<'a>(
+    async fn status_update_stream(
         &self,
-        _task_id: &'a str,
+        _task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>,
@@ -693,9 +700,9 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         ))
     }
 
-    async fn artifact_update_stream<'a>(
+    async fn artifact_update_stream(
         &self,
-        _task_id: &'a str,
+        _task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<dyn futures::Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>,
@@ -707,9 +714,9 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         ))
     }
 
-    async fn combined_update_stream<'a>(
+    async fn combined_update_stream(
         &self,
-        _task_id: &'a str,
+        _task_id: &str,
     ) -> Result<
         std::pin::Pin<
             Box<

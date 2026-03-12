@@ -36,11 +36,11 @@ impl<T> AsyncMessageHandler for DefaultMessageHandler<T>
 where
     T: AsyncTaskManager + Send + Sync + 'static,
 {
-    async fn process_message<'a>(
+    async fn process_message(
         &self,
-        task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
+        task_id: &str,
+        message: &Message,
+        session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
         // Check if task exists
         let task_exists = self.task_manager.task_exists(task_id).await?;
@@ -73,7 +73,7 @@ where
             ))])
             .message_id(uuid::Uuid::new_v4().to_string())
             .task_id(task_id.to_string())
-            .context_id(message.context_id.clone().unwrap_or_default())
+            .context_id(message.context_id.as_deref().unwrap_or("").to_string())
             .build();
 
         // For the default handler, we'll add the response message to history but keep the task in Working state

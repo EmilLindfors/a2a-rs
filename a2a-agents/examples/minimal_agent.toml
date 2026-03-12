@@ -1,0 +1,13 @@
+# Minimal Agent Configuration Example
+# This demonstrates the simplest possible agent setup
+
+[agent]
+name = "Echo Agent"
+description = "A simple agent that echoes back messages"
+
+[[skills]]
+id = "echo"
+name = "Echo"
+description = "Echoes back whatever you send"
+keywords = ["echo", "repeat", "test"]
+examples = ["Echo this message"]

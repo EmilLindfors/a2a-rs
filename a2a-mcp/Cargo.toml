@@ -1,20 +1,48 @@
 [package]
 name = "a2a-mcp"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 authors = ["A2A-RS Contributors"]
-description = "Integration between A2A Protocol and Rusty Model Context Protocol (RMCP)"
+description = "Bidirectional integration between A2A Protocol and Model Context Protocol (MCP)"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/username/a2a-rs"
-keywords = ["a2a", "rmcp", "ai", "agent", "protocol"]
+keywords = ["a2a", "mcp", "rmcp", "ai", "agent"]
 categories = ["ai", "network-programming"]
 
-# Simplify for initial implementation
 [dependencies]
-# We'll add more dependencies as needed in the future
-rmcp = { version = "0.1.5" }
+# Local rmcp dependency from cloned rust-sdk
+rmcp = { version = "0.10.0", path = "rust-sdk/crates/rmcp", features = ["server", "client", "macros", "transport-io"] }
+rmcp-macros = { version = "0.10.0", path = "rust-sdk/crates/rmcp-macros" }
+
+# A2A core library
+a2a-rs = { path = "../a2a-rs", features = ["http-client", "http-server", "client", "server"] }
+
+# Async runtime and utilities
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# Error handling
+thiserror = "2"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+
+# Schema generation (matching rmcp's version)
+schemars = { version = "1.0", features = ["chrono04"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# UUID generation
+uuid = { version = "1", features = ["v4", "serde"] }
+
 [dev-dependencies]
-# Simple test dependencies for now
+tokio = { version = "1", features = ["full"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1.0"

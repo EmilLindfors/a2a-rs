@@ -1,4 +1,4 @@
-use a2a_agents::reimbursement_agent::{AuthConfig, ReimbursementServer, ServerConfig};
+use a2a_agents::agents::reimbursement::{AuthConfig, ReimbursementServer, ServerConfig, StorageConfig};
 use a2a_client::{
     WebA2AClient,
     components::{MessageView, TaskView, create_sse_stream},
@@ -374,10 +374,10 @@ fn print_agent_info(config: &ServerConfig, args: &Args) {
     println!("   ⚙️  Transport: {}", args.transport);
 
     match &config.storage {
-        a2a_agents::reimbursement_agent::StorageConfig::InMemory => {
+        StorageConfig::InMemory => {
             println!("   💾 Storage: In-memory (non-persistent)");
         }
-        a2a_agents::reimbursement_agent::StorageConfig::Sqlx { url, .. } => {
+        StorageConfig::Sqlx { url, .. } => {
             println!("   💾 Storage: SQLx ({})", url);
         }
     }

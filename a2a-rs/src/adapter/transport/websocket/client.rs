@@ -141,7 +141,7 @@ impl WebSocketClient {
 
 #[async_trait]
 impl AsyncA2AClient for WebSocketClient {
-    async fn send_raw_request<'a>(&self, request: &'a str) -> Result<String, A2AError> {
+    async fn send_raw_request(&self, request: &str) -> Result<String, A2AError> {
         let mut client = self.clone();
         let response = client
             .send_ws_message(WsMessage::Text(request.to_string()))
@@ -155,18 +155,18 @@ impl AsyncA2AClient for WebSocketClient {
         }
     }
 
-    async fn send_request<'a>(&self, request: &'a A2ARequest) -> Result<JSONRPCResponse, A2AError> {
+    async fn send_request(&self, request: &A2ARequest) -> Result<JSONRPCResponse, A2AError> {
         let json = json_rpc::serialize_request(request)?;
         let response_text = self.send_raw_request(&json).await?;
         let response: JSONRPCResponse = serde_json::from_str(&response_text)?;
         Ok(response)
     }
 
-    async fn send_task_message<'a>(
+    async fn send_task_message(
         &self,
-        task_id: &'a str,
-        message: &'a Message,
-        session_id: Option<&'a str>,
+        task_id: &str,
+        message: &Message,
+        session_id: Option<&str>,
         history_length: Option<u32>,
     ) -> Result<Task, A2AError> {
         let params = TaskSendParams {
@@ -200,9 +200,9 @@ impl AsyncA2AClient for WebSocketClient {
         }
     }
 
-    async fn get_task<'a>(
+    async fn get_task(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         history_length: Option<u32>,
     ) -> Result<Task, A2AError> {
         let params = TaskQueryParams {
@@ -229,7 +229,7 @@ impl AsyncA2AClient for WebSocketClient {
         Ok(task)
     }
 
-    async fn cancel_task<'a>(&self, task_id: &'a str) -> Result<Task, A2AError> {
+    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
         let params = TaskIdParams {
             id: task_id.to_string(),
             metadata: None,
@@ -253,9 +253,9 @@ impl AsyncA2AClient for WebSocketClient {
         Ok(task)
     }
 
-    async fn set_task_push_notification<'a>(
+    async fn set_task_push_notification(
         &self,
-        config: &'a TaskPushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         let request = json_rpc::SetTaskPushNotificationRequest::new(config.clone());
         let response = self
@@ -277,9 +277,9 @@ impl AsyncA2AClient for WebSocketClient {
         Ok(config)
     }
 
-    async fn get_task_push_notification<'a>(
+    async fn get_task_push_notification(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         let params = TaskIdParams {
             id: task_id.to_string(),
@@ -310,9 +310,9 @@ impl AsyncA2AClient for WebSocketClient {
         }
     }
 
-    async fn list_tasks<'a>(
+    async fn list_tasks(
         &self,
-        params: &'a crate::domain::ListTasksParams,
+        params: &crate::domain::ListTasksParams,
     ) -> Result<crate::domain::ListTasksResult, A2AError> {
         let request = json_rpc::ListTasksRequest::new(Some(params.clone()));
         let response = self.send_request(&A2ARequest::ListTasks(request)).await?;
@@ -336,9 +336,9 @@ impl AsyncA2AClient for WebSocketClient {
         }
     }
 
-    async fn list_push_notification_configs<'a>(
+    async fn list_push_notification_configs(
         &self,
-        task_id: &'a str,
+        task_id: &str,
     ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
         use crate::domain::ListTaskPushNotificationConfigParams;
 
@@ -372,10 +372,10 @@ impl AsyncA2AClient for WebSocketClient {
         }
     }
 
-    async fn get_push_notification_config<'a>(
+    async fn get_push_notification_config(
         &self,
-        task_id: &'a str,
-        config_id: &'a str,
+        task_id: &str,
+        config_id: &str,
     ) -> Result<crate::domain::TaskPushNotificationConfig, A2AError> {
         use crate::domain::GetTaskPushNotificationConfigParams;
 
@@ -410,10 +410,10 @@ impl AsyncA2AClient for WebSocketClient {
         }
     }
 
-    async fn delete_push_notification_config<'a>(
+    async fn delete_push_notification_config(
         &self,
-        task_id: &'a str,
-        config_id: &'a str,
+        task_id: &str,
+        config_id: &str,
     ) -> Result<(), A2AError> {
         use crate::domain::DeleteTaskPushNotificationConfigParams;
 
@@ -440,9 +440,9 @@ impl AsyncA2AClient for WebSocketClient {
         }
     }
 
-    async fn subscribe_to_task<'a>(
+    async fn subscribe_to_task(
         &self,
-        task_id: &'a str,
+        task_id: &str,
         history_length: Option<u32>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
         // First connect to ensure we have a connection

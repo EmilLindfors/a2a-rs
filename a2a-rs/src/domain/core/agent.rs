@@ -443,7 +443,7 @@ mod tests {
             description: Some("API Key authentication".to_string()),
         };
 
-        let json_value = serde_json::to_value(&scheme).unwrap();
+        let json_value = serde_json::to_value(&scheme).expect("Failed to serialize SecurityScheme");
         assert_eq!(json_value["type"], "apiKey");
         assert_eq!(json_value["in"], "header");
         assert_eq!(json_value["name"], "X-API-Key");
@@ -457,7 +457,7 @@ mod tests {
             description: Some("Bearer token authentication".to_string()),
         };
 
-        let json_value = serde_json::to_value(&scheme).unwrap();
+        let json_value = serde_json::to_value(&scheme).expect("Failed to serialize SecurityScheme");
         assert_eq!(json_value["type"], "http");
         assert_eq!(json_value["scheme"], "bearer");
         assert_eq!(json_value["bearerFormat"], "JWT");
@@ -469,7 +469,7 @@ mod tests {
             description: Some("Mutual TLS authentication".to_string()),
         };
 
-        let json_value = serde_json::to_value(&scheme).unwrap();
+        let json_value = serde_json::to_value(&scheme).expect("Failed to serialize SecurityScheme");
         assert_eq!(json_value["type"], "mutualTLS");
         assert_eq!(json_value["description"], "Mutual TLS authentication");
     }
@@ -496,7 +496,7 @@ mod tests {
             ),
         };
 
-        let json_value = serde_json::to_value(&scheme).unwrap();
+        let json_value = serde_json::to_value(&scheme).expect("Failed to serialize SecurityScheme");
         assert_eq!(json_value["type"], "oauth2");
         assert_eq!(
             json_value["metadataUrl"],
@@ -536,7 +536,7 @@ mod tests {
             supports_authenticated_extended_card: Some(true),
         };
 
-        let json_value = serde_json::to_value(&card).unwrap();
+        let json_value = serde_json::to_value(&card).expect("Failed to serialize AgentCard");
         assert!(json_value["signatures"].is_array());
         assert_eq!(
             json_value["signatures"][0]["protected"],
@@ -562,7 +562,7 @@ mod tests {
             security: Some(vec![security_req]),
         };
 
-        let json_value = serde_json::to_value(&skill).unwrap();
+        let json_value = serde_json::to_value(&skill).expect("Failed to serialize AgentSkill");
         assert!(json_value["security"].is_array());
         assert_eq!(json_value["security"][0]["oauth2"][0], "read:users");
     }
@@ -609,7 +609,7 @@ mod tests {
             supports_authenticated_extended_card: None,
         };
 
-        let json_value = serde_json::to_value(&card).unwrap();
+        let json_value = serde_json::to_value(&card).expect("Failed to serialize AgentCard");
         assert!(json_value["securitySchemes"].is_object());
         assert_eq!(json_value["securitySchemes"]["bearer"]["type"], "http");
         assert_eq!(json_value["securitySchemes"]["mtls"]["type"], "mutualTLS");

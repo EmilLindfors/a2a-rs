@@ -1,13 +1,85 @@
-# A2A Agents - Modern Framework Examples
+# A2A Agents
 
-This crate provides example agent implementations using the modern A2A protocol framework in Rust. Currently featuring a reimbursement agent that demonstrates best practices for building production-ready agents.
+Example agent implementations for the A2A Protocol with production-ready patterns and **declarative configuration**.
+
+## 🚀 Quick Start (New Builder API)
+
+Create a production-ready agent in just **~30 lines of code** instead of ~300!
+
+### 1. Define your agent (`agent.toml`)
+
+```toml
+[agent]
+name = "My Agent"
+description = "A helpful agent"
+
+[[skills]]
+id = "my_skill"
+name = "My Skill"
+description = "What this skill does"
+```
+
+### 2. Implement your handler
+
+```rust
+use a2a_rs::port::AsyncMessageHandler;
+use async_trait::async_trait;
+
+#[derive(Clone)]
+struct MyHandler;
+
+#[async_trait]
+impl AsyncMessageHandler for MyHandler {
+    async fn process_message(/* ... */) -> Result<Task, A2AError> {
+        // Your business logic here
+    }
+}
+```
+
+### 3. Build and run!
+
+```rust
+use a2a_agents::AgentBuilder;
+use a2a_rs::InMemoryTaskStorage;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    AgentBuilder::from_file("agent.toml")?
+        .with_handler(MyHandler)
+        .with_storage(InMemoryTaskStorage::new())
+        .build()?
+        .run()
+        .await?;
+    Ok(())
+}
+```
+
+**That's it!** The framework handles servers, agent cards, authentication, and more.
+
+📚 **[See complete Builder API documentation →](BUILDER_API.md)**
 
 ## Overview
 
-This implementation showcases the modern A2A framework architecture:
+This crate provides two approaches for building agents:
+
+### ✨ New: Declarative Builder API (Recommended)
+
+- **90% less boilerplate** - ~30 lines vs ~300 lines
+- **TOML configuration** - Define agents declaratively
+- **Environment-aware** - Built-in env var interpolation
+- **Type-safe** - Configuration validated at load time
+- **Production-ready** - Batteries included
+
+**Examples:**
+- [`examples/minimal_agent.rs`](examples/minimal_agent.rs) - Echo agent (~50 lines)
+- [`examples/reimbursement_builder.rs`](examples/reimbursement_builder.rs) - Full-featured agent
+
+### Traditional Approach
+
+The original hexagonal architecture approach with manual wiring:
 
 1. **Hexagonal Architecture**: Clean separation between domain logic and adapters
-2. **Framework Integration**: Uses `DefaultBusinessHandler` and `InMemoryTaskStorage`
+2. **Framework Integration**: Uses `DefaultRequestProcessor` and storage backends
 3. **Protocol Compliance**: Full A2A protocol support with HTTP and WebSocket transports
 4. **Modern Patterns**: Async/await, builder patterns, and structured error handling
 

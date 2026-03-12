@@ -246,6 +246,7 @@ pub struct Artifact {
 /// Helper methods for creating parts
 impl Part {
     /// Create a text part
+    #[inline]
     pub fn text(content: String) -> Self {
         Part::Text {
             text: content,
@@ -254,6 +255,7 @@ impl Part {
     }
 
     /// Create a text part with metadata
+    #[inline]
     pub fn text_with_metadata(content: String, metadata: Map<String, Value>) -> Self {
         Part::Text {
             text: content,
@@ -262,6 +264,7 @@ impl Part {
     }
 
     /// Create a data part
+    #[inline]
     pub fn data(data: Map<String, Value>) -> Self {
         Part::Data {
             data,
@@ -278,11 +281,8 @@ impl Part {
             uri: None,
         };
 
-        // Validates implicitly as it only has bytes and no URI
-        debug_assert!(
-            file_content.validate().is_ok(),
-            "FileContent validation failed"
-        );
+        // Validate that FileContent has either bytes or URI (not both, not neither)
+        file_content.validate().expect("FileContent must have either bytes or uri, not both or neither");
 
         Part::File {
             file: file_content,

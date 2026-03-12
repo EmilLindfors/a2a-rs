@@ -1,169 +1,258 @@
-# A2A Client
+# a2a-client
 
-A simple web-based chat client for interacting with A2A (Agent-to-Agent) protocol agents. This client provides a clean, server-side rendered interface for communicating with agents like the reimbursement agent.
+A reusable Rust library for building web-based frontends for A2A (Agent-to-Agent) Protocol agents.
+
+## Overview
+
+`a2a-client` provides reusable components, utilities, and client wrappers for creating web applications that interact with A2A protocol agents. It's designed to be integrated into your own web applications, not used as a standalone application.
 
 ## Features
 
-- 🌐 **Web-based interface** - No client installation required
-- 💬 **Real-time chat** - Send and receive messages with A2A agents
-- 🔄 **Auto-refresh** - Automatically updates chat history every 5 seconds
-- 🎨 **Clean UI** - Simple, responsive design with styled messages
-- 🚀 **Fast** - Server-side rendered with Askama templates
-- 🔧 **Easy setup** - Single binary, minimal configuration
+- 🔌 **Unified Client API** - Single interface for HTTP and WebSocket transports
+- 📡 **SSE Streaming** - Server-Sent Events with automatic fallback to polling
+- 🎨 **View Models** - Ready-to-use view models for tasks and messages
+- 🔄 **Auto-reconnection** - Resilient WebSocket connections with retry logic
+- 🧩 **Modular Components** - Use only what you need via feature flags
+- 🦀 **Type-safe** - Leverages Rust's type system for protocol correctness
+
+## Installation
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+a2a-client = { path = "../a2a-client" }
+
+# For Axum integration with SSE streaming components
+a2a-client = { path = "../a2a-client", features = ["axum-components"] }
+```
 
 ## Quick Start
 
-### Prerequisites
+### Basic HTTP Client
 
-- Rust 1.70 or later
-- An A2A agent running (e.g., reimbursement agent on `http://localhost:8080`)
+```rust
+use a2a_client::WebA2AClient;
 
-### Building
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Create a client connected to your A2A agent
+    let client = WebA2AClient::new_http("http://localhost:8080".to_string());
 
-```bash
-cd a2a-client
-cargo build --release --bin server
+    // Send a message and get a task
+    let message = a2a_rs::domain::Message::builder()
+        .text("Hello, agent!")
+        .build();
+
+    let task = client.http.send_message(&message, None).await?;
+    println!("Task ID: {}", task.id);
+
+    Ok(())
+}
 ```
 
-### Running
+### With WebSocket Support
 
-```bash
-# Run with default settings (connects to http://localhost:8080)
-cargo run --bin server
+```rust
+use a2a_client::WebA2AClient;
 
-# Or specify a custom agent URL
-AGENT_URL=http://my-agent:8080 cargo run --bin server
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Auto-detect available transports
+    let client = WebA2AClient::auto_connect("http://localhost:8080").await?;
 
-# With logging enabled
-RUST_LOG=info cargo run --bin server
+    if client.has_websocket() {
+        println!("WebSocket support detected!");
+    }
+
+    Ok(())
+}
 ```
 
-The server will start on `http://localhost:3000`.
+### SSE Streaming with Axum
 
-## Usage
+```rust
+use a2a_client::{WebA2AClient, components::create_sse_stream};
+use axum::{Router, routing::get, extract::{State, Path}};
+use std::sync::Arc;
 
-1. **Start the server** using one of the commands above
-2. **Open your browser** and navigate to `http://localhost:3000`
-3. **Enter the agent URL** (or use the default `http://localhost:8080`)
-4. **Click "Start New Chat"** to begin a conversation
-5. **Type your message** and click "Send" to interact with the agent
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let client = Arc::new(
+        WebA2AClient::new_with_websocket(
+            "http://localhost:8080".to_string(),
+            "ws://localhost:8080/ws".to_string()
+        )
+    );
+
+    let app = Router::new()
+        .route("/stream/:task_id", get(stream_handler))
+        .with_state(client);
+
+    // Start server...
+    Ok(())
+}
+
+async fn stream_handler(
+    State(client): State<Arc<WebA2AClient>>,
+    Path(task_id): Path<String>,
+) -> axum::response::sse::Sse<impl futures::Stream<Item = Result<axum::response::sse::Event, std::convert::Infallible>>> {
+    create_sse_stream(client, task_id)
+}
+```
 
 ## Architecture
-
-The client is built with:
-
-- **[Axum](https://github.com/tokio-rs/axum)** - Web framework
-- **[Askama](https://github.com/djc/askama)** - Type-safe templating
-- **[a2a-rs](../a2a-rs)** - A2A protocol implementation
-- **Server-side rendering** - No JavaScript required
-
-### Project Structure
 
 ```
 a2a-client/
 ├── src/
-│   ├── bin/
-│   │   └── server.rs      # Main server binary
-│   └── styles.css         # CSS styles
-├── templates/
-│   ├── index.html         # Home page template
-│   └── chat.html          # Chat interface template
-├── Cargo.toml
-└── README.md
+│   ├── lib.rs              # Core client API
+│   ├── components/         # Reusable UI components
+│   │   ├── streaming.rs    # SSE streaming helpers
+│   │   └── task_viewer.rs  # View models for tasks/messages
+│   └── utils/              # Utilities
+│       └── formatters.rs   # Display formatting
+└── examples/               # Usage examples (coming soon)
 ```
 
-## Configuration
+## Core Components
 
-### Environment Variables
+### `WebA2AClient`
 
-- `AGENT_URL` - Default agent URL (default: `http://localhost:8080`)
-- `RUST_LOG` - Log level (e.g., `info`, `debug`, `trace`)
-
-### Server Settings
-
-The server runs on port 3000 by default. To change this, modify the address in `src/bin/server.rs`:
+The main client struct that wraps both HTTP and WebSocket clients:
 
 ```rust
-let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+pub struct WebA2AClient {
+    pub http: HttpClient,
+    pub ws: Option<Arc<WebSocketClient>>,
+}
 ```
 
-## Message Format
+**Methods:**
+- `new_http(base_url)` - HTTP-only client
+- `new_with_websocket(http_url, ws_url)` - Client with both transports
+- `auto_connect(base_url)` - Auto-detect available transports
+- `has_websocket()` - Check if WebSocket is available
+- `websocket()` - Get WebSocket client reference
 
-The client uses the A2A protocol message format:
+### View Models
 
-- **User messages** are sent with `Role::User`
-- **Text content** is wrapped in message parts
-- **Message IDs** are automatically generated UUIDs
-- **Task IDs** are used to group conversations
+#### `TaskView`
 
-## Styling
+Display model for task lists:
 
-The UI uses a clean, modern design with:
+```rust
+pub struct TaskView {
+    pub task_id: String,
+    pub state: String,
+    pub message_count: usize,
+    pub last_message_preview: Option<String>,
+}
+```
 
-- Distinct styling for user and agent messages
-- Responsive layout that works on mobile
-- Auto-scrolling to the latest message
-- Clear visual hierarchy
+#### `MessageView`
 
-To customize the appearance, edit `src/styles.css`.
+Display model for individual messages:
+
+```rust
+pub struct MessageView {
+    pub id: String,
+    pub role: String,
+    pub content: String,
+}
+```
+
+### Streaming Components
+
+#### `create_sse_stream`
+
+Creates a Server-Sent Events stream for task updates:
+
+```rust
+pub fn create_sse_stream(
+    client: Arc<WebA2AClient>,
+    task_id: String,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>>
+```
+
+**Features:**
+- Automatic WebSocket connection with retry logic
+- Graceful fallback to HTTP polling
+- Emits `task-update`, `task-status`, and `artifact` events
+- Keep-alive heartbeat
+
+### Formatters
+
+```rust
+// Format task state for display
+pub fn format_task_state(state: &TaskState) -> String;
+
+// Extract text from message parts
+pub fn format_message_content(parts: &[Part]) -> String;
+
+// Truncate text for previews
+pub fn truncate_preview(text: &str, max_len: usize) -> String;
+```
+
+## Features
+
+### `axum-components` (default)
+
+Enables Axum-specific components like SSE streaming support.
+
+```toml
+[dependencies]
+a2a-client = { path = "../a2a-client", default-features = false }  # Minimal
+a2a-client = { path = "../a2a-client" }  # With Axum components
+```
+
+## Integration with A2A Agents
+
+This library works seamlessly with agents built using:
+- `a2a-rs` - Core protocol implementation
+- `a2a-agents` - Declarative agent framework
+- `a2a-agent-reimbursement` - Example agent implementation
 
 ## Development
 
-### Adding Features
+### Building
 
-To extend the client:
-
-1. **New routes** - Add handlers in `src/bin/server.rs`
-2. **New templates** - Create `.html` files in `templates/`
-3. **API changes** - Update the message handling logic
-4. **Styling** - Modify `src/styles.css`
+```bash
+cargo build --all-features
+```
 
 ### Testing
 
-Run the client with a mock agent or the reimbursement agent:
-
 ```bash
-# Terminal 1: Start the reimbursement agent
-cd ../a2a-agents
-cargo run --bin reimbursement_server
+# Unit tests
+cargo test
 
-# Terminal 2: Start the client
-cd ../a2a-client
-RUST_LOG=info cargo run --bin server
-
-# Terminal 3: Test with curl
-curl -X POST http://localhost:3000/chat/new \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "agent_url=http://localhost:8080"
+# Integration tests (requires running agent)
+cargo test --features integration-tests
 ```
 
-## Troubleshooting
+## Examples
 
-### Common Issues
+See the `examples/` directory for complete working examples:
 
-1. **"Failed to connect to agent"**
-   - Ensure the agent is running on the specified URL
-   - Check firewall settings
-   - Verify the agent URL is correct
+- `basic_client.rs` - Simple HTTP client usage (coming soon)
+- `sse_streaming.rs` - SSE streaming with Axum (coming soon)
+- `websocket_client.rs` - WebSocket integration (coming soon)
 
-2. **"No messages appearing"**
-   - Check the browser console for errors
-   - Ensure the task ID is valid
-   - Verify the agent is responding
+## Roadmap
 
-3. **"Build errors"**
-   - Run `cargo clean` and rebuild
-   - Ensure you're using Rust 1.70+
-   - Check all dependencies are available
+See [TODO.md](TODO.md) for planned features and improvements.
 
-### Debug Mode
+## Contributing
 
-Enable detailed logging:
-
-```bash
-RUST_LOG=debug cargo run --bin server
-```
+This library is part of the [a2a-rs](../README.md) workspace. Contributions are welcome!
 
 ## License
 
-This project is part of the a2a-rs workspace. See the main project for license information.
+MIT
+
+## See Also
+
+- [a2a-rs](../a2a-rs) - Core A2A protocol implementation
+- [a2a-agents](../a2a-agents) - Declarative agent framework
+- [A2A Protocol Specification](../spec) - Protocol documentation
