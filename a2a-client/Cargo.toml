@@ -1,5 +1,5 @@
 [package]
-name = "a2a-client"
+name = "a2a-rs-client"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
@@ -9,6 +9,9 @@ license = "MIT"
 repository = "https://github.com/emillindfors/a2a-rs"
 keywords = ["a2a", "agent", "client", "web"]
 categories = ["api-bindings", "web-programming"]
+
+[lib]
+name = "a2a_client"
 
 [dependencies]
 # A2A integration

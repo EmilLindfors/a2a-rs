@@ -53,8 +53,8 @@ jobs:
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
-      - name: Publish a2a-client
-        run: cargo publish -p a2a-client ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
+      - name: Publish a2a-rs-client
+        run: cargo publish -p a2a-rs-client ${{ (github.event_name == 'push' || inputs.dry_run == 'false') && ' ' || '--dry-run' }}
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 

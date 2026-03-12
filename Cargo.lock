@@ -7,8 +7,8 @@ name = "a2a-agents"
 version = "0.2.0"
 dependencies = [
  "a2a-ap2",
- "a2a-client",
  "a2a-rs",
+ "a2a-rs-client",
  "anyhow",
  "askama",
  "askama_axum",
@@ -61,23 +61,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "a2a-client"
-version = "0.2.0"
-dependencies = [
- "a2a-rs",
- "anyhow",
- "async-stream",
- "axum 0.7.9",
- "futures",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "a2a-rs"
 version = "0.2.0"
 dependencies = [
@@ -105,6 +88,23 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
+]
+
+[[package]]
+name = "a2a-rs-client"
+version = "0.2.0"
+dependencies = [
+ "a2a-rs",
+ "anyhow",
+ "async-stream",
+ "axum 0.7.9",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
  "uuid",
 ]
 

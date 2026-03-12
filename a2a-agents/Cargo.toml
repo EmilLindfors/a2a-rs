@@ -13,7 +13,7 @@ categories = ["api-bindings", "network-programming"]
 [dependencies]
 a2a-rs = { path = "../a2a-rs", version = "0.2", features = ["server", "http-server", "ws-server", "http-client", "tracing"] }
 a2a-ap2 = { path = "../a2a-ap2", version = "0.2", optional = true }
-a2a-client = { path = "../a2a-client", version = "0.2" }
+a2a-client = { package = "a2a-rs-client", path = "../a2a-client", version = "0.2" }
 
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }
