@@ -3,9 +3,9 @@
 //! Provides a fluent API for building agents from configuration files
 //! or programmatically with minimal boilerplate.
 
-use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
 #[cfg(feature = "mcp-client")]
 use crate::core::McpClientManager;
+use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
 use crate::core::runtime::AgentRuntime;
 use a2a_rs::domain::{
     A2AError, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskState,
@@ -15,11 +15,11 @@ use a2a_rs::port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
     StreamingSubscriber, UpdateEvent,
 };
-use futures::Stream;
-use std::pin::Pin;
 use a2a_rs::{HttpPushNotificationSender, InMemoryTaskStorage};
 use async_trait::async_trait;
+use futures::Stream;
 use std::path::Path;
+use std::pin::Pin;
 use std::sync::Arc;
 #[cfg(feature = "mcp-client")]
 use tracing::info;
@@ -194,7 +194,8 @@ impl AsyncStreamingHandler for AutoStorage {
     async fn status_update_stream(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError> {
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError>
+    {
         match self {
             AutoStorage::InMemory(s) => s.status_update_stream(task_id).await,
             #[cfg(feature = "sqlx")]
@@ -205,7 +206,10 @@ impl AsyncStreamingHandler for AutoStorage {
     async fn artifact_update_stream(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>, A2AError> {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>,
+        A2AError,
+    > {
         match self {
             AutoStorage::InMemory(s) => s.artifact_update_stream(task_id).await,
             #[cfg(feature = "sqlx")]
@@ -328,9 +332,7 @@ where
     /// Create storage from the configuration
     /// This is a convenience method that automatically creates the appropriate storage
     /// based on what's configured in the TOML file
-    pub async fn build_with_auto_storage(
-        self,
-    ) -> Result<AgentRuntime<H, AutoStorage>, BuildError> {
+    pub async fn build_with_auto_storage(self) -> Result<AgentRuntime<H, AutoStorage>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
 
         let storage = match &self.config.server.storage {
@@ -342,21 +344,25 @@ where
                 AutoStorage::InMemory(storage)
             }
             #[cfg(feature = "sqlx")]
-            StorageConfig::Sqlx { url, enable_logging, .. } => {
+            StorageConfig::Sqlx {
+                url,
+                enable_logging,
+                ..
+            } => {
                 if *enable_logging {
                     tracing::info!("SQL query logging enabled");
                 }
 
-                let storage = SqlxTaskStorage::new(url)
-                    .await
-                    .map_err(|e| BuildError::StorageError(format!("Failed to create SQLx storage: {}", e)))?;
+                let storage = SqlxTaskStorage::new(url).await.map_err(|e| {
+                    BuildError::StorageError(format!("Failed to create SQLx storage: {}", e))
+                })?;
 
                 AutoStorage::Sqlx(storage)
             }
             #[cfg(not(feature = "sqlx"))]
             StorageConfig::Sqlx { .. } => {
                 return Err(BuildError::StorageError(
-                    "SQLx storage requested but 'sqlx' feature is not enabled".to_string()
+                    "SQLx storage requested but 'sqlx' feature is not enabled".to_string(),
                 ));
             }
         };
@@ -368,8 +374,14 @@ where
             let mcp_client = McpClientManager::new();
 
             // Initialize connections to configured servers
-            if let Err(e) = mcp_client.initialize(&self.config.features.mcp_client).await {
-                return Err(BuildError::RuntimeError(format!("Failed to initialize MCP client: {}", e)));
+            if let Err(e) = mcp_client
+                .initialize(&self.config.features.mcp_client)
+                .await
+            {
+                return Err(BuildError::RuntimeError(format!(
+                    "Failed to initialize MCP client: {}",
+                    e
+                )));
             }
 
             return Ok(AgentRuntime::with_mcp_client(
@@ -398,21 +410,29 @@ where
 
         let storage = match &self.config.server.storage {
             StorageConfig::InMemory => {
-                tracing::warn!("Migrations provided but using in-memory storage - migrations ignored");
+                tracing::warn!(
+                    "Migrations provided but using in-memory storage - migrations ignored"
+                );
                 let push_sender = HttpPushNotificationSender::new()
                     .with_timeout(30)
                     .with_max_retries(3);
                 let storage = InMemoryTaskStorage::with_push_sender(push_sender);
                 AutoStorage::InMemory(storage)
             }
-            StorageConfig::Sqlx { url, enable_logging, .. } => {
+            StorageConfig::Sqlx {
+                url,
+                enable_logging,
+                ..
+            } => {
                 if *enable_logging {
                     tracing::info!("SQL query logging enabled");
                 }
 
                 let storage = SqlxTaskStorage::with_migrations(url, migrations)
                     .await
-                    .map_err(|e| BuildError::StorageError(format!("Failed to create SQLx storage: {}", e)))?;
+                    .map_err(|e| {
+                        BuildError::StorageError(format!("Failed to create SQLx storage: {}", e))
+                    })?;
 
                 AutoStorage::Sqlx(storage)
             }
@@ -425,8 +445,14 @@ where
             let mcp_client = McpClientManager::new();
 
             // Initialize connections to configured servers
-            if let Err(e) = mcp_client.initialize(&self.config.features.mcp_client).await {
-                return Err(BuildError::RuntimeError(format!("Failed to initialize MCP client: {}", e)));
+            if let Err(e) = mcp_client
+                .initialize(&self.config.features.mcp_client)
+                .await
+            {
+                return Err(BuildError::RuntimeError(format!(
+                    "Failed to initialize MCP client: {}",
+                    e
+                )));
             }
 
             return Ok(AgentRuntime::with_mcp_client(

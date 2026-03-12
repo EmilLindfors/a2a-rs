@@ -59,8 +59,8 @@ impl<'de> Deserialize<'de> for A2ARequest {
         // This avoids the serialize->deserialize round-trip
         let result = match method {
             "message/send" => {
-                let req = SendMessageRequest::deserialize(&value)
-                    .map_err(serde::de::Error::custom)?;
+                let req =
+                    SendMessageRequest::deserialize(&value).map_err(serde::de::Error::custom)?;
                 A2ARequest::SendMessage(req)
             }
             "message/stream" => {
@@ -69,18 +69,16 @@ impl<'de> Deserialize<'de> for A2ARequest {
                 A2ARequest::SendMessageStreaming(req)
             }
             "tasks/send" => {
-                let req = SendTaskRequest::deserialize(&value)
-                    .map_err(serde::de::Error::custom)?;
+                let req = SendTaskRequest::deserialize(&value).map_err(serde::de::Error::custom)?;
                 A2ARequest::SendTask(req)
             }
             "tasks/get" => {
-                let req = GetTaskRequest::deserialize(&value)
-                    .map_err(serde::de::Error::custom)?;
+                let req = GetTaskRequest::deserialize(&value).map_err(serde::de::Error::custom)?;
                 A2ARequest::GetTask(req)
             }
             "tasks/cancel" => {
-                let req = CancelTaskRequest::deserialize(&value)
-                    .map_err(serde::de::Error::custom)?;
+                let req =
+                    CancelTaskRequest::deserialize(&value).map_err(serde::de::Error::custom)?;
                 A2ARequest::CancelTask(req)
             }
             "tasks/pushNotificationConfig/set" => {
@@ -114,8 +112,8 @@ impl<'de> Deserialize<'de> for A2ARequest {
                 A2ARequest::GetAuthenticatedExtendedCard(req)
             }
             "tasks/list" => {
-                let req = ListTasksRequest::deserialize(&value)
-                    .map_err(serde::de::Error::custom)?;
+                let req =
+                    ListTasksRequest::deserialize(&value).map_err(serde::de::Error::custom)?;
                 A2ARequest::ListTasks(req)
             }
             "tasks/pushNotificationConfig/list" => {
@@ -130,8 +128,7 @@ impl<'de> Deserialize<'de> for A2ARequest {
             }
             _ => {
                 // For other methods, deserialize as Generic
-                let req = JSONRPCRequest::deserialize(&value)
-                    .map_err(serde::de::Error::custom)?;
+                let req = JSONRPCRequest::deserialize(&value).map_err(serde::de::Error::custom)?;
                 A2ARequest::Generic(req)
             }
         };

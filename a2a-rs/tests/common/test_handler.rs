@@ -37,6 +37,7 @@ impl TestBusinessHandler {
     }
 
     /// Create with a custom storage implementation
+    #[allow(dead_code)]
     pub fn with_storage(storage: InMemoryTaskStorage) -> Self {
         Self {
             storage: Arc::new(storage),
@@ -193,19 +194,11 @@ impl AsyncMessageHandler for TestBusinessHandler {
 
 #[async_trait]
 impl AsyncTaskManager for TestBusinessHandler {
-    async fn create_task(
-        &self,
-        task_id: &str,
-        context_id: &str,
-    ) -> Result<Task, A2AError> {
+    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
         self.storage.create_task(task_id, context_id).await
     }
 
-    async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<u32>,
-    ) -> Result<Task, A2AError> {
+    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
         self.storage.get_task(task_id, history_length).await
     }
 

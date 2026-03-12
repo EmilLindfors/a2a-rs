@@ -62,7 +62,11 @@ impl AsyncMessageHandler for SimpleHandler {
         // Simple pattern matching based on message content
         let response = if text.contains("greet") || text.contains("hello") || text.contains("hi") {
             "Hello! I'm an A2A agent exposed as an MCP server. How can I help you today?"
-        } else if text.contains("calculate") || text.contains("math") || text.contains("+") || text.contains("*") {
+        } else if text.contains("calculate")
+            || text.contains("math")
+            || text.contains("+")
+            || text.contains("*")
+        {
             // Very simple calculator example
             if let Some(result) = simple_calculate(&text) {
                 &format!("The result is: {}", result)

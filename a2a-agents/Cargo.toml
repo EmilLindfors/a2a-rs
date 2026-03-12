@@ -43,7 +43,7 @@ regex = "1.10"  # Used for text parsing and config env var expansion
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # OAuth2 support (optional, for auth feature)
-oauth2 = { version = "4.4", optional = true }
+oauth2 = { version = "5.0", optional = true }
 
 # Frontend dependencies
 axum = { version = "0.7", features = ["multipart"] }

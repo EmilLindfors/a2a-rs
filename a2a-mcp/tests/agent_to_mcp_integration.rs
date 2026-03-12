@@ -84,10 +84,8 @@ async fn test_tool_name_namespacing() {
         )])
         .build();
 
-    let tool = SkillToolConverter::skill_to_tool(
-        &agent_card.skills[0],
-        "https://agent-a.example.com",
-    );
+    let tool =
+        SkillToolConverter::skill_to_tool(&agent_card.skills[0], "https://agent-a.example.com");
 
     // Verify the tool name includes the sanitized agent URL
     // Note: hyphens are NOT replaced, only /, :, and .
@@ -172,16 +170,8 @@ async fn test_multiple_agents_as_bridges() {
     let client1 = HttpClient::new("https://agent1.example.com".to_string());
     let client2 = HttpClient::new("https://agent2.example.com".to_string());
 
-    let bridge1 = AgentToMcpBridge::new(
-        client1,
-        agent1,
-        "https://agent1.example.com".to_string(),
-    );
-    let bridge2 = AgentToMcpBridge::new(
-        client2,
-        agent2,
-        "https://agent2.example.com".to_string(),
-    );
+    let bridge1 = AgentToMcpBridge::new(client1, agent1, "https://agent1.example.com".to_string());
+    let bridge2 = AgentToMcpBridge::new(client2, agent2, "https://agent2.example.com".to_string());
 
     // Verify each bridge has different server info (representing different agents)
     let info1 = bridge1.get_info();

@@ -30,7 +30,7 @@ impl MarkdownFormatter {
 
     /// Add a heading at the specified level (1-6).
     pub fn heading(mut self, level: u8, text: &str) -> Self {
-        let level = level.min(6).max(1);
+        let level = level.clamp(1, 6);
         let prefix = "#".repeat(level as usize);
         self.content.push(format!("{} {}\n", prefix, text));
         self

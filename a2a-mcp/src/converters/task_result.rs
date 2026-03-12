@@ -1,7 +1,7 @@
 //! Converter between A2A Task/TaskStatus and MCP CallToolResult
 
-use crate::error::{A2aMcpError, Result};
 use crate::converters::MessageConverter;
+use crate::error::{A2aMcpError, Result};
 use a2a_rs::domain::{Message, Part, Role, Task, TaskState};
 use rmcp::model::{CallToolResult, Content};
 
@@ -22,7 +22,9 @@ impl TaskResultConverter {
             .rev()
             .find(|m| m.role == Role::Agent)
             .or_else(|| history.last())
-            .ok_or_else(|| A2aMcpError::InvalidMessage("No messages in task history".to_string()))?;
+            .ok_or_else(|| {
+                A2aMcpError::InvalidMessage("No messages in task history".to_string())
+            })?;
 
         // Convert the message to MCP content
         let mut content = MessageConverter::message_to_content(agent_message)?;
@@ -50,7 +52,9 @@ impl TaskResultConverter {
                             content.push(Content::text(file_text));
                         }
                         Part::Data { data, .. } => {
-                            let data_json = serde_json::to_string_pretty(&serde_json::Value::Object(data.clone()))?;
+                            let data_json = serde_json::to_string_pretty(
+                                &serde_json::Value::Object(data.clone()),
+                            )?;
                             let artifact_data = if let Some(ref name) = artifact.name {
                                 format!("Artifact '{}' data:\n{}", name, data_json)
                             } else {

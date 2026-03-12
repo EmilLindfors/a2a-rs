@@ -14,6 +14,6 @@ pub use payment_request::{
 };
 pub use receipt::{Error, Failure, PaymentReceipt, PaymentStatus, Success};
 pub use roles::{
-    Ap2Role, AP2_EXTENSION_URI, CART_MANDATE_DATA_KEY, INTENT_MANDATE_DATA_KEY,
+    AP2_EXTENSION_URI, Ap2Role, CART_MANDATE_DATA_KEY, INTENT_MANDATE_DATA_KEY,
     PAYMENT_MANDATE_DATA_KEY, PAYMENT_RECEIPT_DATA_KEY, RISK_DATA_KEY,
 };

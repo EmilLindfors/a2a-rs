@@ -23,8 +23,8 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Build
-        run: cargo build --verbose
+      - name: Build workspace
+        run: cargo build --workspace --verbose
 
       - name: Run tests
         run: cargo test --verbose --workspace
@@ -43,8 +43,18 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      # Run clippy on a2a-rs with all features (the core crate supports --all-features)
+      - name: Run clippy (a2a-rs, all features)
+        run: cargo clippy -p a2a-rs --all-targets --all-features -- -D warnings
+
+      # Run clippy on other workspace crates that support --all-features
+      - name: Run clippy (a2a-ap2, a2a-client, a2a-agents-common)
+        run: cargo clippy -p a2a-ap2 -p a2a-client -p a2a-agents-common --all-targets --all-features -- -D warnings
+
+      # Run clippy on a2a-agents with specific features (mcp-server/mcp-client
+      # depend on a local path that is not available in CI)
+      - name: Run clippy (a2a-agents)
+        run: cargo clippy -p a2a-agents --all-targets --features "reimbursement-agent,sqlx,ap2,auth" -- -D warnings
 
   rustfmt:
     name: Format
@@ -72,5 +82,12 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Check documentation
-        run: cargo doc --no-deps --all-features --workspace
+      # Check docs per-crate to avoid mcp-related path dep issues
+      - name: Check documentation (a2a-rs)
+        run: cargo doc --no-deps --all-features -p a2a-rs
+
+      - name: Check documentation (other crates)
+        run: cargo doc --no-deps -p a2a-ap2 -p a2a-client -p a2a-agents-common
+
+      - name: Check documentation (a2a-agents)
+        run: cargo doc --no-deps -p a2a-agents --features "reimbursement-agent,sqlx,ap2,auth"

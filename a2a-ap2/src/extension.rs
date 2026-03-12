@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use a2a_rs::{AgentCapabilities, AgentCard, AgentExtension};
 
-use crate::types::{Ap2Role, AP2_EXTENSION_URI};
+use crate::types::{AP2_EXTENSION_URI, Ap2Role};
 
 /// Create an [`AgentExtension`] declaring AP2 support with the given roles.
 ///

@@ -8,10 +8,7 @@ use a2a_mcp::bridge::agent_to_mcp::AgentToMcpBridge;
 #[cfg(feature = "mcp-server")]
 use a2a_rs::{adapter::transport::http::HttpClient, domain::AgentCard};
 #[cfg(feature = "mcp-server")]
-use rmcp::{
-    transport::stdio,
-    RoleServer,
-};
+use rmcp::{RoleServer, transport::stdio};
 #[cfg(feature = "mcp-server")]
 use tracing::{error, info};
 
@@ -48,11 +45,8 @@ pub async fn run_mcp_server(
 
         // Create and run the MCP service
         // serve_directly runs the service in a background task
-        let _running = rmcp::service::serve_directly::<RoleServer, _, _, _, _>(
-            bridge,
-            (read, write),
-            None,
-        );
+        let _running =
+            rmcp::service::serve_directly::<RoleServer, _, _, _, _>(bridge, (read, write), None);
 
         // Keep the service running - wait for Ctrl+C or stdio to close
         // The stdio transport will handle shutdown when the connection closes

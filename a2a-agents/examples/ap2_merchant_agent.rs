@@ -15,17 +15,15 @@
 
 use a2a_agents::core::{AgentBuilder, BuildError};
 use a2a_ap2::{
-    find_intent_mandate, find_payment_mandate,
-    cart_mandate_artifact, payment_receipt_to_part,
-    CartContents, CartMandate,
-    PaymentCurrencyAmount, PaymentDetailsInit, PaymentItem, PaymentMethodData,
-    PaymentOptions, PaymentReceipt, PaymentRequest, PaymentStatus, Success,
-    Validate,
+    CartContents, CartMandate, PaymentCurrencyAmount, PaymentDetailsInit, PaymentItem,
+    PaymentMethodData, PaymentOptions, PaymentReceipt, PaymentRequest, PaymentStatus, Success,
+    Validate, cart_mandate_artifact, find_intent_mandate, find_payment_mandate,
+    payment_receipt_to_part,
 };
 use a2a_rs::{
+    InMemoryTaskStorage,
     domain::{A2AError, Artifact, Message, Part, Role, Task, TaskState, TaskStatus},
     port::AsyncMessageHandler,
-    InMemoryTaskStorage,
 };
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -72,11 +70,7 @@ struct MerchantHandler;
 
 impl MerchantHandler {
     /// Build a CartMandate from matching products.
-    fn build_cart(
-        &self,
-        products: &[&Product],
-        cart_id: &str,
-    ) -> Result<CartMandate, A2AError> {
+    fn build_cart(&self, products: &[&Product], cart_id: &str) -> Result<CartMandate, A2AError> {
         let display_items: Vec<PaymentItem> = products
             .iter()
             .map(|p| PaymentItem {
@@ -137,7 +131,9 @@ impl MerchantHandler {
             merchant_authorization: None,
         };
 
-        cart.contents.validate().map_err(|e| A2AError::InvalidRequest(e.to_string()))?;
+        cart.contents
+            .validate()
+            .map_err(|e| A2AError::InvalidRequest(e.to_string()))?;
         Ok(cart)
     }
 
@@ -162,8 +158,7 @@ impl MerchantHandler {
             .filter(|p| {
                 let name_lower = p.name.to_lowercase();
                 let desc_match = desc_lower.split_whitespace().any(|word| {
-                    name_lower.contains(word)
-                        || p.description.to_lowercase().contains(word)
+                    name_lower.contains(word) || p.description.to_lowercase().contains(word)
                 });
                 let within_budget = budget.map(|b| p.price < b).unwrap_or(true);
                 desc_match && within_budget
@@ -199,8 +194,8 @@ impl AsyncMessageHandler for MerchantHandler {
         let context_id = message.context_id.clone().unwrap_or_default();
 
         // --- Try AP2 IntentMandate flow ---
-        if let Some(intent) = find_intent_mandate(message)
-            .map_err(|e| A2AError::InvalidRequest(e.to_string()))?
+        if let Some(intent) =
+            find_intent_mandate(message).map_err(|e| A2AError::InvalidRequest(e.to_string()))?
         {
             tracing::info!(
                 task_id,
@@ -214,7 +209,8 @@ impl AsyncMessageHandler for MerchantHandler {
                 let response = Message::builder()
                     .role(Role::Agent)
                     .parts(vec![Part::text(
-                        "Sorry, no products matched your request. Try browsing our catalog!".to_string(),
+                        "Sorry, no products matched your request. Try browsing our catalog!"
+                            .to_string(),
                     )])
                     .message_id(Uuid::new_v4().to_string())
                     .context_id(context_id.clone())
@@ -271,8 +267,8 @@ impl AsyncMessageHandler for MerchantHandler {
         }
 
         // --- Try AP2 PaymentMandate flow ---
-        if let Some(payment) = find_payment_mandate(message)
-            .map_err(|e| A2AError::InvalidRequest(e.to_string()))?
+        if let Some(payment) =
+            find_payment_mandate(message).map_err(|e| A2AError::InvalidRequest(e.to_string()))?
         {
             tracing::info!(
                 task_id,
@@ -281,10 +277,7 @@ impl AsyncMessageHandler for MerchantHandler {
             );
 
             let receipt = PaymentReceipt {
-                payment_mandate_id: payment
-                    .payment_mandate_contents
-                    .payment_mandate_id
-                    .clone(),
+                payment_mandate_id: payment.payment_mandate_contents.payment_mandate_id.clone(),
                 timestamp: chrono::Utc::now().to_rfc3339(),
                 payment_id: format!("pay-{}", Uuid::new_v4()),
                 amount: payment
@@ -316,8 +309,7 @@ impl AsyncMessageHandler for MerchantHandler {
                         receipt.amount.value,
                         receipt.amount.currency,
                         match &receipt.payment_status {
-                            PaymentStatus::Success(s) =>
-                                s.merchant_confirmation_id.clone(),
+                            PaymentStatus::Success(s) => s.merchant_confirmation_id.clone(),
                             _ => "N/A".to_string(),
                         },
                     )),

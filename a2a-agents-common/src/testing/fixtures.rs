@@ -1,6 +1,6 @@
 //! Test fixtures for creating A2A protocol test data.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Create a simple text message for testing.
 ///

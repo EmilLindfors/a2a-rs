@@ -487,11 +487,7 @@ impl SqlxTaskStorage {
 #[cfg(feature = "sqlx-storage")]
 #[async_trait]
 impl AsyncTaskManager for SqlxTaskStorage {
-    async fn create_task(
-        &self,
-        task_id: &str,
-        context_id: &str,
-    ) -> Result<Task, A2AError> {
+    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
         // Check if task already exists
         let existing = sqlx::query("SELECT id FROM tasks WHERE id = ?")
             .bind(task_id)
@@ -586,8 +582,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
         let status = task.status.clone();
 
         // Broadcast status update
-        self.broadcast_status_update(task_id, status, false)
-            .await?;
+        self.broadcast_status_update(task_id, status, false).await?;
 
         Ok(task)
     }
@@ -604,11 +599,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(row.is_some())
     }
 
-    async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<u32>,
-    ) -> Result<Task, A2AError> {
+    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
         // Get task from database
         let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
             .bind(task_id)
@@ -682,8 +673,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
         let status = updated_task.status.clone();
 
         // Broadcast status update (with final flag set to true)
-        self.broadcast_status_update(task_id, status, true)
-            .await?;
+        self.broadcast_status_update(task_id, status, true).await?;
 
         Ok(updated_task)
     }

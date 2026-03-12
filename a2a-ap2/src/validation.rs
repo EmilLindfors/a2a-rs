@@ -109,9 +109,7 @@ impl Validate for IntentMandate {
             ));
         }
         if self.intent_expiry.trim().is_empty() {
-            return Err(Ap2Error::MissingField(
-                "IntentMandate.intent_expiry".into(),
-            ));
+            return Err(Ap2Error::MissingField("IntentMandate.intent_expiry".into()));
         }
         Ok(())
     }
@@ -215,7 +213,10 @@ mod tests {
     fn empty_label_fails() {
         let item = PaymentItem {
             label: "".into(),
-            amount: PaymentCurrencyAmount { currency: "USD".into(), value: 1.0 },
+            amount: PaymentCurrencyAmount {
+                currency: "USD".into(),
+                value: 1.0,
+            },
             pending: None,
             refund_period: 30,
         };
@@ -254,7 +255,10 @@ mod tests {
             payment_mandate_id: "pm_1".into(),
             timestamp: "2025-09-16T12:00:00Z".into(),
             payment_id: "pay_1".into(),
-            amount: PaymentCurrencyAmount { currency: "EUR".into(), value: 50.0 },
+            amount: PaymentCurrencyAmount {
+                currency: "EUR".into(),
+                value: 50.0,
+            },
             payment_status: PaymentStatus::Success(Success {
                 merchant_confirmation_id: "mc_1".into(),
                 psp_confirmation_id: None,

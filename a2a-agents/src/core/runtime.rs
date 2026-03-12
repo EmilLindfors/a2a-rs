@@ -3,12 +3,11 @@
 //! The runtime handles starting HTTP/WebSocket servers, wiring components,
 //! and managing the agent lifecycle based on configuration.
 
-use crate::core::config::{AgentConfig, AuthConfig, StorageConfig};
 #[cfg(feature = "mcp-client")]
 use crate::core::McpClientManager;
+use crate::core::config::{AgentConfig, AuthConfig, StorageConfig};
 use a2a_rs::adapter::{
-    BearerTokenAuthenticator, DefaultRequestProcessor, HttpServer, SimpleAgentInfo,
-    WebSocketServer,
+    BearerTokenAuthenticator, DefaultRequestProcessor, HttpServer, SimpleAgentInfo, WebSocketServer,
 };
 use a2a_rs::port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
@@ -50,7 +49,12 @@ where
 
     /// Create a new runtime with MCP client
     #[cfg(feature = "mcp-client")]
-    pub fn with_mcp_client(config: AgentConfig, handler: Arc<H>, storage: Arc<S>, mcp_client: McpClientManager) -> Self {
+    pub fn with_mcp_client(
+        config: AgentConfig,
+        handler: Arc<H>,
+        storage: Arc<S>,
+        mcp_client: McpClientManager,
+    ) -> Self {
         Self {
             config,
             handler,
@@ -74,8 +78,7 @@ where
         }
 
         if let Some(ref provider) = self.config.agent.provider {
-            agent_info =
-                agent_info.with_provider(provider.name.clone(), provider.url.clone());
+            agent_info = agent_info.with_provider(provider.name.clone(), provider.url.clone());
         }
 
         if let Some(ref doc_url) = self.config.agent.documentation_url {
@@ -108,10 +111,7 @@ where
                 .collect();
 
             let mut params = std::collections::HashMap::new();
-            params.insert(
-                "roles".to_string(),
-                serde_json::Value::Array(roles_json),
-            );
+            params.insert("roles".to_string(), serde_json::Value::Array(roles_json));
 
             let ext = a2a_rs::domain::AgentExtension {
                 uri: "https://github.com/google-agentic-commerce/ap2/tree/v0.1".to_string(),
@@ -151,10 +151,15 @@ where
     /// Start HTTP server
     pub async fn start_http(&self) -> Result<(), RuntimeError> {
         if self.config.server.http_port == 0 {
-            return Err(RuntimeError::ServerNotConfigured("HTTP port is 0".to_string()));
+            return Err(RuntimeError::ServerNotConfigured(
+                "HTTP port is 0".to_string(),
+            ));
         }
 
-        let base_url = format!("http://{}:{}", self.config.server.host, self.config.server.http_port);
+        let base_url = format!(
+            "http://{}:{}",
+            self.config.server.host, self.config.server.http_port
+        );
         let agent_info = self.build_agent_info(base_url);
 
         let processor = DefaultRequestProcessor::new(
@@ -164,7 +169,10 @@ where
             agent_info.clone(),
         );
 
-        let bind_address = format!("{}:{}", self.config.server.host, self.config.server.http_port);
+        let bind_address = format!(
+            "{}:{}",
+            self.config.server.host, self.config.server.http_port
+        );
 
         info!("🌐 Starting HTTP server on {}", bind_address);
         self.print_agent_info("HTTP", &self.config.server.http_port.to_string());
@@ -172,43 +180,70 @@ where
         match &self.config.server.auth {
             AuthConfig::None => {
                 let server = HttpServer::new(processor, agent_info, bind_address);
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
             AuthConfig::Bearer { tokens, format } => {
                 info!(
                     "🔐 Authentication: Bearer token ({} token(s){})",
                     tokens.len(),
-                    format.as_ref().map(|f| format!(", format: {}", f)).unwrap_or_default()
+                    format
+                        .as_ref()
+                        .map(|f| format!(", format: {}", f))
+                        .unwrap_or_default()
                 );
                 let authenticator = BearerTokenAuthenticator::new(tokens.clone());
-                let server = HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
-                server.start().await
+                let server =
+                    HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
-            AuthConfig::ApiKey { keys, location, name } => {
+            AuthConfig::ApiKey {
+                keys,
+                location,
+                name,
+            } => {
                 warn!(
                     "🔐 API key authentication configured ({} {}, {} key(s)) but not yet supported, using no auth",
-                    location, name, keys.len()
+                    location,
+                    name,
+                    keys.len()
                 );
                 let server = HttpServer::new(processor, agent_info, bind_address);
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
             #[cfg(feature = "auth")]
-            AuthConfig::Jwt { secret, rsa_pem_path, algorithm, issuer, audience } => {
+            AuthConfig::Jwt {
+                secret,
+                rsa_pem_path,
+                algorithm,
+                issuer,
+                audience,
+            } => {
                 info!("🔐 Authentication: JWT (algorithm: {})", algorithm);
 
                 let mut authenticator = if let Some(secret) = secret {
                     JwtAuthenticator::new_with_secret(secret.as_bytes())
                 } else if let Some(pem_path) = rsa_pem_path {
-                    let pem_data = std::fs::read(pem_path)
-                        .map_err(|e| RuntimeError::ServerError(format!("Failed to read RSA PEM file: {}", e)))?;
-                    JwtAuthenticator::new_with_rsa_pem(&pem_data)
-                        .map_err(|e| RuntimeError::ServerError(format!("Failed to create JWT authenticator: {}", e)))?
+                    let pem_data = std::fs::read(pem_path).map_err(|e| {
+                        RuntimeError::ServerError(format!("Failed to read RSA PEM file: {}", e))
+                    })?;
+                    JwtAuthenticator::new_with_rsa_pem(&pem_data).map_err(|e| {
+                        RuntimeError::ServerError(format!(
+                            "Failed to create JWT authenticator: {}",
+                            e
+                        ))
+                    })?
                 } else {
                     return Err(RuntimeError::ServerError(
-                        "JWT authentication requires either 'secret' or 'rsa_pem_path'".to_string()
+                        "JWT authentication requires either 'secret' or 'rsa_pem_path'".to_string(),
                     ));
                 };
 
@@ -221,33 +256,41 @@ where
                     info!("   Audience: {}", aud);
                 }
 
-                let server = HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
-                server.start().await
+                let server =
+                    HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
             #[cfg(not(feature = "auth"))]
-            AuthConfig::Jwt { .. } => {
-                Err(RuntimeError::ServerError(
-                    "JWT authentication requires the 'auth' feature to be enabled".to_string()
-                ))
-            }
+            AuthConfig::Jwt { .. } => Err(RuntimeError::ServerError(
+                "JWT authentication requires the 'auth' feature to be enabled".to_string(),
+            )),
             #[cfg(feature = "auth")]
-            AuthConfig::OAuth2 { client_id, client_secret, authorization_url, token_url, redirect_url, flow, scopes } => {
+            AuthConfig::OAuth2 {
+                client_id,
+                client_secret,
+                authorization_url,
+                token_url,
+                redirect_url,
+                flow,
+                scopes,
+            } => {
                 info!("🔐 Authentication: OAuth2 (flow: {})", flow);
                 info!("   Authorization URL: {}", authorization_url);
                 info!("   Token URL: {}", token_url);
 
                 let client_id = ClientId::new(client_id.clone());
                 let client_secret = ClientSecret::new(client_secret.clone());
-                let auth_url = AuthUrl::new(authorization_url.clone())
-                    .map_err(|e| RuntimeError::ServerError(format!("Invalid authorization URL: {}", e)))?;
+                let auth_url = AuthUrl::new(authorization_url.clone()).map_err(|e| {
+                    RuntimeError::ServerError(format!("Invalid authorization URL: {}", e))
+                })?;
                 let token_url = TokenUrl::new(token_url.clone())
                     .map_err(|e| RuntimeError::ServerError(format!("Invalid token URL: {}", e)))?;
 
-                let scopes_map: HashMap<String, String> = scopes
-                    .iter()
-                    .map(|s| (s.clone(), s.clone()))
-                    .collect();
+                let scopes_map: HashMap<String, String> =
+                    scopes.iter().map(|s| (s.clone(), s.clone())).collect();
 
                 let authenticator = if flow == "client_credentials" {
                     OAuth2Authenticator::new_client_credentials(
@@ -259,8 +302,13 @@ where
                 } else {
                     // Authorization code flow
                     let redirect_url = RedirectUrl::new(
-                        redirect_url.clone().unwrap_or_else(|| "http://localhost:8080/callback".to_string())
-                    ).map_err(|e| RuntimeError::ServerError(format!("Invalid redirect URL: {}", e)))?;
+                        redirect_url
+                            .clone()
+                            .unwrap_or_else(|| "http://localhost:8080/callback".to_string()),
+                    )
+                    .map_err(|e| {
+                        RuntimeError::ServerError(format!("Invalid redirect URL: {}", e))
+                    })?;
 
                     info!("   Redirect URL: {}", redirect_url.as_str());
 
@@ -274,16 +322,17 @@ where
                     )
                 };
 
-                let server = HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
-                server.start().await
+                let server =
+                    HttpServer::with_auth(processor, agent_info, bind_address, authenticator);
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
             #[cfg(not(feature = "auth"))]
-            AuthConfig::OAuth2 { .. } => {
-                Err(RuntimeError::ServerError(
-                    "OAuth2 authentication requires the 'auth' feature to be enabled".to_string()
-                ))
-            }
+            AuthConfig::OAuth2 { .. } => Err(RuntimeError::ServerError(
+                "OAuth2 authentication requires the 'auth' feature to be enabled".to_string(),
+            )),
         }
     }
 
@@ -293,10 +342,15 @@ where
         S: AsyncStreamingHandler,
     {
         if self.config.server.ws_port == 0 {
-            return Err(RuntimeError::ServerNotConfigured("WebSocket port is 0".to_string()));
+            return Err(RuntimeError::ServerNotConfigured(
+                "WebSocket port is 0".to_string(),
+            ));
         }
 
-        let base_url = format!("ws://{}:{}", self.config.server.host, self.config.server.ws_port);
+        let base_url = format!(
+            "ws://{}:{}",
+            self.config.server.host, self.config.server.ws_port
+        );
         let agent_info = self.build_agent_info(base_url);
 
         let processor = DefaultRequestProcessor::new(
@@ -319,14 +373,19 @@ where
                     (*self.storage).clone(),
                     bind_address,
                 );
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
             AuthConfig::Bearer { tokens, format } => {
                 info!(
                     "🔐 Authentication: Bearer token ({} token(s){})",
                     tokens.len(),
-                    format.as_ref().map(|f| format!(", format: {}", f)).unwrap_or_default()
+                    format
+                        .as_ref()
+                        .map(|f| format!(", format: {}", f))
+                        .unwrap_or_default()
                 );
                 let authenticator = BearerTokenAuthenticator::new(tokens.clone());
                 let server = WebSocketServer::with_auth(
@@ -336,13 +395,21 @@ where
                     bind_address,
                     authenticator,
                 );
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
-            AuthConfig::ApiKey { keys, location, name } => {
+            AuthConfig::ApiKey {
+                keys,
+                location,
+                name,
+            } => {
                 warn!(
                     "🔐 API key authentication configured ({} {}, {} key(s)) but not yet supported, using no auth",
-                    location, name, keys.len()
+                    location,
+                    name,
+                    keys.len()
                 );
                 let server = WebSocketServer::new(
                     processor,
@@ -350,23 +417,36 @@ where
                     (*self.storage).clone(),
                     bind_address,
                 );
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
             #[cfg(feature = "auth")]
-            AuthConfig::Jwt { secret, rsa_pem_path, algorithm, issuer, audience } => {
+            AuthConfig::Jwt {
+                secret,
+                rsa_pem_path,
+                algorithm,
+                issuer,
+                audience,
+            } => {
                 info!("🔐 Authentication: JWT (algorithm: {})", algorithm);
 
                 let mut authenticator = if let Some(secret) = secret {
                     JwtAuthenticator::new_with_secret(secret.as_bytes())
                 } else if let Some(pem_path) = rsa_pem_path {
-                    let pem_data = std::fs::read(pem_path)
-                        .map_err(|e| RuntimeError::ServerError(format!("Failed to read RSA PEM file: {}", e)))?;
-                    JwtAuthenticator::new_with_rsa_pem(&pem_data)
-                        .map_err(|e| RuntimeError::ServerError(format!("Failed to create JWT authenticator: {}", e)))?
+                    let pem_data = std::fs::read(pem_path).map_err(|e| {
+                        RuntimeError::ServerError(format!("Failed to read RSA PEM file: {}", e))
+                    })?;
+                    JwtAuthenticator::new_with_rsa_pem(&pem_data).map_err(|e| {
+                        RuntimeError::ServerError(format!(
+                            "Failed to create JWT authenticator: {}",
+                            e
+                        ))
+                    })?
                 } else {
                     return Err(RuntimeError::ServerError(
-                        "JWT authentication requires either 'secret' or 'rsa_pem_path'".to_string()
+                        "JWT authentication requires either 'secret' or 'rsa_pem_path'".to_string(),
                     ));
                 };
 
@@ -386,30 +466,37 @@ where
                     bind_address,
                     authenticator,
                 );
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
             #[cfg(not(feature = "auth"))]
-            AuthConfig::Jwt { .. } => {
-                Err(RuntimeError::ServerError(
-                    "JWT authentication requires the 'auth' feature to be enabled".to_string()
-                ))
-            }
+            AuthConfig::Jwt { .. } => Err(RuntimeError::ServerError(
+                "JWT authentication requires the 'auth' feature to be enabled".to_string(),
+            )),
             #[cfg(feature = "auth")]
-            AuthConfig::OAuth2 { client_id, client_secret, authorization_url, token_url, redirect_url, flow, scopes } => {
+            AuthConfig::OAuth2 {
+                client_id,
+                client_secret,
+                authorization_url,
+                token_url,
+                redirect_url,
+                flow,
+                scopes,
+            } => {
                 info!("🔐 Authentication: OAuth2 (flow: {})", flow);
 
                 let client_id = ClientId::new(client_id.clone());
                 let client_secret = ClientSecret::new(client_secret.clone());
-                let auth_url = AuthUrl::new(authorization_url.clone())
-                    .map_err(|e| RuntimeError::ServerError(format!("Invalid authorization URL: {}", e)))?;
+                let auth_url = AuthUrl::new(authorization_url.clone()).map_err(|e| {
+                    RuntimeError::ServerError(format!("Invalid authorization URL: {}", e))
+                })?;
                 let token_url = TokenUrl::new(token_url.clone())
                     .map_err(|e| RuntimeError::ServerError(format!("Invalid token URL: {}", e)))?;
 
-                let scopes_map: HashMap<String, String> = scopes
-                    .iter()
-                    .map(|s| (s.clone(), s.clone()))
-                    .collect();
+                let scopes_map: HashMap<String, String> =
+                    scopes.iter().map(|s| (s.clone(), s.clone())).collect();
 
                 let authenticator = if flow == "client_credentials" {
                     OAuth2Authenticator::new_client_credentials(
@@ -420,8 +507,13 @@ where
                     )
                 } else {
                     let redirect_url = RedirectUrl::new(
-                        redirect_url.clone().unwrap_or_else(|| "http://localhost:8080/callback".to_string())
-                    ).map_err(|e| RuntimeError::ServerError(format!("Invalid redirect URL: {}", e)))?;
+                        redirect_url
+                            .clone()
+                            .unwrap_or_else(|| "http://localhost:8080/callback".to_string()),
+                    )
+                    .map_err(|e| {
+                        RuntimeError::ServerError(format!("Invalid redirect URL: {}", e))
+                    })?;
 
                     OAuth2Authenticator::new_authorization_code(
                         client_id,
@@ -440,15 +532,15 @@ where
                     bind_address,
                     authenticator,
                 );
-                server.start().await
+                server
+                    .start()
+                    .await
                     .map_err(|e| RuntimeError::ServerError(e.to_string()))
             }
             #[cfg(not(feature = "auth"))]
-            AuthConfig::OAuth2 { .. } => {
-                Err(RuntimeError::ServerError(
-                    "OAuth2 authentication requires the 'auth' feature to be enabled".to_string()
-                ))
-            }
+            AuthConfig::OAuth2 { .. } => Err(RuntimeError::ServerError(
+                "OAuth2 authentication requires the 'auth' feature to be enabled".to_string(),
+            )),
         }
     }
 
@@ -461,7 +553,9 @@ where
         info!("🔄 Starting both HTTP and WebSocket servers");
 
         if self.config.server.http_port == 0 && self.config.server.ws_port == 0 {
-            return Err(RuntimeError::ServerNotConfigured("Both HTTP and WebSocket ports are 0".to_string()));
+            return Err(RuntimeError::ServerNotConfigured(
+                "Both HTTP and WebSocket ports are 0".to_string(),
+            ));
         }
 
         // Clone what we need for the tasks
@@ -519,7 +613,9 @@ where
                 info!("WebSocket server stopped");
             }
             (None, None) => {
-                return Err(RuntimeError::ServerNotConfigured("No servers configured".to_string()));
+                return Err(RuntimeError::ServerNotConfigured(
+                    "No servers configured".to_string(),
+                ));
             }
         }
 
@@ -544,7 +640,9 @@ where
         } else if self.config.server.ws_port > 0 {
             self.start_websocket().await
         } else {
-            Err(RuntimeError::ServerNotConfigured("No servers configured".to_string()))
+            Err(RuntimeError::ServerNotConfigured(
+                "No servers configured".to_string(),
+            ))
         }
     }
 
@@ -556,9 +654,14 @@ where
         info!("🔌 Running agent in MCP server mode");
 
         // Build agent card
-        let base_url = format!("http://{}:{}", self.config.server.host, self.config.server.http_port);
+        let base_url = format!(
+            "http://{}:{}",
+            self.config.server.host, self.config.server.http_port
+        );
         let agent_info = self.build_agent_info(base_url.clone());
-        let agent_card = agent_info.get_agent_card().await
+        let agent_card = agent_info
+            .get_agent_card()
+            .await
             .map_err(|e| RuntimeError::ServerError(format!("Failed to get agent card: {}", e)))?;
 
         // Run MCP server

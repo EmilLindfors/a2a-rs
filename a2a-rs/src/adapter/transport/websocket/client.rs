@@ -200,11 +200,7 @@ impl AsyncA2AClient for WebSocketClient {
         }
     }
 
-    async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<u32>,
-    ) -> Result<Task, A2AError> {
+    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
         let params = TaskQueryParams {
             id: task_id.to_string(),
             history_length,

@@ -25,76 +25,84 @@ fn main() {
     // Simulate converting to A2A message
     println!("Converting to A2A message...");
     println!("A2A Task would look like:");
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "id": "task-123456",
-        "status": {
-            "state": "submitted",
-            "message": "Task submitted"
-        },
-        "messages": [
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "type": "text",
-                        "text": "Call method: calculate"
-                    },
-                    {
-                        "type": "data",
-                        "mime_type": "application/json",
-                        "data": {
-                            "operation": "add",
-                            "a": 5,
-                            "b": 7
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "id": "task-123456",
+            "status": {
+                "state": "submitted",
+                "message": "Task submitted"
+            },
+            "messages": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "type": "text",
+                            "text": "Call method: calculate"
+                        },
+                        {
+                            "type": "data",
+                            "mime_type": "application/json",
+                            "data": {
+                                "operation": "add",
+                                "a": 5,
+                                "b": 7
+                            }
                         }
-                    }
-                ]
-            }
-        ]
-    })).unwrap());
+                    ]
+                }
+            ]
+        }))
+        .unwrap()
+    );
     println!();
 
     // Simulate A2A agent response
     println!("A2A Agent Response:");
-    println!("{}", serde_json::to_string_pretty(&json!({
-        "id": "task-123456",
-        "status": {
-            "state": "completed",
-            "message": "Task completed"
-        },
-        "messages": [
-            {
-                "role": "user",
-                "parts": [
-                    {
-                        "type": "text",
-                        "text": "Call method: calculate"
-                    },
-                    {
-                        "type": "data",
-                        "mime_type": "application/json",
-                        "data": {
-                            "operation": "add",
-                            "a": 5,
-                            "b": 7
-                        }
-                    }
-                ]
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&json!({
+            "id": "task-123456",
+            "status": {
+                "state": "completed",
+                "message": "Task completed"
             },
-            {
-                "role": "agent",
-                "parts": [
-                    {
-                        "type": "data",
-                        "mime_type": "application/json",
-                        "data": {
-                            "result": 12
+            "messages": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {
+                            "type": "text",
+                            "text": "Call method: calculate"
+                        },
+                        {
+                            "type": "data",
+                            "mime_type": "application/json",
+                            "data": {
+                                "operation": "add",
+                                "a": 5,
+                                "b": 7
+                            }
                         }
-                    }
-                ]
-            }
-        ]
-    })).unwrap());
+                    ]
+                },
+                {
+                    "role": "agent",
+                    "parts": [
+                        {
+                            "type": "data",
+                            "mime_type": "application/json",
+                            "data": {
+                                "result": 12
+                            }
+                        }
+                    ]
+                }
+            ]
+        }))
+        .unwrap()
+    );
     println!();
 
     // Convert back to RMCP response

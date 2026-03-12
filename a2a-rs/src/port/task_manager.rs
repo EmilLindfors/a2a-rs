@@ -83,18 +83,10 @@ pub trait TaskManager {
 /// An async trait for managing task lifecycle and operations
 pub trait AsyncTaskManager: Send + Sync {
     /// Create a new task
-    async fn create_task(
-        &self,
-        task_id: &str,
-        context_id: &str,
-    ) -> Result<Task, A2AError>;
+    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError>;
 
     /// Get a task by ID with optional history
-    async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<u32>,
-    ) -> Result<Task, A2AError>;
+    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError>;
 
     /// Update task status with an optional message to add to history
     async fn update_task_status(
@@ -174,10 +166,7 @@ pub trait AsyncTaskManager: Send + Sync {
     // ===== v0.3.0 New Methods =====
 
     /// List tasks with comprehensive filtering and pagination (v0.3.0)
-    async fn list_tasks_v3(
-        &self,
-        _params: &ListTasksParams,
-    ) -> Result<ListTasksResult, A2AError> {
+    async fn list_tasks_v3(&self, _params: &ListTasksParams) -> Result<ListTasksResult, A2AError> {
         // Default implementation returns unsupported error
         Err(A2AError::UnsupportedOperation(
             "Task listing with pagination not implemented".to_string(),

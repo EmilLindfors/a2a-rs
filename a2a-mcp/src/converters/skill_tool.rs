@@ -27,11 +27,17 @@ impl SkillToolConverter {
         }
 
         if let Some(input_modes) = &skill.input_modes {
-            description_parts.push(format!("\nSupported input modes: {}", input_modes.join(", ")));
+            description_parts.push(format!(
+                "\nSupported input modes: {}",
+                input_modes.join(", ")
+            ));
         }
 
         if let Some(output_modes) = &skill.output_modes {
-            description_parts.push(format!("\nSupported output modes: {}", output_modes.join(", ")));
+            description_parts.push(format!(
+                "\nSupported output modes: {}",
+                output_modes.join(", ")
+            ));
         }
 
         let full_description = description_parts.join("");
@@ -123,7 +129,8 @@ mod tests {
 
     #[test]
     fn test_tool_name_creation() {
-        let name = SkillToolConverter::create_tool_name("https://example.com:8080/api/agent", "my_skill");
+        let name =
+            SkillToolConverter::create_tool_name("https://example.com:8080/api/agent", "my_skill");
         assert_eq!(name, "example_com_8080_api_agent_my_skill");
     }
 

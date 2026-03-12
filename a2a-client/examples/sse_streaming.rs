@@ -20,15 +20,15 @@
 //! 3. Open your browser to http://localhost:3000 and send a message.
 //!    The response will stream in real-time via SSE.
 
-use a2a_client::{components::create_sse_stream, WebA2AClient};
+use a2a_client::{WebA2AClient, components::create_sse_stream};
 use a2a_rs::domain::{Message, Part, Role};
 use a2a_rs::services::AsyncA2AClient;
 use axum::{
+    Json, Router,
     extract::{Path, State},
     http::StatusCode,
     response::{Html, IntoResponse},
     routing::{get, post},
-    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
@@ -103,7 +103,11 @@ async fn send_message_handler(
     // Create a new task ID for this conversation
     let task_id = uuid::Uuid::new_v4().to_string();
 
-    match client.http.send_task_message(&task_id, &message, None, None).await {
+    match client
+        .http
+        .send_task_message(&task_id, &message, None, None)
+        .await
+    {
         Ok(task) => {
             println!("Created task: {}", task.id);
             Ok(Json(SendMessageResponse { task_id: task.id }))

@@ -266,7 +266,10 @@ mod tests {
         let postgres_config = DatabaseConfig::builder()
             .url("postgres://localhost/test".to_string())
             .build();
-        assert_eq!(postgres_config.database_type(), Some(DatabaseType::Postgres));
+        assert_eq!(
+            postgres_config.database_type(),
+            Some(DatabaseType::Postgres)
+        );
 
         let postgresql_config = DatabaseConfig::builder()
             .url("postgresql://localhost/test".to_string())

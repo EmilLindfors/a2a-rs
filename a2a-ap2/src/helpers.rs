@@ -8,8 +8,9 @@ use serde_json::{Map, Value};
 
 use crate::error::Result;
 use crate::types::{
-    CartMandate, IntentMandate, PaymentMandate, PaymentReceipt, CART_MANDATE_DATA_KEY,
-    INTENT_MANDATE_DATA_KEY, PAYMENT_MANDATE_DATA_KEY, PAYMENT_RECEIPT_DATA_KEY, RISK_DATA_KEY,
+    CART_MANDATE_DATA_KEY, CartMandate, INTENT_MANDATE_DATA_KEY, IntentMandate,
+    PAYMENT_MANDATE_DATA_KEY, PAYMENT_RECEIPT_DATA_KEY, PaymentMandate, PaymentReceipt,
+    RISK_DATA_KEY,
 };
 
 // ---------------------------------------------------------------------------
@@ -29,10 +30,7 @@ pub fn intent_mandate_to_part(mandate: &IntentMandate) -> Result<Part> {
 /// Serialize a [`CartMandate`] into a `Part::Data`.
 pub fn cart_mandate_to_part(mandate: &CartMandate) -> Result<Part> {
     let mut data = Map::new();
-    data.insert(
-        CART_MANDATE_DATA_KEY.into(),
-        serde_json::to_value(mandate)?,
-    );
+    data.insert(CART_MANDATE_DATA_KEY.into(), serde_json::to_value(mandate)?);
     Ok(Part::data(data))
 }
 
@@ -119,10 +117,7 @@ pub fn find_payment_receipt_in_parts(parts: &[Part]) -> Result<Option<PaymentRec
 // ---------------------------------------------------------------------------
 
 /// Create a user `Message` containing an [`IntentMandate`].
-pub fn intent_mandate_message(
-    mandate: &IntentMandate,
-    message_id: String,
-) -> Result<Message> {
+pub fn intent_mandate_message(mandate: &IntentMandate, message_id: String) -> Result<Message> {
     let part = intent_mandate_to_part(mandate)?;
     Ok(Message::builder()
         .role(Role::User)
@@ -150,10 +145,7 @@ pub fn cart_mandate_artifact(
 }
 
 /// Create a user `Message` containing a [`PaymentMandate`].
-pub fn payment_mandate_message(
-    mandate: &PaymentMandate,
-    message_id: String,
-) -> Result<Message> {
+pub fn payment_mandate_message(mandate: &PaymentMandate, message_id: String) -> Result<Message> {
     let part = payment_mandate_to_part(mandate)?;
     Ok(Message::builder()
         .role(Role::User)
@@ -167,10 +159,7 @@ pub fn payment_mandate_message(
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-fn extract_from_part<T: serde::de::DeserializeOwned>(
-    part: &Part,
-    key: &str,
-) -> Result<Option<T>> {
+fn extract_from_part<T: serde::de::DeserializeOwned>(part: &Part, key: &str) -> Result<Option<T>> {
     match part {
         Part::Data { data, .. } => match data.get(key) {
             Some(value) => {
@@ -183,10 +172,7 @@ fn extract_from_part<T: serde::de::DeserializeOwned>(
     }
 }
 
-fn find_in_parts<T: serde::de::DeserializeOwned>(
-    parts: &[Part],
-    key: &str,
-) -> Result<Option<T>> {
+fn find_in_parts<T: serde::de::DeserializeOwned>(parts: &[Part], key: &str) -> Result<Option<T>> {
     for part in parts {
         if let Some(t) = extract_from_part(part, key)? {
             return Ok(Some(t));
@@ -230,7 +216,10 @@ mod tests {
                         modifiers: None,
                         total: PaymentItem {
                             label: "Total".into(),
-                            amount: PaymentCurrencyAmount { currency: "USD".into(), value: 50.0 },
+                            amount: PaymentCurrencyAmount {
+                                currency: "USD".into(),
+                                value: 50.0,
+                            },
                             pending: None,
                             refund_period: 30,
                         },
@@ -276,8 +265,7 @@ mod tests {
     #[test]
     fn find_cart_in_artifact() {
         let cart = sample_cart();
-        let artifact =
-            cart_mandate_artifact(&cart, "art-1".into(), Some("Cart".into())).unwrap();
+        let artifact = cart_mandate_artifact(&cart, "art-1".into(), Some("Cart".into())).unwrap();
         let found = find_cart_mandate(&artifact).unwrap().unwrap();
         assert_eq!(cart, found);
     }

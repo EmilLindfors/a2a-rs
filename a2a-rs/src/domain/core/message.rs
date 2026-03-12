@@ -282,7 +282,9 @@ impl Part {
         };
 
         // Validate that FileContent has either bytes or URI (not both, not neither)
-        file_content.validate().expect("FileContent must have either bytes or uri, not both or neither");
+        file_content
+            .validate()
+            .expect("FileContent must have either bytes or uri, not both or neither");
 
         Part::File {
             file: file_content,

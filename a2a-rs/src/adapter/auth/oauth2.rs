@@ -144,8 +144,8 @@ impl OAuth2Authenticator {
     pub fn authorize_url(&self) -> (String, CsrfToken) {
         // Only set auth_uri here; token_uri is not needed for generating the
         // authorize URL and would change the client's type-state parameter.
-        let mut client = BasicClient::new(self.client_id.clone())
-            .set_auth_uri(self.auth_url.clone());
+        let mut client =
+            BasicClient::new(self.client_id.clone()).set_auth_uri(self.auth_url.clone());
         if let Some(ref secret) = self.client_secret {
             client = client.set_client_secret(secret.clone());
         }

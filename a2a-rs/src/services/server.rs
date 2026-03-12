@@ -48,8 +48,5 @@ pub trait AsyncA2ARequestProcessor: Send + Sync {
     async fn process_raw_request(&self, request: &str) -> Result<String, A2AError>;
 
     /// Process a parsed A2A request
-    async fn process_request(
-        &self,
-        request: &A2ARequest,
-    ) -> Result<JSONRPCResponse, A2AError>;
+    async fn process_request(&self, request: &A2ARequest) -> Result<JSONRPCResponse, A2AError>;
 }

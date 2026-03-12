@@ -6,17 +6,14 @@ use regex::Regex;
 use std::sync::LazyLock;
 
 /// Regex for extracting email addresses
-static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap()
-});
+static EMAIL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap());
 
 /// Regex for extracting URLs
-static URL_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
+static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
 
 /// Regex for extracting numbers (including decimals)
-static NUMBER_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-?\d+\.?\d*").unwrap());
+static NUMBER_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-?\d+\.?\d*").unwrap());
 
 /// Extract email addresses from text
 pub fn extract_emails(text: &str) -> Vec<String> {

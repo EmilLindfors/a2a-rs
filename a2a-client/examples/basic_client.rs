@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
         .message_id(uuid::Uuid::new_v4().to_string())
         .role(a2a_rs::domain::Role::User)
         .parts(vec![Part::text(
-            "Hello! I'd like to submit an expense reimbursement.".to_string()
+            "Hello! I'd like to submit an expense reimbursement.".to_string(),
         )])
         .build();
 
@@ -46,12 +46,19 @@ async fn main() -> anyhow::Result<()> {
     // For a new conversation, we create a unique task ID
     let task_id = uuid::Uuid::new_v4().to_string();
 
-    match client.http.send_task_message(&task_id, &message, None, None).await {
+    match client
+        .http
+        .send_task_message(&task_id, &message, None, None)
+        .await
+    {
         Ok(task) => {
             println!("✓ Message sent successfully!");
             println!("  Task ID: {}", task.id);
             println!("  State: {:?}", task.status.state);
-            println!("  Message count: {}", task.history.as_ref().map(|h| h.len()).unwrap_or(0));
+            println!(
+                "  Message count: {}",
+                task.history.as_ref().map(|h| h.len()).unwrap_or(0)
+            );
 
             // Retrieve the task to see the agent's response
             println!("Retrieving task to see agent response...");
@@ -62,10 +69,10 @@ async fn main() -> anyhow::Result<()> {
                         println!("  Conversation has {} messages", history.len());
                         if let Some(last_msg) = history.last() {
                             println!("  Last message role: {:?}", last_msg.role);
-                            if let Some(part) = last_msg.parts.first() {
-                                if let a2a_rs::domain::Part::Text { text, .. } = part {
-                                    println!("  Agent says: {}", text);
-                                }
+                            if let Some(a2a_rs::domain::Part::Text { text, .. }) =
+                                last_msg.parts.first()
+                            {
+                                println!("  Agent says: {}", text);
                             }
                         }
                     }

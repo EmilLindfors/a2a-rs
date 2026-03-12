@@ -31,7 +31,8 @@ where
             SkillDefinition {
                 id: "submit_reimbursement".to_string(),
                 name: "Submit Reimbursement Request".to_string(),
-                description: "Guide users through submitting an expense reimbursement request".to_string(),
+                description: "Guide users through submitting an expense reimbursement request"
+                    .to_string(),
                 keywords: vec![
                     "reimburse".into(),
                     "reimbursement".into(),

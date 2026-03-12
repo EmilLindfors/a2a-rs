@@ -1,4 +1,6 @@
-use a2a_agents::agents::reimbursement::{AuthConfig, ReimbursementServer, ServerConfig, StorageConfig};
+use a2a_agents::agents::reimbursement::{
+    AuthConfig, ReimbursementServer, ServerConfig, StorageConfig,
+};
 use a2a_client::{
     WebA2AClient,
     components::{MessageView, TaskView, create_sse_stream},

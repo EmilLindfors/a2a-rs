@@ -8,14 +8,33 @@
 
 use a2a_ap2::{
     // Types
-    Ap2Role, CartContents, CartMandate, IntentMandate, PaymentCurrencyAmount, PaymentDetailsInit,
-    PaymentItem, PaymentMandate, PaymentMandateContents, PaymentMethodData, PaymentOptions,
-    PaymentReceipt, PaymentRequest, PaymentResponse, PaymentStatus, Success,
-    // Helpers
-    ap2_extension, cart_mandate_artifact, find_cart_mandate, find_intent_mandate,
-    find_payment_mandate, intent_mandate_message, payment_mandate_message, payment_receipt_to_part,
+    Ap2Role,
+    CartContents,
+    CartMandate,
+    IntentMandate,
+    PaymentCurrencyAmount,
+    PaymentDetailsInit,
+    PaymentItem,
+    PaymentMandate,
+    PaymentMandateContents,
+    PaymentMethodData,
+    PaymentOptions,
+    PaymentReceipt,
+    PaymentRequest,
+    PaymentResponse,
+    PaymentStatus,
+    Success,
     // Validation
     Validate,
+    // Helpers
+    ap2_extension,
+    cart_mandate_artifact,
+    find_cart_mandate,
+    find_intent_mandate,
+    find_payment_mandate,
+    intent_mandate_message,
+    payment_mandate_message,
+    payment_receipt_to_part,
 };
 
 fn main() {
@@ -72,9 +91,12 @@ fn main() {
                 method_data: vec![PaymentMethodData {
                     supported_methods: "CARD".into(),
                     data: Some(
-                        [("payment_processor_url".to_string(), serde_json::json!("https://pay.example.com"))]
-                            .into_iter()
-                            .collect(),
+                        [(
+                            "payment_processor_url".to_string(),
+                            serde_json::json!("https://pay.example.com"),
+                        )]
+                        .into_iter()
+                        .collect(),
                     ),
                 }],
                 details: PaymentDetailsInit {
@@ -112,12 +134,18 @@ fn main() {
             cart_expiry: "2026-01-15T12:00:00Z".into(),
             merchant_name: "Nike Store".into(),
         },
-        merchant_authorization: Some("eyJhbGciOiJSUzI1NiJ9.eyJjYXJ0X2hhc2giOiIuLi4ifQ.signature".into()),
+        merchant_authorization: Some(
+            "eyJhbGciOiJSUzI1NiJ9.eyJjYXJ0X2hhc2giOiIuLi4ifQ.signature".into(),
+        ),
     };
     cart.validate().expect("cart should be valid");
 
-    let cart_artifact = cart_mandate_artifact(&cart, "artifact-cart-001".into(), Some("Shopping Cart".into()))
-        .expect("should create cart artifact");
+    let cart_artifact = cart_mandate_artifact(
+        &cart,
+        "artifact-cart-001".into(),
+        Some("Shopping Cart".into()),
+    )
+    .expect("should create cart artifact");
     println!(
         "2. CartMandate Artifact:\n{}\n",
         serde_json::to_string_pretty(&cart_artifact).unwrap()

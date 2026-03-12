@@ -85,15 +85,15 @@
 //! - **Skills/Tools**: `A2A AgentSkill` ↔ `MCP Tool`
 //! - **Results**: `A2A Task` ↔ `MCP CallToolResult`
 
-pub mod error;
-pub mod converters;
 pub mod bridge;
+pub mod converters;
+pub mod error;
 
 // Re-export key types
-pub use error::{A2aMcpError, Result};
-pub use bridge::{AgentToMcpBridge, McpToA2ABridge};
 pub use bridge::mcp_to_a2a::create_tool_call_message;
+pub use bridge::{AgentToMcpBridge, McpToA2ABridge};
 pub use converters::{MessageConverter, SkillToolConverter, TaskResultConverter};
+pub use error::{A2aMcpError, Result};
 
 /// Current crate version
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

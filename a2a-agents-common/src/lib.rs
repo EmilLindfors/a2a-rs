@@ -28,15 +28,15 @@
 //! - `async` - Enable async utilities like caching
 //! - `full` - Enable all features
 
-pub mod nlp;
-pub mod formatting;
 #[cfg(feature = "async")]
 pub mod caching;
+pub mod formatting;
+pub mod nlp;
 pub mod testing;
 
 // Re-export commonly used items
-pub use nlp::{IntentClassifier, EntityExtractor};
 pub use formatting::{MarkdownFormatter, TableFormatter};
+pub use nlp::{EntityExtractor, IntentClassifier};
 
 /// Common error type for utilities
 #[derive(Debug, thiserror::Error)]

@@ -10,7 +10,7 @@
 //! ```
 
 use a2a_agents::core::{AgentBuilder, McpClientManager};
-use a2a_agents::traits::{extract_tool_result_text, is_tool_call_successful, McpToolsExt};
+use a2a_agents::traits::{McpToolsExt, extract_tool_result_text, is_tool_call_successful};
 use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatus};
 use a2a_rs::port::AsyncMessageHandler;
 use async_trait::async_trait;
@@ -94,10 +94,7 @@ impl AsyncMessageHandler for McpToolAgent {
                         format!("MCP Tool Response:\n{}", tool_response)
                     }
                     Ok(result) => {
-                        format!(
-                            "Tool call failed: {}",
-                            extract_tool_result_text(&result)
-                        )
+                        format!("Tool call failed: {}", extract_tool_result_text(&result))
                     }
                     Err(e) => {
                         format!("Error calling MCP tool: {}", e)
@@ -122,10 +119,7 @@ impl AsyncMessageHandler for McpToolAgent {
                         format!("MCP Tool Response:\n{}", tool_response)
                     }
                     Ok(result) => {
-                        format!(
-                            "Tool call failed: {}",
-                            extract_tool_result_text(&result)
-                        )
+                        format!("Tool call failed: {}", extract_tool_result_text(&result))
                     }
                     Err(e) => {
                         format!("Error calling MCP tool: {}", e)

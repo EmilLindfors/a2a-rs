@@ -45,7 +45,7 @@ impl IntentClassifier {
     pub fn add_keywords(&mut self, intent: &str, keywords: &[&str]) {
         self.intents
             .entry(intent.to_string())
-            .or_insert_with(Vec::new)
+            .or_default()
             .extend(keywords.iter().map(|s| s.to_lowercase()));
     }
 

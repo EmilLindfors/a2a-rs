@@ -7,12 +7,11 @@
 use crate::core::config::{McpClientConfig, McpServerConnection};
 #[cfg(feature = "mcp-client")]
 use rmcp::{
+    Peer, RoleClient, ServiceExt,
     model::{
-        CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation, ProtocolVersion,
-        Tool,
+        CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation, ProtocolVersion, Tool,
     },
     transport::TokioChildProcess,
-    Peer, RoleClient, ServiceExt,
 };
 #[cfg(feature = "mcp-client")]
 use std::collections::HashMap;
@@ -57,12 +56,18 @@ impl McpClientManager {
             return Ok(());
         }
 
-        info!("Initializing MCP client with {} servers", config.servers.len());
+        info!(
+            "Initializing MCP client with {} servers",
+            config.servers.len()
+        );
 
         for server_config in &config.servers {
             match self.connect_to_server(server_config).await {
                 Ok(_) => {
-                    info!("Successfully connected to MCP server: {}", server_config.name);
+                    info!(
+                        "Successfully connected to MCP server: {}",
+                        server_config.name
+                    );
                 }
                 Err(e) => {
                     error!(
@@ -221,7 +226,7 @@ impl McpClientManager {
 }
 
 #[cfg(not(feature = "mcp-client"))]
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct McpClientManager;
 
 #[cfg(not(feature = "mcp-client"))]

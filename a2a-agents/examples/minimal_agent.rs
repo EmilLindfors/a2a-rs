@@ -5,9 +5,9 @@
 
 use a2a_agents::core::{AgentBuilder, BuildError};
 use a2a_rs::{
+    InMemoryTaskStorage,
     domain::{A2AError, Message, Part, Role, Task, TaskState},
     port::AsyncMessageHandler,
-    InMemoryTaskStorage,
 };
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -25,7 +25,9 @@ impl AsyncMessageHandler for EchoHandler {
         _session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
         // Extract text from the message
-        let text = message.parts.iter()
+        let text = message
+            .parts
+            .iter()
             .find_map(|part| match part {
                 Part::Text { text, .. } => Some(text.clone()),
                 _ => None,

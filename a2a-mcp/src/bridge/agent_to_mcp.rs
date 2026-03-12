@@ -10,11 +10,7 @@ use a2a_rs::{
     services::client::AsyncA2AClient,
 };
 use async_trait::async_trait;
-use rmcp::{
-    model::*,
-    service::RequestContext,
-    ErrorData as McpError, RoleServer, ServerHandler,
-};
+use rmcp::{model::*, service::RequestContext, ErrorData as McpError, RoleServer, ServerHandler};
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
@@ -66,7 +62,10 @@ impl AgentToMcpBridge {
 
     /// Helper to call an A2A agent skill
     async fn call_skill(&self, skill_id: &str, message_text: &str) -> Result<CallToolResult> {
-        debug!("Calling A2A skill '{}' with message: {}", skill_id, message_text);
+        debug!(
+            "Calling A2A skill '{}' with message: {}",
+            skill_id, message_text
+        );
 
         // Create an A2A message
         let message = Message::builder()
@@ -104,9 +103,7 @@ impl ServerHandler for AgentToMcpBridge {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
+            capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
                 name: format!("a2a-mcp-bridge:{}", self.agent_card.name),
                 title: Some(format!("A2A Agent: {}", self.agent_card.name)),
@@ -130,7 +127,8 @@ impl ServerHandler for AgentToMcpBridge {
         &self,
         _request: Option<PaginatedRequestParam>,
         _ctx: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<ListToolsResult, McpError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = std::result::Result<ListToolsResult, McpError>> + Send + '_
+    {
         async move {
             debug!("MCP client requested tool list");
 
@@ -146,7 +144,8 @@ impl ServerHandler for AgentToMcpBridge {
         &self,
         CallToolRequestParam { name, arguments }: CallToolRequestParam,
         _ctx: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = std::result::Result<CallToolResult, McpError>> + Send + '_
+    {
         async move {
             info!("MCP client calling tool: {}", name);
 
@@ -192,9 +191,13 @@ impl ServerHandler for AgentToMcpBridge {
         &self,
         _request: InitializeRequestParam,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<InitializeResult, McpError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = std::result::Result<InitializeResult, McpError>> + Send + '_
+    {
         async move {
-            info!("MCP client initializing with agent '{}'", self.agent_card.name);
+            info!(
+                "MCP client initializing with agent '{}'",
+                self.agent_card.name
+            );
             Ok(self.get_info())
         }
     }

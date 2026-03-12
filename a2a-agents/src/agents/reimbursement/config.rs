@@ -2,10 +2,11 @@ use serde::{Deserialize, Serialize};
 use std::env;
 
 /// Storage backend configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum StorageConfig {
     /// In-memory storage (default)
+    #[default]
     InMemory,
     /// SQLx-based persistent storage
     Sqlx {
@@ -18,12 +19,6 @@ pub enum StorageConfig {
         #[serde(default)]
         enable_logging: bool,
     },
-}
-
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self::InMemory
-    }
 }
 
 impl StorageConfig {
@@ -128,10 +123,11 @@ fn default_ws_port() -> u16 {
 }
 
 /// Authentication configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum AuthConfig {
     /// No authentication (default for development)
+    #[default]
     None,
     /// Bearer token authentication
     BearerToken {
@@ -152,12 +148,6 @@ pub enum AuthConfig {
         #[serde(default = "default_api_key_name")]
         name: String,
     },
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl AuthConfig {

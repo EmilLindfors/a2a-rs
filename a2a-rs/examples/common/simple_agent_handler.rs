@@ -206,19 +206,11 @@ impl AsyncMessageHandler for SimpleAgentHandler {
 
 #[async_trait]
 impl AsyncTaskManager for SimpleAgentHandler {
-    async fn create_task(
-        &self,
-        task_id: &str,
-        context_id: &str,
-    ) -> Result<Task, A2AError> {
+    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
         self.storage.create_task(task_id, context_id).await
     }
 
-    async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<u32>,
-    ) -> Result<Task, A2AError> {
+    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
         self.storage.get_task(task_id, history_length).await
     }
 

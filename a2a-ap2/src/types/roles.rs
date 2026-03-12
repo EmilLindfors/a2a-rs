@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Agents that support the AP2 extension MUST use this URI in their
 /// `AgentExtension` declaration.
-pub const AP2_EXTENSION_URI: &str =
-    "https://github.com/google-agentic-commerce/ap2/tree/v0.1";
+pub const AP2_EXTENSION_URI: &str = "https://github.com/google-agentic-commerce/ap2/tree/v0.1";
 
 /// Data-part key for an [`IntentMandate`](super::mandate::IntentMandate).
 pub const INTENT_MANDATE_DATA_KEY: &str = "ap2.mandates.IntentMandate";
@@ -88,6 +87,9 @@ mod tests {
 
     #[test]
     fn role_display() {
-        assert_eq!(Ap2Role::CredentialsProvider.to_string(), "credentials-provider");
+        assert_eq!(
+            Ap2Role::CredentialsProvider.to_string(),
+            "credentials-provider"
+        );
     }
 }

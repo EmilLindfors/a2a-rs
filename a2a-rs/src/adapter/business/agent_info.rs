@@ -118,10 +118,7 @@ impl SimpleAgentInfo {
     /// let agent = SimpleAgentInfo::new("agent".into(), "http://localhost".into())
     ///     .with_security_schemes(schemes);
     /// ```
-    pub fn with_security_schemes(
-        mut self,
-        schemes: HashMap<String, SecurityScheme>,
-    ) -> Self {
+    pub fn with_security_schemes(mut self, schemes: HashMap<String, SecurityScheme>) -> Self {
         // Build security requirements: each scheme is an OR alternative (no scopes required by default)
         let security: Vec<HashMap<String, Vec<String>>> = schemes
             .keys()

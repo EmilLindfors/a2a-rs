@@ -31,11 +31,7 @@ pub trait AsyncA2AClient: Send + Sync {
     ) -> Result<Task, A2AError>;
 
     /// Get a task by ID
-    async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<u32>,
-    ) -> Result<Task, A2AError>;
+    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError>;
 
     /// Cancel a task
     async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError>;
@@ -53,10 +49,7 @@ pub trait AsyncA2AClient: Send + Sync {
     ) -> Result<TaskPushNotificationConfig, A2AError>;
 
     /// List tasks with filtering and pagination (v0.3.0)
-    async fn list_tasks(
-        &self,
-        params: &ListTasksParams,
-    ) -> Result<ListTasksResult, A2AError>;
+    async fn list_tasks(&self, params: &ListTasksParams) -> Result<ListTasksResult, A2AError>;
 
     /// List all push notification configs for a task (v0.3.0)
     async fn list_push_notification_configs(

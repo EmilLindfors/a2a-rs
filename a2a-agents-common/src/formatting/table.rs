@@ -90,7 +90,7 @@ impl TableFormatter {
         result.push('\n');
 
         // Separator row
-        result.push_str("|");
+        result.push('|');
         for (i, width) in widths.iter().enumerate() {
             let alignment = self.alignment.get(i).copied().unwrap_or(Alignment::Left);
             result.push_str(&self.separator(*width, alignment));

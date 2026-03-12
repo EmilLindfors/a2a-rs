@@ -1099,7 +1099,7 @@ fn test_error_code_ranges() {
 
     for code in jsonrpc_codes {
         assert!(
-            code >= -32700 && code <= -32600,
+            (-32700..=-32600).contains(&code),
             "JSON-RPC error code {} should be in range -32700 to -32600",
             code
         );
@@ -1110,7 +1110,7 @@ fn test_error_code_ranges() {
 
     for code in a2a_codes {
         assert!(
-            code >= -32007 && code <= -32001,
+            (-32007..=-32001).contains(&code),
             "A2A error code {} should be in range -32007 to -32001",
             code
         );

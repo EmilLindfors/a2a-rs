@@ -21,20 +21,38 @@ impl MessageConverter {
                     // MCP doesn't have direct file support in Content, so we encode as text with metadata
                     let file_desc = if let Some(ref name) = file.name {
                         if let Some(ref uri) = file.uri {
-                            format!("File: {} ({})\nURI: {}", name, file.mime_type.as_deref().unwrap_or("unknown"), uri)
+                            format!(
+                                "File: {} ({})\nURI: {}",
+                                name,
+                                file.mime_type.as_deref().unwrap_or("unknown"),
+                                uri
+                            )
                         } else {
-                            format!("File: {} ({})\n[Embedded data]", name, file.mime_type.as_deref().unwrap_or("unknown"))
+                            format!(
+                                "File: {} ({})\n[Embedded data]",
+                                name,
+                                file.mime_type.as_deref().unwrap_or("unknown")
+                            )
                         }
                     } else if let Some(ref uri) = file.uri {
-                        format!("File: {}\nType: {}", uri, file.mime_type.as_deref().unwrap_or("unknown"))
+                        format!(
+                            "File: {}\nType: {}",
+                            uri,
+                            file.mime_type.as_deref().unwrap_or("unknown")
+                        )
                     } else {
-                        format!("File [Embedded data]\nType: {}", file.mime_type.as_deref().unwrap_or("unknown"))
+                        format!(
+                            "File [Embedded data]\nType: {}",
+                            file.mime_type.as_deref().unwrap_or("unknown")
+                        )
                     };
                     contents.push(Content::text(file_desc));
                 }
                 Part::Data { data, .. } => {
                     // For structured data, serialize to JSON text
-                    contents.push(Content::text(serde_json::to_string_pretty(&serde_json::Value::Object(data.clone()))?));
+                    contents.push(Content::text(serde_json::to_string_pretty(
+                        &serde_json::Value::Object(data.clone()),
+                    )?));
                 }
             }
         }
@@ -64,9 +82,18 @@ impl MessageConverter {
                 RawContent::Image(image_content) => {
                     // Convert image to data part
                     let mut data_map = serde_json::Map::new();
-                    data_map.insert("type".to_string(), serde_json::Value::String("image".to_string()));
-                    data_map.insert("data".to_string(), serde_json::Value::String(image_content.data.clone()));
-                    data_map.insert("mimeType".to_string(), serde_json::Value::String(image_content.mime_type.clone()));
+                    data_map.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("image".to_string()),
+                    );
+                    data_map.insert(
+                        "data".to_string(),
+                        serde_json::Value::String(image_content.data.clone()),
+                    );
+                    data_map.insert(
+                        "mimeType".to_string(),
+                        serde_json::Value::String(image_content.mime_type.clone()),
+                    );
 
                     parts.push(Part::Data {
                         data: data_map,
@@ -76,7 +103,11 @@ impl MessageConverter {
                 RawContent::Resource(resource_content) => {
                     // Treat embedded resource as a file reference
                     match &resource_content.resource {
-                        rmcp::model::ResourceContents::TextResourceContents { uri, mime_type, .. } => {
+                        rmcp::model::ResourceContents::TextResourceContents {
+                            uri,
+                            mime_type,
+                            ..
+                        } => {
                             parts.push(Part::File {
                                 file: FileContent {
                                     name: None,
@@ -87,7 +118,11 @@ impl MessageConverter {
                                 metadata: None,
                             });
                         }
-                        rmcp::model::ResourceContents::BlobResourceContents { uri, mime_type, .. } => {
+                        rmcp::model::ResourceContents::BlobResourceContents {
+                            uri,
+                            mime_type,
+                            ..
+                        } => {
                             parts.push(Part::File {
                                 file: FileContent {
                                     name: None,
@@ -153,7 +188,10 @@ impl MessageConverter {
                     }
                 }
                 Part::Data { data, .. } => {
-                    texts.push(format!("[Data: {}]", serde_json::Value::Object(data.clone())));
+                    texts.push(format!(
+                        "[Data: {}]",
+                        serde_json::Value::Object(data.clone())
+                    ));
                 }
             }
         }

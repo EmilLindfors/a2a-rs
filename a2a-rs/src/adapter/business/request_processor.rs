@@ -378,10 +378,7 @@ where
         Ok(serde_json::to_string(&response)?)
     }
 
-    async fn process_request(
-        &self,
-        request: &A2ARequest,
-    ) -> Result<JSONRPCResponse, A2AError> {
+    async fn process_request(&self, request: &A2ARequest) -> Result<JSONRPCResponse, A2AError> {
         match request {
             A2ARequest::SendTask(req) => self.process_send_task(req).await,
             A2ARequest::SendMessage(_req) => {

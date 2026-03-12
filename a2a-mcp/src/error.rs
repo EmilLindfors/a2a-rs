@@ -64,9 +64,7 @@ impl A2aMcpError {
             A2aMcpError::ToolNotFound(name) => {
                 rmcp::ErrorData::internal_error(format!("Tool not found: {}", name), None)
             }
-            A2aMcpError::InvalidToolCall(msg) => {
-                rmcp::ErrorData::invalid_params(msg.clone(), None)
-            }
+            A2aMcpError::InvalidToolCall(msg) => rmcp::ErrorData::invalid_params(msg.clone(), None),
             A2aMcpError::McpError(e) => e.clone(),
             _ => rmcp::ErrorData::internal_error(self.to_string(), None),
         }

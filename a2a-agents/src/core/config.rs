@@ -57,17 +57,23 @@ impl AgentConfig {
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.agent.name.is_empty() {
-            return Err(ConfigError::ValidationError("Agent name cannot be empty".to_string()));
+            return Err(ConfigError::ValidationError(
+                "Agent name cannot be empty".to_string(),
+            ));
         }
 
         if self.server.http_port == 0 && self.server.ws_port == 0 {
-            return Err(ConfigError::ValidationError("At least one server port must be configured".to_string()));
+            return Err(ConfigError::ValidationError(
+                "At least one server port must be configured".to_string(),
+            ));
         }
 
         // Validate skills
         for skill in &self.skills {
             if skill.id.is_empty() {
-                return Err(ConfigError::ValidationError("Skill ID cannot be empty".to_string()));
+                return Err(ConfigError::ValidationError(
+                    "Skill ID cannot be empty".to_string(),
+                ));
             }
         }
 
@@ -147,10 +153,11 @@ impl Default for ServerConfig {
 }
 
 /// Storage backend configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum StorageConfig {
     /// In-memory storage (default)
+    #[default]
     InMemory,
 
     /// SQLx-based persistent storage
@@ -168,17 +175,12 @@ pub enum StorageConfig {
     },
 }
 
-impl Default for StorageConfig {
-    fn default() -> Self {
-        Self::InMemory
-    }
-}
-
 /// Authentication configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum AuthConfig {
     /// No authentication (default for development)
+    #[default]
     None,
 
     /// Bearer token authentication
@@ -255,12 +257,6 @@ pub enum AuthConfig {
         #[serde(default)]
         scopes: Vec<String>,
     },
-}
-
-impl Default for AuthConfig {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 /// Skill configuration
@@ -394,7 +390,7 @@ fn default_true() -> bool {
 }
 
 /// MCP client configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct McpClientConfig {
     /// Enable MCP client (connect to MCP servers to use their tools)
     #[serde(default)]
@@ -403,15 +399,6 @@ pub struct McpClientConfig {
     /// MCP servers to connect to
     #[serde(default)]
     pub servers: Vec<McpServerConnection>,
-}
-
-impl Default for McpClientConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            servers: Vec::new(),
-        }
-    }
 }
 
 /// Configuration for connecting to an MCP server
@@ -494,8 +481,8 @@ fn expand_env_vars(content: &str) -> Result<String, ConfigError> {
         let full_match = &cap[0];
         let var_name = &cap[1];
 
-        let value = std::env::var(var_name)
-            .map_err(|_| ConfigError::EnvVarError(var_name.to_string()))?;
+        let value =
+            std::env::var(var_name).map_err(|_| ConfigError::EnvVarError(var_name.to_string()))?;
 
         result = result.replace(full_match, &value);
     }
@@ -606,7 +593,13 @@ mod tests {
 
         let config = AgentConfig::from_toml(toml).unwrap();
         match &config.server.auth {
-            AuthConfig::Jwt { secret, algorithm, issuer, audience, .. } => {
+            AuthConfig::Jwt {
+                secret,
+                algorithm,
+                issuer,
+                audience,
+                ..
+            } => {
                 assert_eq!(secret.as_ref().unwrap(), "my-jwt-secret");
                 assert_eq!(algorithm, "HS256");
                 assert_eq!(issuer.as_ref().unwrap(), "https://auth.example.com");
@@ -635,7 +628,13 @@ mod tests {
 
         let config = AgentConfig::from_toml(toml).unwrap();
         match &config.server.auth {
-            AuthConfig::OAuth2 { client_id, client_secret, flow, scopes, .. } => {
+            AuthConfig::OAuth2 {
+                client_id,
+                client_secret,
+                flow,
+                scopes,
+                ..
+            } => {
                 assert_eq!(client_id, "my-client-id");
                 assert_eq!(client_secret, "my-client-secret");
                 assert_eq!(flow, "authorization_code");

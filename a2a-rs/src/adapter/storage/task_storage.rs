@@ -261,11 +261,7 @@ impl InMemoryTaskStorage {
 
 #[async_trait]
 impl AsyncTaskManager for InMemoryTaskStorage {
-    async fn create_task(
-        &self,
-        task_id: &str,
-        context_id: &str,
-    ) -> Result<Task, A2AError> {
+    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
         let mut tasks_guard = self.tasks.lock().await;
 
         if tasks_guard.contains_key(task_id) {
@@ -315,11 +311,7 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         Ok(tasks_guard.contains_key(task_id))
     }
 
-    async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<u32>,
-    ) -> Result<Task, A2AError> {
+    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
         // Get the task
         let task = {
             let tasks_guard = self.tasks.lock().await;

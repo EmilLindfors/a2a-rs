@@ -24,9 +24,9 @@
 
 pub mod builder;
 pub mod config;
-pub mod runtime;
 pub mod mcp;
 pub mod mcp_client;
+pub mod runtime;
 
 // Re-export main types for convenience
 pub use builder::{AgentBuilder, BuildError};

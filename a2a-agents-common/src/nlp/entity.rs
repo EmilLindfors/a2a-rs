@@ -5,17 +5,14 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 
 /// Regex for extracting email addresses
-static EMAIL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap()
-});
+static EMAIL_REGEX: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}").unwrap());
 
 /// Regex for extracting URLs
-static URL_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
+static URL_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"https?://[^\s]+").unwrap());
 
 /// Regex for extracting numbers (including decimals and negatives)
-static NUMBER_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-?\d+\.?\d*").unwrap());
+static NUMBER_REGEX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-?\d+\.?\d*").unwrap());
 
 /// Regex for extracting currency amounts (e.g., $100, €50.99)
 static CURRENCY_REGEX: LazyLock<Regex> =
@@ -190,8 +187,7 @@ mod tests {
     #[test]
     fn test_extract_dates() {
         let extractor = EntityExtractor::new();
-        let entities =
-            extractor.extract("Meeting on 2025-12-06 or 12/25/2025 or maybe 25.12.2025");
+        let entities = extractor.extract("Meeting on 2025-12-06 or 12/25/2025 or maybe 25.12.2025");
 
         let dates = entities.get("date").unwrap();
         assert_eq!(dates.len(), 3);

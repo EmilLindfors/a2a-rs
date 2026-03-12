@@ -43,15 +43,35 @@ pub mod validation;
 pub use error::{Ap2Error, Result};
 
 pub use types::{
-    Ap2Role, CartContents, CartMandate, ContactAddress, IntentMandate, PaymentCurrencyAmount,
-    PaymentDetailsInit, PaymentDetailsModifier, PaymentItem, PaymentMandate,
-    PaymentMandateContents, PaymentMethodData, PaymentOptions, PaymentReceipt, PaymentRequest,
-    PaymentResponse, PaymentShippingOption, PaymentStatus,
-    // Receipt variant structs
-    Error, Failure, Success,
     // Constants
-    AP2_EXTENSION_URI, CART_MANDATE_DATA_KEY, INTENT_MANDATE_DATA_KEY,
-    PAYMENT_MANDATE_DATA_KEY, PAYMENT_RECEIPT_DATA_KEY, RISK_DATA_KEY,
+    AP2_EXTENSION_URI,
+    Ap2Role,
+    CART_MANDATE_DATA_KEY,
+    CartContents,
+    CartMandate,
+    ContactAddress,
+    // Receipt variant structs
+    Error,
+    Failure,
+    INTENT_MANDATE_DATA_KEY,
+    IntentMandate,
+    PAYMENT_MANDATE_DATA_KEY,
+    PAYMENT_RECEIPT_DATA_KEY,
+    PaymentCurrencyAmount,
+    PaymentDetailsInit,
+    PaymentDetailsModifier,
+    PaymentItem,
+    PaymentMandate,
+    PaymentMandateContents,
+    PaymentMethodData,
+    PaymentOptions,
+    PaymentReceipt,
+    PaymentRequest,
+    PaymentResponse,
+    PaymentShippingOption,
+    PaymentStatus,
+    RISK_DATA_KEY,
+    Success,
 };
 
 pub use helpers::{

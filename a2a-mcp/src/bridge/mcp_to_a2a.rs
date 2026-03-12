@@ -5,9 +5,7 @@ use crate::{
     error::{A2aMcpError, Result},
 };
 use a2a_rs::{
-    domain::{
-        Message, Part, Role, Task, TaskState, TaskStatus,
-    },
+    domain::{Message, Part, Role, Task, TaskState, TaskStatus},
     port::AsyncMessageHandler,
 };
 use async_trait::async_trait;
@@ -111,7 +109,8 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         }
 
         // Call the MCP tool via the peer
-        let result = self.mcp_peer
+        let result = self
+            .mcp_peer
             .call_tool(CallToolRequestParam {
                 name: tool_name.to_string().into(),
                 arguments: if let serde_json::Value::Object(map) = arguments {
@@ -127,7 +126,6 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
 
         Ok(result)
     }
-
 }
 
 #[async_trait]
@@ -223,7 +221,10 @@ mod tests {
     #[test]
     fn test_is_tool_call_detection() {
         let mut data_map = serde_json::Map::new();
-        data_map.insert("param".to_string(), serde_json::Value::String("value".to_string()));
+        data_map.insert(
+            "param".to_string(),
+            serde_json::Value::String("value".to_string()),
+        );
 
         let tool_message = Message::builder()
             .role(Role::User)

@@ -39,10 +39,7 @@ impl AsyncMessageHandler for PersistentEchoHandler {
 
         let response = Message::builder()
             .role(Role::Agent)
-            .parts(vec![Part::text(format!(
-                "Echo (from SQLx): {}",
-                text
-            ))])
+            .parts(vec![Part::text(format!("Echo (from SQLx): {}", text))])
             .message_id(Uuid::new_v4().to_string())
             .context_id(message.context_id.clone().unwrap_or_default())
             .build();

@@ -36,8 +36,7 @@ async fn test_message_roundtrip() {
     assert_eq!(mcp_content.len(), 2);
 
     // Convert back to A2A message
-    let converted_message =
-        MessageConverter::content_to_message(&mcp_content, Role::User).unwrap();
+    let converted_message = MessageConverter::content_to_message(&mcp_content, Role::User).unwrap();
 
     // Verify the content is preserved (note: message_id will be different)
     assert_eq!(converted_message.role, original_message.role);
@@ -218,16 +217,8 @@ async fn test_concurrent_bridges() {
     let client1 = HttpClient::new("https://agent1.example.com".to_string());
     let client2 = HttpClient::new("https://agent2.example.com".to_string());
 
-    let bridge1 = AgentToMcpBridge::new(
-        client1,
-        agent1,
-        "https://agent1.example.com".to_string(),
-    );
-    let bridge2 = AgentToMcpBridge::new(
-        client2,
-        agent2,
-        "https://agent2.example.com".to_string(),
-    );
+    let bridge1 = AgentToMcpBridge::new(client1, agent1, "https://agent1.example.com".to_string());
+    let bridge2 = AgentToMcpBridge::new(client2, agent2, "https://agent2.example.com".to_string());
 
     // Verify both bridges were created successfully
     let info1 = bridge1.get_info();

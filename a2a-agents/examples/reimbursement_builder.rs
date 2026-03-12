@@ -27,8 +27,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!();
 
     // Get database URL from environment or use default
-    let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "sqlite:reimbursement_tasks.db".to_string());
+    let database_url =
+        env::var("DATABASE_URL").unwrap_or_else(|_| "sqlite:reimbursement_tasks.db".to_string());
 
     // Create storage with custom migrations
     let migrations = &[include_str!("../migrations/001_create_reimbursements.sql")];

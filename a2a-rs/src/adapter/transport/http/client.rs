@@ -71,12 +71,10 @@ impl HttpClient {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         if let Some(token) = &self.auth_token {
-            let auth_value = HeaderValue::from_str(&format!("Bearer {}", token))
-                .map_err(|e| A2AError::Internal(format!("Invalid auth token for HTTP header: {}", e)))?;
-            headers.insert(
-                reqwest::header::AUTHORIZATION,
-                auth_value,
-            );
+            let auth_value = HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {
+                A2AError::Internal(format!("Invalid auth token for HTTP header: {}", e))
+            })?;
+            headers.insert(reqwest::header::AUTHORIZATION, auth_value);
         }
 
         Ok(headers)
@@ -176,11 +174,7 @@ impl AsyncA2AClient for HttpClient {
         feature = "tracing",
         instrument(skip(self), fields(task_id, history_length))
     )]
-    async fn get_task(
-        &self,
-        task_id: &str,
-        history_length: Option<u32>,
-    ) -> Result<Task, A2AError> {
+    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
         let params = TaskQueryParams {
             id: task_id.to_string(),
             history_length,
@@ -301,10 +295,7 @@ impl AsyncA2AClient for HttpClient {
 
     /// List tasks with filtering and pagination (v0.3.0)
     #[cfg_attr(feature = "tracing", instrument(skip(self, params)))]
-    async fn list_tasks(
-        &self,
-        params: &ListTasksParams,
-    ) -> Result<ListTasksResult, A2AError> {
+    async fn list_tasks(&self, params: &ListTasksParams) -> Result<ListTasksResult, A2AError> {
         let request = json_rpc::ListTasksRequest::new(Some(params.clone()));
         let response = self.send_request(&A2ARequest::ListTasks(request)).await?;
 

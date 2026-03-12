@@ -87,7 +87,7 @@ async fn main() -> Result<(), BuildError> {
     // No manual storage creation, no boilerplate!
     AgentBuilder::from_file("examples/auto_storage.toml")?
         .with_handler(EchoHandler)
-        .build_with_auto_storage()  // <- Magic happens here!
+        .build_with_auto_storage() // <- Magic happens here!
         .await?
         .run()
         .await
