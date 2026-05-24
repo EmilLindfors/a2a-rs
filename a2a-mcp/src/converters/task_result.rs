@@ -2,7 +2,7 @@
 
 use crate::converters::MessageConverter;
 use crate::error::{A2aMcpError, Result};
-use a2a_rs::domain::{Message, Part, Role, Task, TaskState};
+use a2a_rs::domain::{Message, Role, Task, TaskState};
 use rmcp::model::{CallToolResult, Content};
 
 /// Converts between A2A Task and MCP CallToolResult
@@ -13,14 +13,14 @@ impl TaskResultConverter {
     ///
     /// Extracts the last agent message and any artifacts as the tool result
     pub fn task_to_result(task: &Task) -> Result<CallToolResult> {
-        // Get history or create empty vec
-        let history = task.history.as_ref().map(|h| h.as_slice()).unwrap_or(&[]);
+        // Get history
+        let history = &task.history;
 
         // Find the last agent message in the task
         let agent_message = history
             .iter()
             .rev()
-            .find(|m| m.role == Role::Agent)
+            .find(|m| m.role == buffa::enumeration::EnumValue::Known(Role::ROLE_AGENT))
             .or_else(|| history.last())
             .ok_or_else(|| {
                 A2aMcpError::InvalidMessage("No messages in task history".to_string())
@@ -30,48 +30,70 @@ impl TaskResultConverter {
         let mut content = MessageConverter::message_to_content(agent_message)?;
 
         // Add artifacts as additional content if available
-        if let Some(artifacts) = &task.artifacts {
-            for artifact in artifacts {
-                // Artifacts have parts, so convert each part
-                for part in &artifact.parts {
-                    match part {
-                        Part::Text { text, .. } => {
-                            let artifact_text = if let Some(ref name) = artifact.name {
-                                format!("Artifact '{}': {}", name, text)
-                            } else {
-                                format!("Artifact: {}", text)
-                            };
-                            content.push(Content::text(artifact_text));
-                        }
-                        Part::File { file, .. } => {
-                            let file_text = if let Some(ref name) = artifact.name {
-                                format!("Artifact '{}': File {:?}", name, file.name)
-                            } else {
-                                format!("Artifact File: {:?}", file.name)
-                            };
-                            content.push(Content::text(file_text));
-                        }
-                        Part::Data { data, .. } => {
-                            let data_json = serde_json::to_string_pretty(
-                                &serde_json::Value::Object(data.clone()),
-                            )?;
-                            let artifact_data = if let Some(ref name) = artifact.name {
-                                format!("Artifact '{}' data:\n{}", name, data_json)
-                            } else {
-                                format!("Artifact data:\n{}", data_json)
-                            };
-                            content.push(Content::text(artifact_data));
-                        }
+        for artifact in &task.artifacts {
+            // Artifacts have parts, so convert each part
+            for part in &artifact.parts {
+                use a2a_rs::domain::generated::part;
+                match &part.content {
+                    Some(part::Content::Text(text)) => {
+                        let artifact_text = if !artifact.name.is_empty() {
+                            format!("Artifact '{}': {}", artifact.name, text)
+                        } else {
+                            format!("Artifact: {}", text)
+                        };
+                        content.push(Content::text(artifact_text));
                     }
+                    Some(part::Content::Raw(_)) | Some(part::Content::Url(_)) => {
+                        let file_text = if !artifact.name.is_empty() {
+                            format!("Artifact '{}': File {:?}", artifact.name, part.filename)
+                        } else {
+                            format!("Artifact File: {:?}", part.filename)
+                        };
+                        content.push(Content::text(file_text));
+                    }
+                    Some(part::Content::Data(value)) => {
+                        let data_json = serde_json::to_string_pretty(&value)?;
+                        let artifact_data = if !artifact.name.is_empty() {
+                            format!("Artifact '{}' data:\n{}", artifact.name, data_json)
+                        } else {
+                            format!("Artifact data:\n{}", data_json)
+                        };
+                        content.push(Content::text(artifact_data));
+                    }
+                    None => {}
                 }
             }
         }
 
+        let is_input_required = task
+            .status
+            .as_option()
+            .map(|s| {
+                s.state == buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_INPUT_REQUIRED)
+            })
+            .unwrap_or(false);
+
+        if is_input_required {
+            let prompt = format!(
+                "\n\n[Task suspended awaiting input. To continue, please call this tool again with `task_id`: '{}' and provide the requested information in the `message` parameter.]",
+                task.id
+            );
+            content.push(Content::text(prompt));
+        }
+
         // Determine if the task completed successfully
-        let is_error = matches!(
-            task.status.state,
-            TaskState::Failed | TaskState::Rejected | TaskState::Canceled
-        );
+        let is_error = task
+            .status
+            .as_option()
+            .map(|s| {
+                matches!(
+                    s.state,
+                    buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_FAILED)
+                        | buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_REJECTED)
+                        | buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_CANCELED)
+                )
+            })
+            .unwrap_or(false);
 
         Ok(if is_error {
             CallToolResult::error(content)
@@ -97,15 +119,26 @@ impl TaskResultConverter {
 
     /// Check if a task is in a final state
     pub fn is_task_final(task: &Task) -> bool {
-        matches!(
-            task.status.state,
-            TaskState::Completed | TaskState::Failed | TaskState::Rejected | TaskState::Canceled
-        )
+        task.status
+            .as_option()
+            .map(|s| {
+                matches!(
+                    s.state,
+                    buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_COMPLETED)
+                        | buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_FAILED)
+                        | buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_REJECTED)
+                        | buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_CANCELED)
+                )
+            })
+            .unwrap_or(false)
     }
 
     /// Check if a task completed successfully
     pub fn is_task_successful(task: &Task) -> bool {
-        task.status.state == TaskState::Completed
+        task.status
+            .as_option()
+            .map(|s| s.state == buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_COMPLETED))
+            .unwrap_or(false)
     }
 }
 
@@ -119,29 +152,20 @@ mod tests {
         let task = Task::builder()
             .id("task-1".to_string())
             .context_id("ctx-1".to_string())
-            .status(TaskStatus {
-                state: TaskState::Completed,
-                message: None,
-                timestamp: None,
-            })
+            .status(TaskStatus::new(TaskState::TASK_STATE_COMPLETED, None))
             .history(vec![Message::builder()
                 .role(Role::Agent)
-                .parts(vec![Part::Text {
-                    text: "Result text".to_string(),
-                    metadata: None,
-                }])
+                .parts(vec![Part::text("Result text".to_string())])
                 .message_id("msg-1".to_string())
                 .build()])
             .artifacts(vec![Artifact {
                 artifact_id: "art-1".to_string(),
-                name: Some("Test Artifact".to_string()),
-                description: None,
-                parts: vec![Part::Text {
-                    text: "Additional artifact".to_string(),
-                    metadata: None,
-                }],
-                metadata: None,
-                extensions: None,
+                name: "Test Artifact".to_string(),
+                description: String::new(),
+                parts: vec![Part::text("Additional artifact".to_string())],
+                metadata: None.into(),
+                extensions: Vec::new(),
+                ..Default::default()
             }])
             .build();
 
@@ -155,17 +179,10 @@ mod tests {
         let task = Task::builder()
             .id("task-2".to_string())
             .context_id("ctx-2".to_string())
-            .status(TaskStatus {
-                state: TaskState::Failed,
-                message: None,
-                timestamp: None,
-            })
+            .status(TaskStatus::new(TaskState::TASK_STATE_FAILED, None))
             .history(vec![Message::builder()
                 .role(Role::Agent)
-                .parts(vec![Part::Text {
-                    text: "Error details".to_string(),
-                    metadata: None,
-                }])
+                .parts(vec![Part::text("Error details".to_string())])
                 .message_id("msg-2".to_string())
                 .build()])
             .build();
@@ -179,22 +196,14 @@ mod tests {
         let completed = Task::builder()
             .id("1".to_string())
             .context_id("ctx-1".to_string())
-            .status(TaskStatus {
-                state: TaskState::Completed,
-                message: None,
-                timestamp: None,
-            })
+            .status(TaskStatus::new(TaskState::TASK_STATE_COMPLETED, None))
             .build();
         assert!(TaskResultConverter::is_task_final(&completed));
 
         let working = Task::builder()
             .id("2".to_string())
             .context_id("ctx-2".to_string())
-            .status(TaskStatus {
-                state: TaskState::Working,
-                message: None,
-                timestamp: None,
-            })
+            .status(TaskStatus::new(TaskState::TASK_STATE_WORKING, None))
             .build();
         assert!(!TaskResultConverter::is_task_final(&working));
     }

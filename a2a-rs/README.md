@@ -4,17 +4,17 @@
 [![Documentation](https://docs.rs/a2a-rs/badge.svg)](https://docs.rs/a2a-rs)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Rust implementation of the Agent-to-Agent (A2A) Protocol v0.3.0, providing a type-safe, idiomatic way to build agent communication systems.
+A Rust implementation of the Agent-to-Agent (A2A) Protocol v1.0.0, providing a type-safe, idiomatic way to build agent communication systems.
 
 ## Features
 
-- 🚀 **A2A Protocol v0.3.0** - Full support for the latest A2A specification including:
+- 🚀 **A2A Protocol v1.0.0** - Full support for the latest A2A specification including:
   - Enhanced push notification management with listing and deletion
   - Task listing with comprehensive filtering and pagination
   - Authenticated extended card support
   - Protocol extensions framework
-  - Multi-transport support (JSONRPC, GRPC, HTTP+JSON)
-- 🔄 **Multiple Transport Options** - HTTP and WebSocket support
+  - Multi-transport support (GRPC, HTTP+JSON)
+- 🔄 **Multiple Transport Options** - HTTP support
 - 📡 **Streaming Updates** - Real-time task and artifact updates
 - 🔐 **Authentication & Security** - JWT, OAuth2, OpenID Connect support with agent card signatures
 - 💾 **Persistent Storage** - SQLx integration for task persistence
@@ -106,8 +106,6 @@ This library follows a hexagonal architecture pattern:
 - `server` - Server-side functionality  
 - `http-client` - HTTP client implementation
 - `http-server` - HTTP server implementation
-- `ws-client` - WebSocket client implementation
-- `ws-server` - WebSocket server implementation
 - `auth` - Authentication support (JWT, OAuth2, OpenID Connect)
 - `sqlx-storage` - SQLx-based persistent storage
 - `sqlite` - SQLite database support
@@ -121,7 +119,6 @@ This library follows a hexagonal architecture pattern:
 See the [examples](examples/) directory for complete working examples:
 
 - [HTTP Client/Server](examples/http_client_server.rs)
-- [WebSocket Client/Server](examples/websocket_client_server.rs)
 - [SQLx Storage Demo](examples/sqlx_storage_demo.rs)
 - [Storage Comparison](examples/storage_comparison.rs)
 

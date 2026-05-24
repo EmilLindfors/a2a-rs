@@ -1,8 +1,8 @@
 use a2a_rs::adapter::{
     BearerTokenAuthenticator, DefaultRequestProcessor, HttpPushNotificationSender, HttpServer,
-    InMemoryTaskStorage, SimpleAgentInfo, WebSocketServer,
+    InMemoryTaskStorage, SimpleAgentInfo,
 };
-use a2a_rs::port::{AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager};
+use a2a_rs::port::{AsyncNotificationManager, AsyncTaskManager};
 
 // SQLx storage support (feature-gated)
 #[cfg(feature = "sqlx")]
@@ -76,7 +76,7 @@ impl ReimbursementServer {
         match &self.config.storage {
             StorageConfig::InMemory => {
                 let storage = self.create_in_memory_storage();
-                self.start_http_server(storage).await
+                self.start(storage).await
             }
             #[cfg(feature = "sqlx")]
             StorageConfig::Sqlx {
@@ -87,7 +87,7 @@ impl ReimbursementServer {
                 let storage = self
                     .create_sqlx_storage(url, *max_connections, *enable_logging)
                     .await?;
-                self.start_http_server(storage).await
+                self.start(storage).await
             }
             #[cfg(not(feature = "sqlx"))]
             StorageConfig::Sqlx { .. } => {
@@ -97,9 +97,9 @@ impl ReimbursementServer {
     }
 
     /// Start HTTP server
-    async fn start_http_server<S>(&self, storage: S) -> Result<(), Box<dyn std::error::Error>>
+    pub async fn start<S>(&self, storage: S) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+        S: AsyncTaskManager + AsyncNotificationManager + a2a_rs::port::AsyncStreamingHandler + Clone + Send + Sync + 'static,
     {
         // Create message handler with storage for history management
         let message_handler = ReimbursementHandler::new(storage.clone());
@@ -113,7 +113,7 @@ impl ReimbursementServer {
         storage: S,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+        S: AsyncTaskManager + AsyncNotificationManager + a2a_rs::port::AsyncStreamingHandler + Clone + Send + Sync + 'static,
         H: a2a_rs::port::message_handler::AsyncMessageHandler + Clone + Send + Sync + 'static,
     {
         // Create agent info with reimbursement capabilities
@@ -231,244 +231,5 @@ impl ReimbursementServer {
         }
     }
 
-    /// Start the WebSocket server
-    pub async fn start_websocket(&self) -> Result<(), Box<dyn std::error::Error>> {
-        match &self.config.storage {
-            StorageConfig::InMemory => {
-                let storage = self.create_in_memory_storage();
-                self.start_websocket_server(storage).await
-            }
-            #[cfg(feature = "sqlx")]
-            StorageConfig::Sqlx {
-                url,
-                max_connections,
-                enable_logging,
-            } => {
-                let storage = self
-                    .create_sqlx_storage(url, *max_connections, *enable_logging)
-                    .await?;
-                self.start_websocket_server(storage).await
-            }
-            #[cfg(not(feature = "sqlx"))]
-            StorageConfig::Sqlx { .. } => {
-                Err("SQLx storage requested but 'sqlx' feature is not enabled.".into())
-            }
-        }
-    }
 
-    /// Start WebSocket server with specific storage
-    async fn start_websocket_server<S>(&self, storage: S) -> Result<(), Box<dyn std::error::Error>>
-    where
-        S: AsyncTaskManager
-            + AsyncNotificationManager
-            + AsyncStreamingHandler
-            + Clone
-            + Send
-            + Sync
-            + 'static,
-    {
-        // Create message handler with storage for history management
-        let message_handler = ReimbursementHandler::new(storage.clone());
-
-        // Create agent info with reimbursement capabilities
-        let agent_info = SimpleAgentInfo::new(
-            "Reimbursement Agent".to_string(),
-            format!("ws://{}:{}", self.config.host, self.config.ws_port),
-        )
-        .with_description("An intelligent agent that handles employee reimbursement requests, from form generation to approval processing.".to_string())
-        .with_provider(
-            "Example Organization".to_string(),
-            "https://example.org".to_string(),
-        )
-        .with_documentation_url("https://example.org/docs/reimbursement-agent".to_string())
-        .with_streaming()
-        .with_push_notifications()
-        .with_state_transition_history()
-        .with_authenticated_extended_card()
-        .add_comprehensive_skill(
-            "process_reimbursement".to_string(),
-            "Process Reimbursement".to_string(),
-            Some("Helps with the reimbursement process for users given the amount and purpose of the reimbursement. Generates forms, validates submissions, and processes approvals.".to_string()),
-            Some(vec![
-                "reimbursement".to_string(),
-                "expense".to_string(),
-                "finance".to_string(),
-                "forms".to_string(),
-            ]),
-            Some(vec![
-                "Can you reimburse me $20 for my lunch with the clients?".to_string(),
-                "I need to submit a reimbursement for $150 for office supplies".to_string(),
-                "Process my travel expense of $500 for the conference".to_string(),
-            ]),
-            Some(vec!["text".to_string(), "data".to_string()]),
-            Some(vec!["text".to_string(), "data".to_string()]),
-        );
-
-        // Create processor with separate handlers and agent info
-        let processor = DefaultRequestProcessor::new(
-            message_handler,
-            storage.clone(), // storage implements AsyncTaskManager
-            storage.clone(), // storage also implements AsyncNotificationManager
-            agent_info.clone(),
-        );
-
-        // Create WebSocket server
-        let bind_address = format!("{}:{}", self.config.host, self.config.ws_port);
-
-        println!(
-            "🔌 Starting WebSocket reimbursement server on {}:{}",
-            self.config.host, self.config.ws_port
-        );
-        println!(
-            "📋 WebSocket URL: ws://{}:{}",
-            self.config.host, self.config.ws_port
-        );
-
-        match &self.config.storage {
-            StorageConfig::InMemory => println!("💾 Storage: In-memory (non-persistent)"),
-            StorageConfig::Sqlx { url, .. } => println!("💾 Storage: SQLx ({})", url),
-        }
-
-        match &self.config.auth {
-            AuthConfig::None => {
-                println!("🔓 Authentication: None (public access)");
-
-                // Create server without authentication
-                // Pass storage as the streaming handler (it implements AsyncStreamingHandler)
-                let server = WebSocketServer::new(processor, agent_info, storage, bind_address);
-                server
-                    .start()
-                    .await
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
-            }
-            AuthConfig::BearerToken { tokens, format } => {
-                println!(
-                    "🔐 Authentication: Bearer token ({} token(s){})",
-                    tokens.len(),
-                    format
-                        .as_ref()
-                        .map(|f| format!(", format: {}", f))
-                        .unwrap_or_default()
-                );
-
-                let authenticator = BearerTokenAuthenticator::new(tokens.clone());
-                // Pass storage as the streaming handler (it implements AsyncStreamingHandler)
-                let server = WebSocketServer::with_auth(
-                    processor,
-                    agent_info,
-                    storage,
-                    bind_address,
-                    authenticator,
-                );
-                server
-                    .start()
-                    .await
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
-            }
-            AuthConfig::ApiKey {
-                keys,
-                location,
-                name,
-            } => {
-                println!(
-                    "🔐 Authentication: API key ({} {}, {} key(s))",
-                    location,
-                    name,
-                    keys.len()
-                );
-                println!("⚠️  API key authentication not yet supported, using no authentication");
-
-                // Create server without authentication
-                // Pass storage as the streaming handler (it implements AsyncStreamingHandler)
-                let server = WebSocketServer::new(processor, agent_info, storage, bind_address);
-                server
-                    .start()
-                    .await
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
-            }
-        }
-    }
-
-    /// Start both HTTP and WebSocket servers
-    pub async fn start_all(&self) -> Result<(), Box<dyn std::error::Error>> {
-        println!("🚀 Starting modern reimbursement agent...");
-        println!("🔄 Starting both HTTP and WebSocket servers with SHARED storage");
-
-        match &self.config.storage {
-            StorageConfig::InMemory => {
-                println!(
-                    "💾 Storage: In-memory (non-persistent) - SHARED between HTTP and WebSocket"
-                );
-                let storage = self.create_in_memory_storage();
-                self.start_both_with_storage(storage).await
-            }
-            #[cfg(feature = "sqlx")]
-            StorageConfig::Sqlx {
-                url,
-                max_connections,
-                enable_logging,
-            } => {
-                println!(
-                    "💾 Storage: SQLx ({}) - SHARED between HTTP and WebSocket",
-                    url
-                );
-                let storage = self
-                    .create_sqlx_storage(url, *max_connections, *enable_logging)
-                    .await?;
-                self.start_both_with_storage(storage).await
-            }
-            #[cfg(not(feature = "sqlx"))]
-            StorageConfig::Sqlx { .. } => {
-                Err("SQLx storage requested but 'sqlx' feature is not enabled.".into())
-            }
-        }
-    }
-
-    /// Start both servers with shared storage
-    async fn start_both_with_storage<S>(&self, storage: S) -> Result<(), Box<dyn std::error::Error>>
-    where
-        S: AsyncTaskManager
-            + AsyncNotificationManager
-            + AsyncStreamingHandler
-            + Clone
-            + Send
-            + Sync
-            + 'static,
-    {
-        // Clone storage for both servers (they share the same Arc-wrapped data)
-        let http_storage = storage.clone();
-        let ws_storage = storage;
-
-        // Clone config for the server tasks
-        let http_config = self.config.clone();
-        let ws_config = self.config.clone();
-
-        // Start HTTP server in a separate task with shared storage
-        let http_handle = tokio::spawn(async move {
-            let server = ReimbursementServer::from_config(http_config);
-            if let Err(e) = server.start_http_server(http_storage).await {
-                eprintln!("❌ HTTP server error: {}", e);
-            }
-        });
-
-        // Start WebSocket server in a separate task with shared storage
-        let ws_handle = tokio::spawn(async move {
-            let server = ReimbursementServer::from_config(ws_config);
-            if let Err(e) = server.start_websocket_server(ws_storage).await {
-                eprintln!("❌ WebSocket server error: {}", e);
-            }
-        });
-
-        // Wait for both servers (they run indefinitely)
-        tokio::select! {
-            _ = http_handle => {
-                println!("HTTP server stopped");
-            }
-            _ = ws_handle => {
-                println!("WebSocket server stopped");
-            }
-        }
-
-        Ok(())
-    }
 }

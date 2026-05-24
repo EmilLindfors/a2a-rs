@@ -27,23 +27,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message1 = Message::builder()
         .role(Role::User)
         .message_id(Uuid::new_v4().to_string())
-        .parts(vec![Part::Data {
-            data: {
-                let mut data = Map::new();
-                data.insert("date".to_string(), Value::String("2024-01-20".to_string()));
-                data.insert(
-                    "amount".to_string(),
-                    Value::Number(serde_json::Number::from(50)),
-                );
-                data.insert(
-                    "purpose".to_string(),
-                    Value::String("Team lunch".to_string()),
-                );
-                data.insert("category".to_string(), Value::String("meals".to_string()));
-                data
-            },
-            metadata: None,
-        }])
+        .parts(vec![Part::data({
+            let mut data = Map::new();
+            data.insert("date".to_string(), Value::String("2024-01-20".to_string()));
+            data.insert(
+                "amount".to_string(),
+                Value::Number(serde_json::Number::from(50)),
+            );
+            data.insert(
+                "purpose".to_string(),
+                Value::String("Team lunch".to_string()),
+            );
+            data.insert("category".to_string(), Value::String("meals".to_string()));
+            serde_json::from_value(Value::Object(data)).unwrap()
+        })])
         .build();
 
     let _task1 = handler.process_message("task1", &message1, None).await?;
@@ -54,23 +51,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message2 = Message::builder()
         .role(Role::User)
         .message_id(Uuid::new_v4().to_string())
-        .parts(vec![Part::Data {
-            data: {
-                let mut data = Map::new();
-                data.insert("date".to_string(), Value::String("2024-01-25".to_string()));
-                data.insert(
-                    "amount".to_string(),
-                    Value::Number(serde_json::Number::from(500)),
-                );
-                data.insert(
-                    "purpose".to_string(),
-                    Value::String("Conference attendance".to_string()),
-                );
-                data.insert("category".to_string(), Value::String("travel".to_string()));
-                data
-            },
-            metadata: None,
-        }])
+        .parts(vec![Part::data({
+            let mut data = Map::new();
+            data.insert("date".to_string(), Value::String("2024-01-25".to_string()));
+            data.insert(
+                "amount".to_string(),
+                Value::Number(serde_json::Number::from(500)),
+            );
+            data.insert(
+                "purpose".to_string(),
+                Value::String("Conference attendance".to_string()),
+            );
+            data.insert("category".to_string(), Value::String("travel".to_string()));
+            serde_json::from_value(Value::Object(data)).unwrap()
+        })])
         .build();
 
     let _task2 = handler.process_message("task2", &message2, None).await?;
@@ -81,20 +75,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message3 = Message::builder()
         .role(Role::User)
         .message_id(Uuid::new_v4().to_string())
-        .parts(vec![Part::Data {
-            data: {
-                let mut data = Map::new();
-                data.insert("date".to_string(), Value::String("".to_string())); // Empty date
-                data.insert(
-                    "amount".to_string(),
-                    Value::Number(serde_json::Number::from(100)),
-                );
-                data.insert("purpose".to_string(), Value::String("".to_string())); // Empty purpose
-                data.insert("category".to_string(), Value::String("meals".to_string()));
-                data
-            },
-            metadata: None,
-        }])
+        .parts(vec![Part::data({
+            let mut data = Map::new();
+            data.insert("date".to_string(), Value::String("".to_string())); // Empty date
+            data.insert(
+                "amount".to_string(),
+                Value::Number(serde_json::Number::from(100)),
+            );
+            data.insert("purpose".to_string(), Value::String("".to_string())); // Empty purpose
+            data.insert("category".to_string(), Value::String("meals".to_string()));
+            serde_json::from_value(Value::Object(data)).unwrap()
+        })])
         .build();
 
     let result3 = handler.process_message("task3", &message3, None).await;
@@ -109,10 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message4 = Message::builder()
         .role(Role::User)
         .message_id(Uuid::new_v4().to_string())
-        .parts(vec![Part::Text {
-            text: "I need to submit a reimbursement request".to_string(),
-            metadata: None,
-        }])
+        .parts(vec![Part::text("I need to submit a reimbursement request".to_string())])
         .build();
 
     let _task4 = handler.process_message("task4", &message4, None).await?;

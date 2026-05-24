@@ -17,12 +17,12 @@ use std::time::Duration;
 ///
 /// #[tokio::main]
 /// async fn main() {
-///     let cache = AgentCache::<String, String>::new()
+///     let cache = AgentCache::<&'static str, &'static str>::new()
 ///         .with_max_capacity(1000)
 ///         .with_ttl(Duration::from_secs(300));
 ///
 ///     cache.insert("key", "value").await;
-///     let value = cache.get("key").await;
+///     let value = cache.get(&"key").await;
 ///     assert_eq!(value, Some("value"));
 /// }
 /// ```
@@ -79,6 +79,7 @@ where
     /// Clear all entries from the cache.
     pub async fn clear(&self) {
         self.cache.invalidate_all();
+        self.cache.run_pending_tasks().await;
     }
 
     /// Get the number of entries in the cache.
@@ -177,6 +178,7 @@ mod tests {
 
         cache.insert("key1", "value1").await;
         cache.insert("key2", "value2").await;
+        cache.cache.run_pending_tasks().await;
         assert_eq!(cache.len().await, 2);
 
         cache.clear().await;

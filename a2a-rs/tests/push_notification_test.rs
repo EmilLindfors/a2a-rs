@@ -4,13 +4,13 @@
 
 mod common;
 
-use a2a_rs::{
+use a2a_rs::{TaskPushNotificationConfig, 
     adapter::{
         DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage,
         PushNotificationSender, SimpleAgentInfo,
     },
     domain::{
-        A2AError, Message, Part, PushNotificationConfig, TaskArtifactUpdateEvent,
+        A2AError, Message, Part,  TaskArtifactUpdateEvent,
         TaskStatusUpdateEvent,
     },
     services::AsyncA2AClient,
@@ -50,7 +50,7 @@ impl MockPushNotificationSender {
 impl PushNotificationSender for MockPushNotificationSender {
     async fn send_status_update(
         &self,
-        config: &PushNotificationConfig,
+        config: &a2a_rs::domain::TaskPushNotificationConfig,
         event: &TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         // Record the update
@@ -64,7 +64,7 @@ impl PushNotificationSender for MockPushNotificationSender {
 
     async fn send_artifact_update(
         &self,
-        config: &PushNotificationConfig,
+        config: &a2a_rs::domain::TaskPushNotificationConfig,
         event: &TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
         // Record the update
@@ -129,17 +129,17 @@ async fn test_push_notifications() {
     // Create the client
     let client = HttpClient::new("http://localhost:8184".to_string());
 
-    // Test 1: Set push notification with ID (v0.3.0 feature)
+    // Test 1: Set push notification with ID (v1.0.0 feature)
     let task_id = format!("push-task-{}", uuid::Uuid::new_v4());
     let push_config_id = "config-123".to_string();
     let push_config = a2a_rs::domain::TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id.clone(),
-        push_notification_config: PushNotificationConfig {
-            id: Some(push_config_id.clone()),
-            url: "https://example.com/webhook".to_string(),
-            token: Some("test-token".to_string()),
-            authentication: None,
-        },
+        id: push_config_id.clone(),
+        url: "https://example.com/webhook".to_string(),
+        token: "test-token".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     let result = client.set_task_push_notification(&push_config).await;
@@ -156,33 +156,24 @@ async fn test_push_notifications() {
     // Give time for push notifications to be processed
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // Test 3: Add an artifact
-    let artifact_part = Part::Text {
-        text: "Artifact content".to_string(),
-        metadata: None,
-    };
+    let artifact_part = Part::text("Artifact content".to_string());
 
     let _artifact = a2a_rs::domain::Artifact {
         artifact_id: format!("artifact-{}", uuid::Uuid::new_v4()),
-        name: Some("test-artifact".to_string()),
-        description: Some("A test artifact".to_string()),
+        name: "test-artifact".to_string(),
+        description: "A test artifact".to_string(),
         parts: vec![artifact_part],
-        metadata: None,
-        extensions: None,
+        metadata: None.into(),
+        extensions: Vec::new(),
+        ..Default::default()
     };
 
     let artifact_message_id = format!("msg-{}", uuid::Uuid::new_v4());
-    let artifact_message = Message {
-        message_id: artifact_message_id,
-        context_id: Some("default".to_string()),
-        role: a2a_rs::domain::Role::Agent,
-        kind: "message".to_string(),
-        parts: vec![],
-        metadata: None,
-        reference_task_ids: None,
-        task_id: None,
-        extensions: None,
-    };
+    let artifact_message = Message::builder()
+        .message_id(artifact_message_id)
+        .context_id("default".to_string())
+        .role(a2a_rs::domain::Role::Agent)
+        .build();
 
     // Send the artifact message
     let _task = client
@@ -210,26 +201,26 @@ async fn test_push_notifications() {
         "Should have sent at least one status update"
     );
 
-    // Test 5: Test multiple push notification configs (v0.3.0 feature)
+    // Test 5: Test multiple push notification configs (v1.0.0 feature)
     // Set a second push notification config with a different ID
     let task_id_multi = format!("push-task-multi-{}", uuid::Uuid::new_v4());
     let push_config_1 = a2a_rs::domain::TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id_multi.clone(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config-1".to_string()),
-            url: "https://example.com/webhook1".to_string(),
-            token: Some("token-1".to_string()),
-            authentication: None,
-        },
+        id: "config-1".to_string(),
+        url: "https://example.com/webhook1".to_string(),
+        token: "token-1".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
     let push_config_2 = a2a_rs::domain::TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id_multi.clone(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config-2".to_string()),
-            url: "https://example.com/webhook2".to_string(),
-            token: Some("token-2".to_string()),
-            authentication: None,
-        },
+        id: "config-2".to_string(),
+        url: "https://example.com/webhook2".to_string(),
+        token: "token-2".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     // Set both configs
@@ -248,17 +239,19 @@ async fn test_push_notifications() {
     server_handle.await.expect("Server task failed");
 }
 
-/// Test push notification config with ID field (v0.3.0)
+/// Test push notification config with ID field (v1.0.0)
 #[tokio::test]
 async fn test_push_notification_config_id() {
-    use a2a_rs::domain::PushNotificationConfig;
-
+    
     // Create a config with an ID
-    let config_with_id = PushNotificationConfig {
-        id: Some("unique-config-123".to_string()),
+    let config_with_id = TaskPushNotificationConfig {
+        tenant: String::new(),
+        task_id: "dummy".to_string(),
+        id: "unique-config-123".to_string(),
         url: "https://example.com/webhook".to_string(),
-        token: Some("bearer-token".to_string()),
-        authentication: None,
+        token: "bearer-token".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     // Serialize and verify ID is present
@@ -267,15 +260,18 @@ async fn test_push_notification_config_id() {
     assert_eq!(config_json["url"], "https://example.com/webhook");
 
     // Create a config without an ID (should still be valid)
-    let config_without_id = PushNotificationConfig {
-        id: None,
+    let config_without_id = TaskPushNotificationConfig {
+        tenant: String::new(),
+        task_id: "dummy".to_string(),
+        id: String::new(),
         url: "https://example.com/webhook".to_string(),
-        token: Some("bearer-token".to_string()),
-        authentication: None,
+        token: "bearer-token".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
-    // Serialize and verify ID is not present when None
+    // Serialize and verify ID is not present or empty when None/empty in proto
     let config_json = serde_json::to_value(&config_without_id).unwrap();
-    assert!(config_json.get("id").is_none());
+    assert!(config_json.get("id").map_or(true, |v| v.as_str() == Some("")));
     assert_eq!(config_json["url"], "https://example.com/webhook");
 }

@@ -1,9 +1,9 @@
 //! Error types for server adapters
 
-#[cfg(any(feature = "http-server", feature = "ws-server"))]
+#[cfg(feature = "http-server")]
 use std::io;
 
-#[cfg(any(feature = "http-server", feature = "ws-server"))]
+#[cfg(feature = "http-server")]
 use thiserror::Error;
 
 /// Error type for HTTP server adapter
@@ -27,30 +27,6 @@ pub enum HttpServerError {
     InvalidRequest(String),
 }
 
-/// Error type for WebSocket server adapter
-#[derive(Error, Debug)]
-#[cfg(feature = "ws-server")]
-pub enum WebSocketServerError {
-    /// WebSocket server error
-    #[error("WebSocket server error: {0}")]
-    Server(String),
-
-    /// IO error during WebSocket operations
-    #[error("IO error: {0}")]
-    Io(#[from] io::Error),
-
-    /// WebSocket connection error
-    #[error("WebSocket connection error: {0}")]
-    Connection(String),
-
-    /// WebSocket message error
-    #[error("WebSocket message error: {0}")]
-    Message(String),
-
-    /// JSON serialization error
-    #[error("JSON serialization error: {0}")]
-    Json(#[from] serde_json::Error),
-}
 
 // Conversion from adapter errors to domain errors
 #[cfg(feature = "http-server")]
@@ -67,21 +43,4 @@ impl From<HttpServerError> for crate::domain::A2AError {
     }
 }
 
-#[cfg(feature = "ws-server")]
-impl From<WebSocketServerError> for crate::domain::A2AError {
-    fn from(error: WebSocketServerError) -> Self {
-        match error {
-            WebSocketServerError::Server(msg) => {
-                crate::domain::A2AError::Internal(format!("WebSocket server error: {}", msg))
-            }
-            WebSocketServerError::Io(e) => crate::domain::A2AError::Io(e),
-            WebSocketServerError::Connection(msg) => {
-                crate::domain::A2AError::Internal(format!("WebSocket connection error: {}", msg))
-            }
-            WebSocketServerError::Message(msg) => {
-                crate::domain::A2AError::Internal(format!("WebSocket message error: {}", msg))
-            }
-            WebSocketServerError::Json(e) => crate::domain::A2AError::JsonParse(e),
-        }
-    }
-}
+

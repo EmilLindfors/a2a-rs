@@ -145,11 +145,7 @@ async fn run_storage_tests<T: AsyncTaskManager>(
 
     // Test 4: Get task with history
     let task_with_history = storage.get_task(&task_id, Some(10)).await?;
-    let history_count = task_with_history
-        .history
-        .as_ref()
-        .map(|h| h.len())
-        .unwrap_or(0);
+    let history_count = task_with_history.history.len();
     println!("  ✓ Retrieved task with {} history entries", history_count);
 
     // Test 5: Complete the task

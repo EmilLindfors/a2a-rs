@@ -62,9 +62,9 @@ impl AgentConfig {
             ));
         }
 
-        if self.server.http_port == 0 && self.server.ws_port == 0 {
+        if !self.features.mcp_server.enabled && self.server.http_port == 0 && self.server.ws_port == 0 {
             return Err(ConfigError::ValidationError(
-                "At least one server port must be configured".to_string(),
+                "At least one server port must be configured when MCP server is disabled".to_string(),
             ));
         }
 

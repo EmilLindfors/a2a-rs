@@ -1,11 +1,11 @@
-//! Tests for InMemoryTaskStorage v0.3.0 methods
+//! Tests for InMemoryTaskStorage v1.0.0 methods
 
-use a2a_rs::{
+use a2a_rs::{TaskPushNotificationConfig, 
     adapter::InMemoryTaskStorage,
     domain::{
         DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-        ListTaskPushNotificationConfigParams, ListTasksParams, PushNotificationConfig,
-        TaskPushNotificationConfig, TaskState,
+        ListTaskPushNotificationConfigsParams, ListTasksParams, 
+        TaskState,
     },
     port::{AsyncNotificationManager, AsyncTaskManager},
 };
@@ -208,13 +208,20 @@ async fn test_list_tasks_v3_filter_by_last_updated_after() {
         .expect("Failed to get task");
     let middle_timestamp = middle_task
         .status
-        .timestamp
+        .as_option()
+        .and_then(|s| s.timestamp_utc())
         .expect("Task should have timestamp")
         .timestamp_millis();
+    let middle_rfc = middle_task
+        .status
+        .as_option()
+        .and_then(|s| s.timestamp_utc())
+        .expect("Task should have timestamp")
+        .to_rfc3339();
 
     // Filter by tasks updated after the middle task
     let params = ListTasksParams {
-        last_updated_after: Some(middle_timestamp),
+        status_timestamp_after: Some(middle_rfc),
         ..Default::default()
     };
     let result = storage
@@ -230,7 +237,8 @@ async fn test_list_tasks_v3_filter_by_last_updated_after() {
     for task in &result.tasks {
         let task_time = task
             .status
-            .timestamp
+            .as_option()
+            .and_then(|s| s.timestamp_utc())
             .expect("Task should have timestamp")
             .timestamp_millis();
         assert!(
@@ -508,19 +516,35 @@ async fn test_list_tasks_v3_history_length() {
 
     // Make several state transitions to create history
     storage
-        .update_task_status(task_id, TaskState::Working, None)
+        .update_task_status(
+            task_id,
+            TaskState::Working,
+            Some(a2a_rs::Message::user_text("working 1".to_string(), "msg-1".to_string())),
+        )
         .await
         .expect("Failed to update");
     storage
-        .update_task_status(task_id, TaskState::InputRequired, None)
+        .update_task_status(
+            task_id,
+            TaskState::InputRequired,
+            Some(a2a_rs::Message::user_text("input required".to_string(), "msg-2".to_string())),
+        )
         .await
         .expect("Failed to update");
     storage
-        .update_task_status(task_id, TaskState::Working, None)
+        .update_task_status(
+            task_id,
+            TaskState::Working,
+            Some(a2a_rs::Message::user_text("working 2".to_string(), "msg-3".to_string())),
+        )
         .await
         .expect("Failed to update");
     storage
-        .update_task_status(task_id, TaskState::Completed, None)
+        .update_task_status(
+            task_id,
+            TaskState::Completed,
+            Some(a2a_rs::Message::user_text("completed".to_string(), "msg-4".to_string())),
+        )
         .await
         .expect("Failed to update");
 
@@ -535,9 +559,7 @@ async fn test_list_tasks_v3_history_length() {
         .expect("Failed to list tasks");
 
     let task = &result.tasks[0];
-    if let Some(history) = &task.history {
-        assert_eq!(history.len(), 2, "History should be limited to 2");
-    }
+    assert_eq!(task.history.len(), 2, "History should be limited to 2");
 
     // List with history_length = 0 (no history)
     let params = ListTasksParams {
@@ -551,8 +573,8 @@ async fn test_list_tasks_v3_history_length() {
 
     let task = &result.tasks[0];
     assert!(
-        task.history.is_none(),
-        "History should be None when limit is 0"
+        task.history.is_empty(),
+        "History should be empty when limit is 0"
     );
 }
 
@@ -569,14 +591,12 @@ async fn test_list_tasks_v3_include_artifacts() {
     // Add an artifact to the task
     task.add_artifact(a2a_rs::domain::Artifact {
         artifact_id: "test-artifact".to_string(),
-        name: Some("Test Artifact".to_string()),
-        description: None,
-        parts: vec![a2a_rs::domain::Part::Text {
-            text: "Artifact content".to_string(),
-            metadata: None,
-        }],
-        metadata: None,
-        extensions: None,
+        name: "Test Artifact".to_string(),
+        description: String::new(),
+        parts: vec![a2a_rs::domain::Part::text("Artifact content".to_string())],
+        metadata: None.into(),
+        extensions: Vec::new(),
+        ..Default::default()
     });
 
     // Update task in storage (through status update to trigger save)
@@ -597,7 +617,7 @@ async fn test_list_tasks_v3_include_artifacts() {
 
     let task = &result.tasks[0];
     assert!(
-        task.artifacts.is_none(),
+        task.artifacts.is_empty(),
         "Artifacts should be excluded when include_artifacts is false"
     );
 
@@ -661,13 +681,13 @@ async fn test_get_push_notification_config() {
 
     // Set a push notification config
     let config = TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id.to_string(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config-1".to_string()),
-            url: "https://example.com/webhook".to_string(),
-            token: Some("test-token".to_string()),
-            authentication: None,
-        },
+        id: "config-1".to_string(),
+        url: "https://example.com/webhook".to_string(),
+        token: "test-token".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     storage
@@ -689,12 +709,12 @@ async fn test_get_push_notification_config() {
 
     assert_eq!(retrieved.task_id, task_id);
     assert_eq!(
-        retrieved.push_notification_config.url,
+        retrieved.url,
         "https://example.com/webhook"
     );
     assert_eq!(
-        retrieved.push_notification_config.token,
-        Some("test-token".to_string())
+        retrieved.token,
+        "test-token"
     );
 }
 
@@ -728,7 +748,7 @@ async fn test_list_push_notification_configs() {
         .expect("Failed to create task");
 
     // Initially should have no configs
-    let params = ListTaskPushNotificationConfigParams {
+    let params = ListTaskPushNotificationConfigsParams {
         id: task_id.to_string(),
         metadata: None,
     };
@@ -741,13 +761,13 @@ async fn test_list_push_notification_configs() {
 
     // Set a config
     let config = TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id.to_string(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config-1".to_string()),
-            url: "https://example.com/webhook".to_string(),
-            token: None,
-            authentication: None,
-        },
+        id: "config-1".to_string(),
+        url: "https://example.com/webhook".to_string(),
+        token: String::new(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     storage
@@ -764,7 +784,7 @@ async fn test_list_push_notification_configs() {
     assert_eq!(configs.len(), 1, "Should have 1 config");
     assert_eq!(configs[0].task_id, task_id);
     assert_eq!(
-        configs[0].push_notification_config.url,
+        configs[0].url,
         "https://example.com/webhook"
     );
 }
@@ -781,13 +801,13 @@ async fn test_delete_push_notification_config() {
 
     // Set a config
     let config = TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id.to_string(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config-1".to_string()),
-            url: "https://example.com/webhook".to_string(),
-            token: None,
-            authentication: None,
-        },
+        id: "config-1".to_string(),
+        url: "https://example.com/webhook".to_string(),
+        token: String::new(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     storage
@@ -796,7 +816,7 @@ async fn test_delete_push_notification_config() {
         .expect("Failed to set notification");
 
     // Verify config exists
-    let list_params = ListTaskPushNotificationConfigParams {
+    let list_params = ListTaskPushNotificationConfigsParams {
         id: task_id.to_string(),
         metadata: None,
     };

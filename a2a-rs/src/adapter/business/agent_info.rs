@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::{
     domain::{
-        A2AError, AgentCapabilities, AgentCard, AgentExtension, AgentProvider, AgentSkill,
+        A2AError, AgentCard, AgentExtension, AgentProvider, AgentSkill,
         SecurityScheme,
     },
     services::server::AgentInfoProvider,
@@ -24,27 +24,14 @@ pub struct SimpleAgentInfo {
 impl SimpleAgentInfo {
     /// Create a new agent info provider with the given name and URL
     pub fn new(name: String, url: String) -> Self {
+        use crate::domain::AgentCardBuilder;
         Self {
-            card: AgentCard {
-                name,
-                description: "Agent description".to_string(),
-                url,
-                provider: None,
-                version: "1.0.0".to_string(),
-                protocol_version: "0.3.0".to_string(),
-                preferred_transport: "JSONRPC".to_string(),
-                additional_interfaces: None,
-                icon_url: None,
-                documentation_url: None,
-                capabilities: AgentCapabilities::default(),
-                security_schemes: None,
-                security: None,
-                default_input_modes: vec!["text".to_string()],
-                default_output_modes: vec!["text".to_string()],
-                skills: Vec::new(),
-                signatures: None,
-                supports_authenticated_extended_card: None,
-            },
+            card: AgentCardBuilder::new()
+                .name(name)
+                .url(url)
+                .description("Agent description".to_string())
+                .version("1.0.0".to_string())
+                .build(),
         }
     }
 
@@ -56,7 +43,7 @@ impl SimpleAgentInfo {
 
     /// Set the provider of the agent
     pub fn with_provider(mut self, organization: String, url: String) -> Self {
-        self.card.provider = Some(AgentProvider { organization, url });
+        self.card.provider = ::buffa::MessageField::some(AgentProvider { organization, url, ..Default::default() });
         self
     }
 
@@ -74,25 +61,25 @@ impl SimpleAgentInfo {
 
     /// Enable streaming capability
     pub fn with_streaming(mut self) -> Self {
-        self.card.capabilities.streaming = true;
+        self.card.capabilities.get_or_insert_default().streaming = Some(true);
         self
     }
 
     /// Enable push notifications capability
     pub fn with_push_notifications(mut self) -> Self {
-        self.card.capabilities.push_notifications = true;
+        self.card.capabilities.get_or_insert_default().push_notifications = Some(true);
         self
     }
 
     /// Enable state transition history capability
-    pub fn with_state_transition_history(mut self) -> Self {
-        self.card.capabilities.state_transition_history = true;
+    pub fn with_state_transition_history(self) -> Self {
+        // No-op in A2A v1.0.0
         self
     }
 
-    /// Enable authenticated extended card support (v0.3.0)
+    /// Enable authenticated extended card support (v1.0.0)
     pub fn with_authenticated_extended_card(mut self) -> Self {
-        self.card.supports_authenticated_extended_card = Some(true);
+        self.card.capabilities.get_or_insert_default().extended_agent_card = Some(true);
         self
     }
 
@@ -103,7 +90,7 @@ impl SimpleAgentInfo {
     /// (with no additional scopes by default).
     ///
     /// # Example
-    /// ```rust
+    /// ```rust,ignore
     /// use std::collections::HashMap;
     /// use a2a_rs::domain::SecurityScheme;
     /// use a2a_rs::SimpleAgentInfo;
@@ -119,26 +106,23 @@ impl SimpleAgentInfo {
     ///     .with_security_schemes(schemes);
     /// ```
     pub fn with_security_schemes(mut self, schemes: HashMap<String, SecurityScheme>) -> Self {
+        use crate::domain::StringList;
+        use crate::domain::SecurityRequirement;
         // Build security requirements: each scheme is an OR alternative (no scopes required by default)
-        let security: Vec<HashMap<String, Vec<String>>> = schemes
+        let security_requirements: Vec<SecurityRequirement> = schemes
             .keys()
             .map(|name| {
                 let mut req = HashMap::new();
                 req.insert(name.clone(), Vec::new());
-                req
+                let schemes = req.into_iter().map(|(k, v)| {
+                    (k, StringList { list: v, ..Default::default() })
+                }).collect();
+                SecurityRequirement { schemes, ..Default::default() }
             })
             .collect();
 
-        self.card.security_schemes = if schemes.is_empty() {
-            None
-        } else {
-            Some(schemes)
-        };
-        self.card.security = if security.is_empty() {
-            None
-        } else {
-            Some(security)
-        };
+        self.card.security_schemes = schemes;
+        self.card.security_requirements = security_requirements;
         self
     }
 
@@ -151,35 +135,29 @@ impl SimpleAgentInfo {
         schemes: HashMap<String, SecurityScheme>,
         security: Vec<HashMap<String, Vec<String>>>,
     ) -> Self {
-        self.card.security_schemes = if schemes.is_empty() {
-            None
-        } else {
-            Some(schemes)
-        };
-        self.card.security = if security.is_empty() {
-            None
-        } else {
-            Some(security)
-        };
+        use crate::domain::StringList;
+        use crate::domain::SecurityRequirement;
+        let security_requirements: Vec<SecurityRequirement> = security.into_iter().map(|req| {
+            let schemes = req.into_iter().map(|(k, v)| {
+                (k, StringList { list: v, ..Default::default() })
+            }).collect();
+            SecurityRequirement { schemes, ..Default::default() }
+        }).collect();
+
+        self.card.security_schemes = schemes;
+        self.card.security_requirements = security_requirements;
         self
     }
 
     /// Add a protocol extension to the agent capabilities
     pub fn add_extension(mut self, extension: AgentExtension) -> Self {
-        match &mut self.card.capabilities.extensions {
-            Some(exts) => exts.push(extension),
-            None => self.card.capabilities.extensions = Some(vec![extension]),
-        }
+        self.card.capabilities.get_or_insert_default().extensions.push(extension);
         self
     }
 
     /// Set protocol extensions on the agent capabilities, replacing any existing ones
     pub fn with_extensions(mut self, extensions: Vec<AgentExtension>) -> Self {
-        self.card.capabilities.extensions = if extensions.is_empty() {
-            None
-        } else {
-            Some(extensions)
-        };
+        self.card.capabilities.get_or_insert_default().extensions = extensions;
         self
     }
 
@@ -228,7 +206,7 @@ impl SimpleAgentInfo {
             examples,
             input_modes,
             output_modes,
-            None, // security - v0.3.0
+            None, // security - v1.0.0
         );
 
         self.card.skills.push(skill);
@@ -303,15 +281,15 @@ impl SimpleAgentInfo {
             }
 
             if let Some(examples_val) = examples {
-                skill.examples = examples_val;
+                skill.examples = examples_val.unwrap_or_default();
             }
 
             if let Some(input_modes_val) = input_modes {
-                skill.input_modes = input_modes_val;
+                skill.input_modes = input_modes_val.unwrap_or_default();
             }
 
             if let Some(output_modes_val) = output_modes {
-                skill.output_modes = output_modes_val;
+                skill.output_modes = output_modes_val.unwrap_or_default();
             }
 
             true
@@ -347,12 +325,11 @@ impl AgentInfoProvider for SimpleAgentInfo {
         Ok(self.card.skills.iter().any(|skill| skill.id == id))
     }
 
-    // Override to provide authenticated extended card when configured (v0.3.0)
+    // Override to provide authenticated extended card when configured (v1.0.0)
     async fn get_authenticated_extended_card(&self) -> Result<AgentCard, A2AError> {
         if self
             .card
-            .supports_authenticated_extended_card
-            .unwrap_or(false)
+            .supports_extended_agent_card()
         {
             // Return the same card for now
             // In a real implementation, this might include additional authenticated-only fields

@@ -107,7 +107,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         "secret-token".to_string(),
     );
 
-    // Note: HTTP client communicates via JSON-RPC, not direct REST endpoints
+    // Note: HTTP client communicates via ConnectRPC over HTTP
     println!("📋 HTTP client connected successfully");
 
     // Test 3: Create and send message to task
@@ -144,9 +144,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         Ok(task) => {
             println!("✅ Retrieved task: {}", task.id);
             println!("   Status: {:?}", task.status.state);
-            if let Some(history) = &task.history {
-                println!("   History entries: {}", history.len());
-            }
+            println!("   History entries: {}", task.history.len());
         }
         Err(e) => {
             println!("❌ Failed to get task: {}", e);

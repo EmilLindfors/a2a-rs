@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added - v0.3.0 Compliance
+### Changed
+- Demoted the `⚠️ No WebSocket subscribers found for task` log in
+  `InMemoryTaskStorage::broadcast_status_update` from WARN to DEBUG. The
+  no-subscriber case is the steady state for `message/send` (non-streaming)
+  flows and was previously flooding logs on every status broadcast.
+  `a2a-rs/src/adapter/storage/task_storage.rs:189`.
+
+### Added - v1.0.0 Compliance
 
 #### New API Methods
 - `tasks/list` - List tasks with comprehensive filtering and pagination
@@ -60,8 +67,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `list_push_notification_configs`
   - `delete_push_notification_config`
 
+#### Protocol Migration & ConnectRPC
+- Completely migrated from legacy JSON-RPC and WebSocket transport to ConnectRPC (gRPC-compatible) over HTTP.
+- Replaced manual JSON-RPC routing with `connectrpc-build` and `prost`-generated models based on the official A2A `v1.0.0` protocol buffers.
+- Deleted legacy WebSocket transport infrastructure across the workspace.
+- Updated `a2a-client` to utilize `connectrpc` stubs for client-server communication.
+- Built and verified a resilient in-process dispatch architecture for MCP standard I/O.
+
 #### Storage Layer
-- Implemented all v0.3.0 methods in `InMemoryTaskStorage`:
+- Implemented all v1.0.0 methods in `InMemoryTaskStorage`:
   - Full filtering support for task listing
   - Timestamp-based filtering
   - Metadata filtering
@@ -114,7 +128,7 @@ let card = AgentCard {
     // ... other fields
 };
 
-// After (v0.3.0)
+// After (v1.0.0)
 let card = AgentCard {
     protocol_version: "0.3.0".to_string(),  // NEW - required
     preferred_transport: "JSONRPC".to_string(),  // NEW - required
@@ -134,7 +148,7 @@ let message = Message {
     // ... other fields
 };
 
-// After (v0.3.0)
+// After (v1.0.0)
 let message = Message {
     message_id: "msg-1".to_string(),
     extensions: None,  // NEW - add this field
@@ -159,7 +173,7 @@ let caps = AgentCapabilities {
     state_transition_history: true,
 };
 
-// After (v0.3.0)
+// After (v1.0.0)
 let caps = AgentCapabilities {
     streaming: true,
     push_notifications: false,
@@ -178,7 +192,7 @@ let config = PushNotificationConfig {
     authentication: None,
 };
 
-// After (v0.3.0)
+// After (v1.0.0)
 let config = PushNotificationConfig {
     id: None,  // NEW - for multi-config support
     url: "https://example.com/webhook".to_string(),

@@ -5,15 +5,15 @@ pub mod message;
 pub mod task;
 
 pub use agent::{
-    AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension, AgentInterface,
+    AgentCapabilities, AgentCard, AgentCardBuilder, AgentCardSignature, AgentExtension, AgentInterface,
     AgentProvider, AgentSkill, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    ImplicitOAuthFlow, OAuthFlows, PasswordOAuthFlow, PushNotificationAuthenticationInfo,
-    PushNotificationConfig, SecurityScheme, TransportProtocol,
+    DeviceCodeOAuthFlow, OAuthFlows, PushNotificationAuthenticationInfo,
+    SecurityScheme, SecurityRequirement, StringList,
 };
-pub use message::{Artifact, FileContent, Message, Part, Role};
+pub use message::{Artifact, Message, Part, PartBuilder, FilePartBuilder, Role, part};
 pub use task::{
     DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-    ListTaskPushNotificationConfigParams, ListTasksParams, ListTasksResult,
+    ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult,
     MessageSendConfiguration, MessageSendParams, Task, TaskIdParams, TaskPushNotificationConfig,
-    TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    TaskQueryParams, TaskSendParams, TaskState, TaskStatus, TaskStateExt,
 };

@@ -1,7 +1,7 @@
 //! A2A Agents - Framework for building A2A Protocol agents
 //!
 //! This crate provides a declarative, configuration-driven framework for building
-//! agents that implement the A2A Protocol v0.3.0.
+//! agents that implement the A2A Protocol v1.0.0.
 //!
 //! # Architecture
 //!

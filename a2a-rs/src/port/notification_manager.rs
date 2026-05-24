@@ -3,13 +3,13 @@
 #[cfg(feature = "server")]
 use async_trait::async_trait;
 
-use crate::domain::{A2AError, PushNotificationConfig, TaskIdParams, TaskPushNotificationConfig};
+use crate::domain::{A2AError, TaskIdParams, TaskPushNotificationConfig};
 
 /// Validate a push notification config URL.
 ///
 /// Checks that the URL is non-empty, well-formed, and uses HTTPS
 /// (HTTP is allowed only for localhost for development purposes).
-fn validate_push_notification_url(config: &PushNotificationConfig) -> Result<(), A2AError> {
+fn validate_push_notification_url(config: &TaskPushNotificationConfig) -> Result<(), A2AError> {
     if config.url.trim().is_empty() {
         return Err(A2AError::ValidationError {
             field: "url".to_string(),
@@ -72,13 +72,13 @@ pub trait NotificationManager {
     /// Validate push notification configuration
     fn validate_notification_config(
         &self,
-        config: &PushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<(), A2AError> {
         validate_push_notification_url(config)
     }
 
     /// Send a test notification to verify configuration
-    fn send_test_notification(&self, config: &PushNotificationConfig) -> Result<(), A2AError> {
+    fn send_test_notification(&self, config: &TaskPushNotificationConfig) -> Result<(), A2AError> {
         // Default implementation - can be overridden
         self.validate_notification_config(config)?;
         // In a real implementation, this would send a test notification
@@ -117,7 +117,7 @@ pub trait AsyncNotificationManager: Send + Sync {
     /// Validate push notification configuration
     async fn validate_notification_config(
         &self,
-        config: &PushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<(), A2AError> {
         validate_push_notification_url(config)
     }
@@ -125,7 +125,7 @@ pub trait AsyncNotificationManager: Send + Sync {
     /// Send a test notification to verify configuration
     async fn send_test_notification(
         &self,
-        config: &PushNotificationConfig,
+        config: &TaskPushNotificationConfig,
     ) -> Result<(), A2AError> {
         // Default implementation - can be overridden
         self.validate_notification_config(config).await?;
@@ -147,7 +147,7 @@ pub trait AsyncNotificationManager: Send + Sync {
         }
 
         // Validate the notification config
-        self.validate_notification_config(&config.push_notification_config)
+        self.validate_notification_config(&config)
             .await?;
 
         // Set the notification

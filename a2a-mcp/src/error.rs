@@ -24,6 +24,10 @@ pub enum A2aMcpError {
     #[error("Tool not found: {0}")]
     ToolNotFound(String),
 
+    /// Prompt not found
+    #[error("Prompt not found: {0}")]
+    PromptNotFound(String),
+
     /// Skill not found
     #[error("Skill not found: {0}")]
     SkillNotFound(String),
@@ -64,6 +68,9 @@ impl A2aMcpError {
             A2aMcpError::ToolNotFound(name) => {
                 rmcp::ErrorData::internal_error(format!("Tool not found: {}", name), None)
             }
+            A2aMcpError::PromptNotFound(name) => {
+                rmcp::ErrorData::internal_error(format!("Prompt not found: {}", name), None)
+            }
             A2aMcpError::InvalidToolCall(msg) => rmcp::ErrorData::invalid_params(msg.clone(), None),
             A2aMcpError::McpError(e) => e.clone(),
             _ => rmcp::ErrorData::internal_error(self.to_string(), None),
@@ -74,5 +81,14 @@ impl A2aMcpError {
     pub fn to_a2a_error(&self) -> a2a_rs::domain::error::A2AError {
         // A2AError doesn't implement Clone, so we just wrap everything as Internal
         a2a_rs::domain::error::A2AError::Internal(self.to_string())
+    }
+}
+
+impl From<rmcp::service::ServiceError> for A2aMcpError {
+    fn from(err: rmcp::service::ServiceError) -> Self {
+        match err {
+            rmcp::service::ServiceError::McpError(e) => A2aMcpError::McpError(e),
+            _ => A2aMcpError::McpServer(err.to_string()),
+        }
     }
 }

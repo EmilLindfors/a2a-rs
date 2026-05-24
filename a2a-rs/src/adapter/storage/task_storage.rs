@@ -126,7 +126,6 @@ impl InMemoryTaskStorage {
         &self,
         task_id: &str,
         status: TaskStatus,
-        final_: bool,
     ) -> Result<(), A2AError> {
         let context_id = self.get_task_context_id(task_id).await;
 
@@ -136,7 +135,6 @@ impl InMemoryTaskStorage {
             context_id,
             kind: "status-update".to_string(),
             status: status.clone(),
-            final_,
             metadata: None,
         };
 
@@ -183,10 +181,13 @@ impl InMemoryTaskStorage {
                 }
                 count
             } else {
+                // No subscribers is the steady-state for tasks created via
+                // message/send (no streaming requested). Only worth tracing
+                // at DEBUG — WARN here floods logs in normal operation.
                 #[cfg(feature = "tracing")]
-                tracing::warn!(
+                tracing::debug!(
                     task_id = %task_id,
-                    "⚠️  No WebSocket subscribers found for task"
+                    "no WebSocket subscribers for task; status broadcast skipped"
                 );
                 0
             }
@@ -293,14 +294,14 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         task.update_status(state, message);
 
         // Clone status before cloning the entire task to avoid double clone
-        let status_for_broadcast = task.status.clone();
+        let status_for_broadcast = task.status.clone().into_option().unwrap_or_default();
         let updated_task = task.clone();
 
         // Release the lock before broadcasting
         drop(tasks_guard);
 
         // Broadcast status update
-        self.broadcast_status_update(task_id, status_for_broadcast, false)
+        self.broadcast_status_update(task_id, status_for_broadcast)
             .await?;
 
         Ok(updated_task)
@@ -348,25 +349,19 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 
             // Create a cancellation message to add to history
             let cancel_message = Message {
-                role: crate::domain::Role::Agent,
-                parts: vec![crate::domain::Part::Text {
-                    text: format!("Task {} canceled.", task_id),
-                    metadata: None,
-                }],
-                metadata: None,
-                reference_task_ids: None,
+                role: ::buffa::EnumValue::from(crate::domain::Role::Agent),
+                parts: vec![crate::domain::Part::text(format!("Task {} canceled.", task_id))],
                 message_id: uuid::Uuid::new_v4().to_string(),
-                task_id: Some(task_id.to_string()),
-                context_id: Some(updated_task.context_id.clone()),
-                extensions: None,
-                kind: "message".to_string(),
+                task_id: task_id.to_string(),
+                context_id: updated_task.context_id.clone(),
+                ..Default::default()
             };
 
             // Update the status with the cancellation message to track in history
             updated_task.update_status(TaskState::Canceled, Some(cancel_message));
 
             // Clone status before updating storage to avoid cloning task twice
-            let status_for_broadcast = updated_task.status.clone();
+            let status_for_broadcast = updated_task.status.clone().into_option().unwrap_or_default();
             tasks_guard.insert(task_id.to_string(), updated_task.clone());
 
             // Drop guard early and return status for use after broadcasting
@@ -375,13 +370,13 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         }; // Lock is dropped here
 
         // Broadcast status update (with final flag set to true)
-        self.broadcast_status_update(task_id, status_for_broadcast, true)
+        self.broadcast_status_update(task_id, status_for_broadcast)
             .await?;
 
         Ok(task)
     }
 
-    // ===== v0.3.0 New Methods =====
+    // ===== v1.0.0 New Methods =====
 
     async fn list_tasks_v3(
         &self,
@@ -409,12 +404,14 @@ impl AsyncTaskManager for InMemoryTaskStorage {
                     }
                 }
 
-                // Filter by lastUpdatedAfter if provided
-                if let Some(last_updated_after) = params.last_updated_after {
-                    if let Some(timestamp) = task.status.timestamp {
-                        let task_time_ms = timestamp.timestamp_millis();
-                        if task_time_ms <= last_updated_after {
-                            return false;
+                // Filter by status_timestamp_after if provided
+                if let Some(status_timestamp_after) = &params.status_timestamp_after {
+                    if let Ok(after_dt) = chrono::DateTime::parse_from_rfc3339(status_timestamp_after) {
+                        let after_utc = after_dt.with_timezone(&chrono::Utc);
+                        if let Some(timestamp) = task.status.timestamp_utc() {
+                            if timestamp <= after_utc {
+                                return false;
+                            }
                         }
                     }
                 }
@@ -428,12 +425,12 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         filtered_tasks.sort_by(|a, b| {
             let a_time = a
                 .status
-                .timestamp
+                .timestamp_utc()
                 .map(|t| t.timestamp_millis())
                 .unwrap_or(0);
             let b_time = b
                 .status
-                .timestamp
+                .timestamp_utc()
                 .map(|t| t.timestamp_millis())
                 .unwrap_or(0);
             b_time.cmp(&a_time)
@@ -463,7 +460,7 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 
             // Remove artifacts if not requested
             if !params.include_artifacts.unwrap_or(false) {
-                task.artifacts = None;
+                task.artifacts.clear();
             }
         }
 
@@ -493,7 +490,7 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 
     async fn list_push_notification_configs(
         &self,
-        params: &crate::domain::ListTaskPushNotificationConfigParams,
+        params: &crate::domain::ListTaskPushNotificationConfigsParams,
     ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
         // For in-memory storage, we only support one config per task
         // Return it as a single-item vec
@@ -502,10 +499,7 @@ impl AsyncTaskManager for InMemoryTaskStorage {
             .get_config(&params.id)
             .await?
         {
-            Some(config) => Ok(vec![crate::domain::TaskPushNotificationConfig {
-                task_id: params.id.clone(),
-                push_notification_config: config,
-            }]),
+            Some(config) => Ok(vec![config]),
             None => Ok(vec![]),
         }
     }
@@ -530,13 +524,13 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
         #[cfg(feature = "tracing")]
         tracing::info!(
             task_id = %config.task_id,
-            url = %config.push_notification_config.url,
-            "✅ Registering push notification config for task"
+            url = %config.url,
+            "🚀 Registering push notification config for task"
         );
 
         // Register with the push notification registry
         self.push_notification_registry
-            .register(&config.task_id, config.push_notification_config.clone())
+            .register(&config.task_id, config.clone())
             .await?;
 
         #[cfg(feature = "tracing")]
@@ -554,10 +548,7 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Get the push notification config from the registry
         match self.push_notification_registry.get_config(task_id).await? {
-            Some(config) => Ok(TaskPushNotificationConfig {
-                task_id: task_id.to_string(),
-                push_notification_config: config,
-            }),
+            Some(config) => Ok(config),
             None => Err(A2AError::PushNotificationNotSupported),
         }
     }
@@ -604,7 +595,7 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
         if let Ok(task) = self.get_task(task_id, None).await {
             let _ = self
-                .broadcast_status_update(task_id, task.status, false)
+                .broadcast_status_update(task_id, task.status.clone().into_option().unwrap_or_default())
                 .await;
         }
 
@@ -630,12 +621,10 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         // If there are existing artifacts, broadcast them
         // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
         if let Ok(task) = self.get_task(task_id, None).await {
-            if let Some(artifacts) = task.artifacts {
-                for artifact in artifacts {
-                    let _ = self
-                        .broadcast_artifact_update(task_id, artifact, None, false)
-                        .await;
-                }
+            for artifact in &task.artifacts {
+                let _ = self
+                    .broadcast_artifact_update(task_id, artifact.clone(), None, false)
+                    .await;
             }
         }
 
@@ -673,7 +662,7 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.broadcast_status_update(task_id, update.status, update.final_)
+        self.broadcast_status_update(task_id, update.status)
             .await
     }
 

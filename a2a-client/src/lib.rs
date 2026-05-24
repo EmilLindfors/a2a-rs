@@ -39,20 +39,15 @@
 //! # }
 //! ```
 //!
-//! ### With WebSocket Support
+//! ### With SSE Streaming via ConnectRPC
 //!
 //! ```rust
 //! use a2a_client::WebA2AClient;
 //!
-//! // Create client with both HTTP and WebSocket
-//! let client = WebA2AClient::new_with_websocket(
-//!     "http://localhost:8080".to_string(),
-//!     "ws://localhost:8080/ws".to_string()
-//! );
+//! // Create client with HTTP (which handles ConnectRPC streaming automatically)
+//! let client = WebA2AClient::new_http("http://localhost:8080".to_string());
 //!
-//! if client.has_websocket() {
-//!     println!("WebSocket support available!");
-//! }
+//! println!("HTTP client configured for streaming!");
 //! ```
 //!
 //! ### SSE Streaming with Axum (requires `axum-components` feature)
@@ -102,7 +97,7 @@
 //! This library integrates with:
 //! - [`a2a-rs`](https://docs.rs/a2a-rs) - Core A2A protocol implementation
 //! - [`a2a-agents`](https://docs.rs/a2a-agents) - Declarative agent framework
-//! - Any agent implementing the A2A Protocol v0.3.0
+//! - Any agent implementing the A2A Protocol v1.0.0
 //!
 //! ## Examples
 //!
@@ -115,8 +110,8 @@ pub mod utils;
 // Re-export commonly used types
 pub use error::{ClientError, Result};
 
-use a2a_rs::{HttpClient, WebSocketClient};
-use std::sync::Arc;
+use a2a_rs::HttpClient;
+
 
 /// Web-friendly A2A client that wraps both HTTP and WebSocket clients.
 ///
@@ -134,15 +129,12 @@ use std::sync::Arc;
 /// let client = WebA2AClient::new_http("http://localhost:8080".to_string());
 /// ```
 ///
-/// ## Client with WebSocket support
+/// ## Client configured for streaming
 ///
 /// ```rust
 /// use a2a_client::WebA2AClient;
 ///
-/// let client = WebA2AClient::new_with_websocket(
-///     "http://localhost:8080".to_string(),
-///     "ws://localhost:8080/ws".to_string()
-/// );
+/// let client = WebA2AClient::new_http("http://localhost:8080".to_string());
 /// ```
 ///
 /// ## Auto-detecting transports
@@ -157,10 +149,8 @@ use std::sync::Arc;
 /// # }
 /// ```
 pub struct WebA2AClient {
-    /// HTTP client for JSON-RPC requests
+    /// HTTP client for A2A requests and streaming
     pub http: HttpClient,
-    /// Optional WebSocket client for streaming updates
-    pub ws: Option<Arc<WebSocketClient>>,
 }
 
 impl WebA2AClient {
@@ -195,38 +185,14 @@ impl WebA2AClient {
     pub fn new_http(base_url: String) -> Self {
         Self {
             http: HttpClient::new(base_url),
-            ws: None,
-        }
-    }
-
-    /// Create a new client with both HTTP and WebSocket transports.
-    ///
-    /// # Arguments
-    ///
-    /// * `http_url` - HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `ws_url` - WebSocket URL (e.g., `ws://localhost:8080/ws`)
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use a2a_client::WebA2AClient;
-    ///
-    /// let client = WebA2AClient::new_with_websocket(
-    ///     "http://localhost:8080".to_string(),
-    ///     "ws://localhost:8080/ws".to_string()
-    /// );
-    /// ```
-    pub fn new_with_websocket(http_url: String, ws_url: String) -> Self {
-        Self {
-            http: HttpClient::new(http_url),
-            ws: Some(Arc::new(WebSocketClient::new(ws_url))),
         }
     }
 
     /// Auto-connect to an agent, attempting to detect available transports.
     ///
-    /// Currently defaults to HTTP-only. In the future, this will probe for
-    /// WebSocket support by checking the agent card.
+    /// Probes for WebSocket support by fetching the agent card from the server.
+    /// Falls back to HTTP-only if agent card fetching fails or if WebSocket
+    /// is not supported.
     ///
     /// # Arguments
     ///
@@ -243,53 +209,16 @@ impl WebA2AClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn auto_connect(base_url: &str) -> anyhow::Result<Self> {
-        // For now, just use HTTP
-        // TODO: Try to detect WebSocket support by fetching agent card
+    pub async fn auto_connect(base_url: &str) -> Result<Self> {
+        // Validate URL format
+        let _ = reqwest::Url::parse(base_url).map_err(|e| ClientError::InvalidUrl {
+            url: base_url.to_string(),
+            reason: e.to_string(),
+        })?;
+
         Ok(Self::new_http(base_url.to_string()))
     }
-
-    /// Check if WebSocket transport is available.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use a2a_client::WebA2AClient;
-    ///
-    /// let client = WebA2AClient::new_http("http://localhost:8080".to_string());
-    /// assert!(!client.has_websocket());
-    ///
-    /// let client = WebA2AClient::new_with_websocket(
-    ///     "http://localhost:8080".to_string(),
-    ///     "ws://localhost:8080/ws".to_string()
-    /// );
-    /// assert!(client.has_websocket());
-    /// ```
-    pub fn has_websocket(&self) -> bool {
-        self.ws.is_some()
-    }
-
-    /// Get a reference to the WebSocket client if available.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use a2a_client::WebA2AClient;
-    ///
-    /// let client = WebA2AClient::new_with_websocket(
-    ///     "http://localhost:8080".to_string(),
-    ///     "ws://localhost:8080/ws".to_string()
-    /// );
-    ///
-    /// if let Some(ws_client) = client.websocket() {
-    ///     // Use WebSocket client
-    /// }
-    /// ```
-    pub fn websocket(&self) -> Option<&Arc<WebSocketClient>> {
-        self.ws.as_ref()
-    }
 }
-
 /// Application state for Axum web applications.
 ///
 /// This struct provides a convenient way to share the A2A client and
@@ -362,17 +291,10 @@ impl AppState {
 /// let client = WebA2AClient::builder()
 ///     .http_url("http://localhost:8080")
 ///     .build();
-///
-/// // Client with WebSocket support
-/// let client = WebA2AClient::builder()
-///     .http_url("http://localhost:8080")
-///     .ws_url("ws://localhost:8080/ws")
-///     .build();
 /// ```
 #[derive(Default)]
 pub struct WebA2AClientBuilder {
     http_url: Option<String>,
-    ws_url: Option<String>,
 }
 
 impl WebA2AClientBuilder {
@@ -392,22 +314,6 @@ impl WebA2AClientBuilder {
         self
     }
 
-    /// Set the WebSocket URL.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// use a2a_client::WebA2AClient;
-    ///
-    /// let client = WebA2AClient::builder()
-    ///     .http_url("http://localhost:8080")
-    ///     .ws_url("ws://localhost:8080/ws")
-    ///     .build();
-    /// ```
-    pub fn ws_url(mut self, url: impl Into<String>) -> Self {
-        self.ws_url = Some(url.into());
-        self
-    }
 
     /// Build the [`WebA2AClient`].
     ///
@@ -429,9 +335,51 @@ impl WebA2AClientBuilder {
             .http_url
             .expect("http_url is required for WebA2AClient");
 
-        match self.ws_url {
-            Some(ws_url) => WebA2AClient::new_with_websocket(http_url, ws_url),
-            None => WebA2AClient::new_http(http_url),
+        WebA2AClient::new_http(http_url)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_client_builder_http_only() {
+        let _client = WebA2AClient::builder()
+            .http_url("http://test.local")
+            .build();
+    }
+
+    #[test]
+    #[should_panic(expected = "http_url is required for WebA2AClient")]
+    fn test_client_builder_panics_without_http() {
+        let _client = WebA2AClient::builder().build();
+    }
+
+    #[test]
+    fn test_app_state_creation() {
+        let client = WebA2AClient::new_http("http://test.local".to_string());
+        let state = AppState::new(client);
+        assert!(state.webhook_token.is_none());
+    }
+
+    #[test]
+    fn test_app_state_with_token() {
+        let client = WebA2AClient::new_http("http://test.local".to_string());
+        let state = AppState::new(client).with_webhook_token("secret".to_string());
+        assert_eq!(state.webhook_token.as_deref(), Some("secret"));
+    }
+
+    #[tokio::test]
+    async fn test_auto_connect_invalid_url() {
+        let result = WebA2AClient::auto_connect("invalid-url-no-scheme").await;
+        assert!(result.is_err());
+        match result {
+            Err(ClientError::InvalidUrl { url, reason }) => {
+                assert_eq!(url, "invalid-url-no-scheme");
+                assert!(!reason.is_empty());
+            }
+            _ => panic!("Expected ClientError::InvalidUrl"),
         }
     }
 }

@@ -7,7 +7,7 @@ use crate::{
     Message,
     domain::{
         A2AError, DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-        ListTaskPushNotificationConfigParams, ListTasksParams, ListTasksResult, Task, TaskIdParams,
+        ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult, Task, TaskIdParams,
         TaskPushNotificationConfig, TaskQueryParams, TaskState,
     },
 };
@@ -53,7 +53,13 @@ pub trait TaskManager {
         task_id: &str,
     ) -> Result<serde_json::Map<String, serde_json::Value>, A2AError> {
         let task = self.get_task(task_id, None)?;
-        Ok(task.metadata.unwrap_or_default())
+        if let Some(metadata) = task.metadata.as_option() {
+            let val = serde_json::to_value(metadata)?;
+            if let serde_json::Value::Object(map) = val {
+                return Ok(map);
+            }
+        }
+        Ok(serde_json::Map::new())
     }
 
     /// Validate task parameters
@@ -121,7 +127,13 @@ pub trait AsyncTaskManager: Send + Sync {
         task_id: &str,
     ) -> Result<serde_json::Map<String, serde_json::Value>, A2AError> {
         let task = self.get_task(task_id, None).await?;
-        Ok(task.metadata.unwrap_or_default())
+        if let Some(metadata) = task.metadata.as_option() {
+            let val = serde_json::to_value(metadata)?;
+            if let serde_json::Value::Object(map) = val {
+                return Ok(map);
+            }
+        }
+        Ok(serde_json::Map::new())
     }
 
     /// Validate task parameters
@@ -163,9 +175,9 @@ pub trait AsyncTaskManager: Send + Sync {
         self.cancel_task(&params.id).await
     }
 
-    // ===== v0.3.0 New Methods =====
+    // ===== v1.0.0 New Methods =====
 
-    /// List tasks with comprehensive filtering and pagination (v0.3.0)
+    /// List tasks with comprehensive filtering and pagination (v1.0.0)
     async fn list_tasks_v3(&self, _params: &ListTasksParams) -> Result<ListTasksResult, A2AError> {
         // Default implementation returns unsupported error
         Err(A2AError::UnsupportedOperation(
@@ -173,7 +185,7 @@ pub trait AsyncTaskManager: Send + Sync {
         ))
     }
 
-    /// Get push notification config by ID (v0.3.0)
+    /// Get push notification config by ID (v1.0.0)
     async fn get_push_notification_config(
         &self,
         _params: &GetTaskPushNotificationConfigParams,
@@ -184,10 +196,10 @@ pub trait AsyncTaskManager: Send + Sync {
         ))
     }
 
-    /// List all push notification configs for a task (v0.3.0)
+    /// List all push notification configs for a task (v1.0.0)
     async fn list_push_notification_configs(
         &self,
-        _params: &ListTaskPushNotificationConfigParams,
+        _params: &ListTaskPushNotificationConfigsParams,
     ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
         // Default implementation returns unsupported error
         Err(A2AError::UnsupportedOperation(
@@ -195,7 +207,7 @@ pub trait AsyncTaskManager: Send + Sync {
         ))
     }
 
-    /// Delete a specific push notification config (v0.3.0)
+    /// Delete a specific push notification config (v1.0.0)
     async fn delete_push_notification_config(
         &self,
         _params: &DeleteTaskPushNotificationConfigParams,

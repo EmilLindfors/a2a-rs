@@ -1,5 +1,6 @@
 //! Protocol converters between A2A and MCP
 
+pub mod llm_tool;
 pub mod message;
 pub mod skill_tool;
 pub mod task_result;

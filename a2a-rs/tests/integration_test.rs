@@ -46,7 +46,7 @@ async fn test_http_client_server_interaction() {
         "https://example.org".to_string(),
     )
     .with_documentation_url("https://example.org/docs".to_string())
-    .with_state_transition_history()
+    .with_push_notifications()
     .add_skill(
         "test".to_string(),
         "Test Skill".to_string(),
@@ -86,11 +86,11 @@ async fn test_http_client_server_interaction() {
     let agent_card: Value = response.json().await.expect("Failed to parse agent card");
     assert_eq!(agent_card["name"].as_str().unwrap(), "Test Agent");
     assert!(
-        agent_card["capabilities"]["stateTransitionHistory"]
+        agent_card["capabilities"]["pushNotifications"]
             .as_bool()
-            .unwrap()
+            .unwrap_or(false)
     );
-    assert!(!agent_card["capabilities"]["streaming"].as_bool().unwrap());
+    assert!(!agent_card["capabilities"]["streaming"].as_bool().unwrap_or(false));
 
     // Test 2: Get skills using direct HTTP request
     let response = http_client
@@ -131,7 +131,7 @@ async fn test_http_client_server_interaction() {
         .await
         .expect("Failed to get task");
     assert_eq!(task.id, task_id);
-    assert!(task.history.is_some());
+    assert!(!task.history.is_empty());
 
     // Test 6: Get task with limited history
     let task_limited = client
@@ -139,7 +139,7 @@ async fn test_http_client_server_interaction() {
         .await
         .expect("Failed to get task with limited history");
     assert_eq!(task_limited.id, task_id);
-    assert!(task_limited.history.is_none());
+    assert!(task_limited.history.is_empty());
 
     // Test 7: Cancel task
     println!("About to cancel task with ID: {}", task_id);
@@ -160,28 +160,24 @@ async fn test_http_client_server_interaction() {
     server_handle.await.expect("Server task failed");
 }
 
-/// Test handling different message types
 #[tokio::test]
 async fn test_message_types() {
+    use a2a_rs::domain::part;
+
     // Create a message with text part
     let message_id = format!("msg-{}", uuid::Uuid::new_v4());
     let mut message = Message::user_text("Hello, A2A agent!".to_string(), message_id);
 
     // Add a data part
-    let mut data = serde_json::Map::new();
-    data.insert(
-        "key".to_string(),
-        serde_json::Value::String("value".to_string()),
-    );
-    let data_part = Part::Data {
-        data,
-        metadata: None,
-    };
+    let data_val: buffa_types::google::protobuf::Value = serde_json::from_value(serde_json::json!({
+        "key": "value"
+    })).unwrap();
+    let data_part = Part::data(data_val);
     message.add_part(data_part);
 
     // Add a file part
     let file_part = Part::file_from_bytes(
-        "SGVsbG8sIHdvcmxkIQ==".to_string(), // Base64 encoded "Hello, world!"
+        b"Hello, world!".to_vec(),
         Some("greeting.txt".to_string()),
         Some("text/plain".to_string()),
     );
@@ -193,24 +189,26 @@ async fn test_message_types() {
     assert_eq!(message.parts.len(), 3);
 
     // Verify part types
-    match &message.parts[0] {
-        Part::Text { text, .. } => assert_eq!(text, "Hello, A2A agent!"),
+    match message.parts[0].content.as_ref() {
+        Some(part::Content::Text(text)) => assert_eq!(text, "Hello, A2A agent!"),
         _ => panic!("Expected Text part"),
     }
 
-    match &message.parts[1] {
-        Part::Data { data, .. } => assert_eq!(data.get("key").unwrap().as_str().unwrap(), "value"),
+    match message.parts[1].content.as_ref() {
+        Some(part::Content::Data(data)) => {
+            let data_json = serde_json::to_value(&**data).unwrap();
+            assert_eq!(data_json["key"], "value");
+        }
         _ => panic!("Expected Data part"),
     }
 
-    match &message.parts[2] {
-        Part::File { file, .. } => {
-            assert_eq!(file.name.as_ref().unwrap(), "greeting.txt");
-            assert_eq!(file.mime_type.as_ref().unwrap(), "text/plain");
-            assert!(file.bytes.is_some());
-            assert!(file.uri.is_none());
+    match message.parts[2].content.as_ref() {
+        Some(part::Content::Raw(bytes)) => {
+            assert_eq!(bytes, b"Hello, world!");
+            assert_eq!(message.parts[2].filename, "greeting.txt");
+            assert_eq!(message.parts[2].media_type, "text/plain");
         }
-        _ => panic!("Expected File part"),
+        _ => panic!("Expected Raw part"),
     }
 }
 
@@ -235,17 +233,17 @@ async fn test_task_history() {
     task.update_status(TaskState::Working, Some(message3));
 
     // Verify history has all messages
-    assert!(task.history.is_some());
-    let history = task.history.as_ref().unwrap();
+    assert!(!task.history.is_empty());
+    let history = &task.history;
     assert_eq!(history.len(), 3);
 
     // Test history truncation
     let task_limited = task.with_limited_history(Some(2));
-    assert!(task_limited.history.is_some());
-    let history_limited = task_limited.history.unwrap();
+    assert!(!task_limited.history.is_empty());
+    let history_limited = &task_limited.history;
     assert_eq!(history_limited.len(), 2);
 
     // Test removing history entirely
     let task_no_history = task.with_limited_history(Some(0));
-    assert!(task_no_history.history.is_none());
+    assert!(task_no_history.history.is_empty());
 }

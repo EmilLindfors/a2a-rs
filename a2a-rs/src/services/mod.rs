@@ -13,4 +13,4 @@ pub mod server;
 pub use client::{AsyncA2AClient, StreamItem};
 
 #[cfg(feature = "server")]
-pub use server::{AgentInfoProvider, AsyncA2ARequestProcessor};
+pub use server::AgentInfoProvider;

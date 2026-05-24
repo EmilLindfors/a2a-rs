@@ -12,8 +12,6 @@ pub struct TaskStatusUpdateEvent {
     pub context_id: String,
     pub kind: String, // Always "status-update"
     pub status: TaskStatus,
-    #[serde(rename = "final")]
-    pub final_: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
 }
@@ -33,4 +31,44 @@ pub struct TaskArtifactUpdateEvent {
     pub last_chunk: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
+}
+
+impl From<crate::domain::generated::TaskStatusUpdateEvent> for TaskStatusUpdateEvent {
+    fn from(event: crate::domain::generated::TaskStatusUpdateEvent) -> Self {
+        let metadata = event.metadata.into_option().and_then(|s| {
+            if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(s) {
+                Some(map)
+            } else {
+                None
+            }
+        });
+        Self {
+            task_id: event.task_id,
+            context_id: event.context_id,
+            kind: "status-update".to_string(),
+            status: event.status.into_option().unwrap_or_default(),
+            metadata,
+        }
+    }
+}
+
+impl From<crate::domain::generated::TaskArtifactUpdateEvent> for TaskArtifactUpdateEvent {
+    fn from(event: crate::domain::generated::TaskArtifactUpdateEvent) -> Self {
+        let metadata = event.metadata.into_option().and_then(|s| {
+            if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(s) {
+                Some(map)
+            } else {
+                None
+            }
+        });
+        Self {
+            task_id: event.task_id,
+            context_id: event.context_id,
+            kind: "artifact-update".to_string(),
+            artifact: event.artifact.into_option().unwrap_or_default(),
+            append: Some(event.append),
+            last_chunk: Some(event.last_chunk),
+            metadata,
+        }
+    }
 }

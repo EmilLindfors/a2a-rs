@@ -15,7 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .message_id(message_id.clone())
         .parts(vec![
             Part::text("Hello, agent!".to_string()),
-            Part::data(serde_json::Map::new()),
+            Part::data(::buffa_types::google::protobuf::Value::default()),
         ])
         .task_id("task-123".to_string())
         .build();
@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let file_part = Part::file_builder()
         .name("example.txt".to_string())
         .mime_type("text/plain".to_string())
-        .bytes("SGVsbG8gV29ybGQ=".to_string()) // "Hello World" in base64
+        .bytes(b"Hello World".to_vec()) // "Hello World" in bytes
         .build()?;
 
     let complex_message_id = format!("msg-{}", Uuid::new_v4());
@@ -68,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ✓ Built and validated task with ID: {}", task.id);
     println!(
         "  ✓ Task has {} messages in history",
-        task.history.as_ref().unwrap().len()
+        task.history.len()
     );
     println!("  ✓ Task status: {:?}", task.status.state);
 
@@ -86,11 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let working_task = Task::builder()
         .id(custom_task_id.clone())
         .context_id(context_id.clone())
-        .status(TaskStatus {
-            state: TaskState::Working,
-            message: Some(status_message.clone()),
-            timestamp: Some(chrono::Utc::now()),
-        })
+        .status(TaskStatus::new(TaskState::Working, Some(status_message.clone())))
         .history(vec![status_message])
         .build();
 
@@ -99,21 +95,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ✓ Task status: {:?}", working_task.status.state);
     println!(
         "  ✓ Status message: {:?}",
-        working_task.status.message.as_ref().unwrap().parts[0]
+        working_task.status.as_option().unwrap().message.as_option().unwrap().parts[0]
     );
 
     // 5. Demonstrating builder flexibility with metadata
     println!("\n5. Building with metadata:");
 
-    let mut metadata = serde_json::Map::new();
-    metadata.insert(
+    let mut metadata_map = serde_json::Map::new();
+    metadata_map.insert(
         "priority".to_string(),
         serde_json::Value::String("high".to_string()),
     );
-    metadata.insert(
+    metadata_map.insert(
         "category".to_string(),
         serde_json::Value::String("support".to_string()),
     );
+    let proto_metadata: ::buffa_types::google::protobuf::Struct = serde_json::from_value(serde_json::Value::Object(metadata_map)).unwrap();
 
     let metadata_message_id = format!("msg-{}", Uuid::new_v4());
     let metadata_message = Message::builder()
@@ -122,7 +119,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parts(vec![Part::text(
             "This is a high priority support request".to_string(),
         )])
-        .metadata(metadata.clone())
+        .metadata(proto_metadata)
         .reference_task_ids(vec![
             "related-task-1".to_string(),
             "related-task-2".to_string(),
@@ -135,14 +132,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "  ✓ Metadata keys: {:?}",
         metadata_message
             .metadata
-            .as_ref()
+            .as_option()
             .unwrap()
+            .fields
             .keys()
             .collect::<Vec<_>>()
     );
     println!(
         "  ✓ Referenced tasks: {:?}",
-        metadata_message.reference_task_ids.as_ref().unwrap()
+        metadata_message.reference_task_ids
     );
 
     println!("\n🎉 All builder patterns work correctly!");

@@ -1,326 +1,93 @@
-use bon::Builder;
-use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
-
-#[cfg(feature = "tracing")]
-use tracing::instrument;
-
 use crate::domain::error::A2AError;
 
-/// Roles in agent communication (user or agent).
-///
-/// Distinguishes between messages sent by users (human or system)
-/// and messages sent by agents in the conversation flow.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    User,
-    Agent,
+// Re-export the generated types so downstream code gets them from `domain::core::message`
+pub use crate::domain::generated::{Message, Part, Role, Artifact, part};
+
+impl Role {
+    pub const User: Self = Self::ROLE_USER;
+    pub const Agent: Self = Self::ROLE_AGENT;
 }
 
-/// File content representation supporting both embedded data and URIs.
-///
-/// Files can be represented either as base64-encoded embedded data
-/// or as URIs pointing to external resources. The implementation
-/// validates that exactly one of `bytes` or `uri` is provided.
-///
-/// # Example
-/// ```rust
-/// use a2a_rs::FileContent;
-///
-/// // Embedded file content
-/// let embedded = FileContent {
-///     name: Some("example.txt".to_string()),
-///     mime_type: Some("text/plain".to_string()),
-///     bytes: Some("SGVsbG8gV29ybGQ=".to_string()), // "Hello World" in base64
-///     uri: None,
-/// };
-///
-/// // URI-based file content  
-/// let uri_based = FileContent {
-///     name: Some("document.pdf".to_string()),
-///     mime_type: Some("application/pdf".to_string()),
-///     bytes: None,
-///     uri: Some("https://example.com/document.pdf".to_string()),
-/// };
-/// ```
-#[derive(Debug, Clone, Serialize)]
-pub struct FileContent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "mimeType")]
-    pub mime_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub bytes: Option<String>, // Base64 encoded
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub uri: Option<String>,
-}
 
-// Custom FileContent deserializer that validates the content
-// during deserialization
-impl<'de> Deserialize<'de> for FileContent {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        // Use a helper struct to deserialize the raw data
-        #[derive(Deserialize)]
-        struct FileContentHelper {
-            name: Option<String>,
-            #[serde(rename = "mimeType")]
-            mime_type: Option<String>,
-            bytes: Option<String>,
-            uri: Option<String>,
-        }
-
-        let helper = FileContentHelper::deserialize(deserializer)?;
-
-        // Create the FileContent
-        let file_content = FileContent {
-            name: helper.name,
-            mime_type: helper.mime_type,
-            bytes: helper.bytes,
-            uri: helper.uri,
-        };
-
-        // Validate and return
-        match file_content.validate() {
-            Ok(_) => Ok(file_content),
-            Err(err) => {
-                // Convert the A2AError to a serde error
-                Err(serde::de::Error::custom(format!(
-                    "FileContent validation error: {}",
-                    err
-                )))
-            }
-        }
-    }
-}
-
-impl FileContent {
-    /// Validates that the file content is properly specified
-    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
-        file.name = ?self.name,
-        file.has_bytes = self.bytes.is_some(),
-        file.has_uri = self.uri.is_some()
-    )))]
-    pub fn validate(&self) -> Result<(), A2AError> {
-        match (&self.bytes, &self.uri) {
-            (Some(_), None) | (None, Some(_)) => {
-                #[cfg(feature = "tracing")]
-                tracing::debug!("File content validation successful");
-                Ok(())
-            }
-            (Some(_), Some(_)) => {
-                #[cfg(feature = "tracing")]
-                tracing::error!("File content has both bytes and uri");
-                Err(A2AError::InvalidParams(
-                    "Cannot provide both bytes and uri".to_string(),
-                ))
-            }
-            (None, None) => {
-                #[cfg(feature = "tracing")]
-                tracing::error!("File content has neither bytes nor uri");
-                Err(A2AError::InvalidParams(
-                    "Must provide either bytes or uri".to_string(),
-                ))
-            }
-        }
-    }
-}
-
-/// Parts that can make up a message (text, file, or structured data).\n///\n/// Messages in the A2A protocol consist of one or more parts, each of which\n/// can contain different types of content:\n/// - `Text`: Plain text content with optional metadata\n/// - `File`: File content (embedded or URI-based) with optional metadata  \n/// - `Data`: Structured JSON data with optional metadata\n///\n/// Each part type supports optional metadata for additional context.\n///\n/// # Example\n/// ```rust\n/// use a2a_rs::{Part, FileContent};\n/// use serde_json::{Map, Value};\n/// \n/// // Text part\n/// let text_part = Part::Text {\n///     text: \"Hello, world!\".to_string(),\n///     metadata: None,\n/// };\n/// \n/// // File part with metadata\n/// let mut metadata = Map::new();\n/// metadata.insert(\"source\".to_string(), Value::String(\"user_upload\".to_string()));\n/// \n/// let file_part = Part::File {\n///     file: FileContent {\n///         name: Some(\"example.txt\".to_string()),\n///         mime_type: Some(\"text/plain\".to_string()),\n///         bytes: Some(\"SGVsbG8=\".to_string()),\n///         uri: None,\n///     },\n///     metadata: Some(metadata),\n/// };\n/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
-pub enum Part {
-    #[serde(rename = "text")]
-    Text {
-        text: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<Map<String, Value>>,
-    },
-    #[serde(rename = "file")]
-    File {
-        file: FileContent,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<Map<String, Value>>,
-    },
-    #[serde(rename = "data")]
-    Data {
-        data: Map<String, Value>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        metadata: Option<Map<String, Value>>,
-    },
-}
-
-impl Part {
-    /// Helper method to get the text content if this is a Text part
-    #[cfg(test)]
-    pub fn get_text(&self) -> Option<&str> {
-        match self {
-            Part::Text { text, .. } => Some(text),
-            _ => None,
-        }
-    }
-}
-
-/// A message in the A2A protocol containing parts and metadata.
-///
-/// Messages are the primary unit of communication in the A2A protocol.
-/// Each message has a role (user or agent), one or more content parts,
-/// and various IDs for tracking and organization.
-///
-/// # Example
-/// ```rust
-/// use a2a_rs::{Message, Role, Part};
-///
-/// let message = Message::builder()
-///     .role(Role::User)
-///     .parts(vec![Part::Text {
-///         text: "Hello, agent!".to_string(),
-///         metadata: None,
-///     }])
-///     .message_id("msg-123".to_string())
-///     .build();
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, Builder)]
-pub struct Message {
-    pub role: Role,
-    #[builder(default = Vec::new())]
-    pub parts: Vec<Part>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Map<String, Value>>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "referenceTaskIds")]
-    pub reference_task_ids: Option<Vec<String>>,
-    #[serde(rename = "messageId")]
-    pub message_id: String,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "taskId")]
-    pub task_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "contextId")]
-    pub context_id: Option<String>,
-    /// URIs of extensions relevant to this message (v0.3.0)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extensions: Option<Vec<String>>,
-    #[builder(default = "message".to_string())]
-    pub kind: String, // Always "message"
-}
-
-/// An artifact produced by an agent during task processing.
-///
-/// Artifacts represent outputs, intermediate results, or side effects
-/// produced by agents while processing tasks. They can contain various
-/// types of content and include metadata for organization and discovery.
-///
-/// # Example
-/// ```rust
-/// use a2a_rs::{Artifact, Part};
-///
-/// let artifact = Artifact {
-///     artifact_id: "artifact-123".to_string(),
-///     name: Some("Generated Report".to_string()),
-///     description: Some("Analysis report generated from data".to_string()),
-///     parts: vec![Part::Text {
-///         text: "Report content here...".to_string(),
-///         metadata: None,
-///     }],
-///     metadata: None,
-///     extensions: None,
-/// };
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Artifact {
-    #[serde(rename = "artifactId")]
-    pub artifact_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    pub parts: Vec<Part>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Map<String, Value>>,
-    /// URIs of extensions relevant to this artifact (v0.3.0)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extensions: Option<Vec<String>>,
-}
-
-/// Helper methods for creating parts
 impl Part {
     /// Create a text part
     #[inline]
     pub fn text(content: String) -> Self {
-        Part::Text {
-            text: content,
-            metadata: None,
+        Self {
+            content: Some(part::Content::Text(content)),
+            ..Default::default()
         }
     }
 
     /// Create a text part with metadata
     #[inline]
-    pub fn text_with_metadata(content: String, metadata: Map<String, Value>) -> Self {
-        Part::Text {
-            text: content,
-            metadata: Some(metadata),
+    pub fn text_with_metadata(content: String, metadata: ::buffa_types::google::protobuf::Struct) -> Self {
+        Self {
+            content: Some(part::Content::Text(content)),
+            metadata: ::buffa::MessageField::some(metadata),
+            ..Default::default()
         }
     }
 
     /// Create a data part
     #[inline]
-    pub fn data(data: Map<String, Value>) -> Self {
-        Part::Data {
-            data,
-            metadata: None,
+    pub fn data(data: ::buffa_types::google::protobuf::Value) -> Self {
+        Self {
+            content: Some(part::Content::Data(Box::new(data))),
+            ..Default::default()
         }
     }
 
-    /// Create a file part from base64 encoded data
-    pub fn file_from_bytes(bytes: String, name: Option<String>, mime_type: Option<String>) -> Self {
-        let file_content = FileContent {
-            name,
-            mime_type,
-            bytes: Some(bytes),
-            uri: None,
-        };
-
-        // Validate that FileContent has either bytes or URI (not both, not neither)
-        file_content
-            .validate()
-            .expect("FileContent must have either bytes or uri, not both or neither");
-
-        Part::File {
-            file: file_content,
-            metadata: None,
+    /// Create a file part from base64 encoded data (or bytes)
+    pub fn file_from_bytes(bytes: Vec<u8>, name: Option<String>, mime_type: Option<String>) -> Self {
+        Self {
+            content: Some(part::Content::Raw(bytes)),
+            filename: name.unwrap_or_default(),
+            media_type: mime_type.unwrap_or_default(),
+            ..Default::default()
         }
     }
 
     /// Create a file part from a URI
     pub fn file_from_uri(uri: String, name: Option<String>, mime_type: Option<String>) -> Self {
-        let file_content = FileContent {
-            name,
-            mime_type,
-            bytes: None,
-            uri: Some(uri),
-        };
+        Self {
+            content: Some(part::Content::Url(uri)),
+            filename: name.unwrap_or_default(),
+            media_type: mime_type.unwrap_or_default(),
+            ..Default::default()
+        }
+    }
 
-        // Validates implicitly as it only has URI and no bytes
-        debug_assert!(
-            file_content.validate().is_ok(),
-            "FileContent validation failed"
-        );
+    /// Helper method to get the text content if this is a Text part
+    pub fn get_text(&self) -> Option<&str> {
+        match &self.content {
+            Some(part::Content::Text(text)) => Some(text.as_str()),
+            _ => None,
+        }
+    }
 
-        Part::File {
-            file: file_content,
-            metadata: None,
+    /// Validate the part content
+    pub fn validate(&self) -> Result<(), A2AError> {
+        match &self.content {
+            Some(_) => Ok(()),
+            None => Err(A2AError::InvalidParams(
+                "Part must contain content (text, raw, url, or data)".to_string(),
+            )),
         }
     }
 
     /// Create a builder-style text part that can be chained
     pub fn text_builder(content: String) -> PartBuilder {
-        PartBuilder::new_text(content)
+        PartBuilder {
+            part: Self::text(content),
+        }
     }
 
     /// Create a builder-style data part that can be chained
-    pub fn data_builder(data: Map<String, Value>) -> PartBuilder {
-        PartBuilder::new_data(data)
+    pub fn data_builder(data: ::buffa_types::google::protobuf::Value) -> PartBuilder {
+        PartBuilder {
+            part: Self::data(data),
+        }
     }
 
     /// Create a builder-style file part that can be chained
@@ -335,31 +102,9 @@ pub struct PartBuilder {
 }
 
 impl PartBuilder {
-    fn new_text(content: String) -> Self {
-        Self {
-            part: Part::Text {
-                text: content,
-                metadata: None,
-            },
-        }
-    }
-
-    fn new_data(data: Map<String, Value>) -> Self {
-        Self {
-            part: Part::Data {
-                data,
-                metadata: None,
-            },
-        }
-    }
-
     /// Add metadata to any part type
-    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
-        match &mut self.part {
-            Part::Text { metadata: meta, .. } => *meta = Some(metadata),
-            Part::Data { metadata: meta, .. } => *meta = Some(metadata),
-            Part::File { metadata: meta, .. } => *meta = Some(metadata),
-        }
+    pub fn with_metadata(mut self, metadata: ::buffa_types::google::protobuf::Struct) -> Self {
+        self.part.metadata = ::buffa::MessageField::some(metadata);
         self
     }
 
@@ -373,13 +118,13 @@ impl PartBuilder {
 pub struct FilePartBuilder {
     name: Option<String>,
     mime_type: Option<String>,
-    bytes: Option<String>,
+    bytes: Option<Vec<u8>>,
     uri: Option<String>,
-    metadata: Option<Map<String, Value>>,
+    metadata: Option<::buffa_types::google::protobuf::Struct>,
 }
 
 impl FilePartBuilder {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             name: None,
             mime_type: None,
@@ -401,8 +146,8 @@ impl FilePartBuilder {
         self
     }
 
-    /// Set file content as base64 bytes
-    pub fn bytes(mut self, bytes: String) -> Self {
+    /// Set file content as bytes
+    pub fn bytes(mut self, bytes: Vec<u8>) -> Self {
         self.bytes = Some(bytes);
         self.uri = None; // Clear URI if setting bytes
         self
@@ -416,131 +161,162 @@ impl FilePartBuilder {
     }
 
     /// Add metadata
-    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
+    pub fn with_metadata(mut self, metadata: ::buffa_types::google::protobuf::Struct) -> Self {
         self.metadata = Some(metadata);
         self
     }
 
     /// Build the file part with validation
     pub fn build(self) -> Result<Part, A2AError> {
-        let file_content = FileContent {
-            name: self.name,
-            mime_type: self.mime_type,
-            bytes: self.bytes,
-            uri: self.uri,
+        let content = match (self.bytes, self.uri) {
+            (Some(b), None) => part::Content::Raw(b),
+            (None, Some(u)) => part::Content::Url(u),
+            (Some(_), Some(_)) => {
+                return Err(A2AError::InvalidParams(
+                    "Cannot provide both bytes and uri".to_string(),
+                ));
+            }
+            (None, None) => {
+                return Err(A2AError::InvalidParams(
+                    "Must provide either bytes or uri".to_string(),
+                ));
+            }
         };
 
-        // Validate the file content
-        file_content.validate()?;
-
-        Ok(Part::File {
-            file: file_content,
-            metadata: self.metadata,
+        Ok(Part {
+            content: Some(content),
+            filename: self.name.unwrap_or_default(),
+            media_type: self.mime_type.unwrap_or_default(),
+            metadata: self.metadata.into(),
+            ..Default::default()
         })
     }
 }
 
-/// Helper methods for creating messages
+/// Builder for Message instances to keep compatibility
+pub struct MessageBuilder {
+    message_id: String,
+    context_id: String,
+    task_id: String,
+    role: Role,
+    parts: Vec<Part>,
+    metadata: Option<::buffa_types::google::protobuf::Struct>,
+    extensions: Vec<String>,
+    reference_task_ids: Vec<String>,
+}
+
+impl MessageBuilder {
+    pub fn new() -> Self {
+        Self {
+            message_id: String::new(),
+            context_id: String::new(),
+            task_id: String::new(),
+            role: Role::ROLE_UNSPECIFIED,
+            parts: Vec::new(),
+            metadata: None,
+            extensions: Vec::new(),
+            reference_task_ids: Vec::new(),
+        }
+    }
+
+    pub fn message_id(mut self, message_id: String) -> Self {
+        self.message_id = message_id;
+        self
+    }
+
+    pub fn context_id(mut self, context_id: String) -> Self {
+        self.context_id = context_id;
+        self
+    }
+
+    pub fn task_id(mut self, task_id: String) -> Self {
+        self.task_id = task_id;
+        self
+    }
+
+    pub fn role(mut self, role: Role) -> Self {
+        self.role = role;
+        self
+    }
+
+    pub fn parts(mut self, parts: Vec<Part>) -> Self {
+        self.parts = parts;
+        self
+    }
+
+    pub fn metadata(mut self, metadata: ::buffa_types::google::protobuf::Struct) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
+    pub fn extensions(mut self, extensions: Vec<String>) -> Self {
+        self.extensions = extensions;
+        self
+    }
+
+    pub fn reference_task_ids(mut self, reference_task_ids: Vec<String>) -> Self {
+        self.reference_task_ids = reference_task_ids;
+        self
+    }
+
+    pub fn build(self) -> Message {
+        Message {
+            message_id: self.message_id,
+            context_id: self.context_id,
+            task_id: self.task_id,
+            role: ::buffa::EnumValue::from(self.role),
+            parts: self.parts,
+            metadata: self.metadata.into(),
+            extensions: self.extensions,
+            reference_task_ids: self.reference_task_ids,
+            ..Default::default()
+        }
+    }
+}
+
 impl Message {
+    /// Create a new Message builder
+    pub fn builder() -> MessageBuilder {
+        MessageBuilder::new()
+    }
+
     /// Create a new user message with a single text part
     pub fn user_text(text: String, message_id: String) -> Self {
         Self {
-            role: Role::User,
+            role: ::buffa::EnumValue::from(Role::ROLE_USER),
             parts: vec![Part::text(text)],
-            metadata: None,
-            reference_task_ids: None,
             message_id,
-            task_id: None,
-            context_id: None,
-            extensions: None,
-            kind: "message".to_string(),
+            ..Default::default()
         }
     }
 
     /// Create a new agent message with a single text part
     pub fn agent_text(text: String, message_id: String) -> Self {
         Self {
-            role: Role::Agent,
+            role: ::buffa::EnumValue::from(Role::ROLE_AGENT),
             parts: vec![Part::text(text)],
-            metadata: None,
-            reference_task_ids: None,
             message_id,
-            task_id: None,
-            context_id: None,
-            extensions: None,
-            kind: "message".to_string(),
+            ..Default::default()
         }
     }
 
     /// Add a part to this message
     pub fn add_part(&mut self, part: Part) {
-        // If it's a file part, validate the file content
-        if let Part::File { file, .. } = &part {
-            // In debug mode, we'll assert that the file content is valid
-            debug_assert!(
-                file.validate().is_ok(),
-                "Invalid file content in Part::File"
-            );
-        }
-
         self.parts.push(part);
     }
 
     /// Add a part to this message, validating and returning Result
-    #[cfg_attr(feature = "tracing", instrument(skip(self, part), fields(
-        message.id = %self.message_id
-    )))]
     pub fn add_part_validated(&mut self, part: Part) -> Result<(), A2AError> {
-        // If it's a file part, validate the file content
-        if let Part::File { file, .. } = &part {
-            file.validate()?;
-        }
-
-        #[cfg(feature = "tracing")]
-        {
-            let part_type = match &part {
-                Part::Text { .. } => "text",
-                Part::File { .. } => "file",
-                Part::Data { .. } => "data",
-            };
-            tracing::debug!(part_type = part_type, "Part added successfully to message");
-        }
-
+        part.validate()?;
         self.parts.push(part);
         Ok(())
     }
 
-    /// Validate a message (useful after building with builder)
-    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
-        message.id = %self.message_id,
-        message.role = ?self.role,
-        message.parts_count = self.parts.len(),
-        message.kind = %self.kind
-    )))]
+    /// Validate a message
     pub fn validate(&self) -> Result<(), A2AError> {
-        #[cfg(feature = "tracing")]
-        tracing::debug!("Validating message");
-
-        // Validate all file parts
-        for (index, part) in self.parts.iter().enumerate() {
-            if let Part::File { file, .. } = part {
-                #[cfg(feature = "tracing")]
-                tracing::trace!("Validating file part at index {}", index);
-                file.validate()?;
-            }
+        for part in &self.parts {
+            part.validate()?;
         }
-
-        // Validate that kind is "message"
-        if self.kind != "message" {
-            #[cfg(feature = "tracing")]
-            tracing::error!("Invalid message kind: {}", self.kind);
-            return Err(A2AError::InvalidParams(
-                "Message kind must be 'message'".to_string(),
-            ));
-        }
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!("Message validation successful");
         Ok(())
     }
 }

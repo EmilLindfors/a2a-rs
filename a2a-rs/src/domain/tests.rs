@@ -18,8 +18,8 @@ mod task_tests {
         task.update_status(TaskState::Working, Some(message3.clone()));
 
         // Verify history has all messages
-        assert!(task.history.is_some());
-        let history = task.history.as_ref().unwrap();
+        assert!(!task.history.is_empty());
+        let history = &task.history;
         assert_eq!(history.len(), 3);
         assert_eq!(history[0].parts[0].get_text().unwrap(), "Message 1");
         assert_eq!(history[1].parts[0].get_text().unwrap(), "Message 2");
@@ -27,8 +27,8 @@ mod task_tests {
 
         // Test history truncation with with_limited_history
         let task_limited = task.with_limited_history(Some(2));
-        assert!(task_limited.history.is_some());
-        let history_limited = task_limited.history.unwrap();
+        assert!(!task_limited.history.is_empty());
+        let history_limited = task_limited.history;
         assert_eq!(history_limited.len(), 2);
 
         // Should have the most recent 2 messages (message2, message3)
@@ -37,6 +37,6 @@ mod task_tests {
 
         // Test removing history entirely
         let task_no_history = task.with_limited_history(Some(0));
-        assert!(task_no_history.history.is_none());
+        assert!(task_no_history.history.is_empty());
     }
 }

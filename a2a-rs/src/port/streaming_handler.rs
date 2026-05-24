@@ -6,6 +6,7 @@ use futures::Stream;
 use std::pin::Pin;
 
 use crate::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+use crate::domain::core::task::TaskStateExt;
 
 /// A trait for subscribing to real-time updates
 #[cfg(feature = "server")]
@@ -184,7 +185,7 @@ impl UpdateEvent {
     #[inline]
     pub fn is_final(&self) -> bool {
         match self {
-            UpdateEvent::StatusUpdate(event) => event.final_,
+            UpdateEvent::StatusUpdate(event) => event.status.state.is_terminal(),
             UpdateEvent::ArtifactUpdate(event) => event.last_chunk.unwrap_or(false),
         }
     }

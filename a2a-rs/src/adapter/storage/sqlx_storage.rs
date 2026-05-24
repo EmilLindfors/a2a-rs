@@ -281,20 +281,26 @@ impl SqlxTaskStorage {
             None
         };
 
+        let now = chrono::Utc::now();
         let task_status = TaskStatus {
-            state,
-            message: status_message,
-            timestamp: Some(chrono::Utc::now()), // For now, use current time
+            state: ::buffa::EnumValue::from(state),
+            message: status_message.into(),
+            timestamp: ::buffa::MessageField::some(::buffa_types::google::protobuf::Timestamp {
+                seconds: now.timestamp(),
+                nanos: now.timestamp_subsec_nanos() as i32,
+                ..Default::default()
+            }),
+            ..Default::default()
         };
 
         let task = Task {
             id: task_id.clone(),
             context_id,
-            status: task_status,
-            history: None, // Will be set separately if needed
-            metadata,
-            artifacts,
-            kind: "task".to_string(),
+            status: ::buffa::MessageField::some(task_status),
+            history: Vec::new(),
+            metadata: metadata.into(),
+            artifacts: artifacts.unwrap_or_default(),
+            ..Default::default()
         };
 
         Ok(task)
@@ -396,7 +402,6 @@ impl SqlxTaskStorage {
         &self,
         task_id: &str,
         status: TaskStatus,
-        final_: bool,
     ) -> Result<(), A2AError> {
         let context_id = self.get_task_context_id(task_id).await;
 
@@ -406,7 +411,6 @@ impl SqlxTaskStorage {
             context_id,
             kind: "status-update".to_string(),
             status,
-            final_,
             metadata: None,
         };
 
@@ -510,16 +514,13 @@ impl AsyncTaskManager for SqlxTaskStorage {
         // Convert metadata and artifacts to JSON strings
         let metadata_json = task
             .metadata
-            .as_ref()
+            .as_option()
             .map(|m| serde_json::to_string(m).unwrap_or_default());
-        let artifacts_json = task
-            .artifacts
-            .as_ref()
-            .map(|a| serde_json::to_string(a).unwrap_or_default());
+        let artifacts_json = serde_json::to_string(&task.artifacts).unwrap_or_default();
         let status_message_str = task
             .status
-            .message
-            .as_ref()
+            .as_option()
+            .and_then(|s| s.message.as_option())
             .map(|m| serde_json::to_string(m).unwrap_or_default());
 
         // Insert into database
@@ -579,10 +580,10 @@ impl AsyncTaskManager for SqlxTaskStorage {
         let task = self.get_task(task_id, None).await?;
 
         // Clone status before broadcasting to avoid double clone
-        let status = task.status.clone();
+        let status = task.status.clone().take().unwrap_or_default();
 
         // Broadcast status update
-        self.broadcast_status_update(task_id, status, false).await?;
+        self.broadcast_status_update(task_id, status).await?;
 
         Ok(task)
     }
@@ -616,11 +617,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
         // Load history
         if history_length.is_some() || history_length.is_none() {
             let history = self.load_task_history(task_id, history_length).await?;
-            task.history = if history.is_empty() {
-                None
-            } else {
-                Some(history)
-            };
+            task.history = history;
         }
 
         Ok(task)
@@ -639,20 +636,12 @@ impl AsyncTaskManager for SqlxTaskStorage {
         }
 
         // Create a cancellation message
-        let cancel_message = Message {
-            role: crate::domain::Role::Agent,
-            parts: vec![crate::domain::Part::Text {
-                text: format!("Task {} canceled.", task_id),
-                metadata: None,
-            }],
-            metadata: None,
-            reference_task_ids: None,
-            message_id: uuid::Uuid::new_v4().to_string(),
-            task_id: Some(task_id.to_string()),
-            context_id: Some(task.context_id.clone()),
-            extensions: None,
-            kind: "message".to_string(),
-        };
+        let mut cancel_message = Message::agent_text(
+            format!("Task {} canceled.", task_id),
+            uuid::Uuid::new_v4().to_string(),
+        );
+        cancel_message.task_id = task_id.to_string();
+        cancel_message.context_id = task.context_id.clone();
 
         // Update task status
         sqlx::query("UPDATE tasks SET status_state = ? WHERE id = ?")
@@ -670,15 +659,15 @@ impl AsyncTaskManager for SqlxTaskStorage {
         let updated_task = self.get_task(task_id, None).await?;
 
         // Clone status before broadcasting to avoid double clone
-        let status = updated_task.status.clone();
+        let status = updated_task.status.clone().take().unwrap_or_default();
 
         // Broadcast status update (with final flag set to true)
-        self.broadcast_status_update(task_id, status, true).await?;
+        self.broadcast_status_update(task_id, status).await?;
 
         Ok(updated_task)
     }
 
-    // ===== v0.3.0 Methods =====
+    // ===== v1.0.0 Methods =====
 
     async fn list_tasks_v3(
         &self,
@@ -699,18 +688,18 @@ impl AsyncTaskManager for SqlxTaskStorage {
             where_conditions.push("status_state = ?".to_string());
         }
 
-        // Filter by lastUpdatedAfter
-        let timestamp_str = if let Some(last_updated_after) = params.last_updated_after {
-            // Convert milliseconds to SQLite timestamp
-            let timestamp = chrono::DateTime::from_timestamp_millis(last_updated_after)
-                .ok_or_else(|| {
+        // Filter by status_timestamp_after
+        let timestamp_str = if let Some(status_timestamp_after) = &params.status_timestamp_after {
+            // Parse ISO 8601 string
+            let timestamp = chrono::DateTime::parse_from_rfc3339(status_timestamp_after)
+                .map_err(|e| {
                     A2AError::DatabaseError(format!(
-                        "Invalid timestamp value: {}",
-                        last_updated_after
+                        "Invalid timestamp value: {} ({})",
+                        status_timestamp_after, e
                     ))
                 })?;
-            where_conditions.push("updated_at > ?".to_string());
-            Some(timestamp.format("%Y-%m-%d %H:%M:%S").to_string())
+            where_conditions.push("updated_at >= ?".to_string());
+            Some(timestamp.with_timezone(&chrono::Utc).format("%Y-%m-%d %H:%M:%S").to_string())
         } else {
             None
         };
@@ -731,7 +720,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
             count_q = count_q.bind(context_id);
         }
         if let Some(ref status) = params.status {
-            let state_str = match status {
+            let state_str = match *status {
                 crate::domain::TaskState::Submitted => "submitted",
                 crate::domain::TaskState::Working => "working",
                 crate::domain::TaskState::InputRequired => "input-required",
@@ -778,7 +767,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
             main_q = main_q.bind(context_id);
         }
         if let Some(ref status) = params.status {
-            let state_str = match status {
+            let state_str = match *status {
                 crate::domain::TaskState::Submitted => "submitted",
                 crate::domain::TaskState::Working => "working",
                 crate::domain::TaskState::InputRequired => "input-required",
@@ -816,18 +805,14 @@ impl AsyncTaskManager for SqlxTaskStorage {
                 let history = self
                     .load_task_history(&task.id, Some(history_length as u32))
                     .await?;
-                task.history = if history.is_empty() {
-                    None
-                } else {
-                    Some(history)
-                };
+                task.history = history;
             } else {
-                task.history = None;
+                task.history.clear();
             }
 
             // Remove artifacts if not requested
             if !params.include_artifacts.unwrap_or(false) {
-                task.artifacts = None;
+                task.artifacts.clear();
             }
         }
 
@@ -876,7 +861,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
             let token: Option<String> = row.try_get("token").ok();
             let auth_json: Option<String> = row.try_get("authentication").ok();
 
-            let authentication = if let Some(auth_str) = auth_json {
+            let auth_info = if let Some(auth_str) = auth_json {
                 serde_json::from_str(&auth_str).ok()
             } else {
                 None
@@ -884,12 +869,12 @@ impl AsyncTaskManager for SqlxTaskStorage {
 
             Ok(crate::domain::TaskPushNotificationConfig {
                 task_id: params.id.clone(),
-                push_notification_config: crate::domain::PushNotificationConfig {
-                    id: Some(id),
-                    url,
-                    token,
-                    authentication,
-                },
+                id,
+                url,
+                token: token.unwrap_or_default(),
+                authentication: auth_info.into(),
+                tenant: "".to_string(),
+                ..Default::default()
             })
         } else {
             Err(A2AError::TaskNotFound(format!(
@@ -901,7 +886,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
 
     async fn list_push_notification_configs(
         &self,
-        params: &crate::domain::ListTaskPushNotificationConfigParams,
+        params: &crate::domain::ListTaskPushNotificationConfigsParams,
     ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
         // Query all configs for the task
         let rows = sqlx::query(
@@ -920,7 +905,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
                 let token: Option<String> = row.try_get("token").ok().flatten();
                 let auth_json: Option<String> = row.try_get("authentication").ok().flatten();
 
-                let authentication = if let Some(auth_str) = auth_json {
+                let auth_info = if let Some(auth_str) = auth_json {
                     serde_json::from_str(&auth_str).ok()
                 } else {
                     None
@@ -928,12 +913,12 @@ impl AsyncTaskManager for SqlxTaskStorage {
 
                 Some(crate::domain::TaskPushNotificationConfig {
                     task_id: params.id.clone(),
-                    push_notification_config: crate::domain::PushNotificationConfig {
-                        id: Some(id),
-                        url,
-                        token,
-                        authentication,
-                    },
+                    id,
+                    url,
+                    token: token.unwrap_or_default(),
+                    authentication: auth_info.into(),
+                    tenant: "".to_string(),
+                    ..Default::default()
                 })
             })
             .collect();
@@ -956,7 +941,7 @@ impl AsyncTaskManager for SqlxTaskStorage {
                     A2AError::DatabaseError(format!("Failed to delete push config: {}", e))
                 })?;
 
-        // Idempotent - don't error if already deleted (v0.3.0 spec behavior)
+        // Idempotent - don't error if already deleted (v1.0.0 spec behavior)
         Ok(())
     }
 }
@@ -969,17 +954,16 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         // Generate ID if not provided
-        let config_id = config
-            .push_notification_config
-            .id
-            .clone()
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let config_id = if config.id.is_empty() {
+            uuid::Uuid::new_v4().to_string()
+        } else {
+            config.id.clone()
+        };
 
         // Serialize authentication if present
         let auth_json = config
-            .push_notification_config
             .authentication
-            .as_ref()
+            .as_option()
             .map(|auth| serde_json::to_string(auth).unwrap_or_default());
 
         // Store in database (using new schema with id, token, authentication)
@@ -988,8 +972,8 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         )
         .bind(&config_id)
         .bind(&config.task_id)
-        .bind(&config.push_notification_config.url)
-        .bind(&config.push_notification_config.token)
+        .bind(&config.url)
+        .bind(&config.token)
         .bind(auth_json)
         .execute(&self.pool)
         .await
@@ -999,12 +983,12 @@ impl AsyncNotificationManager for SqlxTaskStorage {
 
         // Register with the push notification registry
         self.push_notification_registry
-            .register(&config.task_id, config.push_notification_config.clone())
+            .register(&config.task_id, config.clone())
             .await?;
 
         // Return config with ID set
         let mut result_config = config.clone();
-        result_config.push_notification_config.id = Some(config_id);
+        result_config.id = config_id;
         Ok(result_config)
     }
 
@@ -1035,7 +1019,7 @@ impl AsyncNotificationManager for SqlxTaskStorage {
             let token: Option<String> = row.try_get("token").ok();
             let auth_json: Option<String> = row.try_get("authentication").ok();
 
-            let authentication = if let Some(auth_str) = auth_json {
+            let auth_info = if let Some(auth_str) = auth_json {
                 serde_json::from_str(&auth_str).ok()
             } else {
                 None
@@ -1043,12 +1027,12 @@ impl AsyncNotificationManager for SqlxTaskStorage {
 
             Ok(TaskPushNotificationConfig {
                 task_id: task_id.to_string(),
-                push_notification_config: crate::domain::PushNotificationConfig {
-                    id: Some(id),
-                    url,
-                    token,
-                    authentication,
-                },
+                id,
+                url,
+                token: token.unwrap_or_default(),
+                authentication: auth_info.into(),
+                tenant: "".to_string(),
+                ..Default::default()
             })
         } else {
             Err(A2AError::TaskNotFound(format!(
@@ -1097,7 +1081,7 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
         if let Ok(task) = self.get_task(task_id, None).await {
             let _ = self
-                .broadcast_status_update(task_id, task.status, false)
+                .broadcast_status_update(task_id, (*task.status).clone())
                 .await;
         }
 
@@ -1123,12 +1107,10 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         // If there are existing artifacts, broadcast them
         // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
         if let Ok(task) = self.get_task(task_id, None).await {
-            if let Some(artifacts) = task.artifacts {
-                for artifact in artifacts {
-                    let _ = self
-                        .broadcast_artifact_update(task_id, artifact, None, false)
-                        .await;
-                }
+            for artifact in task.artifacts {
+                let _ = self
+                    .broadcast_artifact_update(task_id, artifact, None, false)
+                    .await;
             }
         }
 
@@ -1166,7 +1148,7 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.broadcast_status_update(task_id, update.status, update.final_)
+        self.broadcast_status_update(task_id, update.status)
             .await
     }
 
