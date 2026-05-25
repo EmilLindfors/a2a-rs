@@ -13,7 +13,7 @@ use reqwest::{
 use tokio::sync::Mutex;
 
 use crate::domain::{
-    A2AError, TaskPushNotificationConfig, TaskArtifactUpdateEvent, TaskStatusUpdateEvent,
+    A2AError, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent,
 };
 
 /// Interface for a push notification sender
@@ -102,28 +102,23 @@ impl HttpPushNotificationSender {
         if let Some(auth) = config.authentication.as_option() {
             // Here we could add specific authentication headers based on the schemes
             // For now we just add the credentials if provided
-            if !auth.credentials.is_empty()
-                && !auth.scheme.is_empty() {
-                    let scheme = &auth.scheme;
+            if !auth.credentials.is_empty() && !auth.scheme.is_empty() {
+                let scheme = &auth.scheme;
 
-                    if scheme.to_lowercase() == "basic" {
-                        headers.insert(
-                            AUTHORIZATION,
-                            HeaderValue::from_str(&format!("Basic {}", auth.credentials))
-                                .unwrap_or_else(|_| {
-                                    HeaderValue::from_static("Invalid credentials")
-                                }),
-                        );
-                    } else if scheme.to_lowercase() == "bearer" {
-                        headers.insert(
-                            AUTHORIZATION,
-                            HeaderValue::from_str(&format!("Bearer {}", auth.credentials))
-                                .unwrap_or_else(|_| {
-                                    HeaderValue::from_static("Invalid credentials")
-                                }),
-                        );
-                    }
+                if scheme.to_lowercase() == "basic" {
+                    headers.insert(
+                        AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Basic {}", auth.credentials))
+                            .unwrap_or_else(|_| HeaderValue::from_static("Invalid credentials")),
+                    );
+                } else if scheme.to_lowercase() == "bearer" {
+                    headers.insert(
+                        AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Bearer {}", auth.credentials))
+                            .unwrap_or_else(|_| HeaderValue::from_static("Invalid credentials")),
+                    );
                 }
+            }
         }
 
         headers

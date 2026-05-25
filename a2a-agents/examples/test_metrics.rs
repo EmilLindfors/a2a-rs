@@ -100,7 +100,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message4 = Message::builder()
         .role(Role::User)
         .message_id(Uuid::new_v4().to_string())
-        .parts(vec![Part::text("I need to submit a reimbursement request".to_string())])
+        .parts(vec![Part::text(
+            "I need to submit a reimbursement request".to_string(),
+        )])
         .build();
 
     let _task4 = handler.process_message("task4", &message4, None).await?;

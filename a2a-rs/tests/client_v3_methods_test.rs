@@ -4,7 +4,8 @@
 
 mod common;
 
-use a2a_rs::{adapter::{
+use a2a_rs::{
+    adapter::{
         DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::{ListTasksParams, Message, TaskState},
@@ -287,10 +288,7 @@ async fn test_http_client_push_config_list() {
     println!("Push configs: {:?}", configs);
 
     assert!(!configs.is_empty(), "Should have at least one config");
-    assert_eq!(
-        configs[0].id,
-        "config-1".to_string()
-    );
+    assert_eq!(configs[0].id, "config-1".to_string());
 
     shutdown_tx.send(()).ok();
 }
@@ -327,14 +325,8 @@ async fn test_http_client_push_config_get() {
 
     println!("Retrieved push config: {:?}", retrieved_config);
 
-    assert_eq!(
-        retrieved_config.id,
-        "config-get-test".to_string()
-    );
-    assert_eq!(
-        retrieved_config.url,
-        "https://client.example.com/webhook"
-    );
+    assert_eq!(retrieved_config.id, "config-get-test".to_string());
+    assert_eq!(retrieved_config.url, "https://client.example.com/webhook");
 
     shutdown_tx.send(()).ok();
 }
@@ -389,9 +381,7 @@ async fn test_http_client_push_config_delete() {
     // The config should either be empty or not contain our deleted config
     if !configs_after.is_empty() {
         assert!(
-            configs_after
-                .iter()
-                .all(|c| c.id != "config-delete-test"),
+            configs_after.iter().all(|c| c.id != "config-delete-test"),
             "Deleted config should not appear in list"
         );
     }
@@ -439,9 +429,7 @@ async fn test_http_client_push_config_multiple() {
     assert!(!configs.is_empty(), "Should have at least one config");
 
     // The config should be one of the ones we set
-    let has_our_configs = configs.iter().any(|c| {
-        c.id.starts_with("config-multi-")
-    });
+    let has_our_configs = configs.iter().any(|c| c.id.starts_with("config-multi-"));
     assert!(has_our_configs, "Should have our configs");
 
     // Verify we can retrieve the configs that exist
@@ -452,10 +440,7 @@ async fn test_http_client_push_config_multiple() {
             .await
             .expect("Failed to get individual config");
 
-        assert_eq!(
-            retrieved.id,
-            config_id.clone()
-        );
+        assert_eq!(retrieved.id, config_id.clone());
     }
 
     shutdown_tx.send(()).ok();

@@ -219,7 +219,10 @@ impl AsyncMessageHandler for MerchantHandler {
                 return Ok(Task::builder()
                     .id(task_id.to_string())
                     .context_id(context_id)
-                    .status(TaskStatus::new(TaskState::Completed, Some(response.clone())))
+                    .status(TaskStatus::new(
+                        TaskState::Completed,
+                        Some(response.clone()),
+                    ))
                     .history(vec![message.clone(), response])
                     .build());
             }
@@ -252,7 +255,10 @@ impl AsyncMessageHandler for MerchantHandler {
             return Ok(Task::builder()
                 .id(task_id.to_string())
                 .context_id(context_id)
-                .status(TaskStatus::new(TaskState::InputRequired, Some(response.clone())))
+                .status(TaskStatus::new(
+                    TaskState::InputRequired,
+                    Some(response.clone()),
+                ))
                 .history(vec![message.clone(), response])
                 .artifacts(vec![cart_artifact])
                 .build());
@@ -324,7 +330,10 @@ impl AsyncMessageHandler for MerchantHandler {
             return Ok(Task::builder()
                 .id(task_id.to_string())
                 .context_id(context_id)
-                .status(TaskStatus::new(TaskState::Completed, Some(response.clone())))
+                .status(TaskStatus::new(
+                    TaskState::Completed,
+                    Some(response.clone()),
+                ))
                 .history(vec![message.clone(), response])
                 .artifacts(vec![receipt_artifact])
                 .build());
@@ -341,7 +350,10 @@ impl AsyncMessageHandler for MerchantHandler {
         Ok(Task::builder()
             .id(task_id.to_string())
             .context_id(context_id)
-            .status(TaskStatus::new(TaskState::Completed, Some(response.clone())))
+            .status(TaskStatus::new(
+                TaskState::Completed,
+                Some(response.clone()),
+            ))
             .history(vec![message.clone(), response])
             .build())
     }

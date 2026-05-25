@@ -401,7 +401,11 @@ async fn test_task_list_history_length() {
         .expect("Task not found");
 
     if !task.history.is_empty() {
-        assert_eq!(task.history.len(), 2, "History should be limited to 2 messages");
+        assert_eq!(
+            task.history.len(),
+            2,
+            "History should be limited to 2 messages"
+        );
     }
 
     // List tasks with history_length = 0 (no history)

@@ -23,12 +23,20 @@ impl MessageConverter {
                         format!(
                             "File: {} ({})\n[Embedded data]",
                             part.filename,
-                            if part.media_type.is_empty() { "unknown" } else { &part.media_type }
+                            if part.media_type.is_empty() {
+                                "unknown"
+                            } else {
+                                &part.media_type
+                            }
                         )
                     } else {
                         format!(
                             "File [Embedded data]\nType: {}",
-                            if part.media_type.is_empty() { "unknown" } else { &part.media_type }
+                            if part.media_type.is_empty() {
+                                "unknown"
+                            } else {
+                                &part.media_type
+                            }
                         )
                     };
                     contents.push(Content::text(file_desc));
@@ -38,14 +46,22 @@ impl MessageConverter {
                         format!(
                             "File: {} ({})\nURI: {}",
                             part.filename,
-                            if part.media_type.is_empty() { "unknown" } else { &part.media_type },
+                            if part.media_type.is_empty() {
+                                "unknown"
+                            } else {
+                                &part.media_type
+                            },
                             url
                         )
                     } else {
                         format!(
                             "File: {}\nType: {}",
                             url,
-                            if part.media_type.is_empty() { "unknown" } else { &part.media_type }
+                            if part.media_type.is_empty() {
+                                "unknown"
+                            } else {
+                                &part.media_type
+                            }
                         )
                     };
                     contents.push(Content::text(file_desc));
@@ -93,7 +109,8 @@ impl MessageConverter {
                         serde_json::Value::String(image_content.mime_type.clone()),
                     );
 
-                    let val: ::buffa_types::google::protobuf::Value = serde_json::from_value(serde_json::Value::Object(data_map))?;
+                    let val: ::buffa_types::google::protobuf::Value =
+                        serde_json::from_value(serde_json::Value::Object(data_map))?;
                     parts.push(Part::data(val));
                 }
                 RawContent::Resource(resource_content) => {
@@ -227,7 +244,10 @@ mod tests {
         let content = vec![Content::text("Hello MCP")];
 
         let message = MessageConverter::content_to_message(&content, Role::Agent).unwrap();
-        assert_eq!(message.role, buffa::enumeration::EnumValue::Known(Role::ROLE_AGENT));
+        assert_eq!(
+            message.role,
+            buffa::enumeration::EnumValue::Known(Role::ROLE_AGENT)
+        );
         assert_eq!(message.parts.len(), 1);
 
         use a2a_rs::domain::generated::part;

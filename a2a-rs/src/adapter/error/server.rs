@@ -27,7 +27,6 @@ pub enum HttpServerError {
     InvalidRequest(String),
 }
 
-
 // Conversion from adapter errors to domain errors
 #[cfg(feature = "http-server")]
 impl From<HttpServerError> for crate::domain::A2AError {
@@ -42,5 +41,3 @@ impl From<HttpServerError> for crate::domain::A2AError {
         }
     }
 }
-
-

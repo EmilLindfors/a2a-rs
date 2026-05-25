@@ -84,12 +84,12 @@ pub mod observability;
 pub use domain::{
     A2AError, AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension, AgentInterface,
     AgentProvider, AgentSkill, Artifact, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-    DeviceCodeOAuthFlow, ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult,
-    Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part,
-    PushNotificationAuthenticationInfo, Role, SecurityScheme, Task,
-    TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-    TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
+    DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow,
+    GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams, ListTasksParams,
+    ListTasksResult, Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part,
+    PushNotificationAuthenticationInfo, Role, SecurityScheme, Task, TaskArtifactUpdateEvent,
+    TaskIdParams, TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState,
+    TaskStatus, TaskStatusUpdateEvent,
 };
 
 // Port traits for better separation of concerns
@@ -102,12 +102,8 @@ pub use port::{
 #[cfg(feature = "http-client")]
 pub use adapter::HttpClient;
 
-
-
 #[cfg(feature = "http-server")]
 pub use adapter::HttpServer;
-
-
 
 #[cfg(feature = "server")]
 pub use adapter::{

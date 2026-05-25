@@ -113,7 +113,9 @@ where
                     ),
                 );
             }
-            crate::core::config::AuthConfig::Jwt { issuer, audience, .. } => {
+            crate::core::config::AuthConfig::Jwt {
+                issuer, audience, ..
+            } => {
                 schemes.insert(
                     "jwt".to_string(),
                     a2a_rs::domain::SecurityScheme::http(
@@ -126,26 +128,34 @@ where
                     ),
                 );
             }
-            crate::core::config::AuthConfig::OAuth2 { flow, token_url, authorization_url, scopes, .. } => {
-                let scopes_map: std::collections::HashMap<String, String> = scopes
-                    .iter()
-                    .map(|s| (s.clone(), s.clone()))
-                    .collect();
+            crate::core::config::AuthConfig::OAuth2 {
+                flow,
+                token_url,
+                authorization_url,
+                scopes,
+                ..
+            } => {
+                let scopes_map: std::collections::HashMap<String, String> =
+                    scopes.iter().map(|s| (s.clone(), s.clone())).collect();
                 let flows = if flow == "client_credentials" {
-                    a2a_rs::domain::OAuthFlows::client_credentials(a2a_rs::domain::ClientCredentialsOAuthFlow {
-                        token_url: token_url.clone(),
-                        refresh_url: String::new(),
-                        scopes: scopes_map,
-                        ..Default::default()
-                    })
+                    a2a_rs::domain::OAuthFlows::client_credentials(
+                        a2a_rs::domain::ClientCredentialsOAuthFlow {
+                            token_url: token_url.clone(),
+                            refresh_url: String::new(),
+                            scopes: scopes_map,
+                            ..Default::default()
+                        },
+                    )
                 } else {
-                    a2a_rs::domain::OAuthFlows::authorization_code(a2a_rs::domain::AuthorizationCodeOAuthFlow {
-                        authorization_url: authorization_url.clone(),
-                        token_url: token_url.clone(),
-                        refresh_url: String::new(),
-                        scopes: scopes_map,
-                        ..Default::default()
-                    })
+                    a2a_rs::domain::OAuthFlows::authorization_code(
+                        a2a_rs::domain::AuthorizationCodeOAuthFlow {
+                            authorization_url: authorization_url.clone(),
+                            token_url: token_url.clone(),
+                            refresh_url: String::new(),
+                            scopes: scopes_map,
+                            ..Default::default()
+                        },
+                    )
                 };
                 schemes.insert(
                     "oauth2".to_string(),
@@ -189,7 +199,8 @@ where
             let mut params = std::collections::HashMap::new();
             params.insert("roles".to_string(), serde_json::Value::Array(roles_json));
             let params_val = serde_json::Value::Object(params.into_iter().collect());
-            let params_struct: buffa_types::google::protobuf::Struct = serde_json::from_value(params_val).unwrap_or_default();
+            let params_struct: buffa_types::google::protobuf::Struct =
+                serde_json::from_value(params_val).unwrap_or_default();
 
             let ext = a2a_rs::domain::AgentExtension {
                 uri: "https://github.com/google-agentic-commerce/ap2/tree/v0.1".to_string(),

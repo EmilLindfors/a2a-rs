@@ -381,7 +381,10 @@ impl AsyncMessageHandler for MockStreamingHandler {
             Ok(Task::builder()
                 .id(task_id.to_string())
                 .context_id("ctx-1".to_string())
-                .status(TaskStatus::new(TaskState::Completed, Some(final_msg.clone())))
+                .status(TaskStatus::new(
+                    TaskState::Completed,
+                    Some(final_msg.clone()),
+                ))
                 .history(vec![message.clone(), final_msg])
                 .build())
         } else {
@@ -615,8 +618,11 @@ async fn test_polling_progress_and_sampling() {
         .build();
 
     let backend = Arc::new(MockPollingBackend::new());
-    let bridge =
-        AgentToMcpBridge::from_backend(backend.clone(), agent_card.clone(), agent_card.url().to_string());
+    let bridge = AgentToMcpBridge::from_backend(
+        backend.clone(),
+        agent_card.clone(),
+        agent_card.url().to_string(),
+    );
 
     let (server_io, client_io) = tokio::io::duplex(8192);
     let bridge_task = tokio::spawn(async move {
@@ -725,7 +731,10 @@ impl a2a_mcp::bridge::agent_to_mcp::BridgeBackend for MockPollingBackend {
             Ok(Task::builder()
                 .id(task_id.to_string())
                 .context_id("ctx-1".to_string())
-                .status(TaskStatus::new(TaskState::Completed, Some(final_msg.clone())))
+                .status(TaskStatus::new(
+                    TaskState::Completed,
+                    Some(final_msg.clone()),
+                ))
                 .history(vec![message.clone(), final_msg])
                 .build())
         } else {
@@ -911,7 +920,9 @@ async fn test_list_resources_and_read_resource() {
 
             let agent_msg = Message::builder()
                 .role(Role::Agent)
-                .parts(vec![Part::text("Report generated successfully".to_string())])
+                .parts(vec![Part::text(
+                    "Report generated successfully".to_string(),
+                )])
                 .message_id("resp-123".to_string())
                 .build();
 

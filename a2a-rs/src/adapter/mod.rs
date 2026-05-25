@@ -22,7 +22,6 @@ pub mod transport;
 #[cfg(feature = "http-client")]
 pub use transport::http::HttpClient;
 
-
 // Server re-exports (from various modules)
 #[cfg(feature = "http-server")]
 pub use auth::with_auth;
@@ -41,10 +40,8 @@ pub use storage::InMemoryTaskStorage;
 #[cfg(feature = "http-server")]
 pub use transport::http::HttpServer;
 
-
 // Error re-exports
 #[cfg(feature = "http-client")]
 pub use error::HttpClientError;
 #[cfg(feature = "http-server")]
 pub use error::HttpServerError;
-

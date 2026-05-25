@@ -66,10 +66,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     task.validate()?;
     println!("  ✓ Built and validated task with ID: {}", task.id);
-    println!(
-        "  ✓ Task has {} messages in history",
-        task.history.len()
-    );
+    println!("  ✓ Task has {} messages in history", task.history.len());
     println!("  ✓ Task status: {:?}", task.status.state);
 
     // 4. Building a Task with custom status
@@ -86,7 +83,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let working_task = Task::builder()
         .id(custom_task_id.clone())
         .context_id(context_id.clone())
-        .status(TaskStatus::new(TaskState::Working, Some(status_message.clone())))
+        .status(TaskStatus::new(
+            TaskState::Working,
+            Some(status_message.clone()),
+        ))
         .history(vec![status_message])
         .build();
 
@@ -95,7 +95,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ✓ Task status: {:?}", working_task.status.state);
     println!(
         "  ✓ Status message: {:?}",
-        working_task.status.as_option().unwrap().message.as_option().unwrap().parts[0]
+        working_task
+            .status
+            .as_option()
+            .unwrap()
+            .message
+            .as_option()
+            .unwrap()
+            .parts[0]
     );
 
     // 5. Demonstrating builder flexibility with metadata
@@ -110,7 +117,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "category".to_string(),
         serde_json::Value::String("support".to_string()),
     );
-    let proto_metadata: ::buffa_types::google::protobuf::Struct = serde_json::from_value(serde_json::Value::Object(metadata_map)).unwrap();
+    let proto_metadata: ::buffa_types::google::protobuf::Struct =
+        serde_json::from_value(serde_json::Value::Object(metadata_map)).unwrap();
 
     let metadata_message_id = format!("msg-{}", Uuid::new_v4());
     let metadata_message = Message::builder()

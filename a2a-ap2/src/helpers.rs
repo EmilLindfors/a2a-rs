@@ -24,7 +24,9 @@ pub fn intent_mandate_to_part(mandate: &IntentMandate) -> Result<Part> {
         INTENT_MANDATE_DATA_KEY.into(),
         serde_json::to_value(mandate)?,
     );
-    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(serde_json::Value::Object(data))?;
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(
+        serde_json::Value::Object(data),
+    )?;
     Ok(Part::data(proto_val))
 }
 
@@ -32,7 +34,9 @@ pub fn intent_mandate_to_part(mandate: &IntentMandate) -> Result<Part> {
 pub fn cart_mandate_to_part(mandate: &CartMandate) -> Result<Part> {
     let mut data = Map::new();
     data.insert(CART_MANDATE_DATA_KEY.into(), serde_json::to_value(mandate)?);
-    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(serde_json::Value::Object(data))?;
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(
+        serde_json::Value::Object(data),
+    )?;
     Ok(Part::data(proto_val))
 }
 
@@ -43,7 +47,9 @@ pub fn payment_mandate_to_part(mandate: &PaymentMandate) -> Result<Part> {
         PAYMENT_MANDATE_DATA_KEY.into(),
         serde_json::to_value(mandate)?,
     );
-    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(serde_json::Value::Object(data))?;
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(
+        serde_json::Value::Object(data),
+    )?;
     Ok(Part::data(proto_val))
 }
 
@@ -54,7 +60,9 @@ pub fn payment_receipt_to_part(receipt: &PaymentReceipt) -> Result<Part> {
         PAYMENT_RECEIPT_DATA_KEY.into(),
         serde_json::to_value(receipt)?,
     );
-    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(serde_json::Value::Object(data))?;
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(
+        serde_json::Value::Object(data),
+    )?;
     Ok(Part::data(proto_val))
 }
 
@@ -267,10 +275,7 @@ mod tests {
         let msg = intent_mandate_message(&intent, "msg-1".into()).unwrap();
         let found = find_intent_mandate(&msg).unwrap().unwrap();
         assert_eq!(intent, found);
-        assert_eq!(
-            msg.extensions[0],
-            crate::types::AP2_EXTENSION_URI
-        );
+        assert_eq!(msg.extensions[0], crate::types::AP2_EXTENSION_URI);
     }
 
     #[test]

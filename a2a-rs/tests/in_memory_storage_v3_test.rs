@@ -1,11 +1,11 @@
 //! Tests for InMemoryTaskStorage v1.0.0 methods
 
-use a2a_rs::{TaskPushNotificationConfig, 
+use a2a_rs::{
+    TaskPushNotificationConfig,
     adapter::InMemoryTaskStorage,
     domain::{
         DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-        ListTaskPushNotificationConfigsParams, ListTasksParams, 
-        TaskState,
+        ListTaskPushNotificationConfigsParams, ListTasksParams, TaskState,
     },
     port::{AsyncNotificationManager, AsyncTaskManager},
 };
@@ -519,7 +519,10 @@ async fn test_list_tasks_v3_history_length() {
         .update_task_status(
             task_id,
             TaskState::Working,
-            Some(a2a_rs::Message::user_text("working 1".to_string(), "msg-1".to_string())),
+            Some(a2a_rs::Message::user_text(
+                "working 1".to_string(),
+                "msg-1".to_string(),
+            )),
         )
         .await
         .expect("Failed to update");
@@ -527,7 +530,10 @@ async fn test_list_tasks_v3_history_length() {
         .update_task_status(
             task_id,
             TaskState::InputRequired,
-            Some(a2a_rs::Message::user_text("input required".to_string(), "msg-2".to_string())),
+            Some(a2a_rs::Message::user_text(
+                "input required".to_string(),
+                "msg-2".to_string(),
+            )),
         )
         .await
         .expect("Failed to update");
@@ -535,7 +541,10 @@ async fn test_list_tasks_v3_history_length() {
         .update_task_status(
             task_id,
             TaskState::Working,
-            Some(a2a_rs::Message::user_text("working 2".to_string(), "msg-3".to_string())),
+            Some(a2a_rs::Message::user_text(
+                "working 2".to_string(),
+                "msg-3".to_string(),
+            )),
         )
         .await
         .expect("Failed to update");
@@ -543,7 +552,10 @@ async fn test_list_tasks_v3_history_length() {
         .update_task_status(
             task_id,
             TaskState::Completed,
-            Some(a2a_rs::Message::user_text("completed".to_string(), "msg-4".to_string())),
+            Some(a2a_rs::Message::user_text(
+                "completed".to_string(),
+                "msg-4".to_string(),
+            )),
         )
         .await
         .expect("Failed to update");
@@ -708,14 +720,8 @@ async fn test_get_push_notification_config() {
         .expect("Failed to get config");
 
     assert_eq!(retrieved.task_id, task_id);
-    assert_eq!(
-        retrieved.url,
-        "https://example.com/webhook"
-    );
-    assert_eq!(
-        retrieved.token,
-        "test-token"
-    );
+    assert_eq!(retrieved.url, "https://example.com/webhook");
+    assert_eq!(retrieved.token, "test-token");
 }
 
 #[tokio::test]
@@ -783,10 +789,7 @@ async fn test_list_push_notification_configs() {
 
     assert_eq!(configs.len(), 1, "Should have 1 config");
     assert_eq!(configs[0].task_id, task_id);
-    assert_eq!(
-        configs[0].url,
-        "https://example.com/webhook"
-    );
+    assert_eq!(configs[0].url, "https://example.com/webhook");
 }
 
 #[tokio::test]

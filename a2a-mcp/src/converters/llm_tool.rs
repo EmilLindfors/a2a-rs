@@ -10,7 +10,7 @@ pub struct LlmToolConverter;
 
 impl LlmToolConverter {
     /// Convert an MCP `Tool` into an LLM `ToolDefinition`.
-    /// 
+    ///
     /// This directly copies the MCP tool's name, description, and JSON schema input properties.
     pub fn mcp_to_llm_tool(tool: &Tool) -> ToolDefinition {
         let schema_val = serde_json::to_value(&*tool.input_schema).unwrap_or(Value::Null);
@@ -30,7 +30,7 @@ impl LlmToolConverter {
     /// Converts an LLM `ToolCall` into an MCP `CallToolRequestParams`.
     pub fn llm_tool_call_to_mcp_request(tool_call: &ToolCall) -> Result<CallToolRequestParams> {
         let mut params = CallToolRequestParams::new(tool_call.name.clone());
-        
+
         if !tool_call.arguments.trim().is_empty() {
             match serde_json::from_str::<serde_json::Map<String, Value>>(&tool_call.arguments) {
                 Ok(args) => {
@@ -44,7 +44,7 @@ impl LlmToolConverter {
                 }
             }
         }
-        
+
         Ok(params)
     }
 }
@@ -61,7 +61,8 @@ mod tests {
             "properties": {
                 "param1": { "type": "string" }
             }
-        })).unwrap();
+        }))
+        .unwrap();
 
         let tool = Tool::new("my_tool", "My description", std::sync::Arc::new(schema));
         let llm_tool = LlmToolConverter::mcp_to_llm_tool(&tool);
@@ -69,7 +70,9 @@ mod tests {
         assert_eq!(llm_tool.name, "my_tool");
         assert_eq!(llm_tool.description, "My description");
         assert_eq!(
-            llm_tool.parameters["properties"]["param1"]["type"].as_str().unwrap(),
+            llm_tool.parameters["properties"]["param1"]["type"]
+                .as_str()
+                .unwrap(),
             "string"
         );
     }
@@ -85,7 +88,13 @@ mod tests {
         let request = LlmToolConverter::llm_tool_call_to_mcp_request(&tool_call).unwrap();
         assert_eq!(request.name, "calculator");
         assert_eq!(
-            request.arguments.unwrap().get("a").unwrap().as_i64().unwrap(),
+            request
+                .arguments
+                .unwrap()
+                .get("a")
+                .unwrap()
+                .as_i64()
+                .unwrap(),
             5
         );
     }

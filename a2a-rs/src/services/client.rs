@@ -10,7 +10,6 @@ use crate::domain::{
 #[async_trait]
 /// An async trait defining the methods an async client should implement
 pub trait AsyncA2AClient: Send + Sync {
-
     /// Send a message to a task
     async fn send_task_message(
         &self,

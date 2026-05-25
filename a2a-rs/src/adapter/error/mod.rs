@@ -10,8 +10,6 @@ pub mod server;
 #[cfg(feature = "http-client")]
 pub use client::HttpClientError;
 
-
 // Re-export server error types
 #[cfg(feature = "http-server")]
 pub use server::HttpServerError;
-

@@ -90,7 +90,11 @@ impl ChatMessage {
         }
     }
 
-    pub fn tool_result(tool_call_id: impl Into<String>, name: impl Into<String>, content: impl Into<String>) -> Self {
+    pub fn tool_result(
+        tool_call_id: impl Into<String>,
+        name: impl Into<String>,
+        content: impl Into<String>,
+    ) -> Self {
         Self {
             role: MessageRole::Tool,
             content: Some(content.into()),

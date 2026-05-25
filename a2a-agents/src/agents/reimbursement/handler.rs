@@ -1,18 +1,18 @@
+use a2a_rs::Artifact;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use a2a_rs::Artifact;
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
 use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState, part};
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
-use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest};
 use super::types::*;
+use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest};
 
 // NOTE: Task storage is handled by DefaultRequestProcessor + SQLx/InMemory storage
 // This handler is stateless and only processes messages
@@ -82,7 +82,12 @@ impl HandlerMetrics {
 #[derive(Clone)]
 pub struct ReimbursementHandler<T>
 where
-    T: a2a_rs::port::AsyncTaskManager + a2a_rs::port::AsyncStreamingHandler + Clone + Send + Sync + 'static,
+    T: a2a_rs::port::AsyncTaskManager
+        + a2a_rs::port::AsyncStreamingHandler
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     task_manager: T,
     validation_rules: ValidationRules,
@@ -94,11 +99,18 @@ where
 
 impl<T> ReimbursementHandler<T>
 where
-    T: a2a_rs::port::AsyncTaskManager + a2a_rs::port::AsyncStreamingHandler + Clone + Send + Sync + 'static,
+    T: a2a_rs::port::AsyncTaskManager
+        + a2a_rs::port::AsyncStreamingHandler
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     pub fn new(task_manager: T) -> Self {
         // Try to initialize AI client from environment
-        let llm_provider: Option<Arc<dyn LlmProvider>> = if let Ok(gemini) = a2a_agents_common::llm::gemini::GeminiProvider::from_env() {
+        let llm_provider: Option<Arc<dyn LlmProvider>> = if let Ok(gemini) =
+            a2a_agents_common::llm::gemini::GeminiProvider::from_env()
+        {
             info!("Gemini client initialized successfully");
             Some(Arc::new(gemini))
         } else if let Ok(openai) = a2a_agents_common::llm::openai::OpenAiProvider::from_env() {
@@ -381,9 +393,9 @@ Example response when asking for info:
 
         let mut ai_response = String::new();
         let artifact_id = uuid::Uuid::new_v4().to_string();
-        
+
         use futures::StreamExt;
-        
+
         while let Some(event) = stream.next().await {
             match event {
                 Ok(a2a_agents_common::llm::LlmStreamEvent::ContentChunk(chunk)) => {
@@ -409,16 +421,26 @@ Example response when asking for info:
                         last_chunk: Some(false),
                         metadata: None,
                     };
-                    
-                    let _ = self.task_manager.broadcast_artifact_update(task_id, update_event).await;
+
+                    let _ = self
+                        .task_manager
+                        .broadcast_artifact_update(task_id, update_event)
+                        .await;
                 }
-                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCallChunk { arguments, name, .. }) => {
+                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCallChunk {
+                    arguments,
+                    name,
+                    ..
+                }) => {
                     // Similar to above, but for tool calls
                     ai_response.push_str(&arguments);
 
                     let artifact = Artifact {
                         artifact_id: artifact_id.clone(),
-                        name: format!("Tool Call: {}", name.unwrap_or_else(|| "Unknown".to_string())),
+                        name: format!(
+                            "Tool Call: {}",
+                            name.unwrap_or_else(|| "Unknown".to_string())
+                        ),
                         description: String::new(),
                         parts: vec![Part::text(arguments)],
                         metadata: buffa::MessageField::none(),
@@ -435,8 +457,11 @@ Example response when asking for info:
                         last_chunk: Some(false),
                         metadata: None,
                     };
-                    
-                    let _ = self.task_manager.broadcast_artifact_update(task_id, update_event).await;
+
+                    let _ = self
+                        .task_manager
+                        .broadcast_artifact_update(task_id, update_event)
+                        .await;
                 }
                 Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCall(_)) => {
                     // Ignore final tool call structure for now
@@ -452,7 +477,10 @@ Example response when asking for info:
             return Err("AI returned no text content".to_string());
         }
 
-        info!(response_length = ai_response.len(), "Received AI response via stream");
+        info!(
+            response_length = ai_response.len(),
+            "Received AI response via stream"
+        );
 
         // Parse AI response as JSON
         self.parse_ai_response(&ai_response)
@@ -629,7 +657,10 @@ Example response when asking for info:
                     let mut file_meta = meta_map.clone();
                     file_meta.insert("file_id".to_string(), Value::String(file_id.clone()));
                     if !part.media_type.is_empty() {
-                        file_meta.insert("mime_type".to_string(), Value::String(part.media_type.clone()));
+                        file_meta.insert(
+                            "mime_type".to_string(),
+                            Value::String(part.media_type.clone()),
+                        );
                     }
                     debug!(file_id = %file_id, metadata_keys = ?file_meta.keys().collect::<Vec<_>>(), "Storing file metadata");
                     self.store_file_metadata(&file_id, file_meta);
@@ -1260,9 +1291,12 @@ Example response when asking for info:
                         ),
                     );
 
-                    let metadata_struct: buffa_types::google::protobuf::Struct = serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
-                    let val: serde_json::Value = serde_json::from_str(&json_str).unwrap_or_default();
-                    let proto_val: buffa_types::google::protobuf::Value = serde_json::from_value(val).unwrap_or_default();
+                    let metadata_struct: buffa_types::google::protobuf::Struct =
+                        serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
+                    let val: serde_json::Value =
+                        serde_json::from_str(&json_str).unwrap_or_default();
+                    let proto_val: buffa_types::google::protobuf::Value =
+                        serde_json::from_value(val).unwrap_or_default();
 
                     vec![
                         Part::text_with_metadata(json_str.clone(), metadata_struct.clone()),
@@ -1288,9 +1322,12 @@ Example response when asking for info:
                     metadata.insert("request_id".to_string(), Value::String(request_id.clone()));
                     metadata.insert("status".to_string(), Value::String(format!("{:?}", status)));
 
-                    let metadata_struct: buffa_types::google::protobuf::Struct = serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
-                    let val: serde_json::Value = serde_json::from_str(&json_str).unwrap_or_default();
-                    let proto_val: buffa_types::google::protobuf::Value = serde_json::from_value(val).unwrap_or_default();
+                    let metadata_struct: buffa_types::google::protobuf::Struct =
+                        serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
+                    let val: serde_json::Value =
+                        serde_json::from_str(&json_str).unwrap_or_default();
+                    let proto_val: buffa_types::google::protobuf::Value =
+                        serde_json::from_value(val).unwrap_or_default();
 
                     vec![
                         Part::text_with_metadata(json_str.clone(), metadata_struct.clone()),
@@ -1314,7 +1351,8 @@ Example response when asking for info:
                 );
                 metadata.insert("error_code".to_string(), Value::String(code.clone()));
 
-                let metadata_struct: buffa_types::google::protobuf::Struct = serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
+                let metadata_struct: buffa_types::google::protobuf::Struct =
+                    serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
 
                 vec![Part::text_with_metadata(message.clone(), metadata_struct)]
             }
@@ -1325,7 +1363,12 @@ Example response when asking for info:
 #[async_trait]
 impl<T> AsyncMessageHandler for ReimbursementHandler<T>
 where
-    T: a2a_rs::port::AsyncTaskManager + a2a_rs::port::AsyncStreamingHandler + Clone + Send + Sync + 'static,
+    T: a2a_rs::port::AsyncTaskManager
+        + a2a_rs::port::AsyncStreamingHandler
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     #[instrument(skip(self, message), fields(
         task_id = %task_id,
@@ -1442,7 +1485,12 @@ where
             // Process with AI
             info!(task_id = %task_id_owned, "Calling AI for processing");
             let (response, auto_approved) = match handler
-                .process_with_ai(&task_id_owned, &text_content, current_task.as_ref(), &message_owned)
+                .process_with_ai(
+                    &task_id_owned,
+                    &text_content,
+                    current_task.as_ref(),
+                    &message_owned,
+                )
                 .await
             {
                 Ok(resp) => {

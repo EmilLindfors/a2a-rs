@@ -55,9 +55,7 @@ async fn test_get_authenticated_extended_card_not_configured() {
 
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
-    let response = client
-        .get_extended_agent_card(None)
-        .await;
+    let response = client.get_extended_agent_card(None).await;
 
     // Should return error -32007
     assert!(response.is_err(), "Should have error response");
@@ -87,9 +85,7 @@ async fn test_get_authenticated_extended_card_success() {
 
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
-    let response = client
-        .get_extended_agent_card(None)
-        .await;
+    let response = client.get_extended_agent_card(None).await;
 
     assert!(response.is_ok(), "Should not have error response");
     let card = response.unwrap();
@@ -138,19 +134,19 @@ async fn test_authenticated_card_vs_regular_card() {
     // Both should have same basic info
     assert_eq!(regular_card.name, auth_card.name);
     assert_eq!(regular_card.url(), auth_card.url());
-    assert_eq!(regular_card.protocol_version(), auth_card.protocol_version());
+    assert_eq!(
+        regular_card.protocol_version(),
+        auth_card.protocol_version()
+    );
 
     // Both should indicate support for authenticated extended card
     assert!(
         regular_card
-            .capabilities.extended_agent_card
+            .capabilities
+            .extended_agent_card
             .unwrap_or(false)
     );
-    assert!(
-        auth_card
-            .capabilities.extended_agent_card
-            .unwrap_or(false)
-    );
+    assert!(auth_card.capabilities.extended_agent_card.unwrap_or(false));
 
     shutdown_tx.send(()).ok();
 }
@@ -163,9 +159,7 @@ async fn test_authenticated_card_error_structure() {
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
     // Try to get authenticated card when not configured
-    let response = client
-        .get_extended_agent_card(None)
-        .await;
+    let response = client.get_extended_agent_card(None).await;
 
     assert!(response.is_err());
     let error = response.unwrap_err();

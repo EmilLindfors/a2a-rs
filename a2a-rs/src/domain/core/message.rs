@@ -1,14 +1,13 @@
 use crate::domain::error::A2AError;
 
 // Re-export the generated types so downstream code gets them from `domain::core::message`
-pub use crate::domain::generated::{Message, Part, Role, Artifact, part};
+pub use crate::domain::generated::{Artifact, Message, Part, Role, part};
 
 #[allow(non_upper_case_globals)]
 impl Role {
     pub const User: Self = Self::ROLE_USER;
     pub const Agent: Self = Self::ROLE_AGENT;
 }
-
 
 impl Part {
     /// Create a text part
@@ -22,7 +21,10 @@ impl Part {
 
     /// Create a text part with metadata
     #[inline]
-    pub fn text_with_metadata(content: String, metadata: ::buffa_types::google::protobuf::Struct) -> Self {
+    pub fn text_with_metadata(
+        content: String,
+        metadata: ::buffa_types::google::protobuf::Struct,
+    ) -> Self {
         Self {
             content: Some(part::Content::Text(content)),
             metadata: ::buffa::MessageField::some(metadata),
@@ -40,7 +42,11 @@ impl Part {
     }
 
     /// Create a file part from base64 encoded data (or bytes)
-    pub fn file_from_bytes(bytes: Vec<u8>, name: Option<String>, mime_type: Option<String>) -> Self {
+    pub fn file_from_bytes(
+        bytes: Vec<u8>,
+        name: Option<String>,
+        mime_type: Option<String>,
+    ) -> Self {
         Self {
             content: Some(part::Content::Raw(bytes)),
             filename: name.unwrap_or_default(),

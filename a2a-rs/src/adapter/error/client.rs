@@ -29,7 +29,6 @@ pub enum HttpClientError {
     Timeout,
 }
 
-
 // Conversion from adapter errors to domain errors
 #[cfg(feature = "http-client")]
 impl From<HttpClientError> for A2AError {
@@ -47,5 +46,3 @@ impl From<HttpClientError> for A2AError {
         }
     }
 }
-
-

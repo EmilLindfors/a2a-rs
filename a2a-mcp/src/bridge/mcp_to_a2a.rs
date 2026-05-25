@@ -72,10 +72,12 @@ impl Drop for RequestCancelGuard {
             let request_id = self.request_id.clone();
             tokio::spawn(async move {
                 debug!("RequestCancelGuard triggered: notifying server of cancellation for request: {:?}", request_id);
-                let _ = peer.notify_cancelled(CancelledNotificationParam {
-                    request_id,
-                    reason: Some("Task canceled or handler dropped".to_string()),
-                }).await;
+                let _ = peer
+                    .notify_cancelled(CancelledNotificationParam {
+                        request_id,
+                        reason: Some("Task canceled or handler dropped".to_string()),
+                    })
+                    .await;
             });
         }
     }
@@ -245,10 +247,14 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
     /// This bypasses the A2A Message serialization format and is intended for
     /// agents interacting directly with `LlmProvider` results.
     /// It returns the stringified content of the MCP tool's result.
-    pub async fn execute_llm_tool_call(&self, task_id: &str, tool_call: &ToolCall) -> Result<String> {
+    pub async fn execute_llm_tool_call(
+        &self,
+        task_id: &str,
+        tool_call: &ToolCall,
+    ) -> Result<String> {
         // Convert to MCP parameters
         let params = LlmToolConverter::llm_tool_call_to_mcp_request(tool_call)?;
-        
+
         let args = if let Some(a) = params.arguments {
             serde_json::Value::Object(a)
         } else {
@@ -418,7 +424,10 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         prompt_name: &str,
         arguments: serde_json::Value,
     ) -> Result<GetPromptResult> {
-        debug!("Calling MCP prompt: {} with args: {}", prompt_name, arguments);
+        debug!(
+            "Calling MCP prompt: {} with args: {}",
+            prompt_name, arguments
+        );
 
         // Verify prompt exists
         if !self.prompts.iter().any(|p| p.name == prompt_name) {
@@ -526,10 +535,14 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
                             rmcp::model::RawContent::Resource(res) => {
                                 let (uri, mime_type) = match &res.resource {
                                     rmcp::model::ResourceContents::TextResourceContents {
-                                        uri, mime_type, ..
+                                        uri,
+                                        mime_type,
+                                        ..
                                     } => (uri.clone(), mime_type.clone()),
                                     rmcp::model::ResourceContents::BlobResourceContents {
-                                        uri, mime_type, ..
+                                        uri,
+                                        mime_type,
+                                        ..
                                     } => (uri.clone(), mime_type.clone()),
                                 };
                                 let part = Part::file_from_uri(uri, None, mime_type);
@@ -585,7 +598,10 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
             arguments,
         }) = Self::extract_prompt_call(message)
         {
-            info!("Detected MCP prompt call request for prompt: {}", prompt_name);
+            info!(
+                "Detected MCP prompt call request for prompt: {}",
+                prompt_name
+            );
 
             // Call the MCP prompt
             match self.call_mcp_prompt(&prompt_name, arguments).await {
@@ -645,35 +661,19 @@ fn prompt_message_to_a2a_message(pm: &PromptMessage) -> Message {
                 serde_json::Value::String(image.mime_type.clone()),
             );
 
-            let val: ::buffa_types::google::protobuf::Value = serde_json::from_value(serde_json::Value::Object(data_map)).expect("valid JSON Value");
+            let val: ::buffa_types::google::protobuf::Value =
+                serde_json::from_value(serde_json::Value::Object(data_map))
+                    .expect("valid JSON Value");
             parts.push(Part::data(val));
         }
-        PromptMessageContent::Resource { resource } => {
-            match &resource.resource {
-                rmcp::model::ResourceContents::TextResourceContents {
-                    uri,
-                    mime_type,
-                    ..
-                } => {
-                    parts.push(Part::file_from_uri(
-                        uri.clone(),
-                        None,
-                        mime_type.clone(),
-                    ));
-                }
-                rmcp::model::ResourceContents::BlobResourceContents {
-                    uri,
-                    mime_type,
-                    ..
-                } => {
-                    parts.push(Part::file_from_uri(
-                        uri.clone(),
-                        None,
-                        mime_type.clone(),
-                    ));
-                }
+        PromptMessageContent::Resource { resource } => match &resource.resource {
+            rmcp::model::ResourceContents::TextResourceContents { uri, mime_type, .. } => {
+                parts.push(Part::file_from_uri(uri.clone(), None, mime_type.clone()));
             }
-        }
+            rmcp::model::ResourceContents::BlobResourceContents { uri, mime_type, .. } => {
+                parts.push(Part::file_from_uri(uri.clone(), None, mime_type.clone()));
+            }
+        },
         PromptMessageContent::ResourceLink { link } => {
             parts.push(Part::file_from_uri(
                 link.uri.clone(),
@@ -713,8 +713,9 @@ pub fn create_tool_call_message(tool_name: impl Into<String>, arguments: Value) 
         MCP_TOOL_CALL_METADATA_KEY.to_string(),
         serde_json::to_value(&envelope).expect("McpToolCall always serialises"),
     );
-    let metadata = serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map))
-        .expect("valid Struct");
+    let metadata =
+        serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map))
+            .expect("valid Struct");
 
     Message::builder()
         .role(Role::User)
@@ -733,7 +734,7 @@ pub fn attach_tool_call(message: &mut Message, tool_name: impl Into<String>, arg
         arguments,
     };
     let metadata_struct = message.metadata.get_or_insert_default();
-    
+
     let mut map = serde_json::to_value(&*metadata_struct)
         .ok()
         .and_then(|v| match v {
@@ -741,13 +742,15 @@ pub fn attach_tool_call(message: &mut Message, tool_name: impl Into<String>, arg
             _ => None,
         })
         .unwrap_or_default();
-        
+
     map.insert(
         MCP_TOOL_CALL_METADATA_KEY.to_string(),
         serde_json::to_value(&envelope).expect("McpToolCall always serialises"),
     );
-    
-    if let Ok(new_struct) = serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map)) {
+
+    if let Ok(new_struct) =
+        serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map))
+    {
         *metadata_struct = new_struct;
     }
 }
@@ -763,8 +766,9 @@ pub fn create_prompt_call_message(prompt_name: impl Into<String>, arguments: Val
         MCP_PROMPT_CALL_METADATA_KEY.to_string(),
         serde_json::to_value(&envelope).expect("McpPromptCall always serialises"),
     );
-    let metadata = serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map))
-        .expect("valid Struct");
+    let metadata =
+        serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map))
+            .expect("valid Struct");
 
     Message::builder()
         .role(Role::User)
@@ -780,7 +784,7 @@ pub fn attach_prompt_call(message: &mut Message, prompt_name: impl Into<String>,
         arguments,
     };
     let metadata_struct = message.metadata.get_or_insert_default();
-    
+
     let mut map = serde_json::to_value(&*metadata_struct)
         .ok()
         .and_then(|v| match v {
@@ -788,13 +792,15 @@ pub fn attach_prompt_call(message: &mut Message, prompt_name: impl Into<String>,
             _ => None,
         })
         .unwrap_or_default();
-        
+
     map.insert(
         MCP_PROMPT_CALL_METADATA_KEY.to_string(),
         serde_json::to_value(&envelope).expect("McpPromptCall always serialises"),
     );
-    
-    if let Ok(new_struct) = serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map)) {
+
+    if let Ok(new_struct) =
+        serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map))
+    {
         *metadata_struct = new_struct;
     }
 }
@@ -847,8 +853,10 @@ mod tests {
             MCP_TOOL_CALL_METADATA_KEY.to_string(),
             serde_json::json!("not an object"),
         );
-        let metadata = serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(metadata))
-            .expect("valid Struct");
+        let metadata = serde_json::from_value::<::buffa_types::google::protobuf::Struct>(
+            Value::Object(metadata),
+        )
+        .expect("valid Struct");
         let msg = Message::builder()
             .role(Role::User)
             .metadata(metadata)
@@ -861,13 +869,18 @@ mod tests {
     #[test]
     fn test_create_tool_call_message_shape() {
         let msg = create_tool_call_message("test_tool", serde_json::json!({"x": 42}));
-        assert_eq!(msg.role, buffa::enumeration::EnumValue::Known(Role::ROLE_USER));
+        assert_eq!(
+            msg.role,
+            buffa::enumeration::EnumValue::Known(Role::ROLE_USER)
+        );
         // The envelope lives in metadata; parts is intentionally empty.
         assert!(msg.parts.is_empty());
 
         let metadata_struct = msg.metadata.as_option().expect("metadata present");
         let metadata_val = serde_json::to_value(metadata_struct).unwrap();
-        let envelope = metadata_val.get(MCP_TOOL_CALL_METADATA_KEY).expect("envelope present");
+        let envelope = metadata_val
+            .get(MCP_TOOL_CALL_METADATA_KEY)
+            .expect("envelope present");
         assert_eq!(envelope["name"], "test_tool");
         assert_eq!(envelope["arguments"]["x"].as_f64(), Some(42.0));
     }
@@ -885,7 +898,9 @@ mod tests {
         assert_eq!(msg.parts.len(), 1, "display text part should be preserved");
         let metadata_struct = msg.metadata.as_option().expect("metadata present");
         let metadata_val = serde_json::to_value(metadata_struct).unwrap();
-        let envelope = metadata_val.get(MCP_TOOL_CALL_METADATA_KEY).expect("envelope present");
+        let envelope = metadata_val
+            .get(MCP_TOOL_CALL_METADATA_KEY)
+            .expect("envelope present");
         assert_eq!(envelope["name"], "add");
     }
 
@@ -913,12 +928,17 @@ mod tests {
     #[test]
     fn test_create_prompt_call_message_shape() {
         let msg = create_prompt_call_message("test_prompt", serde_json::json!({"x": 42}));
-        assert_eq!(msg.role, buffa::enumeration::EnumValue::Known(Role::ROLE_USER));
+        assert_eq!(
+            msg.role,
+            buffa::enumeration::EnumValue::Known(Role::ROLE_USER)
+        );
         assert!(msg.parts.is_empty());
 
         let metadata_struct = msg.metadata.as_option().expect("metadata present");
         let metadata_val = serde_json::to_value(metadata_struct).unwrap();
-        let envelope = metadata_val.get(MCP_PROMPT_CALL_METADATA_KEY).expect("envelope present");
+        let envelope = metadata_val
+            .get(MCP_PROMPT_CALL_METADATA_KEY)
+            .expect("envelope present");
         assert_eq!(envelope["name"], "test_prompt");
         assert_eq!(envelope["arguments"]["x"].as_f64(), Some(42.0));
     }
@@ -936,7 +956,9 @@ mod tests {
         assert_eq!(msg.parts.len(), 1, "display text part should be preserved");
         let metadata_struct = msg.metadata.as_option().expect("metadata present");
         let metadata_val = serde_json::to_value(metadata_struct).unwrap();
-        let envelope = metadata_val.get(MCP_PROMPT_CALL_METADATA_KEY).expect("envelope present");
+        let envelope = metadata_val
+            .get(MCP_PROMPT_CALL_METADATA_KEY)
+            .expect("envelope present");
         assert_eq!(envelope["name"], "test_prompt");
     }
 
@@ -944,7 +966,10 @@ mod tests {
     fn test_prompt_message_to_a2a_message_text() {
         let pm = PromptMessage::new_text(PromptMessageRole::User, "Hello User");
         let msg = prompt_message_to_a2a_message(&pm);
-        assert_eq!(msg.role, buffa::enumeration::EnumValue::Known(Role::ROLE_USER));
+        assert_eq!(
+            msg.role,
+            buffa::enumeration::EnumValue::Known(Role::ROLE_USER)
+        );
         assert_eq!(msg.parts.len(), 1);
         use a2a_rs::domain::generated::part;
         if let Some(part::Content::Text(text)) = &msg.parts[0].content {
@@ -967,7 +992,10 @@ mod tests {
             PromptMessageContent::Image { image },
         );
         let msg = prompt_message_to_a2a_message(&pm);
-        assert_eq!(msg.role, buffa::enumeration::EnumValue::Known(Role::ROLE_AGENT));
+        assert_eq!(
+            msg.role,
+            buffa::enumeration::EnumValue::Known(Role::ROLE_AGENT)
+        );
         assert_eq!(msg.parts.len(), 1);
         use a2a_rs::domain::generated::part;
         if let Some(part::Content::Data(val)) = &msg.parts[0].content {
@@ -996,7 +1024,10 @@ mod tests {
             },
         );
         let msg = prompt_message_to_a2a_message(&pm);
-        assert_eq!(msg.role, buffa::enumeration::EnumValue::Known(Role::ROLE_USER));
+        assert_eq!(
+            msg.role,
+            buffa::enumeration::EnumValue::Known(Role::ROLE_USER)
+        );
         assert_eq!(msg.parts.len(), 1);
         use a2a_rs::domain::generated::part;
         let part = &msg.parts[0];
@@ -1026,7 +1057,10 @@ mod tests {
             PromptMessageContent::ResourceLink { link: resource },
         );
         let msg = prompt_message_to_a2a_message(&pm);
-        assert_eq!(msg.role, buffa::enumeration::EnumValue::Known(Role::ROLE_AGENT));
+        assert_eq!(
+            msg.role,
+            buffa::enumeration::EnumValue::Known(Role::ROLE_AGENT)
+        );
         assert_eq!(msg.parts.len(), 1);
         use a2a_rs::domain::generated::part;
         let part = &msg.parts[0];

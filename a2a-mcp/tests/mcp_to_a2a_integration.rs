@@ -14,8 +14,8 @@ use a2a_rs::port::streaming_handler::Subscriber;
 use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, UpdateEvent};
 use async_trait::async_trait;
 use rmcp::{
-    handler::client::progress::ProgressDispatcher,
-    model::*, service::RequestContext, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    handler::client::progress::ProgressDispatcher, model::*, service::RequestContext,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
 };
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -167,14 +167,20 @@ impl ServerHandler for TestMcpServer {
             // Test progress updates if progress_token is present
             if let Some(token) = ctx.meta.get_progress_token() {
                 // Send some progress notifications
-                let _ = ctx.peer.notify_progress(
-                    ProgressNotificationParam::new(token.clone(), 50.0)
-                        .with_message("Step 1 done"),
-                ).await;
-                let _ = ctx.peer.notify_progress(
-                    ProgressNotificationParam::new(token.clone(), 100.0)
-                        .with_message("Step 2 done"),
-                ).await;
+                let _ = ctx
+                    .peer
+                    .notify_progress(
+                        ProgressNotificationParam::new(token.clone(), 50.0)
+                            .with_message("Step 1 done"),
+                    )
+                    .await;
+                let _ = ctx
+                    .peer
+                    .notify_progress(
+                        ProgressNotificationParam::new(token.clone(), 100.0)
+                            .with_message("Step 2 done"),
+                    )
+                    .await;
             }
 
             Ok(CallToolResult::success(vec![Content::text("42")]))
@@ -296,8 +302,9 @@ impl AsyncStreamingHandler for TestStreamingHandler {
     ) -> Result<
         Pin<
             Box<
-                dyn futures::Stream<Item = Result<TaskStatusUpdateEvent, a2a_rs::domain::error::A2AError>>
-                    + Send,
+                dyn futures::Stream<
+                        Item = Result<TaskStatusUpdateEvent, a2a_rs::domain::error::A2AError>,
+                    > + Send,
             >,
         >,
         a2a_rs::domain::error::A2AError,
@@ -311,8 +318,9 @@ impl AsyncStreamingHandler for TestStreamingHandler {
     ) -> Result<
         Pin<
             Box<
-                dyn futures::Stream<Item = Result<TaskArtifactUpdateEvent, a2a_rs::domain::error::A2AError>>
-                    + Send,
+                dyn futures::Stream<
+                        Item = Result<TaskArtifactUpdateEvent, a2a_rs::domain::error::A2AError>,
+                    > + Send,
             >,
         >,
         a2a_rs::domain::error::A2AError,
@@ -368,7 +376,10 @@ async fn test_mcp_to_a2a_prompts() {
     assert_eq!(history.len(), 2);
     // User message is history[0], assistant prompt reply is history[1]
     assert_eq!(history[1].role, Role::Agent);
-    assert_eq!(history[1].parts[0].get_text(), Some("Prompt output message"));
+    assert_eq!(
+        history[1].parts[0].get_text(),
+        Some("Prompt output message")
+    );
 
     drop(mcp_client);
     let _ = server_task.await;

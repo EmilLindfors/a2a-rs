@@ -55,10 +55,7 @@ async fn main() -> anyhow::Result<()> {
             println!("✓ Message sent successfully!");
             println!("  Task ID: {}", task.id);
             println!("  State: {:?}", task.status.state);
-            println!(
-                "  Message count: {}",
-                task.history.len()
-            );
+            println!("  Message count: {}", task.history.len());
 
             // Retrieve the task to see the agent's response
             println!("Retrieving task to see agent response...");

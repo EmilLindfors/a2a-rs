@@ -5,7 +5,7 @@ mod sqlx_tests {
     use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
     use a2a_rs::domain::TaskState;
     use a2a_rs::port::{AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager};
-    use a2a_rs::{TaskPushNotificationConfig, A2AError};
+    use a2a_rs::{A2AError, TaskPushNotificationConfig};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -181,18 +181,12 @@ mod sqlx_tests {
 
         let set_config = storage.set_task_notification(&config).await?;
         assert_eq!(set_config.task_id, task_id);
-        assert_eq!(
-            set_config.url,
-            "https://example.com/webhook"
-        );
+        assert_eq!(set_config.url, "https://example.com/webhook");
 
         // Get push notification config
         let retrieved_config = storage.get_task_notification(&task_id).await?;
         assert_eq!(retrieved_config.task_id, task_id);
-        assert_eq!(
-            retrieved_config.url,
-            "https://example.com/webhook"
-        );
+        assert_eq!(retrieved_config.url, "https://example.com/webhook");
 
         // Remove push notification config
         storage.remove_task_notification(&task_id).await?;
@@ -432,14 +426,8 @@ mod sqlx_tests {
             metadata: None,
         };
         let retrieved = storage.get_push_notification_config(&get_params).await?;
-        assert_eq!(
-            retrieved.url,
-            "https://example.com/webhook"
-        );
-        assert_eq!(
-            retrieved.token,
-            "test-token"
-        );
+        assert_eq!(retrieved.url, "https://example.com/webhook");
+        assert_eq!(retrieved.token, "test-token");
 
         // List configs
         let list_params = a2a_rs::domain::ListTaskPushNotificationConfigsParams {

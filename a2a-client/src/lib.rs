@@ -112,7 +112,6 @@ pub use error::{ClientError, Result};
 
 use a2a_rs::HttpClient;
 
-
 /// Web-friendly A2A client that wraps both HTTP and WebSocket clients.
 ///
 /// This is the main entry point for interacting with A2A agents from web applications.
@@ -313,7 +312,6 @@ impl WebA2AClientBuilder {
         self.http_url = Some(url.into());
         self
     }
-
 
     /// Build the [`WebA2AClient`].
     ///

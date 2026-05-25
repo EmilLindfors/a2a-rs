@@ -211,7 +211,8 @@ async fn test_data_part_conversion() {
             "computation": "6 * 7",
             "method": "multiplication"
         }
-    })).unwrap();
+    }))
+    .unwrap();
 
     let data_message = Message::builder()
         .role(Role::Agent)

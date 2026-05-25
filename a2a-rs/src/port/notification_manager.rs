@@ -147,8 +147,7 @@ pub trait AsyncNotificationManager: Send + Sync {
         }
 
         // Validate the notification config
-        self.validate_notification_config(config)
-            .await?;
+        self.validate_notification_config(config).await?;
 
         // Set the notification
         self.set_task_notification(config).await

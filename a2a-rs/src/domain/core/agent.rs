@@ -1,14 +1,13 @@
 use std::collections::HashMap;
 
-
 // Re-export generated types so downstream code gets them from `domain::core::agent`
 pub use crate::domain::generated::{
-    AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension, AgentInterface,
-    AgentProvider, AgentSkill, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    DeviceCodeOAuthFlow, ImplicitOAuthFlow, PasswordOAuthFlow, OAuthFlows, SecurityScheme,
-    APIKeySecurityScheme, HTTPAuthSecurityScheme, OAuth2SecurityScheme, OpenIdConnectSecurityScheme,
-    MutualTlsSecurityScheme, SecurityRequirement, StringList, AuthenticationInfo,
-    o_auth_flows, security_scheme,
+    APIKeySecurityScheme, AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension,
+    AgentInterface, AgentProvider, AgentSkill, AuthenticationInfo, AuthorizationCodeOAuthFlow,
+    ClientCredentialsOAuthFlow, DeviceCodeOAuthFlow, HTTPAuthSecurityScheme, ImplicitOAuthFlow,
+    MutualTlsSecurityScheme, OAuth2SecurityScheme, OAuthFlows, OpenIdConnectSecurityScheme,
+    PasswordOAuthFlow, SecurityRequirement, SecurityScheme, StringList, o_auth_flows,
+    security_scheme,
 };
 
 pub type PushNotificationAuthenticationInfo = AuthenticationInfo;
@@ -45,12 +44,27 @@ impl AgentSkill {
 
     /// Add security requirements to the skill
     pub fn with_security(mut self, security: Vec<HashMap<String, Vec<String>>>) -> Self {
-        self.security_requirements = security.into_iter().map(|req| {
-            let schemes = req.into_iter().map(|(k, v)| {
-                (k, StringList { list: v, ..Default::default() })
-            }).collect();
-            SecurityRequirement { schemes, ..Default::default() }
-        }).collect();
+        self.security_requirements = security
+            .into_iter()
+            .map(|req| {
+                let schemes = req
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            StringList {
+                                list: v,
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect();
+                SecurityRequirement {
+                    schemes,
+                    ..Default::default()
+                }
+            })
+            .collect();
         self
     }
 
@@ -86,57 +100,75 @@ impl AgentSkill {
 impl SecurityScheme {
     pub fn api_key(name: String, location: String, description: Option<String>) -> Self {
         Self {
-            scheme: Some(security_scheme::Scheme::ApiKeySecurityScheme(Box::new(APIKeySecurityScheme {
-                name,
-                location,
-                description: description.unwrap_or_default(),
-                ..Default::default()
-            }))),
+            scheme: Some(security_scheme::Scheme::ApiKeySecurityScheme(Box::new(
+                APIKeySecurityScheme {
+                    name,
+                    location,
+                    description: description.unwrap_or_default(),
+                    ..Default::default()
+                },
+            ))),
             ..Default::default()
         }
     }
 
-    pub fn http(scheme_name: String, bearer_format: Option<String>, description: Option<String>) -> Self {
+    pub fn http(
+        scheme_name: String,
+        bearer_format: Option<String>,
+        description: Option<String>,
+    ) -> Self {
         Self {
-            scheme: Some(security_scheme::Scheme::HttpAuthSecurityScheme(Box::new(HTTPAuthSecurityScheme {
-                scheme: scheme_name,
-                bearer_format: bearer_format.unwrap_or_default(),
-                description: description.unwrap_or_default(),
-                ..Default::default()
-            }))),
+            scheme: Some(security_scheme::Scheme::HttpAuthSecurityScheme(Box::new(
+                HTTPAuthSecurityScheme {
+                    scheme: scheme_name,
+                    bearer_format: bearer_format.unwrap_or_default(),
+                    description: description.unwrap_or_default(),
+                    ..Default::default()
+                },
+            ))),
             ..Default::default()
         }
     }
 
-    pub fn oauth2(flows: OAuthFlows, description: Option<String>, oauth2_metadata_url: Option<String>) -> Self {
+    pub fn oauth2(
+        flows: OAuthFlows,
+        description: Option<String>,
+        oauth2_metadata_url: Option<String>,
+    ) -> Self {
         Self {
-            scheme: Some(security_scheme::Scheme::Oauth2SecurityScheme(Box::new(OAuth2SecurityScheme {
-                flows: ::buffa::MessageField::some(flows),
-                description: description.unwrap_or_default(),
-                oauth2_metadata_url: oauth2_metadata_url.unwrap_or_default(),
-                ..Default::default()
-            }))),
+            scheme: Some(security_scheme::Scheme::Oauth2SecurityScheme(Box::new(
+                OAuth2SecurityScheme {
+                    flows: ::buffa::MessageField::some(flows),
+                    description: description.unwrap_or_default(),
+                    oauth2_metadata_url: oauth2_metadata_url.unwrap_or_default(),
+                    ..Default::default()
+                },
+            ))),
             ..Default::default()
         }
     }
 
     pub fn open_id_connect(open_id_connect_url: String, description: Option<String>) -> Self {
         Self {
-            scheme: Some(security_scheme::Scheme::OpenIdConnectSecurityScheme(Box::new(OpenIdConnectSecurityScheme {
-                open_id_connect_url,
-                description: description.unwrap_or_default(),
-                ..Default::default()
-            }))),
+            scheme: Some(security_scheme::Scheme::OpenIdConnectSecurityScheme(
+                Box::new(OpenIdConnectSecurityScheme {
+                    open_id_connect_url,
+                    description: description.unwrap_or_default(),
+                    ..Default::default()
+                }),
+            )),
             ..Default::default()
         }
     }
 
     pub fn mutual_tls(description: Option<String>) -> Self {
         Self {
-            scheme: Some(security_scheme::Scheme::MtlsSecurityScheme(Box::new(MutualTlsSecurityScheme {
-                description: description.unwrap_or_default(),
-                ..Default::default()
-            }))),
+            scheme: Some(security_scheme::Scheme::MtlsSecurityScheme(Box::new(
+                MutualTlsSecurityScheme {
+                    description: description.unwrap_or_default(),
+                    ..Default::default()
+                },
+            ))),
             ..Default::default()
         }
     }
@@ -180,7 +212,11 @@ impl AgentCapabilities {
 }
 
 impl AgentCardSignature {
-    pub fn new(protected: String, signature: String, header: Option<::buffa_types::google::protobuf::Struct>) -> Self {
+    pub fn new(
+        protected: String,
+        signature: String,
+        header: Option<::buffa_types::google::protobuf::Struct>,
+    ) -> Self {
         Self {
             protected,
             signature,
@@ -196,15 +232,24 @@ impl AgentCard {
     }
 
     pub fn url(&self) -> &str {
-        self.supported_interfaces.first().map(|i| i.url.as_str()).unwrap_or("")
+        self.supported_interfaces
+            .first()
+            .map(|i| i.url.as_str())
+            .unwrap_or("")
     }
 
     pub fn protocol_version(&self) -> &str {
-        self.supported_interfaces.first().map(|i| i.protocol_version.as_str()).unwrap_or("1.0")
+        self.supported_interfaces
+            .first()
+            .map(|i| i.protocol_version.as_str())
+            .unwrap_or("1.0")
     }
 
     pub fn preferred_transport(&self) -> &str {
-        self.supported_interfaces.first().map(|i| i.protocol_binding.as_str()).unwrap_or("JSONRPC")
+        self.supported_interfaces
+            .first()
+            .map(|i| i.protocol_binding.as_str())
+            .unwrap_or("JSONRPC")
     }
 
     pub fn supports_extended_agent_card(&self) -> bool {
@@ -322,12 +367,27 @@ impl AgentCardBuilder {
     }
 
     pub fn security(mut self, security: Vec<HashMap<String, Vec<String>>>) -> Self {
-        self.security_requirements = security.into_iter().map(|req| {
-            let schemes = req.into_iter().map(|(k, v)| {
-                (k, StringList { list: v, ..Default::default() })
-            }).collect();
-            SecurityRequirement { schemes, ..Default::default() }
-        }).collect();
+        self.security_requirements = security
+            .into_iter()
+            .map(|req| {
+                let schemes = req
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            StringList {
+                                list: v,
+                                ..Default::default()
+                            },
+                        )
+                    })
+                    .collect();
+                SecurityRequirement {
+                    schemes,
+                    ..Default::default()
+                }
+            })
+            .collect();
         self
     }
 
@@ -352,7 +412,9 @@ impl AgentCardBuilder {
     }
 
     pub fn supports_extended_agent_card(mut self, val: bool) -> Self {
-        let caps = self.capabilities.get_or_insert_with(AgentCapabilities::default);
+        let caps = self
+            .capabilities
+            .get_or_insert_with(AgentCapabilities::default);
         caps.extended_agent_card = Some(val);
         self
     }
@@ -363,7 +425,9 @@ impl AgentCardBuilder {
         if !self.url.is_empty() {
             let primary = AgentInterface {
                 url: self.url,
-                protocol_binding: self.preferred_transport.unwrap_or_else(|| "JSONRPC".to_string()),
+                protocol_binding: self
+                    .preferred_transport
+                    .unwrap_or_else(|| "JSONRPC".to_string()),
                 protocol_version: self.protocol_version.unwrap_or_else(|| "1.0".to_string()),
                 ..Default::default()
             };
@@ -423,12 +487,13 @@ mod tests {
 
     #[test]
     fn test_security_scheme_mtls_serialization() {
-        let scheme = SecurityScheme::mutual_tls(
-            Some("Mutual TLS authentication".to_string()),
-        );
+        let scheme = SecurityScheme::mutual_tls(Some("Mutual TLS authentication".to_string()));
 
         let json_value = serde_json::to_value(&scheme).expect("Failed to serialize SecurityScheme");
-        assert_eq!(json_value["mtlsSecurityScheme"]["description"], "Mutual TLS authentication");
+        assert_eq!(
+            json_value["mtlsSecurityScheme"]["description"],
+            "Mutual TLS authentication"
+        );
     }
 
     #[test]

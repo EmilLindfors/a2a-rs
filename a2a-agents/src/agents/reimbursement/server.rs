@@ -99,7 +99,13 @@ impl ReimbursementServer {
     /// Start HTTP server
     pub async fn start<S>(&self, storage: S) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncTaskManager + AsyncNotificationManager + a2a_rs::port::AsyncStreamingHandler + Clone + Send + Sync + 'static,
+        S: AsyncTaskManager
+            + AsyncNotificationManager
+            + a2a_rs::port::AsyncStreamingHandler
+            + Clone
+            + Send
+            + Sync
+            + 'static,
     {
         // Create message handler with storage for history management
         let message_handler = ReimbursementHandler::new(storage.clone());
@@ -113,7 +119,13 @@ impl ReimbursementServer {
         storage: S,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncTaskManager + AsyncNotificationManager + a2a_rs::port::AsyncStreamingHandler + Clone + Send + Sync + 'static,
+        S: AsyncTaskManager
+            + AsyncNotificationManager
+            + a2a_rs::port::AsyncStreamingHandler
+            + Clone
+            + Send
+            + Sync
+            + 'static,
         H: a2a_rs::port::message_handler::AsyncMessageHandler + Clone + Send + Sync + 'static,
     {
         // Create agent info with reimbursement capabilities
@@ -230,6 +242,4 @@ impl ReimbursementServer {
             }
         }
     }
-
-
 }

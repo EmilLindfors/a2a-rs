@@ -7,8 +7,8 @@ use crate::{
     Message,
     domain::{
         A2AError, DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-        ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult, Task, TaskIdParams,
-        TaskPushNotificationConfig, TaskQueryParams, TaskState,
+        ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult, Task,
+        TaskIdParams, TaskPushNotificationConfig, TaskQueryParams, TaskState,
     },
 };
 

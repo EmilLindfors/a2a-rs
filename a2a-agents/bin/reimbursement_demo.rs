@@ -671,11 +671,7 @@ async fn send_message(
                         data.len()
                     );
 
-                    let file_part = Part::file_from_bytes(
-                        data.to_vec(),
-                        file_name,
-                        content_type,
-                    );
+                    let file_part = Part::file_from_bytes(data.to_vec(), file_name, content_type);
                     parts.push(file_part);
                 }
             }

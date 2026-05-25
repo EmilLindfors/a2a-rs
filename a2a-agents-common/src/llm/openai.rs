@@ -1,7 +1,7 @@
 use super::{LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 use std::env;
 use tracing::{debug, error, info, warn};
@@ -191,14 +191,17 @@ impl LlmProvider for OpenAiProvider {
                 },
                 content: msg.content,
                 tool_calls: msg.tool_calls.map(|calls| {
-                    calls.into_iter().map(|c| OpenAiToolCall {
-                        id: c.id,
-                        tool_type: "function".to_string(),
-                        function: OpenAiFunctionCall {
-                            name: c.name,
-                            arguments: c.arguments,
-                        },
-                    }).collect()
+                    calls
+                        .into_iter()
+                        .map(|c| OpenAiToolCall {
+                            id: c.id,
+                            tool_type: "function".to_string(),
+                            function: OpenAiFunctionCall {
+                                name: c.name,
+                                arguments: c.arguments,
+                            },
+                        })
+                        .collect()
                 }),
                 tool_call_id: msg.tool_call_id,
                 name: msg.name,
@@ -206,14 +209,17 @@ impl LlmProvider for OpenAiProvider {
             .collect();
 
         let tools = request.tools.map(|tools| {
-            tools.into_iter().map(|t| OpenAiTool {
-                tool_type: "function".to_string(),
-                function: OpenAiFunction {
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.parameters,
-                },
-            }).collect()
+            tools
+                .into_iter()
+                .map(|t| OpenAiTool {
+                    tool_type: "function".to_string(),
+                    function: OpenAiFunction {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.parameters,
+                    },
+                })
+                .collect()
         });
 
         let api_request = OpenAiChatRequest {
@@ -268,11 +274,14 @@ impl LlmProvider for OpenAiProvider {
         })?;
 
         let tool_calls = choice.message.tool_calls.map(|calls| {
-            calls.into_iter().map(|c| super::ToolCall {
-                id: c.id,
-                name: c.function.name,
-                arguments: c.function.arguments,
-            }).collect()
+            calls
+                .into_iter()
+                .map(|c| super::ToolCall {
+                    id: c.id,
+                    name: c.function.name,
+                    arguments: c.function.arguments,
+                })
+                .collect()
         });
 
         let message_content = choice.message.content;
@@ -315,14 +324,17 @@ impl LlmProvider for OpenAiProvider {
                 },
                 content: msg.content,
                 tool_calls: msg.tool_calls.map(|calls| {
-                    calls.into_iter().map(|c| OpenAiToolCall {
-                        id: c.id,
-                        tool_type: "function".to_string(),
-                        function: OpenAiFunctionCall {
-                            name: c.name,
-                            arguments: c.arguments,
-                        },
-                    }).collect()
+                    calls
+                        .into_iter()
+                        .map(|c| OpenAiToolCall {
+                            id: c.id,
+                            tool_type: "function".to_string(),
+                            function: OpenAiFunctionCall {
+                                name: c.name,
+                                arguments: c.arguments,
+                            },
+                        })
+                        .collect()
                 }),
                 tool_call_id: msg.tool_call_id,
                 name: msg.name,
@@ -330,14 +342,17 @@ impl LlmProvider for OpenAiProvider {
             .collect();
 
         let tools = request.tools.map(|tools| {
-            tools.into_iter().map(|t| OpenAiTool {
-                tool_type: "function".to_string(),
-                function: OpenAiFunction {
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.parameters,
-                },
-            }).collect()
+            tools
+                .into_iter()
+                .map(|t| OpenAiTool {
+                    tool_type: "function".to_string(),
+                    function: OpenAiFunction {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.parameters,
+                    },
+                })
+                .collect()
         });
 
         let api_request = OpenAiChatRequest {

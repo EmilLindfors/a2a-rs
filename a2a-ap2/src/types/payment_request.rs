@@ -34,7 +34,10 @@ pub struct PaymentItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pending: Option<bool>,
     /// Refund duration for this item, in days. Defaults to 30.
-    #[serde(default = "default_refund_period", deserialize_with = "deserialize_refund_period")]
+    #[serde(
+        default = "default_refund_period",
+        deserialize_with = "deserialize_refund_period"
+    )]
     pub refund_period: i32,
 }
 

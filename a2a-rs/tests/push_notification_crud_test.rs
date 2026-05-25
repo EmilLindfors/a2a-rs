@@ -9,7 +9,8 @@
 
 mod common;
 
-use a2a_rs::{TaskPushNotificationConfig, 
+use a2a_rs::{
+    TaskPushNotificationConfig,
     adapter::{
         DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
@@ -128,18 +129,9 @@ async fn test_set_and_list_push_notification_config() {
     // Verify config details
     let returned_config = &configs[0];
     assert_eq!(returned_config.task_id, "task_with_config");
-    assert_eq!(
-        returned_config.id,
-        "config_1".to_string()
-    );
-    assert_eq!(
-        returned_config.url,
-        "https://example.com/webhook1"
-    );
-    assert_eq!(
-        returned_config.token,
-        "secret_token_123".to_string()
-    );
+    assert_eq!(returned_config.id, "config_1".to_string());
+    assert_eq!(returned_config.url, "https://example.com/webhook1");
+    assert_eq!(returned_config.token, "secret_token_123".to_string());
 }
 
 #[tokio::test]
@@ -185,18 +177,9 @@ async fn test_get_push_notification_config() {
 
     // Verify config details
     assert_eq!(returned_config.task_id, "task_get_config");
-    assert_eq!(
-        returned_config.id,
-        "config_abc".to_string()
-    );
-    assert_eq!(
-        returned_config.url,
-        "https://example.com/notifications"
-    );
-    assert_eq!(
-        returned_config.token,
-        "bearer_token_xyz".to_string()
-    );
+    assert_eq!(returned_config.id, "config_abc".to_string());
+    assert_eq!(returned_config.url, "https://example.com/notifications");
+    assert_eq!(returned_config.token, "bearer_token_xyz".to_string());
 }
 
 #[tokio::test]
@@ -357,7 +340,8 @@ async fn test_push_notification_config_with_authentication() {
             scheme: "Bearer".to_string(),
             credentials: "secret_credentials".to_string(),
             ..Default::default()
-        }).into(),
+        })
+        .into(),
         ..Default::default()
     };
 
@@ -377,17 +361,9 @@ async fn test_push_notification_config_with_authentication() {
     assert_eq!(configs.len(), 1);
 
     let returned_config = &configs[0];
-    assert!(
-        returned_config
-            .authentication
-            .as_option()
-            .is_some()
-    );
+    assert!(returned_config.authentication.as_option().is_some());
 
-    let auth = returned_config
-        .authentication
-        .as_option()
-        .unwrap();
+    let auth = returned_config.authentication.as_option().unwrap();
     assert_eq!(auth.scheme, "Bearer".to_string());
     assert_eq!(auth.credentials, "secret_credentials".to_string());
 }

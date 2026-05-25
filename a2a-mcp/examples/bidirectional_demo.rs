@@ -165,7 +165,10 @@ impl AsyncMessageHandler for EchoHandler {
             .message_id(uuid::Uuid::new_v4().to_string())
             .build();
 
-        task.status = ::buffa::MessageField::some(TaskStatus::new(TaskState::Completed, Some(response.clone())));
+        task.status = ::buffa::MessageField::some(TaskStatus::new(
+            TaskState::Completed,
+            Some(response.clone()),
+        ));
         task.history.push(response);
         Ok(task)
     }

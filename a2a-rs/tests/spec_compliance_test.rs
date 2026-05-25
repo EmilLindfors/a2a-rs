@@ -115,7 +115,8 @@ fn test_message_compliance() {
         "nested": {
             "array": [1, 2, 3]
         }
-    })).unwrap();
+    }))
+    .unwrap();
     let data_part = Part::data(data_val);
     message.add_part(data_part);
 
@@ -198,8 +199,6 @@ fn test_task_compliance() {
         panic!("Task does not comply with A2A specification");
     }
 }
-
-
 
 #[test]
 fn test_task_states_compliance() {
@@ -339,7 +338,10 @@ fn test_agent_card_v100_fields() {
         .skills(vec![])
         .build();
 
-    println!("DEBUG: card.supported_interfaces = {:?}", card.supported_interfaces);
+    println!(
+        "DEBUG: card.supported_interfaces = {:?}",
+        card.supported_interfaces
+    );
     // Test protocol_version (should default to "0.3.0")
     assert_eq!(card.protocol_version(), "0.3.0");
 
@@ -354,10 +356,19 @@ fn test_agent_card_v100_fields() {
     );
 
     // Verify the v1.0.0 fields are present
-    assert_eq!(card_json["supportedInterfaces"][0]["protocolVersion"], "0.3.0");
-    assert_eq!(card_json["supportedInterfaces"][0]["protocolBinding"], "JSONRPC");
+    assert_eq!(
+        card_json["supportedInterfaces"][0]["protocolVersion"],
+        "0.3.0"
+    );
+    assert_eq!(
+        card_json["supportedInterfaces"][0]["protocolBinding"],
+        "JSONRPC"
+    );
     assert!(card_json["supportedInterfaces"].is_array());
-    assert_eq!(card_json["supportedInterfaces"][1]["protocolBinding"], "GRPC");
+    assert_eq!(
+        card_json["supportedInterfaces"][1]["protocolBinding"],
+        "GRPC"
+    );
     assert_eq!(card_json["iconUrl"], "https://example.com/icon.png");
     assert!(card_json["signatures"].is_array());
 
@@ -395,7 +406,8 @@ fn test_agent_capabilities_extensions() {
         serde_json::Value::String("1.0".to_string()),
     );
     let ext_params_val = serde_json::to_value(&ext_params).unwrap();
-    let ext_params_struct: buffa_types::google::protobuf::Struct = serde_json::from_value(ext_params_val).unwrap();
+    let ext_params_struct: buffa_types::google::protobuf::Struct =
+        serde_json::from_value(ext_params_val).unwrap();
 
     capabilities.extensions = vec![
         AgentExtension {
@@ -476,8 +488,14 @@ fn test_agent_skill_security() {
     );
 
     assert!(skill_json["securityRequirements"].is_array());
-    assert_eq!(skill_json["securityRequirements"][0]["schemes"]["oauth2"]["list"][0], "read:data");
-    assert_eq!(skill_json["securityRequirements"][0]["schemes"]["oauth2"]["list"][1], "write:data");
+    assert_eq!(
+        skill_json["securityRequirements"][0]["schemes"]["oauth2"]["list"][0],
+        "read:data"
+    );
+    assert_eq!(
+        skill_json["securityRequirements"][0]["schemes"]["oauth2"]["list"][1],
+        "write:data"
+    );
 
     // Validate against schema
     let schema_content = fs::read_to_string("../spec/specification.json")
@@ -556,9 +574,7 @@ fn test_artifact_extensions_field() {
         description: "Artifact with extension support".to_string(),
         parts: vec![Part::text("Artifact content".to_string())],
         metadata: None.into(),
-        extensions: vec![
-            "https://example.com/extensions/artifact-encryption".to_string(),
-        ],
+        extensions: vec!["https://example.com/extensions/artifact-encryption".to_string()],
         ..Default::default()
     };
 
@@ -598,7 +614,8 @@ fn test_artifact_extensions_field() {
 fn test_mutual_tls_security_scheme() {
     use a2a_rs::domain::SecurityScheme;
 
-    let mtls_scheme = SecurityScheme::mutual_tls(Some("Client certificate authentication".to_string()));
+    let mtls_scheme =
+        SecurityScheme::mutual_tls(Some("Client certificate authentication".to_string()));
 
     // Serialize and verify
     let scheme_json = serde_json::to_value(&mtls_scheme).unwrap();
@@ -777,8 +794,6 @@ fn test_push_notification_config_with_id() {
     }
 }
 
-
-
 #[test]
 fn test_message_send_configuration_optional_accepted_output_modes() {
     use a2a_rs::domain::MessageSendConfiguration;
@@ -865,7 +880,8 @@ mod property_based_tests {
 
 #[tokio::test]
 async fn test_task_list_page_size_validation() {
-    use a2a_rs::{adapter::{
+    use a2a_rs::{
+        adapter::{
             DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
         },
         services::AsyncA2AClient,

@@ -1,37 +1,42 @@
 //! A default request processor implementation
 
-use std::pin::Pin;
-use std::sync::Arc;
 use async_trait::async_trait;
 use buffa::Enumeration;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::{
     domain::{
-        A2AError, Task, TaskPushNotificationConfig, AgentCard,
-        TaskStatusUpdateEvent, TaskArtifactUpdateEvent,
+        A2AError, AgentCard, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
+        TaskStatusUpdateEvent,
         generated::{
-            A2aService, SendMessageResponse, ListTasksResponse,
-            ListTaskPushNotificationConfigsResponse, StreamResponse,
-            SendMessageRequestView, GetTaskRequestView, ListTasksRequestView,
-            CancelTaskRequestView, SubscribeToTaskRequestView, TaskPushNotificationConfigView,
-            GetTaskPushNotificationConfigRequestView, ListTaskPushNotificationConfigsRequestView,
-            GetExtendedAgentCardRequestView, DeleteTaskPushNotificationConfigRequestView,
-            send_message_response, stream_response, TaskState,
-            TaskStatusUpdateEvent as GenTaskStatusUpdateEvent,
-            TaskArtifactUpdateEvent as GenTaskArtifactUpdateEvent,
+            A2aService, CancelTaskRequestView, DeleteTaskPushNotificationConfigRequestView,
+            GetExtendedAgentCardRequestView, GetTaskPushNotificationConfigRequestView,
+            GetTaskRequestView, ListTaskPushNotificationConfigsRequestView,
+            ListTaskPushNotificationConfigsResponse, ListTasksRequestView, ListTasksResponse,
+            SendMessageRequestView, SendMessageResponse, StreamResponse,
+            SubscribeToTaskRequestView, TaskArtifactUpdateEvent as GenTaskArtifactUpdateEvent,
+            TaskPushNotificationConfigView, TaskState,
+            TaskStatusUpdateEvent as GenTaskStatusUpdateEvent, send_message_response,
+            stream_response,
         },
     },
     port::{
-        AsyncMessageHandler, AsyncNotificationManager, AsyncTaskManager,
-        AsyncStreamingHandler, UpdateEvent, streaming_handler::Subscriber,
+        AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
+        UpdateEvent, streaming_handler::Subscriber,
     },
     services::server::AgentInfoProvider,
 };
 
 /// Default implementation of a request processor that routes ConnectRPC requests to business handlers
 #[derive(Clone)]
-pub struct DefaultRequestProcessor<M, T, N, A = crate::adapter::SimpleAgentInfo, S = NoopStreamingHandler>
-where
+pub struct DefaultRequestProcessor<
+    M,
+    T,
+    N,
+    A = crate::adapter::SimpleAgentInfo,
+    S = NoopStreamingHandler,
+> where
     M: AsyncMessageHandler + Send + Sync + 'static,
     T: AsyncTaskManager + Send + Sync + 'static,
     N: AsyncNotificationManager + Send + Sync + 'static,
@@ -121,18 +126,34 @@ where
 /// Helper function to map A2AError to connectrpc::ConnectError
 fn map_err(e: A2AError) -> ::connectrpc::ConnectError {
     match e {
-        A2AError::TaskNotFound(msg) => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::NotFound, msg),
-        A2AError::InvalidParams(msg) => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::InvalidArgument, msg),
-        A2AError::ValidationError { field, message } => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::InvalidArgument, format!("{}: {}", field, message)),
-        A2AError::UnsupportedOperation(msg) => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Unimplemented, msg),
-        A2AError::AuthenticatedExtendedCardNotConfigured => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::FailedPrecondition, "Authenticated extended card not configured".to_string()),
-        A2AError::MethodNotFound(msg) => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Unimplemented, msg),
+        A2AError::TaskNotFound(msg) => {
+            ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::NotFound, msg)
+        }
+        A2AError::InvalidParams(msg) => {
+            ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::InvalidArgument, msg)
+        }
+        A2AError::ValidationError { field, message } => ::connectrpc::ConnectError::new(
+            ::connectrpc::ErrorCode::InvalidArgument,
+            format!("{}: {}", field, message),
+        ),
+        A2AError::UnsupportedOperation(msg) => {
+            ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Unimplemented, msg)
+        }
+        A2AError::AuthenticatedExtendedCardNotConfigured => ::connectrpc::ConnectError::new(
+            ::connectrpc::ErrorCode::FailedPrecondition,
+            "Authenticated extended card not configured".to_string(),
+        ),
+        A2AError::MethodNotFound(msg) => {
+            ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Unimplemented, msg)
+        }
         _ => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Internal, e.to_string()),
     }
 }
 
 /// Helper to map domain metadata to protobuf Struct
-fn map_metadata(opt: Option<serde_json::Map<String, serde_json::Value>>) -> ::buffa::MessageField<::buffa_types::google::protobuf::Struct> {
+fn map_metadata(
+    opt: Option<serde_json::Map<String, serde_json::Value>>,
+) -> ::buffa::MessageField<::buffa_types::google::protobuf::Struct> {
     if let Some(map) = opt {
         let val = serde_json::Value::Object(map);
         if let Ok(struc) = serde_json::from_value::<::buffa_types::google::protobuf::Struct>(val) {
@@ -142,7 +163,9 @@ fn map_metadata(opt: Option<serde_json::Map<String, serde_json::Value>>) -> ::bu
     ::buffa::MessageField::none()
 }
 
-fn map_status_update(evt: crate::domain::events::TaskStatusUpdateEvent) -> GenTaskStatusUpdateEvent {
+fn map_status_update(
+    evt: crate::domain::events::TaskStatusUpdateEvent,
+) -> GenTaskStatusUpdateEvent {
     GenTaskStatusUpdateEvent {
         task_id: evt.task_id,
         context_id: evt.context_id,
@@ -152,7 +175,9 @@ fn map_status_update(evt: crate::domain::events::TaskStatusUpdateEvent) -> GenTa
     }
 }
 
-fn map_artifact_update(evt: crate::domain::events::TaskArtifactUpdateEvent) -> GenTaskArtifactUpdateEvent {
+fn map_artifact_update(
+    evt: crate::domain::events::TaskArtifactUpdateEvent,
+) -> GenTaskArtifactUpdateEvent {
     GenTaskArtifactUpdateEvent {
         task_id: evt.task_id,
         context_id: evt.context_id,
@@ -176,10 +201,7 @@ where
         &self,
         ctx: ::connectrpc::Context,
         request: ::buffa::view::OwnedView<SendMessageRequestView<'static>>,
-    ) -> Result<
-        (SendMessageResponse, ::connectrpc::Context),
-        ::connectrpc::ConnectError,
-    > {
+    ) -> Result<(SendMessageResponse, ::connectrpc::Context), ::connectrpc::ConnectError> {
         let req = request.to_owned_message();
         let message = req.message.into_option().ok_or_else(|| {
             ::connectrpc::ConnectError::new(
@@ -238,9 +260,8 @@ where
         (
             ::std::pin::Pin<
                 Box<
-                    dyn ::futures::Stream<
-                        Item = Result<StreamResponse, ::connectrpc::ConnectError>,
-                    > + Send,
+                    dyn ::futures::Stream<Item = Result<StreamResponse, ::connectrpc::ConnectError>>
+                        + Send,
                 >,
             >,
             ::connectrpc::Context,
@@ -297,7 +318,7 @@ where
         }
 
         use futures::StreamExt;
-        
+
         let initial_response = StreamResponse {
             payload: Some(stream_response::Payload::Task(Box::new(task))),
             ..Default::default()
@@ -306,19 +327,23 @@ where
         let mapped_stream = update_stream.map(|item| {
             item.map(|evt| match evt {
                 UpdateEvent::StatusUpdate(event) => StreamResponse {
-                    payload: Some(stream_response::Payload::StatusUpdate(Box::new(map_status_update(event)))),
+                    payload: Some(stream_response::Payload::StatusUpdate(Box::new(
+                        map_status_update(event),
+                    ))),
                     ..Default::default()
                 },
                 UpdateEvent::ArtifactUpdate(event) => StreamResponse {
-                    payload: Some(stream_response::Payload::ArtifactUpdate(Box::new(map_artifact_update(event)))),
+                    payload: Some(stream_response::Payload::ArtifactUpdate(Box::new(
+                        map_artifact_update(event),
+                    ))),
                     ..Default::default()
                 },
             })
             .map_err(map_err)
         });
 
-        let chained_stream = futures::stream::once(async { Ok(initial_response) })
-            .chain(mapped_stream);
+        let chained_stream =
+            futures::stream::once(async { Ok(initial_response) }).chain(mapped_stream);
 
         Ok((Box::pin(chained_stream), ctx))
     }
@@ -342,30 +367,40 @@ where
         &self,
         ctx: ::connectrpc::Context,
         request: ::buffa::view::OwnedView<ListTasksRequestView<'static>>,
-    ) -> Result<
-        (ListTasksResponse, ::connectrpc::Context),
-        ::connectrpc::ConnectError,
-    > {
+    ) -> Result<(ListTasksResponse, ::connectrpc::Context), ::connectrpc::ConnectError> {
         let req = request.to_owned_message();
-        
+
         let params = crate::domain::ListTasksParams {
-            context_id: if req.context_id.is_empty() { None } else { Some(req.context_id) },
+            context_id: if req.context_id.is_empty() {
+                None
+            } else {
+                Some(req.context_id)
+            },
             status: match req.status.to_i32() {
                 0 => None,
                 val => Some(TaskState::from_i32(val).unwrap_or(TaskState::TASK_STATE_UNSPECIFIED)),
             },
             page_size: req.page_size,
-            page_token: if req.page_token.is_empty() { None } else { Some(req.page_token) },
+            page_token: if req.page_token.is_empty() {
+                None
+            } else {
+                Some(req.page_token)
+            },
             history_length: req.history_length,
             include_artifacts: req.include_artifacts,
             status_timestamp_after: req.status_timestamp_after.as_option().map(|t| {
-                let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(t.seconds, t.nanos as u32).unwrap_or_default();
+                let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(t.seconds, t.nanos as u32)
+                    .unwrap_or_default();
                 dt.to_rfc3339()
             }),
             metadata: None,
         };
 
-        let result = self.task_manager.list_tasks_v3(&params).await.map_err(map_err)?;
+        let result = self
+            .task_manager
+            .list_tasks_v3(&params)
+            .await
+            .map_err(map_err)?;
 
         let response = ListTasksResponse {
             tasks: result.tasks,
@@ -400,9 +435,8 @@ where
         (
             ::std::pin::Pin<
                 Box<
-                    dyn ::futures::Stream<
-                        Item = Result<StreamResponse, ::connectrpc::ConnectError>,
-                    > + Send,
+                    dyn ::futures::Stream<Item = Result<StreamResponse, ::connectrpc::ConnectError>>
+                        + Send,
                 >,
             >,
             ::connectrpc::Context,
@@ -429,11 +463,15 @@ where
         let mapped_stream = update_stream.map(|item| {
             item.map(|evt| match evt {
                 UpdateEvent::StatusUpdate(event) => StreamResponse {
-                    payload: Some(stream_response::Payload::StatusUpdate(Box::new(map_status_update(event)))),
+                    payload: Some(stream_response::Payload::StatusUpdate(Box::new(
+                        map_status_update(event),
+                    ))),
                     ..Default::default()
                 },
                 UpdateEvent::ArtifactUpdate(event) => StreamResponse {
-                    payload: Some(stream_response::Payload::ArtifactUpdate(Box::new(map_artifact_update(event)))),
+                    payload: Some(stream_response::Payload::ArtifactUpdate(Box::new(
+                        map_artifact_update(event),
+                    ))),
                     ..Default::default()
                 },
             })
@@ -445,8 +483,8 @@ where
                 payload: Some(stream_response::Payload::Task(Box::new(task))),
                 ..Default::default()
             };
-            let chained_stream = futures::stream::once(async { Ok(initial_response) })
-                .chain(mapped_stream);
+            let chained_stream =
+                futures::stream::once(async { Ok(initial_response) }).chain(mapped_stream);
             Ok((Box::pin(chained_stream), ctx))
         } else {
             Ok((Box::pin(mapped_stream), ctx))
@@ -457,10 +495,8 @@ where
         &self,
         ctx: ::connectrpc::Context,
         request: ::buffa::view::OwnedView<TaskPushNotificationConfigView<'static>>,
-    ) -> Result<
-        (TaskPushNotificationConfig, ::connectrpc::Context),
-        ::connectrpc::ConnectError,
-    > {
+    ) -> Result<(TaskPushNotificationConfig, ::connectrpc::Context), ::connectrpc::ConnectError>
+    {
         let config = request.to_owned_message();
         let created_config = self
             .notification_manager
@@ -473,13 +509,9 @@ where
     async fn get_task_push_notification_config(
         &self,
         ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<
-            GetTaskPushNotificationConfigRequestView<'static>,
-        >,
-    ) -> Result<
-        (TaskPushNotificationConfig, ::connectrpc::Context),
-        ::connectrpc::ConnectError,
-    > {
+        request: ::buffa::view::OwnedView<GetTaskPushNotificationConfigRequestView<'static>>,
+    ) -> Result<(TaskPushNotificationConfig, ::connectrpc::Context), ::connectrpc::ConnectError>
+    {
         let req = request.to_owned_message();
         let params = crate::domain::GetTaskPushNotificationConfigParams {
             id: req.task_id,
@@ -497,11 +529,12 @@ where
     async fn list_task_push_notification_configs(
         &self,
         ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<
-            ListTaskPushNotificationConfigsRequestView<'static>,
-        >,
+        request: ::buffa::view::OwnedView<ListTaskPushNotificationConfigsRequestView<'static>>,
     ) -> Result<
-        (ListTaskPushNotificationConfigsResponse, ::connectrpc::Context),
+        (
+            ListTaskPushNotificationConfigsResponse,
+            ::connectrpc::Context,
+        ),
         ::connectrpc::ConnectError,
     > {
         let req = request.to_owned_message();
@@ -538,11 +571,12 @@ where
     async fn delete_task_push_notification_config(
         &self,
         ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<
-            DeleteTaskPushNotificationConfigRequestView<'static>,
-        >,
+        request: ::buffa::view::OwnedView<DeleteTaskPushNotificationConfigRequestView<'static>>,
     ) -> Result<
-        (::buffa_types::google::protobuf::Empty, ::connectrpc::Context),
+        (
+            ::buffa_types::google::protobuf::Empty,
+            ::connectrpc::Context,
+        ),
         ::connectrpc::ConnectError,
     > {
         let req = request.to_owned_message();
@@ -570,7 +604,9 @@ impl AsyncStreamingHandler for NoopStreamingHandler {
         _task_id: &str,
         _subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
-        Err(A2AError::UnsupportedOperation("Streaming not supported by this processor".to_string()))
+        Err(A2AError::UnsupportedOperation(
+            "Streaming not supported by this processor".to_string(),
+        ))
     }
 
     async fn add_artifact_subscriber(
@@ -578,7 +614,9 @@ impl AsyncStreamingHandler for NoopStreamingHandler {
         _task_id: &str,
         _subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
-        Err(A2AError::UnsupportedOperation("Streaming not supported by this processor".to_string()))
+        Err(A2AError::UnsupportedOperation(
+            "Streaming not supported by this processor".to_string(),
+        ))
     }
 
     async fn remove_subscription(&self, _subscription_id: &str) -> Result<(), A2AError> {
@@ -612,8 +650,13 @@ impl AsyncStreamingHandler for NoopStreamingHandler {
     async fn status_update_stream(
         &self,
         _task_id: &str,
-    ) -> Result<Pin<Box<dyn ::futures::Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError> {
-        Err(A2AError::UnsupportedOperation("Streaming not supported by this processor".to_string()))
+    ) -> Result<
+        Pin<Box<dyn ::futures::Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>,
+        A2AError,
+    > {
+        Err(A2AError::UnsupportedOperation(
+            "Streaming not supported by this processor".to_string(),
+        ))
     }
 
     async fn artifact_update_stream(
@@ -623,13 +666,20 @@ impl AsyncStreamingHandler for NoopStreamingHandler {
         Pin<Box<dyn ::futures::Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>,
         A2AError,
     > {
-        Err(A2AError::UnsupportedOperation("Streaming not supported by this processor".to_string()))
+        Err(A2AError::UnsupportedOperation(
+            "Streaming not supported by this processor".to_string(),
+        ))
     }
 
     async fn combined_update_stream(
         &self,
         _task_id: &str,
-    ) -> Result<Pin<Box<dyn ::futures::Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError> {
-        Err(A2AError::UnsupportedOperation("Streaming not supported by this processor".to_string()))
+    ) -> Result<
+        Pin<Box<dyn ::futures::Stream<Item = Result<UpdateEvent, A2AError>> + Send>>,
+        A2AError,
+    > {
+        Err(A2AError::UnsupportedOperation(
+            "Streaming not supported by this processor".to_string(),
+        ))
     }
 }

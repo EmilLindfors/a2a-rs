@@ -90,7 +90,11 @@ async fn test_http_client_server_interaction() {
             .as_bool()
             .unwrap_or(false)
     );
-    assert!(!agent_card["capabilities"]["streaming"].as_bool().unwrap_or(false));
+    assert!(
+        !agent_card["capabilities"]["streaming"]
+            .as_bool()
+            .unwrap_or(false)
+    );
 
     // Test 2: Get skills using direct HTTP request
     let response = http_client
@@ -169,9 +173,11 @@ async fn test_message_types() {
     let mut message = Message::user_text("Hello, A2A agent!".to_string(), message_id);
 
     // Add a data part
-    let data_val: buffa_types::google::protobuf::Value = serde_json::from_value(serde_json::json!({
-        "key": "value"
-    })).unwrap();
+    let data_val: buffa_types::google::protobuf::Value =
+        serde_json::from_value(serde_json::json!({
+            "key": "value"
+        }))
+        .unwrap();
     let data_part = Part::data(data_val);
     message.add_part(data_part);
 

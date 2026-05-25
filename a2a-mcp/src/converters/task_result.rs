@@ -69,7 +69,8 @@ impl TaskResultConverter {
             .status
             .as_option()
             .map(|s| {
-                s.state == buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_INPUT_REQUIRED)
+                s.state
+                    == buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_INPUT_REQUIRED)
             })
             .unwrap_or(false);
 
@@ -137,7 +138,9 @@ impl TaskResultConverter {
     pub fn is_task_successful(task: &Task) -> bool {
         task.status
             .as_option()
-            .map(|s| s.state == buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_COMPLETED))
+            .map(|s| {
+                s.state == buffa::enumeration::EnumValue::Known(TaskState::TASK_STATE_COMPLETED)
+            })
             .unwrap_or(false)
     }
 }

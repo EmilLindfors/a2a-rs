@@ -9,10 +9,7 @@ use async_trait::async_trait;
 
 use a2a_rs::{
     adapter::{business::DefaultMessageHandler, storage::InMemoryTaskStorage},
-    domain::{
-        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskState,
-        TaskStatusUpdateEvent,
-    },
+    domain::{A2AError, Message, Task, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent},
     port::{
         AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
         MessageHandler, NotificationManager, StreamingHandler, TaskManager,
@@ -111,7 +108,7 @@ impl TaskManager for TestBusinessHandler {
 impl NotificationManager for TestBusinessHandler {
     fn set_task_notification(
         &self,
-        _config: &a2a_rs::domain::TaskPushNotificationConfig
+        _config: &a2a_rs::domain::TaskPushNotificationConfig,
     ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
         Err(A2AError::UnsupportedOperation(
             "Synchronous notification setup not supported. Use async version.".to_string(),
@@ -254,7 +251,7 @@ impl AsyncTaskManager for TestBusinessHandler {
 impl AsyncNotificationManager for TestBusinessHandler {
     async fn set_task_notification(
         &self,
-        config: &a2a_rs::domain::TaskPushNotificationConfig
+        config: &a2a_rs::domain::TaskPushNotificationConfig,
     ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
         self.storage.set_task_notification(config).await
     }

@@ -1,7 +1,5 @@
 //! Helpers for declaring AP2 support in an A2A `AgentCard`.
 
-
-
 use a2a_rs::{AgentCapabilities, AgentCard, AgentExtension};
 
 use crate::types::{AP2_EXTENSION_URI, Ap2Role};
@@ -18,8 +16,9 @@ pub fn ap2_extension(roles: Vec<Ap2Role>, required: bool) -> AgentExtension {
     let mut params_map = serde_json::Map::new();
     params_map.insert("roles".to_string(), serde_json::Value::Array(roles_json));
     let struct_val = serde_json::Value::Object(params_map);
-    let params_struct = serde_json::from_value::<::buffa_types::google::protobuf::Struct>(struct_val)
-        .unwrap_or_default();
+    let params_struct =
+        serde_json::from_value::<::buffa_types::google::protobuf::Struct>(struct_val)
+            .unwrap_or_default();
 
     AgentExtension {
         uri: AP2_EXTENSION_URI.to_string(),
@@ -43,7 +42,10 @@ pub fn supports_ap2(card: &AgentCard) -> bool {
 /// Returns `None` if the card does not declare AP2 support.
 pub fn get_ap2_roles(card: &AgentCard) -> Option<Vec<Ap2Role>> {
     let caps = card.capabilities.as_option()?;
-    let ap2_ext = caps.extensions.iter().find(|e| e.uri == AP2_EXTENSION_URI)?;
+    let ap2_ext = caps
+        .extensions
+        .iter()
+        .find(|e| e.uri == AP2_EXTENSION_URI)?;
     let params = ap2_ext.params.as_option()?;
     let json_val = serde_json::to_value(params).ok()?;
     let roles_val = json_val.get("roles")?;

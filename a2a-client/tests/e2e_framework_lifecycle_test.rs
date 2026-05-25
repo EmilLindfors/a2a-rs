@@ -1,9 +1,9 @@
+use a2a_agents::{AgentPlugin, SkillDefinition};
 use a2a_client::WebA2AClient;
+use a2a_rs::adapter::{DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, SimpleAgentInfo};
 use a2a_rs::domain::{A2AError, Message, Task, TaskState};
 use a2a_rs::port::AsyncMessageHandler;
 use a2a_rs::services::AsyncA2AClient;
-use a2a_rs::adapter::{DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, SimpleAgentInfo};
-use a2a_agents::{AgentPlugin, SkillDefinition};
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -20,11 +20,11 @@ impl AgentPlugin for EchoAgent {
     fn name(&self) -> &str {
         "Echo E2E Agent"
     }
-    
+
     fn description(&self) -> &str {
         "E2E Test Agent"
     }
-    
+
     fn skills(&self) -> Vec<SkillDefinition> {
         vec![]
     }
@@ -46,7 +46,7 @@ impl AsyncMessageHandler for EchoAgent {
                 break;
             }
         }
-        
+
         let reply_text = if text.is_empty() {
             "No message received".to_string()
         } else {
@@ -59,14 +59,12 @@ impl AsyncMessageHandler for EchoAgent {
         } else {
             self.storage.get_task(task_id, None).await?
         };
-        
+
         let reply_msg = Message::agent_text(reply_text, "msg-res-1".to_string());
-        
-        self.storage.update_task_status(
-            task_id,
-            TaskState::Completed,
-            Some(reply_msg.clone()),
-        ).await?;
+
+        self.storage
+            .update_task_status(task_id, TaskState::Completed, Some(reply_msg.clone()))
+            .await?;
 
         let mut t = task;
         t.update_status(TaskState::Completed, Some(reply_msg));
@@ -84,7 +82,9 @@ async fn test_framework_lifecycle_e2e() {
     let storage = InMemoryTaskStorage::new();
 
     let processor = DefaultRequestProcessor::new(
-        EchoAgent { storage: storage.clone() },
+        EchoAgent {
+            storage: storage.clone(),
+        },
         storage.clone(),
         storage,
         agent_info.clone(),
@@ -107,13 +107,13 @@ async fn test_framework_lifecycle_e2e() {
     // 3. Client submit task
     let task_id = "test-e2e-task-1".to_string();
     let message = Message::user_text("Hello Framework!".to_string(), "msg-1".to_string());
-    
+
     let task = client
         .http
         .send_task_message(&task_id, &message, None, None)
         .await
         .expect("Failed to send task");
-        
+
     assert_eq!(task.id, task_id);
     assert!(task.status.state == TaskState::Working || task.status.state == TaskState::Completed);
 
@@ -129,7 +129,7 @@ async fn test_framework_lifecycle_e2e() {
 
     assert_eq!(final_task.status.state, TaskState::Completed);
     let last_reply = final_task.history.last().unwrap();
-    
+
     let mut received_text = String::new();
     for part in &last_reply.parts {
         if let Some(a2a_rs::domain::part::Content::Text(t)) = &part.content {
@@ -137,7 +137,7 @@ async fn test_framework_lifecycle_e2e() {
             break;
         }
     }
-    
+
     assert_eq!(received_text, "Echo: Hello Framework!");
 
     // 5. Cleanup

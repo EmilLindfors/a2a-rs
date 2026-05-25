@@ -11,7 +11,7 @@ use crate::measure_duration;
 use super::message::{Artifact, Message};
 
 // Re-export generated types
-pub use crate::domain::generated::{Task, TaskState, TaskStatus, TaskPushNotificationConfig};
+pub use crate::domain::generated::{Task, TaskPushNotificationConfig, TaskState, TaskStatus};
 
 #[allow(non_upper_case_globals)]
 impl TaskState {
@@ -151,7 +151,10 @@ pub struct ListTasksParams {
     pub history_length: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "includeArtifacts")]
     pub include_artifacts: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "statusTimestampAfter")]
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        rename = "statusTimestampAfter"
+    )]
     pub status_timestamp_after: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Map<String, Value>>,
@@ -255,7 +258,10 @@ impl TaskBuilder {
         Task {
             id: self.id,
             context_id: self.context_id,
-            status: self.status.unwrap_or_else(|| TaskStatus::new(TaskState::TASK_STATE_SUBMITTED, None)).into(),
+            status: self
+                .status
+                .unwrap_or_else(|| TaskStatus::new(TaskState::TASK_STATE_SUBMITTED, None))
+                .into(),
             artifacts: self.artifacts,
             history: self.history,
             metadata: self.metadata.into(),
@@ -280,7 +286,10 @@ impl Task {
         Self {
             id,
             context_id,
-            status: ::buffa::MessageField::some(TaskStatus::new(TaskState::TASK_STATE_SUBMITTED, None)),
+            status: ::buffa::MessageField::some(TaskStatus::new(
+                TaskState::TASK_STATE_SUBMITTED,
+                None,
+            )),
             artifacts: Vec::new(),
             history: Vec::new(),
             metadata: ::buffa::MessageField::none(),
@@ -351,7 +360,12 @@ impl Task {
                 limit,
                 items_to_skip
             );
-            task_copy.history = task_copy.history.iter().skip(items_to_skip).cloned().collect();
+            task_copy.history = task_copy
+                .history
+                .iter()
+                .skip(items_to_skip)
+                .cloned()
+                .collect();
         }
 
         task_copy

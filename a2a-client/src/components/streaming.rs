@@ -86,7 +86,7 @@ pub fn create_sse_stream(
                             }
                         }
                     }
-                    
+
                     if is_terminal {
                         info!("Task {} reached terminal state. Ending stream gracefully.", task_id);
                         break;

@@ -4,10 +4,8 @@
 //! task operations, and streaming functionality to establish baseline metrics.
 
 use a2a_rs::{
-    MessageSendParams,
     adapter::SimpleAgentInfo,
     domain::{AgentSkill, Message, Part, Task, TaskState},
-    domain::generated::SendMessageRequest,
 };
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use serde_json::{self};
@@ -144,7 +142,6 @@ fn bench_task_operations(c: &mut Criterion) {
 
     group.finish();
 }
-
 
 /// Benchmark part validation and processing
 fn bench_part_operations(c: &mut Criterion) {

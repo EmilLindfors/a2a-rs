@@ -50,7 +50,10 @@ impl AsyncMessageHandler for EchoHandler {
         Ok(Task::builder()
             .id(task_id.to_string())
             .context_id(message.context_id.clone())
-            .status(TaskStatus::new(TaskState::Completed, Some(response.clone())))
+            .status(TaskStatus::new(
+                TaskState::Completed,
+                Some(response.clone()),
+            ))
             .history(vec![message.clone(), response])
             .build())
     }

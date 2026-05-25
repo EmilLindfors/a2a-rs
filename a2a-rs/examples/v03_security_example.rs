@@ -43,9 +43,7 @@ fn main() {
     // Add mTLS authentication (new in v1.0.0)
     security_schemes.insert(
         "mtls".to_string(),
-        SecurityScheme::mutual_tls(
-            Some("Client certificate authentication".to_string()),
-        ),
+        SecurityScheme::mutual_tls(Some("Client certificate authentication".to_string())),
     );
 
     // Add OAuth2 with metadata URL (new in v1.0.0)

@@ -16,7 +16,7 @@ async fn test_agent_workflow() {
         .with_pattern("company", r"(apple|google|microsoft|amazon)");
 
     let input = "What is the weather in tokyo today?";
-    
+
     let intent = classifier.classify(input);
     assert_eq!(intent, Some("query_weather"));
 
@@ -27,7 +27,9 @@ async fn test_agent_workflow() {
 
     // Test Caching component
     let cache = AgentCache::<String, String>::new();
-    cache.insert("weather:tokyo".to_string(), "Sunny, 25C".to_string()).await;
+    cache
+        .insert("weather:tokyo".to_string(), "Sunny, 25C".to_string())
+        .await;
 
     let result = cache.get(&"weather:tokyo".to_string()).await.unwrap();
     assert_eq!(result, "Sunny, 25C");
@@ -58,17 +60,16 @@ async fn test_error_handling() {
         .add_intent("query_weather", &["weather", "forecast"])
         .add_intent("query_stock", &["stock", "price"]);
 
-    let extractor = EntityExtractor::new()
-        .with_pattern("location", r"(new york|london|tokyo)");
+    let extractor = EntityExtractor::new().with_pattern("location", r"(new york|london|tokyo)");
 
     let input = "Tell me a joke";
-    
+
     let intent = classifier.classify(input);
     assert_eq!(intent, None);
 
     let entities = extractor.extract(input);
     assert!(!entities.contains_key("location"));
-    
+
     // Formatting with missing data
     let output = MarkdownFormatter::new()
         .heading(1, "Error Report")

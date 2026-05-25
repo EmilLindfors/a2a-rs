@@ -4,15 +4,13 @@
 
 mod common;
 
-use a2a_rs::{TaskPushNotificationConfig, 
+use a2a_rs::{
+    TaskPushNotificationConfig,
     adapter::{
         DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage,
         PushNotificationSender, SimpleAgentInfo,
     },
-    domain::{
-        A2AError, Message, Part,  TaskArtifactUpdateEvent,
-        TaskStatusUpdateEvent,
-    },
+    domain::{A2AError, Message, Part, TaskArtifactUpdateEvent, TaskStatusUpdateEvent},
     services::AsyncA2AClient,
 };
 use async_trait::async_trait;
@@ -242,7 +240,6 @@ async fn test_push_notifications() {
 /// Test push notification config with ID field (v1.0.0)
 #[tokio::test]
 async fn test_push_notification_config_id() {
-    
     // Create a config with an ID
     let config_with_id = TaskPushNotificationConfig {
         tenant: String::new(),

@@ -12,7 +12,12 @@ use super::handler::ReimbursementHandler;
 #[async_trait]
 impl<T> AgentPlugin for ReimbursementHandler<T>
 where
-    T: a2a_rs::port::AsyncTaskManager + a2a_rs::port::AsyncStreamingHandler + Clone + Send + Sync + 'static,
+    T: a2a_rs::port::AsyncTaskManager
+        + a2a_rs::port::AsyncStreamingHandler
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     fn name(&self) -> &str {
         "Reimbursement Agent"

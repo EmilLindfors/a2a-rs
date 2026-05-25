@@ -691,15 +691,20 @@ impl AsyncTaskManager for SqlxTaskStorage {
         // Filter by status_timestamp_after
         let timestamp_str = if let Some(status_timestamp_after) = &params.status_timestamp_after {
             // Parse ISO 8601 string
-            let timestamp = chrono::DateTime::parse_from_rfc3339(status_timestamp_after)
-                .map_err(|e| {
+            let timestamp =
+                chrono::DateTime::parse_from_rfc3339(status_timestamp_after).map_err(|e| {
                     A2AError::DatabaseError(format!(
                         "Invalid timestamp value: {} ({})",
                         status_timestamp_after, e
                     ))
                 })?;
             where_conditions.push("updated_at >= ?".to_string());
-            Some(timestamp.with_timezone(&chrono::Utc).format("%Y-%m-%d %H:%M:%S").to_string())
+            Some(
+                timestamp
+                    .with_timezone(&chrono::Utc)
+                    .format("%Y-%m-%d %H:%M:%S")
+                    .to_string(),
+            )
         } else {
             None
         };
@@ -1148,8 +1153,7 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.broadcast_status_update(task_id, update.status)
-            .await
+        self.broadcast_status_update(task_id, update.status).await
     }
 
     async fn broadcast_artifact_update(

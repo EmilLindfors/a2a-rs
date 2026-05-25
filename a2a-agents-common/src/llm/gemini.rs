@@ -1,7 +1,7 @@
 use super::{LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
-use futures::{stream::BoxStream, StreamExt};
+use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
 use std::env;
 use tracing::{debug, error, info, warn};
@@ -16,15 +16,14 @@ pub struct GeminiConfig {
 
 impl GeminiConfig {
     pub fn from_env() -> Result<Self, String> {
-        let base_url = env::var("GEMINI_API_BASE_URL")
-            .unwrap_or_else(|_| "https://generativelanguage.googleapis.com/v1beta/models".to_string());
+        let base_url = env::var("GEMINI_API_BASE_URL").unwrap_or_else(|_| {
+            "https://generativelanguage.googleapis.com/v1beta/models".to_string()
+        });
 
-        let model = env::var("GEMINI_MODEL")
-            .unwrap_or_else(|_| "gemini-1.5-pro".to_string());
+        let model = env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-1.5-pro".to_string());
 
-        let api_key = env::var("GEMINI_API_KEY").map_err(|_| {
-            "GEMINI_API_KEY environment variable is required".to_string()
-        })?;
+        let api_key = env::var("GEMINI_API_KEY")
+            .map_err(|_| "GEMINI_API_KEY environment variable is required".to_string())?;
 
         Ok(Self {
             base_url,
@@ -152,7 +151,10 @@ impl GeminiProvider {
 #[async_trait]
 impl LlmProvider for GeminiProvider {
     async fn chat_completion(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
-        let url = format!("{}/{}:generateContent?key={}", self.config.base_url, self.config.model, self.config.api_key);
+        let url = format!(
+            "{}/{}:generateContent?key={}",
+            self.config.base_url, self.config.model, self.config.api_key
+        );
 
         let mut system_instruction_parts = Vec::new();
         let mut contents = Vec::new();
@@ -163,21 +165,33 @@ impl LlmProvider for GeminiProvider {
             match msg.role {
                 MessageRole::System => {
                     if let Some(text) = msg.content {
-                        system_instruction_parts.push(Part { text: Some(text), function_call: None, function_response: None });
+                        system_instruction_parts.push(Part {
+                            text: Some(text),
+                            function_call: None,
+                            function_response: None,
+                        });
                     }
                 }
                 MessageRole::User => {
                     if let Some(text) = msg.content {
                         contents.push(Content {
                             role: "user".to_string(),
-                            parts: vec![Part { text: Some(text), function_call: None, function_response: None }],
+                            parts: vec![Part {
+                                text: Some(text),
+                                function_call: None,
+                                function_response: None,
+                            }],
                         });
                     }
                 }
                 MessageRole::Assistant => {
                     let mut parts = Vec::new();
                     if let Some(text) = msg.content {
-                        parts.push(Part { text: Some(text), function_call: None, function_response: None });
+                        parts.push(Part {
+                            text: Some(text),
+                            function_call: None,
+                            function_response: None,
+                        });
                     }
                     if let Some(tool_calls) = msg.tool_calls {
                         for call in tool_calls {
@@ -185,7 +199,8 @@ impl LlmProvider for GeminiProvider {
                                 text: None,
                                 function_call: Some(GeminiFunctionCall {
                                     name: call.name,
-                                    args: serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null),
+                                    args: serde_json::from_str(&call.arguments)
+                                        .unwrap_or(serde_json::Value::Null),
                                 }),
                                 function_response: None,
                             });
@@ -201,7 +216,8 @@ impl LlmProvider for GeminiProvider {
                 MessageRole::Tool => {
                     if let Some(name) = msg.name {
                         let response_val: serde_json::Value = if let Some(content) = msg.content {
-                            serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content))
+                            serde_json::from_str(&content)
+                                .unwrap_or(serde_json::Value::String(content))
                         } else {
                             serde_json::Value::Null
                         };
@@ -241,11 +257,14 @@ impl LlmProvider for GeminiProvider {
 
         let tools = request.tools.map(|tools| {
             vec![GeminiTool {
-                function_declarations: tools.into_iter().map(|t| GeminiFunctionDeclaration {
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.parameters,
-                }).collect(),
+                function_declarations: tools
+                    .into_iter()
+                    .map(|t| GeminiFunctionDeclaration {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.parameters,
+                    })
+                    .collect(),
             }]
         });
 
@@ -262,10 +281,16 @@ impl LlmProvider for GeminiProvider {
             "Sending chat completion request to Gemini"
         );
 
-        let response = self.client.post(&url).json(&api_request).send().await.map_err(|e| {
-            error!(error = %e, "Failed to send request to Gemini API");
-            LlmError::NetworkError(e.to_string())
-        })?;
+        let response = self
+            .client
+            .post(&url)
+            .json(&api_request)
+            .send()
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Failed to send request to Gemini API");
+                LlmError::NetworkError(e.to_string())
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -301,7 +326,7 @@ impl LlmProvider for GeminiProvider {
         })?;
 
         let parts = response_content.parts.unwrap_or_default();
-        
+
         let mut message_content = None;
         let mut tool_calls = Vec::new();
 
@@ -340,7 +365,10 @@ impl LlmProvider for GeminiProvider {
         &self,
         request: LlmRequest,
     ) -> Result<BoxStream<'static, Result<super::LlmStreamEvent, LlmError>>, LlmError> {
-        let url = format!("{}/{}:streamGenerateContent?alt=sse&key={}", self.config.base_url, self.config.model, self.config.api_key);
+        let url = format!(
+            "{}/{}:streamGenerateContent?alt=sse&key={}",
+            self.config.base_url, self.config.model, self.config.api_key
+        );
 
         let mut system_instruction_parts = Vec::new();
         let mut contents = Vec::new();
@@ -349,21 +377,33 @@ impl LlmProvider for GeminiProvider {
             match msg.role {
                 MessageRole::System => {
                     if let Some(text) = msg.content {
-                        system_instruction_parts.push(Part { text: Some(text), function_call: None, function_response: None });
+                        system_instruction_parts.push(Part {
+                            text: Some(text),
+                            function_call: None,
+                            function_response: None,
+                        });
                     }
                 }
                 MessageRole::User => {
                     if let Some(text) = msg.content {
                         contents.push(Content {
                             role: "user".to_string(),
-                            parts: vec![Part { text: Some(text), function_call: None, function_response: None }],
+                            parts: vec![Part {
+                                text: Some(text),
+                                function_call: None,
+                                function_response: None,
+                            }],
                         });
                     }
                 }
                 MessageRole::Assistant => {
                     let mut parts = Vec::new();
                     if let Some(text) = msg.content {
-                        parts.push(Part { text: Some(text), function_call: None, function_response: None });
+                        parts.push(Part {
+                            text: Some(text),
+                            function_call: None,
+                            function_response: None,
+                        });
                     }
                     if let Some(tool_calls) = msg.tool_calls {
                         for call in tool_calls {
@@ -371,7 +411,8 @@ impl LlmProvider for GeminiProvider {
                                 text: None,
                                 function_call: Some(GeminiFunctionCall {
                                     name: call.name,
-                                    args: serde_json::from_str(&call.arguments).unwrap_or(serde_json::Value::Null),
+                                    args: serde_json::from_str(&call.arguments)
+                                        .unwrap_or(serde_json::Value::Null),
                                 }),
                                 function_response: None,
                             });
@@ -387,7 +428,8 @@ impl LlmProvider for GeminiProvider {
                 MessageRole::Tool => {
                     if let Some(name) = msg.name {
                         let response_val: serde_json::Value = if let Some(content) = msg.content {
-                            serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content))
+                            serde_json::from_str(&content)
+                                .unwrap_or(serde_json::Value::String(content))
                         } else {
                             serde_json::Value::Null
                         };
@@ -427,11 +469,14 @@ impl LlmProvider for GeminiProvider {
 
         let tools = request.tools.map(|tools| {
             vec![GeminiTool {
-                function_declarations: tools.into_iter().map(|t| GeminiFunctionDeclaration {
-                    name: t.name,
-                    description: t.description,
-                    parameters: t.parameters,
-                }).collect(),
+                function_declarations: tools
+                    .into_iter()
+                    .map(|t| GeminiFunctionDeclaration {
+                        name: t.name,
+                        description: t.description,
+                        parameters: t.parameters,
+                    })
+                    .collect(),
             }]
         });
 
@@ -447,10 +492,16 @@ impl LlmProvider for GeminiProvider {
             "Sending streaming chat completion request to Gemini"
         );
 
-        let response = self.client.post(&url).json(&api_request).send().await.map_err(|e| {
-            error!(error = %e, "Failed to send streaming request to Gemini API");
-            LlmError::NetworkError(e.to_string())
-        })?;
+        let response = self
+            .client
+            .post(&url)
+            .json(&api_request)
+            .send()
+            .await
+            .map_err(|e| {
+                error!(error = %e, "Failed to send streaming request to Gemini API");
+                LlmError::NetworkError(e.to_string())
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();

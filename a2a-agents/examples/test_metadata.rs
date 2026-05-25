@@ -25,9 +25,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message1 = Message::builder()
         .role(Role::User)
         .message_id(Uuid::new_v4().to_string())
-        .parts(vec![Part::text_builder("I need reimbursement for 150 euros spent on hotel in Paris on 2024-01-15".to_string())
+        .parts(vec![
+            Part::text_builder(
+                "I need reimbursement for 150 euros spent on hotel in Paris on 2024-01-15"
+                    .to_string(),
+            )
             .with_metadata(serde_json::from_value(Value::Object(metadata1)).unwrap())
-            .build()])
+            .build(),
+        ])
         .build();
 
     let task1 = handler.process_message("task1", &message1, None).await?;
@@ -56,9 +61,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message2 = Message::builder()
         .role(Role::User)
         .message_id(Uuid::new_v4().to_string())
-        .parts(vec![Part::data_builder(serde_json::from_value(Value::Object(data2)).unwrap())
-            .with_metadata(serde_json::from_value(Value::Object(metadata2)).unwrap())
-            .build()])
+        .parts(vec![
+            Part::data_builder(serde_json::from_value(Value::Object(data2)).unwrap())
+                .with_metadata(serde_json::from_value(Value::Object(metadata2)).unwrap())
+                .build(),
+        ])
         .build();
 
     let task2 = handler.process_message("task2", &message2, None).await?;
@@ -92,7 +99,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     data3.insert("category".to_string(), Value::String("travel".to_string()));
 
-    let file_metadata_struct: ::buffa_types::google::protobuf::Struct = serde_json::from_value(Value::Object(file_metadata)).unwrap();
+    let file_metadata_struct: ::buffa_types::google::protobuf::Struct =
+        serde_json::from_value(Value::Object(file_metadata)).unwrap();
     let file_part = Part::file_builder()
         .name("receipt_hotel.pdf".to_string())
         .mime_type("application/pdf".to_string())
@@ -101,16 +109,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()
         .unwrap();
 
-    let data_val3: ::buffa_types::google::protobuf::Value = serde_json::from_value(Value::Object(data3)).unwrap();
+    let data_val3: ::buffa_types::google::protobuf::Value =
+        serde_json::from_value(Value::Object(data3)).unwrap();
     let data_part3 = Part::data(data_val3);
 
     let message3 = Message::builder()
         .role(Role::User)
         .message_id(Uuid::new_v4().to_string())
-        .parts(vec![
-            data_part3,
-            file_part,
-        ])
+        .parts(vec![data_part3, file_part])
         .build();
 
     let task3 = handler.process_message("task3", &message3, None).await?;

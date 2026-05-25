@@ -1,6 +1,6 @@
 //! Generic task viewing components
 
-use a2a_rs::domain::{part, Task};
+use a2a_rs::domain::{Task, part};
 use serde::Serialize;
 
 /// View model for a task in a list
@@ -18,7 +18,8 @@ impl TaskView {
         let message_count = task.history.len();
         let last_message_preview = task.history.last().and_then(|msg| {
             msg.parts.iter().find_map(|part| {
-                part.get_text().map(|text| text.chars().take(100).collect::<String>())
+                part.get_text()
+                    .map(|text| text.chars().take(100).collect::<String>())
             })
         });
 
@@ -66,16 +67,28 @@ impl MessageView {
                 Some(part::Content::Text(text)) => text.clone(),
                 Some(part::Content::Raw(_)) => format!(
                     "[File: {}]",
-                    if part.filename.is_empty() { "unnamed" } else { &part.filename }
+                    if part.filename.is_empty() {
+                        "unnamed"
+                    } else {
+                        &part.filename
+                    }
                 ),
                 Some(part::Content::Url(url)) => format!(
                     "[URL/File: {}]",
-                    if part.filename.is_empty() { url } else { &part.filename }
+                    if part.filename.is_empty() {
+                        url
+                    } else {
+                        &part.filename
+                    }
                 ),
                 Some(part::Content::Data(data)) => {
                     let name = serde_json::to_value(&**data)
                         .ok()
-                        .and_then(|v| v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string()))
+                        .and_then(|v| {
+                            v.get("name")
+                                .and_then(|n| n.as_str())
+                                .map(|s| s.to_string())
+                        })
                         .unwrap_or_else(|| "unnamed".to_string());
                     format!("[Data: {}]", name)
                 }
@@ -151,13 +164,13 @@ impl MessageView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use a2a_rs::domain::{Message, Task, TaskStatus, TaskState};
+    use a2a_rs::domain::{Message, Task, TaskState, TaskStatus};
 
     #[test]
     fn test_task_view_from_task() {
         let mut task = Task::new("task-123".to_string(), "ctx-1".to_string());
         task.status = ::buffa::MessageField::some(TaskStatus::new(TaskState::Working, None));
-        
+
         // Add a message to history
         let msg = Message::user_text("A preview text here".to_string(), "msg-1".to_string());
         task.history = vec![msg];
@@ -166,7 +179,10 @@ mod tests {
         assert_eq!(view.task_id, "task-123");
         assert_eq!(view.state, "Working");
         assert_eq!(view.message_count, 1);
-        assert_eq!(view.last_message_preview, Some("A preview text here".to_string()));
+        assert_eq!(
+            view.last_message_preview,
+            Some("A preview text here".to_string())
+        );
     }
 
     #[test]
@@ -181,7 +197,7 @@ mod tests {
     fn test_message_view_from_message() {
         let msg = Message::user_text("Hello world".to_string(), "msg-1".to_string());
         let view = MessageView::from_message(msg);
-        
+
         assert_eq!(view.id, "msg-1");
         assert_eq!(view.role, "User");
         assert_eq!(view.content, "Hello world");
@@ -191,7 +207,7 @@ mod tests {
     fn test_message_view_with_json_parsing_result() {
         let json_content = r#"{"type":"result","message":"Success!","status":"ok"}"#;
         let msg = Message::user_text(json_content.to_string(), "msg-2".to_string());
-        
+
         let view = MessageView::from_message_with_json_parsing(msg);
         assert_eq!(view.content, "Success!\n\nStatus: ok");
     }
@@ -200,7 +216,7 @@ mod tests {
     fn test_message_view_with_json_parsing_form() {
         let json_content = r#"{"type":"form","instructions":"Please provide name"}"#;
         let msg = Message::user_text(json_content.to_string(), "msg-3".to_string());
-        
+
         let view = MessageView::from_message_with_json_parsing(msg);
         assert_eq!(view.content, "Please provide name");
     }

@@ -70,7 +70,9 @@ pub trait BridgeBackend: Send + Sync {
 
     /// Cancel a running task.
     async fn cancel_task(&self, _task_id: &str) -> std::result::Result<Task, A2AError> {
-        Err(A2AError::InvalidParams("Cancellation not supported by this backend".to_string()))
+        Err(A2AError::InvalidParams(
+            "Cancellation not supported by this backend".to_string(),
+        ))
     }
 }
 
@@ -189,8 +191,6 @@ where
         }
     }
 }
-
-
 
 /// Bridge that exposes A2A agent skills as MCP tools
 ///
@@ -333,8 +333,6 @@ impl AgentToMcpBridge {
         )
     }
 
-
-
     /// Create a bridge from a custom backend implementation.
     pub fn from_backend(
         backend: Arc<dyn BridgeBackend>,
@@ -422,39 +420,42 @@ impl Drop for TaskCancelGuard {
 }
 
 impl AgentToMcpBridge {
-    fn map_task_state(state: &buffa::enumeration::EnumValue<a2a_rs::domain::TaskState>) -> rmcp::model::TaskStatus {
+    fn map_task_state(
+        state: &buffa::enumeration::EnumValue<a2a_rs::domain::TaskState>,
+    ) -> rmcp::model::TaskStatus {
         match state {
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Submitted) |
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Working) => {
+            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Submitted)
+            | buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Working) => {
                 rmcp::model::TaskStatus::Working
             }
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::InputRequired) => rmcp::model::TaskStatus::InputRequired,
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Completed) => rmcp::model::TaskStatus::Completed,
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Failed) |
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Rejected) => {
+            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::InputRequired) => {
+                rmcp::model::TaskStatus::InputRequired
+            }
+            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Completed) => {
+                rmcp::model::TaskStatus::Completed
+            }
+            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Failed)
+            | buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Rejected) => {
                 rmcp::model::TaskStatus::Failed
             }
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Canceled) => rmcp::model::TaskStatus::Cancelled,
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::AuthRequired) => rmcp::model::TaskStatus::InputRequired,
+            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Canceled) => {
+                rmcp::model::TaskStatus::Cancelled
+            }
+            buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::AuthRequired) => {
+                rmcp::model::TaskStatus::InputRequired
+            }
             _ => rmcp::model::TaskStatus::Working,
         }
     }
 
     fn convert_to_mcp_task(task: &a2a_rs::domain::Task) -> rmcp::model::Task {
         let status = Self::map_task_state(&task.status.state);
-        let updated_at_dt = task
-            .status
-            .timestamp_utc()
-            .unwrap_or_else(chrono::Utc::now);
+        let updated_at_dt = task.status.timestamp_utc().unwrap_or_else(chrono::Utc::now);
         let updated_at = updated_at_dt.to_rfc3339();
-        
-        let mut mcp_task = rmcp::model::Task::new(
-            task.id.clone(),
-            status,
-            updated_at.clone(),
-            updated_at,
-        );
-        
+
+        let mut mcp_task =
+            rmcp::model::Task::new(task.id.clone(), status, updated_at.clone(), updated_at);
+
         if let Some(msg) = task.status.message.as_option() {
             let text_parts: Vec<String> = msg
                 .parts
@@ -465,7 +466,7 @@ impl AgentToMcpBridge {
                 mcp_task = mcp_task.with_status_message(text_parts.join("\n"));
             }
         }
-        
+
         mcp_task
     }
 
@@ -533,13 +534,25 @@ impl AgentToMcpBridge {
                             // Send progress notification if token is provided
                             if let Some(ref token) = progress_token {
                                 let progress_val = match task.status.state {
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Submitted) => 10.0,
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Working) => 50.0,
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::InputRequired) => 75.0,
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Completed) => 100.0,
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Failed)
-                                    | buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Rejected
-                                    | a2a_rs::domain::TaskState::Canceled) => 100.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Submitted,
+                                    ) => 10.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Working,
+                                    ) => 50.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::InputRequired,
+                                    ) => 75.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Completed,
+                                    ) => 100.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Failed,
+                                    )
+                                    | buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Rejected
+                                        | a2a_rs::domain::TaskState::Canceled,
+                                    ) => 100.0,
                                     _ => 30.0,
                                 };
                                 last_progress = last_progress.max(progress_val);
@@ -569,10 +582,8 @@ impl AgentToMcpBridge {
                                 let sampling_params = CreateMessageRequestParams::new(messages, 1024)
                                     .with_system_prompt("You are an assistant providing input to an agent task. Respond directly to the agent's request.");
 
-                                let sampling_res_result = ctx
-                                    .peer
-                                    .create_message(sampling_params)
-                                    .await;
+                                let sampling_res_result =
+                                    ctx.peer.create_message(sampling_params).await;
 
                                 let sampling_res = match sampling_res_result {
                                     Ok(res) => res,
@@ -632,35 +643,47 @@ impl AgentToMcpBridge {
                             // Send progress notification if token is provided
                             if let Some(ref token) = progress_token {
                                 let progress_val = match event.status.state {
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Submitted) => 10.0,
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Working) => 50.0,
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::InputRequired) => 75.0,
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Completed) => 100.0,
-                                    buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Failed)
-                                    | buffa::enumeration::EnumValue::Known(a2a_rs::domain::TaskState::Rejected
-                                    | a2a_rs::domain::TaskState::Canceled) => 100.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Submitted,
+                                    ) => 10.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Working,
+                                    ) => 50.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::InputRequired,
+                                    ) => 75.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Completed,
+                                    ) => 100.0,
+                                    buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Failed,
+                                    )
+                                    | buffa::enumeration::EnumValue::Known(
+                                        a2a_rs::domain::TaskState::Rejected
+                                        | a2a_rs::domain::TaskState::Canceled,
+                                    ) => 100.0,
                                     _ => 30.0,
                                 };
                                 last_progress = last_progress.max(progress_val);
 
                                 let message_str = event.status.message.as_option().map(|msg| {
-                                     msg.parts
-                                         .iter()
-                                         .filter_map(|part: &Part| part.get_text().map(String::from))
-                                         .collect::<Vec<_>>()
-                                         .join("\n")
-                                 });
+                                    msg.parts
+                                        .iter()
+                                        .filter_map(|part: &Part| part.get_text().map(String::from))
+                                        .collect::<Vec<_>>()
+                                        .join("\n")
+                                });
 
-                                 let progress_param = ProgressNotificationParam {
-                                     progress_token: token.clone(),
-                                     progress: last_progress,
-                                     total: Some(100.0),
-                                     message: message_str,
-                                 };
-                                 let _ = ctx.peer.notify_progress(progress_param).await;
-                             }
+                                let progress_param = ProgressNotificationParam {
+                                    progress_token: token.clone(),
+                                    progress: last_progress,
+                                    total: Some(100.0),
+                                    message: message_str,
+                                };
+                                let _ = ctx.peer.notify_progress(progress_param).await;
+                            }
 
-                             task.status = ::buffa::MessageField::some(event.status.clone());
+                            task.status = ::buffa::MessageField::some(event.status.clone());
                             self.tasks_cache
                                 .lock()
                                 .await
@@ -674,10 +697,8 @@ impl AgentToMcpBridge {
                                 let sampling_params = CreateMessageRequestParams::new(messages, 1024)
                                     .with_system_prompt("You are an assistant providing input to an agent task. Respond directly to the agent's request.");
 
-                                let sampling_res_result = ctx
-                                    .peer
-                                    .create_message(sampling_params)
-                                    .await;
+                                let sampling_res_result =
+                                    ctx.peer.create_message(sampling_params).await;
 
                                 let sampling_res = match sampling_res_result {
                                     Ok(res) => res,
@@ -734,7 +755,8 @@ impl AgentToMcpBridge {
                                 task.id, event.artifact.artifact_id
                             );
                             if event.append.unwrap_or(false) {
-                                if let Some(existing) = task.artifacts
+                                if let Some(existing) = task
+                                    .artifacts
                                     .iter_mut()
                                     .find(|a| a.artifact_id == event.artifact.artifact_id)
                                 {
@@ -742,7 +764,8 @@ impl AgentToMcpBridge {
                                 } else {
                                     task.artifacts.push(event.artifact);
                                 }
-                            } else if let Some(pos) = task.artifacts
+                            } else if let Some(pos) = task
+                                .artifacts
                                 .iter()
                                 .position(|a| a.artifact_id == event.artifact.artifact_id)
                             {
@@ -803,10 +826,8 @@ impl AgentToMcpBridge {
                             let sampling_params = CreateMessageRequestParams::new(messages, 1024)
                                 .with_system_prompt("You are an assistant providing input to an agent task. Respond directly to the agent's request.");
 
-                            let sampling_res_result = ctx
-                                .peer
-                                .create_message(sampling_params)
-                                .await;
+                            let sampling_res_result =
+                                ctx.peer.create_message(sampling_params).await;
 
                             let sampling_res = match sampling_res_result {
                                 Ok(res) => res,
@@ -894,8 +915,12 @@ fn translate_task_to_sampling_messages(task: &Task) -> Vec<SamplingMessage> {
 
     for msg in &task.history {
         let role = match msg.role {
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_USER) => rmcp::model::Role::User,
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_AGENT) => rmcp::model::Role::Assistant,
+            buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_USER) => {
+                rmcp::model::Role::User
+            }
+            buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_AGENT) => {
+                rmcp::model::Role::Assistant
+            }
             _ => rmcp::model::Role::User,
         };
 
@@ -920,8 +945,12 @@ fn translate_task_to_sampling_messages(task: &Task) -> Vec<SamplingMessage> {
 
         if !already_in_history {
             let role = match msg.role {
-                buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_USER) => rmcp::model::Role::User,
-                buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_AGENT) => rmcp::model::Role::Assistant,
+                buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_USER) => {
+                    rmcp::model::Role::User
+                }
+                buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_AGENT) => {
+                    rmcp::model::Role::Assistant
+                }
                 _ => rmcp::model::Role::User,
             };
 
@@ -945,10 +974,19 @@ fn translate_task_to_sampling_messages(task: &Task) -> Vec<SamplingMessage> {
 #[allow(clippy::manual_async_fn)]
 impl ServerHandler for AgentToMcpBridge {
     fn get_info(&self) -> ServerInfo {
-        let server_name = self.mcp_server_name.as_deref().unwrap_or(&self.agent_card.name);
+        let server_name = self
+            .mcp_server_name
+            .as_deref()
+            .unwrap_or(&self.agent_card.name);
         // Fall back to agent_card.version, then to "0.1.0"
-        let server_version = self.mcp_server_version.as_deref()
-            .unwrap_or(if self.agent_card.version.is_empty() { "0.1.0" } else { &self.agent_card.version });
+        let server_version =
+            self.mcp_server_version
+                .as_deref()
+                .unwrap_or(if self.agent_card.version.is_empty() {
+                    "0.1.0"
+                } else {
+                    &self.agent_card.version
+                });
 
         let implementation =
             Implementation::new(format!("a2a-mcp-bridge:{}", server_name), server_version)
@@ -967,13 +1005,27 @@ impl ServerHandler for AgentToMcpBridge {
 
         let mut extensions = ExtensionCapabilities::new();
         for scheme in self.agent_card.security_schemes.values() {
-            if let Some(a2a_rs::domain::generated::security_scheme::Scheme::Oauth2SecurityScheme(ref oauth2_scheme)) = &scheme.scheme {
+            if let Some(a2a_rs::domain::generated::security_scheme::Scheme::Oauth2SecurityScheme(
+                ref oauth2_scheme,
+            )) = &scheme.scheme
+            {
                 if let Some(flows) = oauth2_scheme.flows.as_option() {
-                    if let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(ref cc)) = &flows.flow {
+                    if let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(
+                        ref cc,
+                    )) = &flows.flow
+                    {
                         let mut cc_settings = serde_json::Map::new();
-                        cc_settings.insert("tokenUrl".to_string(), serde_json::Value::String(cc.token_url.clone()));
+                        cc_settings.insert(
+                            "tokenUrl".to_string(),
+                            serde_json::Value::String(cc.token_url.clone()),
+                        );
                         if !oauth2_scheme.oauth2_metadata_url.is_empty() {
-                            cc_settings.insert("metadataUrl".to_string(), serde_json::Value::String(oauth2_scheme.oauth2_metadata_url.clone()));
+                            cc_settings.insert(
+                                "metadataUrl".to_string(),
+                                serde_json::Value::String(
+                                    oauth2_scheme.oauth2_metadata_url.clone(),
+                                ),
+                            );
                         }
                         extensions.insert(
                             "io.modelcontextprotocol/oauth-client-credentials".to_string(),
@@ -1047,39 +1099,39 @@ impl ServerHandler for AgentToMcpBridge {
                 ));
             }
 
-        let message_text = params
-            .arguments
-            .as_ref()
-            .and_then(|args| args.get("message"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string();
+            let message_text = params
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("message"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
 
-        if message_text.is_empty() {
-            return Err(McpError::invalid_params(
-                "Missing required parameter 'message'",
-                None,
-            ));
-        }
+            if message_text.is_empty() {
+                return Err(McpError::invalid_params(
+                    "Missing required parameter 'message'",
+                    None,
+                ));
+            }
 
-        let task_id = params
-            .arguments
-            .as_ref()
-            .and_then(|args| args.get("task_id"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let task_id = params
+                .arguments
+                .as_ref()
+                .and_then(|args| args.get("task_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-        let progress_token = ctx.meta.get_progress_token();
+            let progress_token = ctx.meta.get_progress_token();
 
-        // Call the A2A agent skill
-        match self
-            .call_skill(&skill_id, &task_id, &message_text, progress_token, &ctx)
-            .await
-        {
-            Ok(result) => Ok(result),
-            Err(e) => Err(e.to_mcp_error()),
-        }
+            // Call the A2A agent skill
+            match self
+                .call_skill(&skill_id, &task_id, &message_text, progress_token, &ctx)
+                .await
+            {
+                Ok(result) => Ok(result),
+                Err(e) => Err(e.to_mcp_error()),
+            }
         }
     }
 
@@ -1278,9 +1330,13 @@ impl ServerHandler for AgentToMcpBridge {
                         .parts
                         .iter()
                         .find_map(|p| match &p.content {
-                            Some(a2a_rs::domain::generated::part::Content::Url(_)) |
-                            Some(a2a_rs::domain::generated::part::Content::Raw(_)) => {
-                                if p.media_type.is_empty() { None } else { Some(p.media_type.clone()) }
+                            Some(a2a_rs::domain::generated::part::Content::Url(_))
+                            | Some(a2a_rs::domain::generated::part::Content::Raw(_)) => {
+                                if p.media_type.is_empty() {
+                                    None
+                                } else {
+                                    Some(p.media_type.clone())
+                                }
                             }
                             Some(a2a_rs::domain::generated::part::Content::Data(_)) => {
                                 Some("application/json".to_string())
@@ -1340,7 +1396,8 @@ impl ServerHandler for AgentToMcpBridge {
             };
 
             // Find the artifact
-            let artifact = task.artifacts
+            let artifact = task
+                .artifacts
                 .into_iter()
                 .find(|a| a.artifact_id == artifact_id)
                 .ok_or_else(|| {
@@ -1364,7 +1421,11 @@ impl ServerHandler for AgentToMcpBridge {
                     Some(a2a_rs::domain::generated::part::Content::Raw(bytes)) => {
                         contents.push(ResourceContents::BlobResourceContents {
                             uri: request.uri.clone(),
-                            mime_type: Some(if part.media_type.is_empty() { "application/octet-stream".to_string() } else { part.media_type.clone() }),
+                            mime_type: Some(if part.media_type.is_empty() {
+                                "application/octet-stream".to_string()
+                            } else {
+                                part.media_type.clone()
+                            }),
                             blob: {
                                 use base64::Engine as _;
                                 base64::engine::general_purpose::STANDARD.encode(&bytes)
@@ -1450,12 +1511,16 @@ impl ServerHandler for AgentToMcpBridge {
     {
         async move {
             info!("MCP client canceling task: {}", request.task_id);
-            let a2a_task = self.backend.cancel_task(&request.task_id).await.map_err(|e| {
-                McpError::internal_error(
-                    format!("Failed to cancel A2A task {}: {}", request.task_id, e),
-                    None,
-                )
-            })?;
+            let a2a_task = self
+                .backend
+                .cancel_task(&request.task_id)
+                .await
+                .map_err(|e| {
+                    McpError::internal_error(
+                        format!("Failed to cancel A2A task {}: {}", request.task_id, e),
+                        None,
+                    )
+                })?;
 
             let mcp_task = Self::convert_to_mcp_task(&a2a_task);
             Ok(CancelTaskResult {
@@ -1552,5 +1617,4 @@ mod tests {
 
         assert!(bridge.tools[0].name.contains("internal-alias"));
     }
-
 }

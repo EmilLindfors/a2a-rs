@@ -350,7 +350,10 @@ impl AsyncTaskManager for InMemoryTaskStorage {
             // Create a cancellation message to add to history
             let cancel_message = Message {
                 role: ::buffa::EnumValue::from(crate::domain::Role::Agent),
-                parts: vec![crate::domain::Part::text(format!("Task {} canceled.", task_id))],
+                parts: vec![crate::domain::Part::text(format!(
+                    "Task {} canceled.",
+                    task_id
+                ))],
                 message_id: uuid::Uuid::new_v4().to_string(),
                 task_id: task_id.to_string(),
                 context_id: updated_task.context_id.clone(),
@@ -361,7 +364,11 @@ impl AsyncTaskManager for InMemoryTaskStorage {
             updated_task.update_status(TaskState::Canceled, Some(cancel_message));
 
             // Clone status before updating storage to avoid cloning task twice
-            let status_for_broadcast = updated_task.status.clone().into_option().unwrap_or_default();
+            let status_for_broadcast = updated_task
+                .status
+                .clone()
+                .into_option()
+                .unwrap_or_default();
             tasks_guard.insert(task_id.to_string(), updated_task.clone());
 
             // Drop guard early and return status for use after broadcasting
@@ -406,7 +413,9 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 
                 // Filter by status_timestamp_after if provided
                 if let Some(status_timestamp_after) = &params.status_timestamp_after {
-                    if let Ok(after_dt) = chrono::DateTime::parse_from_rfc3339(status_timestamp_after) {
+                    if let Ok(after_dt) =
+                        chrono::DateTime::parse_from_rfc3339(status_timestamp_after)
+                    {
                         let after_utc = after_dt.with_timezone(&chrono::Utc);
                         if let Some(timestamp) = task.status.timestamp_utc() {
                             if timestamp <= after_utc {
@@ -595,7 +604,10 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
         if let Ok(task) = self.get_task(task_id, None).await {
             let _ = self
-                .broadcast_status_update(task_id, task.status.clone().into_option().unwrap_or_default())
+                .broadcast_status_update(
+                    task_id,
+                    task.status.clone().into_option().unwrap_or_default(),
+                )
                 .await;
         }
 
@@ -662,8 +674,7 @@ impl AsyncStreamingHandler for InMemoryTaskStorage {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.broadcast_status_update(task_id, update.status)
-            .await
+        self.broadcast_status_update(task_id, update.status).await
     }
 
     async fn broadcast_artifact_update(

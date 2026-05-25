@@ -6,7 +6,7 @@ use reqwest::{
     Client,
     header::{HeaderMap, HeaderValue},
 };
-use std::{pin::Pin, time::Duration, sync::Arc};
+use std::{pin::Pin, sync::Arc, time::Duration};
 
 #[cfg(feature = "tracing")]
 use tracing::{debug, instrument};
@@ -17,12 +17,11 @@ use crate::{
         A2AError, AgentCard, ListTasksParams, ListTasksResult, Message, Task,
         TaskPushNotificationConfig,
         generated::{
-            A2aServiceClient, SendMessageRequest, SendMessageConfiguration,
-            GetTaskRequest, ListTasksRequest, CancelTaskRequest,
-            SubscribeToTaskRequest, GetTaskPushNotificationConfigRequest,
-            DeleteTaskPushNotificationConfigRequest, ListTaskPushNotificationConfigsRequest,
-            GetExtendedAgentCardRequest,
-            stream_response, send_message_response, TaskState,
+            A2aServiceClient, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
+            GetExtendedAgentCardRequest, GetTaskPushNotificationConfigRequest, GetTaskRequest,
+            ListTaskPushNotificationConfigsRequest, ListTasksRequest, SendMessageConfiguration,
+            SendMessageRequest, SubscribeToTaskRequest, TaskState, send_message_response,
+            stream_response,
         },
     },
     services::client::{AsyncA2AClient, StreamItem},
@@ -34,10 +33,16 @@ fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
         connectrpc::ErrorCode::Unimplemented => crate::domain::error::METHOD_NOT_FOUND,
         connectrpc::ErrorCode::InvalidArgument => crate::domain::error::INVALID_PARAMS,
         connectrpc::ErrorCode::Internal => crate::domain::error::INTERNAL_ERROR,
-        connectrpc::ErrorCode::FailedPrecondition => crate::domain::error::AUTHENTICATED_EXTENDED_CARD_NOT_CONFIGURED,
+        connectrpc::ErrorCode::FailedPrecondition => {
+            crate::domain::error::AUTHENTICATED_EXTENDED_CARD_NOT_CONFIGURED
+        }
         _ => {
             let code_val = err.code as i32;
-            if code_val != 0 { code_val } else { crate::domain::error::INTERNAL_ERROR }
+            if code_val != 0 {
+                code_val
+            } else {
+                crate::domain::error::INTERNAL_ERROR
+            }
         }
     };
     A2AError::JsonRpc {
@@ -49,9 +54,7 @@ fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
 
 fn map_stream_response(resp: crate::domain::generated::StreamResponse) -> Option<StreamItem> {
     match resp.payload {
-        Some(stream_response::Payload::Task(task)) => {
-            Some(StreamItem::Task(*task))
-        }
+        Some(stream_response::Payload::Task(task)) => Some(StreamItem::Task(*task)),
         Some(stream_response::Payload::StatusUpdate(update)) => {
             Some(StreamItem::StatusUpdate((*update).into()))
         }
@@ -126,7 +129,8 @@ impl HttpClient {
         };
 
         let mut config = connectrpc::client::ClientConfig::new(uri);
-        config = config.default_timeout(Duration::from_secs(30))
+        config = config
+            .default_timeout(Duration::from_secs(30))
             .default_header("authorization", format!("Bearer {}", auth_token));
 
         let connect_client = A2aServiceClient::new(transport, config);
@@ -143,14 +147,21 @@ impl HttpClient {
     /// Set the timeout for requests
     pub fn with_timeout(mut self, timeout: u64) -> Self {
         self.timeout = timeout;
-        *self.connect_client.config_mut() = self.connect_client.config().clone().default_timeout(Duration::from_secs(timeout));
+        *self.connect_client.config_mut() = self
+            .connect_client
+            .config()
+            .clone()
+            .default_timeout(Duration::from_secs(timeout));
         self
     }
 
     /// Get the headers for a request (used for reqwest)
     fn get_headers(&self) -> Result<HeaderMap, A2AError> {
         let mut headers = HeaderMap::new();
-        headers.insert(reqwest::header::CONTENT_TYPE, HeaderValue::from_static("application/json"));
+        headers.insert(
+            reqwest::header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
 
         if let Some(token) = &self.auth_token {
             let auth_value = HeaderValue::from_str(&format!("Bearer {}", token)).map_err(|e| {
@@ -219,12 +230,19 @@ impl HttpClient {
     }
 
     /// Fetch the extended agent card using ConnectRPC
-    pub async fn get_extended_agent_card(&self, tenant: Option<String>) -> Result<AgentCard, A2AError> {
+    pub async fn get_extended_agent_card(
+        &self,
+        tenant: Option<String>,
+    ) -> Result<AgentCard, A2AError> {
         let request = GetExtendedAgentCardRequest {
             tenant: tenant.unwrap_or_default(),
             ..Default::default()
         };
-        let response = self.connect_client.get_extended_agent_card(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .get_extended_agent_card(request)
+            .await
+            .map_err(map_connect_err)?;
         Ok(response.into_owned())
     }
 }
@@ -259,14 +277,18 @@ impl AsyncA2AClient for HttpClient {
             ..Default::default()
         };
 
-        let response = self.connect_client.send_message(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .send_message(request)
+            .await
+            .map_err(map_connect_err)?;
         let owned_response = response.into_owned();
 
         match owned_response.payload {
-            Some(send_message_response::Payload::Task(task)) => {
-                Ok(*task)
-            }
-            _ => Err(A2AError::Internal("Expected task in SendMessageResponse payload".to_string())),
+            Some(send_message_response::Payload::Task(task)) => Ok(*task),
+            _ => Err(A2AError::Internal(
+                "Expected task in SendMessageResponse payload".to_string(),
+            )),
         }
     }
 
@@ -280,7 +302,11 @@ impl AsyncA2AClient for HttpClient {
             history_length: history_length.map(|l| l as i32),
             ..Default::default()
         };
-        let response = self.connect_client.get_task(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .get_task(request)
+            .await
+            .map_err(map_connect_err)?;
         Ok(response.into_owned())
     }
 
@@ -290,7 +316,11 @@ impl AsyncA2AClient for HttpClient {
             id: task_id.to_string(),
             ..Default::default()
         };
-        let response = self.connect_client.cancel_task(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .cancel_task(request)
+            .await
+            .map_err(map_connect_err)?;
         Ok(response.into_owned())
     }
 
@@ -299,7 +329,11 @@ impl AsyncA2AClient for HttpClient {
         config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         let request = config.clone();
-        let response = self.connect_client.create_task_push_notification_config(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .create_task_push_notification_config(request)
+            .await
+            .map_err(map_connect_err)?;
         Ok(response.into_owned())
     }
 
@@ -311,12 +345,19 @@ impl AsyncA2AClient for HttpClient {
             task_id: task_id.to_string(),
             ..Default::default()
         };
-        let response = self.connect_client.list_task_push_notification_configs(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .list_task_push_notification_configs(request)
+            .await
+            .map_err(map_connect_err)?;
         let configs = response.into_owned().configs;
         if let Some(config) = configs.into_iter().next() {
             Ok(config)
         } else {
-            Err(A2AError::TaskNotFound(format!("No push notification config found for task {}", task_id)))
+            Err(A2AError::TaskNotFound(format!(
+                "No push notification config found for task {}",
+                task_id
+            )))
         }
     }
 
@@ -324,7 +365,9 @@ impl AsyncA2AClient for HttpClient {
     async fn list_tasks(&self, params: &ListTasksParams) -> Result<ListTasksResult, A2AError> {
         let mut request = ListTasksRequest {
             context_id: params.context_id.clone().unwrap_or_default(),
-            status: ::buffa::EnumValue::from(params.status.unwrap_or(TaskState::TASK_STATE_UNSPECIFIED)),
+            status: ::buffa::EnumValue::from(
+                params.status.unwrap_or(TaskState::TASK_STATE_UNSPECIFIED),
+            ),
             page_size: params.page_size,
             page_token: params.page_token.clone().unwrap_or_default(),
             history_length: params.history_length,
@@ -334,15 +377,20 @@ impl AsyncA2AClient for HttpClient {
         if let Some(ref t_str) = params.status_timestamp_after {
             if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t_str) {
                 let utc_dt = dt.with_timezone(&chrono::Utc);
-                request.status_timestamp_after = ::buffa::MessageField::some(::buffa_types::google::protobuf::Timestamp {
-                    seconds: utc_dt.timestamp(),
-                    nanos: utc_dt.timestamp_subsec_nanos() as i32,
-                    ..Default::default()
-                });
+                request.status_timestamp_after =
+                    ::buffa::MessageField::some(::buffa_types::google::protobuf::Timestamp {
+                        seconds: utc_dt.timestamp(),
+                        nanos: utc_dt.timestamp_subsec_nanos() as i32,
+                        ..Default::default()
+                    });
             }
         }
 
-        let response = self.connect_client.list_tasks(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .list_tasks(request)
+            .await
+            .map_err(map_connect_err)?;
         let owned = response.into_owned();
         Ok(ListTasksResult {
             tasks: owned.tasks,
@@ -360,7 +408,11 @@ impl AsyncA2AClient for HttpClient {
             task_id: task_id.to_string(),
             ..Default::default()
         };
-        let response = self.connect_client.list_task_push_notification_configs(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .list_task_push_notification_configs(request)
+            .await
+            .map_err(map_connect_err)?;
         Ok(response.into_owned().configs)
     }
 
@@ -374,7 +426,11 @@ impl AsyncA2AClient for HttpClient {
             id: config_id.to_string(),
             ..Default::default()
         };
-        let response = self.connect_client.get_task_push_notification_config(request).await.map_err(map_connect_err)?;
+        let response = self
+            .connect_client
+            .get_task_push_notification_config(request)
+            .await
+            .map_err(map_connect_err)?;
         Ok(response.into_owned())
     }
 
@@ -388,7 +444,10 @@ impl AsyncA2AClient for HttpClient {
             id: config_id.to_string(),
             ..Default::default()
         };
-        self.connect_client.delete_task_push_notification_config(request).await.map_err(map_connect_err)?;
+        self.connect_client
+            .delete_task_push_notification_config(request)
+            .await
+            .map_err(map_connect_err)?;
         Ok(())
     }
 
@@ -401,7 +460,11 @@ impl AsyncA2AClient for HttpClient {
             id: task_id.to_string(),
             ..Default::default()
         };
-        let stream = self.connect_client.subscribe_to_task(request).await.map_err(map_connect_err)?;
+        let stream = self
+            .connect_client
+            .subscribe_to_task(request)
+            .await
+            .map_err(map_connect_err)?;
 
         let mapped = futures::stream::unfold(stream, |mut s| async move {
             match s.message().await {
@@ -410,7 +473,12 @@ impl AsyncA2AClient for HttpClient {
                     if let Some(item) = map_stream_response(resp) {
                         Some((Ok(item), s))
                     } else {
-                        Some((Err(A2AError::Internal("Empty or unhandled stream response payload".to_string())), s))
+                        Some((
+                            Err(A2AError::Internal(
+                                "Empty or unhandled stream response payload".to_string(),
+                            )),
+                            s,
+                        ))
                     }
                 }
                 Ok(None) => None,
