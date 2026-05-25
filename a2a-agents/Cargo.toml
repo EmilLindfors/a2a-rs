@@ -79,6 +79,10 @@ mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
 # usable directly.
 mcp-client = ["dep:rmcp"]
 
+[[bin]]
+name = "a2a"
+path = "bin/a2a.rs"
+required-features = ["reimbursement-agent", "mcp-server"]
 
 [[bin]]
 name = "reimbursement_demo"

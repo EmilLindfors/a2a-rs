@@ -36,6 +36,23 @@ pub struct AgentConfig {
     /// Features enabled for the agent
     #[serde(default)]
     pub features: FeaturesConfig,
+
+    /// LLM Configuration
+    #[serde(default)]
+    pub llm: Option<LlmConfig>,
+}
+
+/// LLM Configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmConfig {
+    /// LLM Provider (e.g. "openai", "gemini")
+    pub provider: String,
+    /// API key for the LLM
+    pub api_key: Option<String>,
+    /// Model to use
+    pub model: Option<String>,
+    /// Base URL (for providers like openai that support local LLMs like ollama)
+    pub base_url: Option<String>,
 }
 
 impl AgentConfig {
@@ -111,6 +128,11 @@ pub struct AgentMetadata {
     /// Documentation URL
     #[serde(default)]
     pub documentation_url: Option<String>,
+
+    /// The implementation handler to use for this agent (e.g. 'reimbursement', 'echo')
+    /// Used primarily by the generic a2a binary.
+    #[serde(default)]
+    pub implementation: Option<String>,
 }
 
 /// Provider information

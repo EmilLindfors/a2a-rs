@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
 
 jobs:
   build:
@@ -24,10 +25,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build workspace
-        run: cargo build --workspace --verbose
+        run: cargo build --workspace --verbose --locked
 
       - name: Run tests
-        run: cargo test --verbose --workspace
+        run: cargo test --verbose --workspace --locked --all-targets
 
   clippy:
     name: Clippy
@@ -91,3 +92,12 @@ jobs:
 
       - name: Check documentation (a2a-agents)
         run: cargo doc --no-deps -p a2a-agents --features "reimbursement-agent,sqlx,ap2,auth"
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}

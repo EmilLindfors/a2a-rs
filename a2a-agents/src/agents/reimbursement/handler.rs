@@ -121,6 +121,10 @@ where
             None
         };
 
+        Self::with_llm(task_manager, llm_provider)
+    }
+
+    pub fn with_llm(task_manager: T, llm_provider: Option<Arc<dyn LlmProvider>>) -> Self {
         Self {
             task_manager,
             validation_rules: ValidationRules::default(),

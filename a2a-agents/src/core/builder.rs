@@ -117,6 +117,43 @@ impl AsyncNotificationManager for AutoStorage {
     }
 }
 
+impl AutoStorage {
+    /// Create auto storage from server configuration
+    pub async fn from_config(config: &StorageConfig) -> Result<Self, BuildError> {
+        match config {
+            StorageConfig::InMemory => {
+                let push_sender = a2a_rs::adapter::HttpPushNotificationSender::new()
+                    .with_timeout(30)
+                    .with_max_retries(3);
+                let storage = a2a_rs::InMemoryTaskStorage::with_push_sender(push_sender);
+                Ok(AutoStorage::InMemory(storage))
+            }
+            #[cfg(feature = "sqlx")]
+            StorageConfig::Sqlx {
+                url,
+                enable_logging,
+                ..
+            } => {
+                if *enable_logging {
+                    tracing::info!("SQL query logging enabled");
+                }
+
+                let storage = a2a_rs::adapter::storage::SqlxTaskStorage::new(url).await.map_err(|e| {
+                    BuildError::StorageError(format!("Failed to create SQLx storage: {}", e))
+                })?;
+
+                Ok(AutoStorage::Sqlx(storage))
+            }
+            #[cfg(not(feature = "sqlx"))]
+            StorageConfig::Sqlx { .. } => {
+                Err(BuildError::StorageError(
+                    "SQLx storage requested but 'sqlx' feature is not enabled".to_string(),
+                ))
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl AsyncStreamingHandler for AutoStorage {
     async fn add_status_subscriber(
