@@ -252,6 +252,7 @@ where
         Ok((response, ctx))
     }
 
+    #[allow(clippy::result_large_err)]
     async fn send_streaming_message(
         &self,
         ctx: ::connectrpc::Context,
@@ -427,6 +428,7 @@ where
         Ok((task, ctx))
     }
 
+    #[allow(clippy::result_large_err)]
     async fn subscribe_to_task(
         &self,
         ctx: ::connectrpc::Context,
