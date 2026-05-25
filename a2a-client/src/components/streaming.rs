@@ -100,7 +100,7 @@ pub fn create_sse_stream(
 
                     if retry_count <= max_retries {
                         // Exponential delay: base_delay * 2^(retry_count - 1)
-                        let factor = 2u64.saturating_pow(retry_count.saturating_sub(1).min(6) as u32);
+                        let factor = 2u64.saturating_pow(retry_count.saturating_sub(1).min(6));
                         let delay = base_delay.saturating_mul(factor as u32);
 
                         // Jitter calculation (0-200ms) based on task_id bytes and system time

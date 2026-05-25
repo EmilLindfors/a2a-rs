@@ -4,8 +4,7 @@
 
 mod common;
 
-use a2a_rs::{TaskPushNotificationConfig, 
-    adapter::{
+use a2a_rs::{adapter::{
         DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::{ListTasksParams, Message, TaskState},
@@ -392,7 +391,7 @@ async fn test_http_client_push_config_delete() {
         assert!(
             configs_after
                 .iter()
-                .all(|c| c.id != "config-delete-test".to_string()),
+                .all(|c| c.id != "config-delete-test"),
             "Deleted config should not appear in list"
         );
     }

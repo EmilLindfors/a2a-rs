@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use rmcp::{
     handler::client::progress::ProgressDispatcher,
     model::*,
-    service::{MaybeSendFuture, NotificationContext, PeerRequestOptions},
+    service::{NotificationContext, PeerRequestOptions},
     Peer, RoleClient,
 };
 use serde::{Deserialize, Serialize};
@@ -95,14 +95,12 @@ impl ProgressClientHandler {
 }
 
 impl rmcp::ClientHandler for ProgressClientHandler {
-    fn on_progress(
+    async fn on_progress(
         &self,
         params: ProgressNotificationParam,
         _context: NotificationContext<RoleClient>,
-    ) -> impl std::future::Future<Output = ()> + MaybeSendFuture + '_ {
-        async move {
-            self.dispatcher.handle_notification(params).await;
-        }
+    ) {
+        self.dispatcher.handle_notification(params).await;
     }
 }
 
@@ -475,14 +473,12 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
 impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> rmcp::ClientHandler
     for McpToA2ABridge<H>
 {
-    fn on_progress(
+    async fn on_progress(
         &self,
         params: ProgressNotificationParam,
         _context: NotificationContext<RoleClient>,
-    ) -> impl std::future::Future<Output = ()> + MaybeSendFuture + '_ {
-        async move {
-            self.progress_dispatcher.handle_notification(params).await;
-        }
+    ) {
+        self.progress_dispatcher.handle_notification(params).await;
     }
 }
 

@@ -232,6 +232,12 @@ pub struct AgentCardBuilder {
     signatures: Vec<AgentCardSignature>,
 }
 
+impl Default for AgentCardBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AgentCardBuilder {
     pub fn new() -> Self {
         Self {

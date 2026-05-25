@@ -1,4 +1,4 @@
-use super::{ChatMessage, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
+use super::{LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{stream::BoxStream, StreamExt};
@@ -118,6 +118,7 @@ struct Candidate {
 #[derive(Debug, Deserialize)]
 struct ResponseContent {
     parts: Option<Vec<ResponsePart>>,
+    #[allow(dead_code)]
     role: Option<String>,
 }
 
@@ -200,7 +201,7 @@ impl LlmProvider for GeminiProvider {
                 MessageRole::Tool => {
                     if let Some(name) = msg.name {
                         let response_val: serde_json::Value = if let Some(content) = msg.content {
-                            serde_json::from_str(&content).unwrap_or_else(|_| serde_json::Value::String(content))
+                            serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content))
                         } else {
                             serde_json::Value::Null
                         };
@@ -386,7 +387,7 @@ impl LlmProvider for GeminiProvider {
                 MessageRole::Tool => {
                     if let Some(name) = msg.name {
                         let response_val: serde_json::Value = if let Some(content) = msg.content {
-                            serde_json::from_str(&content).unwrap_or_else(|_| serde_json::Value::String(content))
+                            serde_json::from_str(&content).unwrap_or(serde_json::Value::String(content))
                         } else {
                             serde_json::Value::Null
                         };
@@ -483,7 +484,7 @@ impl LlmProvider for GeminiProvider {
 
                 let chunk: GeminiGenerateContentResponse = match serde_json::from_str(&data) {
                     Ok(c) => c,
-                    Err(e) => {
+                    Err(_e) => {
                         debug!("Skipping unparseable SSE data chunk: {}", data);
                         continue;
                     }

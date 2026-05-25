@@ -124,7 +124,7 @@ async fn test_sse_stream_success() {
     let sse = create_sse_stream(client.clone(), "test-task-2".to_string());
     
     use axum::response::IntoResponse;
-    let mut response = sse.into_response();
+    let response = sse.into_response();
     let body = response.into_body();
     
     // Read body chunks

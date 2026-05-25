@@ -182,7 +182,7 @@ proptest! {
             } else {
                 Some(messages[i % messages.len()].clone())
             };
-            task.update_status(state.clone(), maybe_message);
+            task.update_status(*state, maybe_message);
         }
 
         // Invariants that should always hold
@@ -359,7 +359,7 @@ proptest! {
         // Apply final states - once a task reaches a final state,
         // it should maintain that final state
         for final_state in final_states {
-            task.update_status(final_state.clone(), None);
+            task.update_status(final_state, None);
 
             // After setting a final state, the task should be in that state
             prop_assert_eq!(task.status.state, final_state);

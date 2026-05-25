@@ -37,11 +37,11 @@ pub fn format_message_content(parts: &[Part]) -> String {
             Some(Content::Data(data)) => {
                 let name = serde_json::to_value(&**data).ok()
                     .and_then(|v| v.get("name").cloned())
-                    .and_then(|v| {
+                    .map(|v| {
                         if let serde_json::Value::String(s) = v {
-                            Some(s)
+                            s
                         } else {
-                            Some(v.to_string())
+                            v.to_string()
                         }
                     })
                     .unwrap_or_else(|| "unnamed".to_string());

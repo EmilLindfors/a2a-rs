@@ -200,7 +200,7 @@ impl HttpClient {
             .timeout(Duration::from_secs(self.timeout))
             .send()
             .await
-            .map_err(|e| HttpClientError::Reqwest(e))?;
+            .map_err(HttpClientError::Reqwest)?;
 
         if response.status().is_success() {
             let card: AgentCard = response.json().await.map_err(|e| {

@@ -383,7 +383,7 @@ fn test_agent_card_v100_fields() {
 
 #[test]
 fn test_agent_capabilities_extensions() {
-    use a2a_rs::domain::{TaskPushNotificationConfig, AgentCapabilities, AgentExtension};
+    use a2a_rs::domain::{AgentCapabilities, AgentExtension};
     use std::collections::HashMap;
 
     let mut capabilities = AgentCapabilities::default();
@@ -547,7 +547,7 @@ fn test_message_extensions_field() {
 
 #[test]
 fn test_artifact_extensions_field() {
-    use a2a_rs::domain::{TaskPushNotificationConfig, Artifact, Part};
+    use a2a_rs::domain::{Artifact, Part};
 
     // Create an artifact with extensions
     let artifact = Artifact {
@@ -634,7 +634,7 @@ fn test_mutual_tls_security_scheme() {
 
 #[test]
 fn test_oauth2_with_metadata_url() {
-    use a2a_rs::domain::{TaskPushNotificationConfig, ClientCredentialsOAuthFlow, OAuthFlows, SecurityScheme};
+    use a2a_rs::domain::{ClientCredentialsOAuthFlow, OAuthFlows, SecurityScheme};
     use std::collections::HashMap;
 
     let mut scopes = HashMap::new();
@@ -688,7 +688,7 @@ fn test_oauth2_with_metadata_url() {
 
 #[test]
 fn test_list_tasks_params() {
-    use a2a_rs::domain::{TaskPushNotificationConfig, ListTasksParams, TaskState};
+    use a2a_rs::domain::{ListTasksParams, TaskState};
 
     let params = ListTasksParams {
         context_id: Some("ctx-123".to_string()),
@@ -865,8 +865,7 @@ mod property_based_tests {
 
 #[tokio::test]
 async fn test_task_list_page_size_validation() {
-    use a2a_rs::{TaskPushNotificationConfig, 
-        adapter::{
+    use a2a_rs::{adapter::{
             DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
         },
         services::AsyncA2AClient,
@@ -994,7 +993,7 @@ fn test_jsonrpc_error_structure_compliance() {
 
 #[test]
 fn test_task_state_transitions_validation() {
-    use a2a_rs::domain::{TaskPushNotificationConfig, Message, Task, TaskState};
+    use a2a_rs::domain::{Message, Task, TaskState};
 
     let task_id = "task-transition-test".to_string();
     let context_id = "ctx-test".to_string();
@@ -1015,7 +1014,7 @@ fn test_task_state_transitions_validation() {
             format!("Transitioning to {:?}", to_state),
             format!("msg-{}", uuid::Uuid::new_v4()),
         );
-        task.update_status(to_state.clone(), Some(msg));
+        task.update_status(to_state, Some(msg));
         assert_eq!(
             task.status.state, to_state,
             "Task should transition to {:?}",

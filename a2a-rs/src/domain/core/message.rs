@@ -3,6 +3,7 @@ use crate::domain::error::A2AError;
 // Re-export the generated types so downstream code gets them from `domain::core::message`
 pub use crate::domain::generated::{Message, Part, Role, Artifact, part};
 
+#[allow(non_upper_case_globals)]
 impl Role {
     pub const User: Self = Self::ROLE_USER;
     pub const Agent: Self = Self::ROLE_AGENT;
@@ -123,6 +124,12 @@ pub struct FilePartBuilder {
     metadata: Option<::buffa_types::google::protobuf::Struct>,
 }
 
+impl Default for FilePartBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FilePartBuilder {
     pub fn new() -> Self {
         Self {
@@ -203,6 +210,12 @@ pub struct MessageBuilder {
     metadata: Option<::buffa_types::google::protobuf::Struct>,
     extensions: Vec<String>,
     reference_task_ids: Vec<String>,
+}
+
+impl Default for MessageBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MessageBuilder {

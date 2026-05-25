@@ -272,6 +272,6 @@ async fn test_push_notification_config_id() {
 
     // Serialize and verify ID is not present or empty when None/empty in proto
     let config_json = serde_json::to_value(&config_without_id).unwrap();
-    assert!(config_json.get("id").map_or(true, |v| v.as_str() == Some("")));
+    assert!(config_json.get("id").is_none_or(|v| v.as_str() == Some("")));
     assert_eq!(config_json["url"], "https://example.com/webhook");
 }

@@ -1,4 +1,4 @@
-use super::{ChatMessage, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
+use super::{LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{stream::BoxStream, StreamExt};
@@ -410,7 +410,7 @@ impl LlmProvider for OpenAiProvider {
 
                 let chunk: OpenAiStreamChunk = match serde_json::from_str(&data) {
                     Ok(c) => c,
-                    Err(e) => {
+                    Err(_e) => {
                         // Sometimes providers send non-JSON ping events, just ignore if parsing fails
                         debug!("Skipping unparseable SSE data chunk: {}", data);
                         continue;

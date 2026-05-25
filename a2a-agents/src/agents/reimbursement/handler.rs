@@ -1499,7 +1499,7 @@ where
             info!(task_id = %task_id_owned, new_state = ?task_state, "Updating task with AI response");
             match handler
                 .task_manager
-                .update_task_status(&task_id_owned, task_state.clone(), Some(response_message))
+                .update_task_status(&task_id_owned, task_state, Some(response_message))
                 .await
             {
                 Ok(updated_task) => {

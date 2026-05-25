@@ -1,6 +1,5 @@
 use a2a_client::WebA2AClient;
 use a2a_client::components::create_sse_stream;
-use futures_util::StreamExt;
 use std::sync::Arc;
 use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path};
@@ -25,13 +24,13 @@ async fn test_sse_stream_reconnection_logic() {
     let sse = create_sse_stream(client.clone(), "test-task-1".to_string());
     
     use axum::response::IntoResponse;
-    let mut response = sse.into_response();
+    let response = sse.into_response();
     let body = response.into_body();
     
     // We only wait a short time to verify that multiple retries occurred,
     // rather than waiting for all 15 retries to exhaust (~2 minutes).
     let _ = tokio::time::timeout(std::time::Duration::from_secs(3), async {
-        let bytes = axum::body::to_bytes(body, usize::MAX).await;
+        let _bytes = axum::body::to_bytes(body, usize::MAX).await;
     }).await;
     
     // We can verify that the mock server received multiple requests (initial + retries)

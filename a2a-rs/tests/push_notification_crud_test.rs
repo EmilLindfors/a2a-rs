@@ -13,7 +13,6 @@ use a2a_rs::{TaskPushNotificationConfig,
     adapter::{
         DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
-    domain::{Task},
     port::{AsyncNotificationManager, AsyncTaskManager},
     services::AsyncA2AClient,
 };

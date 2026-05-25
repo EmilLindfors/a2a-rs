@@ -762,7 +762,7 @@ impl AgentToMcpBridge {
                     "Streaming not supported, falling back to polling for task: {}",
                     task.id
                 );
-                let mut last_state = task.status.state.clone();
+                let mut last_state = task.status.state;
                 let mut poll_count = 0;
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
@@ -790,7 +790,7 @@ impl AgentToMcpBridge {
                                 "Polled task {} state changed to: {:?}",
                                 task.id, task.status.state
                             );
-                            last_state = task.status.state.clone();
+                            last_state = task.status.state;
                         }
 
                         if task.status.state == a2a_rs::domain::TaskState::InputRequired {
@@ -968,7 +968,7 @@ impl ServerHandler for AgentToMcpBridge {
         let mut extensions = ExtensionCapabilities::new();
         for scheme in self.agent_card.security_schemes.values() {
             if let Some(a2a_rs::domain::generated::security_scheme::Scheme::Oauth2SecurityScheme(ref oauth2_scheme)) = &scheme.scheme {
-                if let Some(ref flows) = oauth2_scheme.flows.as_option() {
+                if let Some(flows) = oauth2_scheme.flows.as_option() {
                     if let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(ref cc)) = &flows.flow {
                         let mut cc_settings = serde_json::Map::new();
                         cc_settings.insert("tokenUrl".to_string(), serde_json::Value::String(cc.token_url.clone()));

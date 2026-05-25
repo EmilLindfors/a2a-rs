@@ -418,40 +418,41 @@ async fn test_mcp_to_a2a_progress_streaming() {
     // Wait a brief moment to ensure broadcast updates compile and finish processing
     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
-    let updates = streaming_handler.updates.lock().unwrap();
-    assert!(updates.len() >= 2);
-    // Verify first update
-    assert_eq!(updates[0].task_id, "task-calc-1");
-    assert_eq!(updates[0].status.state, TaskState::Working);
-    assert_eq!(
-        updates[0]
-            .status
-            .message
-            .as_option()
-            .unwrap()
-            .parts
-            .iter()
-            .find_map(|p| p.get_text().map(|t| t.to_string()))
-            .unwrap(),
-        "Progress: 50"
-    );
+    {
+        let updates = streaming_handler.updates.lock().unwrap();
+        assert!(updates.len() >= 2);
+        // Verify first update
+        assert_eq!(updates[0].task_id, "task-calc-1");
+        assert_eq!(updates[0].status.state, TaskState::Working);
+        assert_eq!(
+            updates[0]
+                .status
+                .message
+                .as_option()
+                .unwrap()
+                .parts
+                .iter()
+                .find_map(|p| p.get_text().map(|t| t.to_string()))
+                .unwrap(),
+            "Progress: 50"
+        );
 
-    // Verify second update
-    assert_eq!(updates[1].task_id, "task-calc-1");
-    assert_eq!(updates[1].status.state, TaskState::Working);
-    assert_eq!(
-        updates[1]
-            .status
-            .message
-            .as_option()
-            .unwrap()
-            .parts
-            .iter()
-            .find_map(|p| p.get_text().map(|t| t.to_string()))
-            .unwrap(),
-        "Progress: 100"
-    );
-
+        // Verify second update
+        assert_eq!(updates[1].task_id, "task-calc-1");
+        assert_eq!(updates[1].status.state, TaskState::Working);
+        assert_eq!(
+            updates[1]
+                .status
+                .message
+                .as_option()
+                .unwrap()
+                .parts
+                .iter()
+                .find_map(|p| p.get_text().map(|t| t.to_string()))
+                .unwrap(),
+            "Progress: 100"
+        );
+    }
     drop(mcp_client);
     let _ = server_task.await;
 }

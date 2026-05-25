@@ -13,6 +13,7 @@ use super::message::{Artifact, Message};
 // Re-export generated types
 pub use crate::domain::generated::{Task, TaskState, TaskStatus, TaskPushNotificationConfig};
 
+#[allow(non_upper_case_globals)]
 impl TaskState {
     pub const Submitted: Self = Self::TASK_STATE_SUBMITTED;
     pub const Working: Self = Self::TASK_STATE_WORKING;

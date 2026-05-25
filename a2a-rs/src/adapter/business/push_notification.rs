@@ -102,8 +102,8 @@ impl HttpPushNotificationSender {
         if let Some(auth) = config.authentication.as_option() {
             // Here we could add specific authentication headers based on the schemes
             // For now we just add the credentials if provided
-            if !auth.credentials.is_empty() {
-                if !auth.scheme.is_empty() {
+            if !auth.credentials.is_empty()
+                && !auth.scheme.is_empty() {
                     let scheme = &auth.scheme;
 
                     if scheme.to_lowercase() == "basic" {
@@ -124,7 +124,6 @@ impl HttpPushNotificationSender {
                         );
                     }
                 }
-            }
         }
 
         headers

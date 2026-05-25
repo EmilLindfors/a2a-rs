@@ -3,7 +3,7 @@ use a2a_rs::domain::{A2AError, Message, Task, TaskState};
 use a2a_rs::port::AsyncMessageHandler;
 use a2a_rs::services::AsyncA2AClient;
 use a2a_rs::adapter::{DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, SimpleAgentInfo};
-use a2a_agents::{AgentBuilder, AgentPlugin, SkillDefinition};
+use a2a_agents::{AgentPlugin, SkillDefinition};
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::sync::oneshot;
