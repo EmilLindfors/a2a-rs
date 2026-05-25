@@ -138,18 +138,18 @@ impl AutoStorage {
                     tracing::info!("SQL query logging enabled");
                 }
 
-                let storage = a2a_rs::adapter::storage::SqlxTaskStorage::new(url).await.map_err(|e| {
-                    BuildError::StorageError(format!("Failed to create SQLx storage: {}", e))
-                })?;
+                let storage = a2a_rs::adapter::storage::SqlxTaskStorage::new(url)
+                    .await
+                    .map_err(|e| {
+                        BuildError::StorageError(format!("Failed to create SQLx storage: {}", e))
+                    })?;
 
                 Ok(AutoStorage::Sqlx(storage))
             }
             #[cfg(not(feature = "sqlx"))]
-            StorageConfig::Sqlx { .. } => {
-                Err(BuildError::StorageError(
-                    "SQLx storage requested but 'sqlx' feature is not enabled".to_string(),
-                ))
-            }
+            StorageConfig::Sqlx { .. } => Err(BuildError::StorageError(
+                "SQLx storage requested but 'sqlx' feature is not enabled".to_string(),
+            )),
         }
     }
 }

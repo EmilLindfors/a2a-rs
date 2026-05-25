@@ -3,13 +3,13 @@
 //! This binary can run multiple A2A agents concurrently, configured via TOML files.
 //! It supports different built-in implementations via the `agent.implementation` setting.
 
+#[cfg(feature = "reimbursement-agent")]
+use a2a_agents::agents::reimbursement::ReimbursementHandler;
 use a2a_agents::core::AgentBuilder;
 use a2a_agents::core::builder::AutoStorage;
 use a2a_agents_common::llm::LlmProvider;
 use a2a_agents_common::llm::gemini::{GeminiConfig, GeminiProvider};
 use a2a_agents_common::llm::openai::{OpenAiConfig, OpenAiProvider};
-#[cfg(feature = "reimbursement-agent")]
-use a2a_agents::agents::reimbursement::ReimbursementHandler;
 
 use a2a_rs::{
     domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let args = Args::parse();
-    
+
     if args.config.is_empty() {
         error!("At least one configuration file must be specified");
         std::process::exit(1);
@@ -96,10 +96,10 @@ async fn main() -> anyhow::Result<()> {
 
     for config_path in &args.config {
         let config_path = config_path.clone();
-        
+
         let handle = tokio::spawn(async move {
             info!("📄 Loading agent config from: {}", config_path);
-            
+
             // Build the configuration first to inspect the implementation type
             let builder = match AgentBuilder::from_file(&config_path) {
                 Ok(b) => b,
@@ -109,23 +109,38 @@ async fn main() -> anyhow::Result<()> {
                 }
             };
 
-            let implementation = builder.config().agent.implementation.as_deref().unwrap_or("echo");
+            let implementation = builder
+                .config()
+                .agent
+                .implementation
+                .as_deref()
+                .unwrap_or("echo");
             info!("🛠️  Using implementation: {}", implementation);
 
             match implementation {
                 #[cfg(feature = "reimbursement-agent")]
                 "reimbursement" => {
-                    let storage = AutoStorage::from_config(&builder.config().server.storage).await?;
-                    
+                    let storage =
+                        AutoStorage::from_config(&builder.config().server.storage).await?;
+
                     // Initialize LLM from config if provided
                     let mut llm_provider: Option<Arc<dyn LlmProvider>> = None;
                     if let Some(llm_config) = &builder.config().llm {
-                        info!("Loading LLM configuration from TOML (provider: {})", llm_config.provider);
+                        info!(
+                            "Loading LLM configuration from TOML (provider: {})",
+                            llm_config.provider
+                        );
                         match llm_config.provider.as_str() {
                             "openai" => {
                                 let openai_config = OpenAiConfig {
-                                    base_url: llm_config.base_url.clone().unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-                                    model: llm_config.model.clone().unwrap_or_else(|| "gpt-4o-mini".to_string()),
+                                    base_url: llm_config
+                                        .base_url
+                                        .clone()
+                                        .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+                                    model: llm_config
+                                        .model
+                                        .clone()
+                                        .unwrap_or_else(|| "gpt-4o-mini".to_string()),
                                     api_key: llm_config.api_key.clone(),
                                 };
                                 llm_provider = Some(Arc::new(OpenAiProvider::new(openai_config)));
@@ -151,12 +166,14 @@ async fn main() -> anyhow::Result<()> {
                             info!("OpenAI client initialized successfully from environment");
                             llm_provider = Some(Arc::new(openai));
                         } else {
-                            warn!("Failed to initialize any AI client. Conversational features will be disabled.");
+                            warn!(
+                                "Failed to initialize any AI client. Conversational features will be disabled."
+                            );
                         }
                     }
 
                     let handler = ReimbursementHandler::with_llm(storage.clone(), llm_provider);
-                    
+
                     // We use build() instead of build_with_auto_storage() since we created storage manually
                     // Note: If mcp-client is enabled, we'd need to manually initialize it here,
                     // but for reimbursement agent we can just build it normally.
@@ -164,7 +181,7 @@ async fn main() -> anyhow::Result<()> {
                         .with_handler(handler)
                         .with_storage(storage)
                         .build()?;
-                    
+
                     runtime.run().await?;
                 }
                 "echo" => {
@@ -172,20 +189,23 @@ async fn main() -> anyhow::Result<()> {
                         .with_handler(EchoHandler)
                         .build_with_auto_storage()
                         .await?;
-                    
+
                     runtime.run().await?;
                 }
                 other => {
-                    warn!("Unknown implementation '{}' in {}. Falling back to 'echo'.", other, config_path);
+                    warn!(
+                        "Unknown implementation '{}' in {}. Falling back to 'echo'.",
+                        other, config_path
+                    );
                     let runtime = builder
                         .with_handler(EchoHandler)
                         .build_with_auto_storage()
                         .await?;
-                    
+
                     runtime.run().await?;
                 }
             }
-            
+
             Ok(())
         });
 
