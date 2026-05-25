@@ -1,4 +1,4 @@
-//! Integration tests for tasks/list endpoint (v0.3.0)
+//! Integration tests for tasks/list endpoint (v1.0.0)
 
 #![cfg(all(feature = "http-client", feature = "http-server"))]
 
@@ -400,8 +400,12 @@ async fn test_task_list_history_length() {
         .find(|t| t.id == task_id)
         .expect("Task not found");
 
-    if let Some(history) = &task.history {
-        assert_eq!(history.len(), 2, "History should be limited to 2 messages");
+    if !task.history.is_empty() {
+        assert_eq!(
+            task.history.len(),
+            2,
+            "History should be limited to 2 messages"
+        );
     }
 
     // List tasks with history_length = 0 (no history)
@@ -421,8 +425,8 @@ async fn test_task_list_history_length() {
         .expect("Task not found");
 
     assert!(
-        task.history.is_none(),
-        "History should be None when history_length is 0"
+        task.history.is_empty(),
+        "History should be empty when history_length is 0"
     );
 
     shutdown_tx.send(()).ok();
@@ -455,19 +459,21 @@ async fn test_task_list_include_artifacts() {
 
     task.add_artifact(a2a_rs::domain::Artifact {
         artifact_id: format!("artifact-{}", uuid::Uuid::new_v4()),
-        name: Some("Test Artifact".to_string()),
-        description: None,
-        parts: vec![a2a_rs::domain::Part::Text {
-            text: "Artifact content".to_string(),
-            metadata: None,
-        }],
-        metadata: None,
-        extensions: None,
+        name: "Test Artifact".to_string(),
+        description: String::new(),
+        parts: vec![a2a_rs::domain::Part::text("Artifact content".to_string())],
+        metadata: None.into(),
+        extensions: Vec::new(),
+        ..Default::default()
     });
 
     // Update task in storage
+    let task_state = match task.status.state {
+        ::buffa::EnumValue::Known(s) => s,
+        _ => TaskState::Unknown,
+    };
     storage
-        .update_task_status(&task_id, task.status.state, None)
+        .update_task_status(&task_id, task_state, None)
         .await
         .ok();
 
@@ -490,8 +496,7 @@ async fn test_task_list_include_artifacts() {
         .expect("Task not found");
 
     assert!(
-        listed_task.artifacts.is_none()
-            || listed_task.artifacts.as_ref().is_some_and(|a| a.is_empty()),
+        listed_task.artifacts.is_empty(),
         "Artifacts should be excluded when include_artifacts is false"
     );
 

@@ -20,23 +20,21 @@ impl SkillToolConverter {
         // Build enhanced description
         let mut description_parts = vec![skill.description.clone()];
 
-        if let Some(examples) = &skill.examples {
-            if !examples.is_empty() {
-                description_parts.push(format!("\n\nExamples:\n{}", examples.join("\n- ")));
-            }
+        if !skill.examples.is_empty() {
+            description_parts.push(format!("\n\nExamples:\n- {}", skill.examples.join("\n- ")));
         }
 
-        if let Some(input_modes) = &skill.input_modes {
+        if !skill.input_modes.is_empty() {
             description_parts.push(format!(
                 "\nSupported input modes: {}",
-                input_modes.join(", ")
+                skill.input_modes.join(", ")
             ));
         }
 
-        if let Some(output_modes) = &skill.output_modes {
+        if !skill.output_modes.is_empty() {
             description_parts.push(format!(
                 "\nSupported output modes: {}",
-                output_modes.join(", ")
+                skill.output_modes.join(", ")
             ));
         }
 
@@ -50,22 +48,21 @@ impl SkillToolConverter {
                 "message": {
                     "type": "string",
                     "description": "The message or query to send to the agent skill"
+                },
+                "task_id": {
+                    "type": "string",
+                    "description": "Optional. The ID of an existing task to continue. Omit when starting a new task."
                 }
             },
             "required": ["message"]
         }))
         .expect("Failed to parse schema JSON");
 
-        Tool {
-            name: tool_name.into(),
-            title: None,
-            description: Some(full_description.into()),
-            input_schema: std::sync::Arc::new(input_schema),
-            output_schema: None,
-            annotations: None,
-            icons: None,
-            meta: None,
-        }
+        Tool::new(
+            tool_name,
+            full_description,
+            std::sync::Arc::new(input_schema),
+        )
     }
 
     /// Create a namespaced tool name
@@ -76,9 +73,7 @@ impl SkillToolConverter {
         let sanitized_url = agent_url
             .replace("https://", "")
             .replace("http://", "")
-            .replace('/', "_")
-            .replace(':', "_")
-            .replace('.', "_");
+            .replace(['/', ':', '.'], "_");
 
         format!("{}_{}", sanitized_url, skill_id)
     }
@@ -108,16 +103,15 @@ mod tests {
 
     #[test]
     fn test_skill_to_tool_conversion() {
-        let skill = AgentSkill {
-            id: "test_skill".to_string(),
-            name: "Test Skill".to_string(),
-            description: "A test skill for demonstration".to_string(),
-            tags: vec!["test".to_string()],
-            examples: Some(vec!["Example 1".to_string(), "Example 2".to_string()]),
-            input_modes: Some(vec!["text".to_string()]),
-            output_modes: Some(vec!["text".to_string()]),
-            security: None,
-        };
+        let skill = AgentSkill::new(
+            "test_skill".to_string(),
+            "Test Skill".to_string(),
+            "A test skill for demonstration".to_string(),
+            vec!["test".to_string()],
+        )
+        .with_examples(vec!["Example 1".to_string(), "Example 2".to_string()])
+        .with_input_modes(vec!["text".to_string()])
+        .with_output_modes(vec!["text".to_string()]);
 
         let tool = SkillToolConverter::skill_to_tool(&skill, "https://example.com/agent");
 

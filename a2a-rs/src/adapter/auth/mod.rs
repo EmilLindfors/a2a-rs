@@ -1,6 +1,6 @@
 //! Authentication adapter implementations
 
-#[cfg(any(feature = "http-server", feature = "ws-server"))]
+#[cfg(feature = "http-server")]
 pub mod authenticator;
 
 #[cfg(feature = "auth")]
@@ -10,7 +10,7 @@ pub mod jwt;
 pub mod oauth2;
 
 // Re-export authentication types
-#[cfg(any(feature = "http-server", feature = "ws-server"))]
+#[cfg(feature = "http-server")]
 pub use authenticator::{
     ApiKeyAuthenticator, ApiKeyExtractor, BearerTokenAuthenticator, BearerTokenExtractor,
     NoopAuthenticator,

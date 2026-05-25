@@ -1,7 +1,5 @@
 //! Helpers for declaring AP2 support in an A2A `AgentCard`.
 
-use std::collections::HashMap;
-
 use a2a_rs::{AgentCapabilities, AgentCard, AgentExtension};
 
 use crate::types::{AP2_EXTENSION_URI, Ap2Role};
@@ -15,33 +13,42 @@ pub fn ap2_extension(roles: Vec<Ap2Role>, required: bool) -> AgentExtension {
         .map(|r| serde_json::Value::String(r.as_str().to_string()))
         .collect();
 
-    let mut params = HashMap::new();
-    params.insert("roles".to_string(), serde_json::Value::Array(roles_json));
+    let mut params_map = serde_json::Map::new();
+    params_map.insert("roles".to_string(), serde_json::Value::Array(roles_json));
+    let struct_val = serde_json::Value::Object(params_map);
+    let params_struct =
+        serde_json::from_value::<::buffa_types::google::protobuf::Struct>(struct_val)
+            .unwrap_or_default();
 
     AgentExtension {
         uri: AP2_EXTENSION_URI.to_string(),
-        description: Some("Agent Payments Protocol (AP2) v0.1".to_string()),
-        required: Some(required),
-        params: Some(params),
+        description: "Agent Payments Protocol (AP2) v0.1".to_string(),
+        required,
+        params: ::buffa::MessageField::some(params_struct),
+        ..Default::default()
     }
 }
 
 /// Check whether an [`AgentCard`] declares AP2 extension support.
 pub fn supports_ap2(card: &AgentCard) -> bool {
     card.capabilities
-        .extensions
-        .as_ref()
-        .is_some_and(|exts| exts.iter().any(|e| e.uri == AP2_EXTENSION_URI))
+        .as_option()
+        .map(|caps| caps.extensions.iter().any(|e| e.uri == AP2_EXTENSION_URI))
+        .unwrap_or(false)
 }
 
 /// Extract the declared AP2 roles from an [`AgentCard`].
 ///
 /// Returns `None` if the card does not declare AP2 support.
 pub fn get_ap2_roles(card: &AgentCard) -> Option<Vec<Ap2Role>> {
-    let exts = card.capabilities.extensions.as_ref()?;
-    let ap2_ext = exts.iter().find(|e| e.uri == AP2_EXTENSION_URI)?;
-    let params = ap2_ext.params.as_ref()?;
-    let roles_val = params.get("roles")?;
+    let caps = card.capabilities.as_option()?;
+    let ap2_ext = caps
+        .extensions
+        .iter()
+        .find(|e| e.uri == AP2_EXTENSION_URI)?;
+    let params = ap2_ext.params.as_option()?;
+    let json_val = serde_json::to_value(params).ok()?;
+    let roles_val = json_val.get("roles")?;
     serde_json::from_value(roles_val.clone()).ok()
 }
 
@@ -57,10 +64,7 @@ pub fn with_ap2(
     required: bool,
 ) -> AgentCapabilities {
     let ext = ap2_extension(roles, required);
-    match &mut capabilities.extensions {
-        Some(exts) => exts.push(ext),
-        None => capabilities.extensions = Some(vec![ext]),
-    }
+    capabilities.extensions.push(ext);
     capabilities
 }
 
@@ -123,10 +127,10 @@ mod tests {
 
     #[test]
     fn ap2_extension_serialization() {
-        let ext = ap2_extension(vec![Ap2Role::Shopper, Ap2Role::CredentialsProvider], false);
+        let ext = ap2_extension(vec![Ap2Role::Shopper, Ap2Role::CredentialsProvider], true);
         let json = serde_json::to_value(&ext).unwrap();
         assert_eq!(json["uri"], AP2_EXTENSION_URI);
-        assert_eq!(json["required"], false);
+        assert_eq!(json["required"], true);
         let roles = json["params"]["roles"].as_array().unwrap();
         assert_eq!(roles[0], "shopper");
         assert_eq!(roles[1], "credentials-provider");

@@ -1,26 +1,15 @@
-//! Client interface traits
-
 use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
 
-use crate::{
-    application::{JSONRPCResponse, json_rpc::A2ARequest},
-    domain::{
-        A2AError, ListTasksParams, ListTasksResult, Message, Task, TaskArtifactUpdateEvent,
-        TaskPushNotificationConfig, TaskStatusUpdateEvent,
-    },
+use crate::domain::{
+    A2AError, ListTasksParams, ListTasksResult, Message, Task, TaskArtifactUpdateEvent,
+    TaskPushNotificationConfig, TaskStatusUpdateEvent,
 };
 
 #[async_trait]
 /// An async trait defining the methods an async client should implement
 pub trait AsyncA2AClient: Send + Sync {
-    /// Send a raw request to the server and get a response
-    async fn send_raw_request(&self, request: &str) -> Result<String, A2AError>;
-
-    /// Send a structured request to the server and get a response
-    async fn send_request(&self, request: &A2ARequest) -> Result<JSONRPCResponse, A2AError>;
-
     /// Send a message to a task
     async fn send_task_message(
         &self,
@@ -48,23 +37,23 @@ pub trait AsyncA2AClient: Send + Sync {
         task_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError>;
 
-    /// List tasks with filtering and pagination (v0.3.0)
+    /// List tasks with filtering and pagination (v1.0.0)
     async fn list_tasks(&self, params: &ListTasksParams) -> Result<ListTasksResult, A2AError>;
 
-    /// List all push notification configs for a task (v0.3.0)
+    /// List all push notification configs for a task (v1.0.0)
     async fn list_push_notification_configs(
         &self,
         task_id: &str,
     ) -> Result<Vec<TaskPushNotificationConfig>, A2AError>;
 
-    /// Get a specific push notification config by ID (v0.3.0)
+    /// Get a specific push notification config by ID (v1.0.0)
     async fn get_push_notification_config(
         &self,
         task_id: &str,
         config_id: &str,
     ) -> Result<TaskPushNotificationConfig, A2AError>;
 
-    /// Delete a specific push notification config (v0.3.0)
+    /// Delete a specific push notification config (v1.0.0)
     async fn delete_push_notification_config(
         &self,
         task_id: &str,

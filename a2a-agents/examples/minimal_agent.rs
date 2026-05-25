@@ -28,10 +28,7 @@ impl AsyncMessageHandler for EchoHandler {
         let text = message
             .parts
             .iter()
-            .find_map(|part| match part {
-                Part::Text { text, .. } => Some(text.clone()),
-                _ => None,
-            })
+            .find_map(|part| part.get_text().map(|s| s.to_string()))
             .unwrap_or_else(|| "No text provided".to_string());
 
         // Create echo response
@@ -39,18 +36,17 @@ impl AsyncMessageHandler for EchoHandler {
             .role(Role::Agent)
             .parts(vec![Part::text(format!("Echo: {}", text))])
             .message_id(Uuid::new_v4().to_string())
-            .context_id(message.context_id.clone().unwrap_or_default())
+            .context_id(message.context_id.clone())
             .build();
 
         // Return completed task with echo response
         Ok(Task::builder()
             .id(task_id.to_string())
-            .context_id(message.context_id.clone().unwrap_or_default())
-            .status(a2a_rs::domain::TaskStatus {
-                state: TaskState::Completed,
-                message: Some(response.clone()),
-                timestamp: Some(chrono::Utc::now()),
-            })
+            .context_id(message.context_id.clone())
+            .status(a2a_rs::domain::TaskStatus::new(
+                TaskState::Completed,
+                Some(response.clone()),
+            ))
             .history(vec![message.clone(), response])
             .build())
     }

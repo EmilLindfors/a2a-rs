@@ -1,0 +1,6 @@
+[build]
+# Limit compilation threads to prevent OOM during large workspace builds
+jobs = 1
+
+[net]
+git-fetch-with-cli = true

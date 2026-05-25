@@ -1,7 +1,7 @@
 //! Converter between A2A Message and MCP Content
 
 use crate::error::Result;
-use a2a_rs::domain::{FileContent, Message, Part, Role};
+use a2a_rs::domain::{Message, Part, Role};
 use rmcp::model::{Content, RawContent};
 
 /// Converts between A2A Messages and MCP Content
@@ -13,47 +13,64 @@ impl MessageConverter {
         let mut contents = Vec::new();
 
         for part in &message.parts {
-            match part {
-                Part::Text { text, .. } => {
-                    contents.push(Content::text(text));
+            use a2a_rs::domain::generated::part;
+            match &part.content {
+                Some(part::Content::Text(text)) => {
+                    contents.push(Content::text(text.clone()));
                 }
-                Part::File { file, .. } => {
-                    // MCP doesn't have direct file support in Content, so we encode as text with metadata
-                    let file_desc = if let Some(ref name) = file.name {
-                        if let Some(ref uri) = file.uri {
-                            format!(
-                                "File: {} ({})\nURI: {}",
-                                name,
-                                file.mime_type.as_deref().unwrap_or("unknown"),
-                                uri
-                            )
-                        } else {
-                            format!(
-                                "File: {} ({})\n[Embedded data]",
-                                name,
-                                file.mime_type.as_deref().unwrap_or("unknown")
-                            )
-                        }
-                    } else if let Some(ref uri) = file.uri {
+                Some(part::Content::Raw(_)) => {
+                    let file_desc = if !part.filename.is_empty() {
                         format!(
-                            "File: {}\nType: {}",
-                            uri,
-                            file.mime_type.as_deref().unwrap_or("unknown")
+                            "File: {} ({})\n[Embedded data]",
+                            part.filename,
+                            if part.media_type.is_empty() {
+                                "unknown"
+                            } else {
+                                &part.media_type
+                            }
                         )
                     } else {
                         format!(
                             "File [Embedded data]\nType: {}",
-                            file.mime_type.as_deref().unwrap_or("unknown")
+                            if part.media_type.is_empty() {
+                                "unknown"
+                            } else {
+                                &part.media_type
+                            }
                         )
                     };
                     contents.push(Content::text(file_desc));
                 }
-                Part::Data { data, .. } => {
-                    // For structured data, serialize to JSON text
-                    contents.push(Content::text(serde_json::to_string_pretty(
-                        &serde_json::Value::Object(data.clone()),
-                    )?));
+                Some(part::Content::Url(url)) => {
+                    let file_desc = if !part.filename.is_empty() {
+                        format!(
+                            "File: {} ({})\nURI: {}",
+                            part.filename,
+                            if part.media_type.is_empty() {
+                                "unknown"
+                            } else {
+                                &part.media_type
+                            },
+                            url
+                        )
+                    } else {
+                        format!(
+                            "File: {}\nType: {}",
+                            url,
+                            if part.media_type.is_empty() {
+                                "unknown"
+                            } else {
+                                &part.media_type
+                            }
+                        )
+                    };
+                    contents.push(Content::text(file_desc));
                 }
+                Some(part::Content::Data(value)) => {
+                    // For structured data, serialize to JSON text
+                    contents.push(Content::text(serde_json::to_string_pretty(&value)?));
+                }
+                None => {}
             }
         }
 
@@ -74,10 +91,7 @@ impl MessageConverter {
             // Match on the dereferenced RawContent
             match &**item {
                 RawContent::Text(text_content) => {
-                    parts.push(Part::Text {
-                        text: text_content.text.clone(),
-                        metadata: None,
-                    });
+                    parts.push(Part::text(text_content.text.clone()));
                 }
                 RawContent::Image(image_content) => {
                     // Convert image to data part
@@ -95,10 +109,9 @@ impl MessageConverter {
                         serde_json::Value::String(image_content.mime_type.clone()),
                     );
 
-                    parts.push(Part::Data {
-                        data: data_map,
-                        metadata: None,
-                    });
+                    let val: ::buffa_types::google::protobuf::Value =
+                        serde_json::from_value(serde_json::Value::Object(data_map))?;
+                    parts.push(Part::data(val));
                 }
                 RawContent::Resource(resource_content) => {
                     // Treat embedded resource as a file reference
@@ -108,60 +121,34 @@ impl MessageConverter {
                             mime_type,
                             ..
                         } => {
-                            parts.push(Part::File {
-                                file: FileContent {
-                                    name: None,
-                                    mime_type: mime_type.clone(),
-                                    bytes: None,
-                                    uri: Some(uri.clone()),
-                                },
-                                metadata: None,
-                            });
+                            parts.push(Part::file_from_uri(uri.clone(), None, mime_type.clone()));
                         }
                         rmcp::model::ResourceContents::BlobResourceContents {
                             uri,
                             mime_type,
                             ..
                         } => {
-                            parts.push(Part::File {
-                                file: FileContent {
-                                    name: None,
-                                    mime_type: mime_type.clone(),
-                                    bytes: None,
-                                    uri: Some(uri.clone()),
-                                },
-                                metadata: None,
-                            });
+                            parts.push(Part::file_from_uri(uri.clone(), None, mime_type.clone()));
                         }
                     }
                 }
                 RawContent::ResourceLink(resource_link) => {
                     // Treat resource link as a file reference
-                    parts.push(Part::File {
-                        file: FileContent {
-                            name: Some(resource_link.name.clone()),
-                            mime_type: resource_link.mime_type.clone(),
-                            bytes: None,
-                            uri: Some(resource_link.uri.clone()),
-                        },
-                        metadata: None,
-                    });
+                    parts.push(Part::file_from_uri(
+                        resource_link.uri.clone(),
+                        Some(resource_link.name.clone()),
+                        resource_link.mime_type.clone(),
+                    ));
                 }
                 RawContent::Audio(_audio_content) => {
                     // For now, treat audio as text description
-                    parts.push(Part::Text {
-                        text: "[Audio content]".to_string(),
-                        metadata: None,
-                    });
+                    parts.push(Part::text("[Audio content]".to_string()));
                 }
             }
         }
 
         if parts.is_empty() {
-            parts.push(Part::Text {
-                text: String::new(),
-                metadata: None,
-            });
+            parts.push(Part::text(String::new()));
         }
 
         Ok(Message::builder()
@@ -176,23 +163,35 @@ impl MessageConverter {
         let mut texts = Vec::new();
 
         for part in &message.parts {
-            match part {
-                Part::Text { text, .. } => texts.push(text.clone()),
-                Part::File { file, .. } => {
-                    if let Some(ref name) = file.name {
+            use a2a_rs::domain::generated::part;
+            match &part.content {
+                Some(part::Content::Text(text)) => texts.push(text.clone()),
+                Some(part::Content::Raw(_)) => {
+                    let name = &part.filename;
+                    if !name.is_empty() {
                         texts.push(format!("[File: {}]", name));
-                    } else if let Some(ref uri) = file.uri {
-                        texts.push(format!("[File: {}]", uri));
                     } else {
                         texts.push("[File: embedded]".to_string());
                     }
                 }
-                Part::Data { data, .. } => {
-                    texts.push(format!(
-                        "[Data: {}]",
-                        serde_json::Value::Object(data.clone())
-                    ));
+                Some(part::Content::Url(url)) => {
+                    let name = &part.filename;
+                    if !name.is_empty() {
+                        texts.push(format!("[File: {}]", name));
+                    } else if !url.is_empty() {
+                        texts.push(format!("[File: {}]", url));
+                    } else {
+                        texts.push("[File: embedded]".to_string());
+                    }
                 }
+                Some(part::Content::Data(data)) => {
+                    if let Ok(data_json) = serde_json::to_string(data) {
+                        texts.push(format!("[Data: {}]", data_json));
+                    } else {
+                        texts.push("[Data]".to_string());
+                    }
+                }
+                None => {}
             }
         }
 
@@ -203,18 +202,18 @@ impl MessageConverter {
     pub fn extract_text_from_content(content: &[Content]) -> String {
         content
             .iter()
-            .filter_map(|c| match &**c {
-                RawContent::Text(text_content) => Some(text_content.text.clone()),
-                RawContent::Image(_) => Some("[Image]".to_string()),
+            .map(|c| match &**c {
+                RawContent::Text(text_content) => text_content.text.clone(),
+                RawContent::Image(_) => "[Image]".to_string(),
                 RawContent::Resource(resource) => {
                     let uri = match &resource.resource {
                         rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
                         rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
                     };
-                    Some(format!("[Resource: {}]", uri))
+                    format!("[Resource: {}]", uri)
                 }
-                RawContent::ResourceLink(resource) => Some(format!("[Resource: {}]", resource.uri)),
-                RawContent::Audio(_) => Some("[Audio]".to_string()),
+                RawContent::ResourceLink(resource) => format!("[Resource: {}]", resource.uri),
+                RawContent::Audio(_) => "[Audio]".to_string(),
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -230,14 +229,8 @@ mod tests {
         let message = Message::builder()
             .role(Role::User)
             .parts(vec![
-                Part::Text {
-                    text: "Hello".to_string(),
-                    metadata: None,
-                },
-                Part::Text {
-                    text: "World".to_string(),
-                    metadata: None,
-                },
+                Part::text("Hello".to_string()),
+                Part::text("World".to_string()),
             ])
             .message_id("test-msg".to_string())
             .build();
@@ -251,10 +244,14 @@ mod tests {
         let content = vec![Content::text("Hello MCP")];
 
         let message = MessageConverter::content_to_message(&content, Role::Agent).unwrap();
-        assert_eq!(message.role, Role::Agent);
+        assert_eq!(
+            message.role,
+            buffa::enumeration::EnumValue::Known(Role::ROLE_AGENT)
+        );
         assert_eq!(message.parts.len(), 1);
 
-        if let Part::Text { text, .. } = &message.parts[0] {
+        use a2a_rs::domain::generated::part;
+        if let Some(part::Content::Text(text)) = &message.parts[0].content {
             assert_eq!(text, "Hello MCP");
         } else {
             panic!("Expected text part");
@@ -266,14 +263,8 @@ mod tests {
         let message = Message::builder()
             .role(Role::User)
             .parts(vec![
-                Part::Text {
-                    text: "Line 1".to_string(),
-                    metadata: None,
-                },
-                Part::Text {
-                    text: "Line 2".to_string(),
-                    metadata: None,
-                },
+                Part::text("Line 1".to_string()),
+                Part::text("Line 2".to_string()),
             ])
             .message_id("test-msg".to_string())
             .build();

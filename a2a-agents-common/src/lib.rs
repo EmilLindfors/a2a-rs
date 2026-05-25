@@ -7,6 +7,7 @@
 //!
 //! - [`nlp`] - Natural language processing utilities (intent classification, entity extraction)
 //! - [`formatting`] - Output formatting helpers (markdown, tables, charts)
+//! - [`llm`] - Standard LLM primitive abstractions and providers
 //! - [`caching`] - Caching utilities for performance optimization (requires `async` feature)
 //! - [`testing`] - Testing utilities and fixtures
 //!
@@ -31,6 +32,7 @@
 #[cfg(feature = "async")]
 pub mod caching;
 pub mod formatting;
+pub mod llm;
 pub mod nlp;
 pub mod testing;
 

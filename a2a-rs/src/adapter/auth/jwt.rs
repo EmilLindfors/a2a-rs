@@ -51,11 +51,11 @@ impl JwtAuthenticator {
         Self {
             decoding_key: DecodingKey::from_secret(secret),
             validation: Validation::new(Algorithm::HS256),
-            scheme: SecurityScheme::Http {
-                scheme: "bearer".to_string(),
-                bearer_format: Some("JWT".to_string()),
-                description: Some("JWT Bearer token authentication".to_string()),
-            },
+            scheme: SecurityScheme::http(
+                "bearer".to_string(),
+                Some("JWT".to_string()),
+                Some("JWT Bearer token authentication".to_string()),
+            ),
         }
     }
 
@@ -70,11 +70,11 @@ impl JwtAuthenticator {
         Ok(Self {
             decoding_key,
             validation,
-            scheme: SecurityScheme::Http {
-                scheme: "bearer".to_string(),
-                bearer_format: Some("JWT".to_string()),
-                description: Some("JWT Bearer token authentication with RSA".to_string()),
-            },
+            scheme: SecurityScheme::http(
+                "bearer".to_string(),
+                Some("JWT".to_string()),
+                Some("JWT Bearer token authentication with RSA".to_string()),
+            ),
         })
     }
 

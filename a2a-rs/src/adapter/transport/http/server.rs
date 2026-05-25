@@ -4,14 +4,7 @@
 
 use std::sync::Arc;
 
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::{get, post},
-};
-use serde_json::{Value, json};
+use axum::{Json, Router, extract::State, http::StatusCode, response::IntoResponse, routing::get};
 
 #[cfg(feature = "tracing")]
 use tracing::{debug, error, info, instrument};
@@ -21,15 +14,18 @@ use crate::{
         auth::{NoopAuthenticator, with_auth},
         error::HttpServerError,
     },
-    domain::A2AError,
+    domain::{
+        A2AError,
+        generated::{A2aService, A2aServiceExt},
+    },
     port::Authenticator,
-    services::server::{AgentInfoProvider, AsyncA2ARequestProcessor},
+    services::server::AgentInfoProvider,
 };
 
 /// HTTP server for the A2A protocol
 pub struct HttpServer<P, A, Auth = NoopAuthenticator>
 where
-    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
+    P: A2aService + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
     Auth: Authenticator + Send + Sync + 'static,
 {
@@ -45,8 +41,8 @@ where
 
 impl<P, A> HttpServer<P, A>
 where
-    P: AsyncA2ARequestProcessor + Clone + Send + Sync + 'static,
-    A: AgentInfoProvider + Clone + Send + Sync + 'static,
+    P: A2aService + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
 {
     /// Create a new HTTP server with the given processor and agent info provider
     pub fn new(processor: P, agent_info: A, address: String) -> Self {
@@ -61,8 +57,8 @@ where
 
 impl<P, A, Auth> HttpServer<P, A, Auth>
 where
-    P: AsyncA2ARequestProcessor + Clone + Send + Sync + 'static,
-    A: AgentInfoProvider + Clone + Send + Sync + 'static,
+    P: A2aService + Send + Sync + 'static,
+    A: AgentInfoProvider + Send + Sync + 'static,
     Auth: Authenticator + Clone + Send + Sync + 'static,
 {
     /// Create a new HTTP server with authentication
@@ -87,16 +83,18 @@ where
         let processor = self.processor.clone();
         let agent_info = self.agent_info.clone();
 
+        // Register the ConnectRPC service
+        let connect_router = processor.register(connectrpc::Router::new());
+
         let mut app = Router::new()
-            .route("/", post(handle_request))
-            // v0.3.0 well-known URI endpoint (RFC 8615)
+            // v1.0.0 well-known URI endpoint (RFC 8615)
             .route("/.well-known/agent-card.json", get(handle_agent_card))
             // Backward compatibility routes
             .route("/agent-card", get(handle_agent_card))
             .route("/skills", get(handle_skills))
             .route("/skills/{id}", get(handle_skill_by_id))
+            .fallback_service(connect_router.into_axum_service())
             .with_state(ServerState {
-                processor: processor.clone(),
                 agent_info: agent_info.clone(),
             });
 
@@ -126,118 +124,28 @@ where
     }
 }
 
-/// State for the HTTP server
-#[derive(Clone)]
-struct ServerState<P, A>
+struct ServerState<A>
 where
-    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
-    processor: Arc<P>,
     agent_info: Arc<A>,
 }
 
-/// Handle a request from a client
-#[cfg_attr(feature = "tracing", instrument(skip(state), fields(
-    request.id = %request.get("id").and_then(|v| v.as_str()).unwrap_or("unknown"),
-    request.method = %request.get("method").and_then(|v| v.as_str()).unwrap_or("unknown")
-)))]
-async fn handle_request<P, A>(
-    State(state): State<ServerState<P, A>>,
-    Json(request): Json<Value>,
-) -> impl IntoResponse
+impl<A> Clone for ServerState<A>
 where
-    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
-    #[cfg(feature = "tracing")]
-    debug!("Processing JSON-RPC request");
-
-    #[cfg(feature = "tracing")]
-    let start_time = std::time::Instant::now();
-
-    // Convert the request to a string
-    let request_str = match serde_json::to_string(&request) {
-        Ok(str) => str,
-        Err(e) => {
-            #[cfg(feature = "tracing")]
-            error!("Invalid JSON payload: {}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": {
-                        "code": -32700,
-                        "message": "Invalid JSON payload",
-                        "data": e.to_string()
-                    }
-                })),
-            )
-                .into_response();
-        }
-    };
-
-    // Process the request
-    match state.processor.process_raw_request(&request_str).await {
-        Ok(response) => {
-            #[cfg(feature = "tracing")]
-            debug!("Request processed successfully");
-            let response_value: Value = match serde_json::from_str(&response) {
-                Ok(value) => value,
-                Err(e) => {
-                    #[cfg(feature = "tracing")]
-                    error!("Failed to parse response: {}", e);
-                    return (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(json!({
-                            "jsonrpc": "2.0",
-                            "id": null,
-                            "error": {
-                                "code": -32603,
-                                "message": "Internal error",
-                                "data": "Failed to parse response"
-                            }
-                        })),
-                    )
-                        .into_response();
-                }
-            };
-
-            #[cfg(feature = "tracing")]
-            {
-                let duration = start_time.elapsed();
-                tracing::Span::current().record("request.duration_ms", duration.as_millis() as u64);
-                info!(
-                    duration_ms = duration.as_millis() as u64,
-                    "Request completed successfully"
-                );
-            }
-
-            (StatusCode::OK, Json(response_value)).into_response()
-        }
-        Err(e) => {
-            #[cfg(feature = "tracing")]
-            error!("Request processing failed: {}", e);
-            let error = e.to_jsonrpc_error();
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": error
-                })),
-            )
-                .into_response()
+    fn clone(&self) -> Self {
+        Self {
+            agent_info: self.agent_info.clone(),
         }
     }
 }
 
 /// Handle a request for the agent card
 #[cfg_attr(feature = "tracing", instrument(skip(state)))]
-async fn handle_agent_card<P, A>(State(state): State<ServerState<P, A>>) -> impl IntoResponse
+async fn handle_agent_card<A>(State(state): State<ServerState<A>>) -> impl IntoResponse
 where
-    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
     #[cfg(feature = "tracing")]
@@ -249,13 +157,11 @@ where
             (StatusCode::OK, Json(card)).into_response()
         }
         Err(e) => {
-            let error = e.to_jsonrpc_error();
+            // Map A2AError to HTTP response
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": error
+                Json(serde_json::json!({
+                    "error": e.to_string()
                 })),
             )
                 .into_response()
@@ -264,57 +170,45 @@ where
 }
 
 /// Handle a request for all agent skills
-async fn handle_skills<P, A>(State(state): State<ServerState<P, A>>) -> impl IntoResponse
+async fn handle_skills<A>(State(state): State<ServerState<A>>) -> impl IntoResponse
 where
-    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
     match state.agent_info.get_skills().await {
         Ok(skills) => (StatusCode::OK, Json(skills)).into_response(),
-        Err(e) => {
-            let error = e.to_jsonrpc_error();
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": error
-                })),
-            )
-                .into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }
 
 /// Handle a request for a specific agent skill by ID
-async fn handle_skill_by_id<P, A>(
-    State(state): State<ServerState<P, A>>,
+async fn handle_skill_by_id<A>(
+    State(state): State<ServerState<A>>,
     axum::extract::Path(id): axum::extract::Path<String>,
 ) -> impl IntoResponse
 where
-    P: AsyncA2ARequestProcessor + Send + Sync + 'static,
     A: AgentInfoProvider + Send + Sync + 'static,
 {
     match state.agent_info.get_skill_by_id(&id).await {
         Ok(Some(skill)) => (StatusCode::OK, Json(skill)).into_response(),
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(json!({
+            Json(serde_json::json!({
                 "error": format!("Skill with ID '{}' not found", id)
             })),
         )
             .into_response(),
-        Err(e) => {
-            let error = e.to_jsonrpc_error();
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({
-                    "jsonrpc": "2.0",
-                    "id": null,
-                    "error": error
-                })),
-            )
-                .into_response()
-        }
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({
+                "error": e.to_string()
+            })),
+        )
+            .into_response(),
     }
 }

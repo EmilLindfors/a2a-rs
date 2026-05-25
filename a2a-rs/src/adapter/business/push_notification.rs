@@ -13,7 +13,7 @@ use reqwest::{
 use tokio::sync::Mutex;
 
 use crate::domain::{
-    A2AError, PushNotificationConfig, TaskArtifactUpdateEvent, TaskStatusUpdateEvent,
+    A2AError, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent,
 };
 
 /// Interface for a push notification sender
@@ -22,14 +22,14 @@ pub trait PushNotificationSender: Send + Sync {
     /// Send a status update notification
     async fn send_status_update(
         &self,
-        config: &PushNotificationConfig,
+        config: &TaskPushNotificationConfig,
         event: &TaskStatusUpdateEvent,
     ) -> Result<(), A2AError>;
 
     /// Send an artifact update notification
     async fn send_artifact_update(
         &self,
-        config: &PushNotificationConfig,
+        config: &TaskPushNotificationConfig,
         event: &TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError>;
 }
@@ -85,45 +85,38 @@ impl HttpPushNotificationSender {
     }
 
     /// Get the headers for a request
-    fn get_headers(&self, config: &PushNotificationConfig) -> HeaderMap {
+    fn get_headers(&self, config: &TaskPushNotificationConfig) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
 
         // Add token if provided
-        if let Some(token) = &config.token {
+        if !config.token.is_empty() {
             headers.insert(
                 AUTHORIZATION,
-                HeaderValue::from_str(&format!("Bearer {}", token))
+                HeaderValue::from_str(&format!("Bearer {}", config.token))
                     .unwrap_or_else(|_| HeaderValue::from_static("Invalid token")),
             );
         }
 
         // Add additional authentication headers if provided
-        if let Some(auth) = &config.authentication {
+        if let Some(auth) = config.authentication.as_option() {
             // Here we could add specific authentication headers based on the schemes
             // For now we just add the credentials if provided
-            if let Some(credentials) = &auth.credentials {
-                if !auth.schemes.is_empty() {
-                    // Use the first scheme for simplicity
-                    let scheme = &auth.schemes[0];
+            if !auth.credentials.is_empty() && !auth.scheme.is_empty() {
+                let scheme = &auth.scheme;
 
-                    if scheme.to_lowercase() == "basic" {
-                        headers.insert(
-                            AUTHORIZATION,
-                            HeaderValue::from_str(&format!("Basic {}", credentials))
-                                .unwrap_or_else(|_| {
-                                    HeaderValue::from_static("Invalid credentials")
-                                }),
-                        );
-                    } else if scheme.to_lowercase() == "bearer" {
-                        headers.insert(
-                            AUTHORIZATION,
-                            HeaderValue::from_str(&format!("Bearer {}", credentials))
-                                .unwrap_or_else(|_| {
-                                    HeaderValue::from_static("Invalid credentials")
-                                }),
-                        );
-                    }
+                if scheme.to_lowercase() == "basic" {
+                    headers.insert(
+                        AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Basic {}", auth.credentials))
+                            .unwrap_or_else(|_| HeaderValue::from_static("Invalid credentials")),
+                    );
+                } else if scheme.to_lowercase() == "bearer" {
+                    headers.insert(
+                        AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Bearer {}", auth.credentials))
+                            .unwrap_or_else(|_| HeaderValue::from_static("Invalid credentials")),
+                    );
                 }
             }
         }
@@ -137,7 +130,7 @@ impl HttpPushNotificationSender {
 impl PushNotificationSender for HttpPushNotificationSender {
     async fn send_status_update(
         &self,
-        config: &PushNotificationConfig,
+        config: &TaskPushNotificationConfig,
         event: &TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         let mut last_error = None;
@@ -244,7 +237,7 @@ impl PushNotificationSender for HttpPushNotificationSender {
 
     async fn send_artifact_update(
         &self,
-        config: &PushNotificationConfig,
+        config: &TaskPushNotificationConfig,
         event: &TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
         let mut last_error = None;
@@ -310,7 +303,7 @@ pub struct NoopPushNotificationSender;
 impl PushNotificationSender for NoopPushNotificationSender {
     async fn send_status_update(
         &self,
-        _config: &PushNotificationConfig,
+        _config: &TaskPushNotificationConfig,
         _event: &TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
         // Do nothing - no-op implementation
@@ -319,7 +312,7 @@ impl PushNotificationSender for NoopPushNotificationSender {
 
     async fn send_artifact_update(
         &self,
-        _config: &PushNotificationConfig,
+        _config: &TaskPushNotificationConfig,
         _event: &TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
         // Do nothing - no-op implementation
@@ -332,7 +325,7 @@ pub struct PushNotificationRegistry {
     /// Sender for push notifications
     sender: Arc<dyn PushNotificationSender>,
     /// Registry of task IDs to push notification configs
-    registry: Arc<Mutex<std::collections::HashMap<String, PushNotificationConfig>>>,
+    registry: Arc<Mutex<std::collections::HashMap<String, TaskPushNotificationConfig>>>,
 }
 
 impl PushNotificationRegistry {
@@ -348,7 +341,7 @@ impl PushNotificationRegistry {
     pub async fn register(
         &self,
         task_id: &str,
-        config: PushNotificationConfig,
+        config: TaskPushNotificationConfig,
     ) -> Result<(), A2AError> {
         let mut registry = self.registry.lock().await;
         registry.insert(task_id.to_string(), config);
@@ -366,7 +359,7 @@ impl PushNotificationRegistry {
     pub async fn get_config(
         &self,
         task_id: &str,
-    ) -> Result<Option<PushNotificationConfig>, A2AError> {
+    ) -> Result<Option<TaskPushNotificationConfig>, A2AError> {
         let registry = self.registry.lock().await;
         Ok(registry.get(task_id).cloned())
     }

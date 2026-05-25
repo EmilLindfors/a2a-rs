@@ -55,25 +55,19 @@ async fn main() -> anyhow::Result<()> {
             println!("✓ Message sent successfully!");
             println!("  Task ID: {}", task.id);
             println!("  State: {:?}", task.status.state);
-            println!(
-                "  Message count: {}",
-                task.history.as_ref().map(|h| h.len()).unwrap_or(0)
-            );
+            println!("  Message count: {}", task.history.len());
 
             // Retrieve the task to see the agent's response
             println!("Retrieving task to see agent response...");
             match client.http.get_task(&task.id, None).await {
                 Ok(updated_task) => {
                     println!("✓ Retrieved task successfully!");
-                    if let Some(history) = &updated_task.history {
-                        println!("  Conversation has {} messages", history.len());
-                        if let Some(last_msg) = history.last() {
-                            println!("  Last message role: {:?}", last_msg.role);
-                            if let Some(a2a_rs::domain::Part::Text { text, .. }) =
-                                last_msg.parts.first()
-                            {
-                                println!("  Agent says: {}", text);
-                            }
+                    let history = &updated_task.history;
+                    println!("  Conversation has {} messages", history.len());
+                    if let Some(last_msg) = history.last() {
+                        println!("  Last message role: {:?}", last_msg.role);
+                        if let Some(text) = last_msg.parts.first().and_then(|p| p.get_text()) {
+                            println!("  Agent says: {}", text);
                         }
                     }
                 }

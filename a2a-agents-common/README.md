@@ -146,6 +146,13 @@ fn test_my_handler() {
   - `get_or_insert_with` for lazy computation
   - Requires `async` feature
 
+### `llm` - LLM Integration Primitives
+
+- **`LlmProvider`** - Standardized trait for connecting to AI models (Gemini, OpenAI)
+  - Unified tool calling via `ToolDefinition` and `ToolCall`
+  - Real-time `chat_completion_stream` using Server-Sent Events (SSE)
+  - Consistent message schemas avoiding vendor lock-in
+
 ### `testing` - Test Utilities
 
 - **Fixtures** - Pre-built test data

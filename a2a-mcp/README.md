@@ -15,24 +15,43 @@ This crate provides integration between the A2A protocol and RMCP, enabling bidi
 
 ## Examples
 
-See the `examples` directory for working demonstrations:
+Both run end-to-end with no external setup — they wire up the A2A and MCP
+sides in-process over an in-memory duplex transport.
 
-```rust
-cargo run --example minimal_example
-```
+- `cargo run --example a2a_as_mcp_server -p a2a-mcp` — spins up a tiny A2A
+  HTTP agent, bridges it with `AgentToMcpBridge`, and demonstrates an MCP
+  client listing and calling its tools.
+- `cargo run --example a2a_with_mcp_tools -p a2a-mcp` — wraps an A2A handler
+  with `McpToA2ABridge` so `TOOL_CALL: <name>` messages get routed to an
+  in-process MCP server.
 
 ## Architecture
 
-```text
-┌─────────────────────────────────────────────┐
-│               a2a-mcp Crate                 │
-├─────────────┬─────────────┬─────────────────┤
-│ RMCP Client │ Translation │    A2A Client   │
-│ Interface   │    Layer    │    Interface    │
-├─────────────┼─────────────┼─────────────────┤
-│ RMCP Server │ Conversion  │    A2A Server   │
-│ Interface   │    Layer    │    Interface    │
-└─────────────┴─────────────┴─────────────────┘
+```mermaid
+flowchart TD
+    subgraph A2A[A2A Protocol]
+        A2AAgent[A2A Agent]
+        A2AClient[A2A Client]
+    end
+
+    subgraph Bridge[a2a-mcp Bridge]
+        A2AMCPBridge[AgentToMcpBridge\n(A2A Agent as MCP Server)]
+        MCPA2ABridge[McpToA2ABridge\n(MCP Server as A2A Agent)]
+        
+        A2AMCPBridge <--> |MessageConverter| Converters
+        MCPA2ABridge <--> |MessageConverter| Converters
+    end
+
+    subgraph MCP[MCP Protocol]
+        MCPClient[MCP Client]
+        MCPServer[MCP Server]
+    end
+
+    A2AAgent <--> |A2A Messages| A2AMCPBridge
+    A2AMCPBridge <--> |MCP JSON-RPC| MCPClient
+    
+    A2AClient <--> |A2A Messages| MCPA2ABridge
+    MCPA2ABridge <--> |MCP JSON-RPC| MCPServer
 ```
 
 ## Development Status

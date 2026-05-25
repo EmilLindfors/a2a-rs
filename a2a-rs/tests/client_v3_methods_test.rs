@@ -1,6 +1,6 @@
-//! A2A Protocol v0.3.0 Client SDK Tests
+//! A2A Protocol v1.0.0 Client SDK Tests
 //!
-//! This module tests the HttpClient and WebSocketClient wrappers for v0.3.0 methods
+//! This module tests the HttpClient and WebSocketClient wrappers for v1.0.0 methods
 
 mod common;
 
@@ -50,11 +50,11 @@ async fn setup_test_server(port: u16) -> (oneshot::Sender<()>, InMemoryTaskStora
 
     let handler = TestBusinessHandler::with_storage(storage.clone());
     let agent_info = SimpleAgentInfo::new(
-        "Test Agent v0.3.0".to_string(),
+        "Test Agent v1.0.0".to_string(),
         format!("http://localhost:{}", port),
     )
     .with_version("2.0.0".to_string())
-    .with_description("Agent for v0.3.0 testing".to_string());
+    .with_description("Agent for v1.0.0 testing".to_string());
 
     let processor = DefaultRequestProcessor::with_handler(handler, agent_info.clone());
     let server = HttpServer::new(processor, agent_info, format!("127.0.0.1:{}", port));
@@ -210,9 +210,8 @@ async fn test_http_client_list_tasks_history_length() {
 
     // Verify that tasks have history
     for task in &result.tasks {
-        if let Some(ref history) = task.history {
-            assert!(history.len() <= 5, "History should be limited to 5 entries");
-        }
+        let history = &task.history;
+        assert!(history.len() <= 5, "History should be limited to 5 entries");
     }
 
     shutdown_tx.send(()).ok();
@@ -266,13 +265,13 @@ async fn test_http_client_push_config_list() {
     // First, set a push notification config
     let task_id = "task-0";
     let config = a2a_rs::domain::TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id.to_string(),
-        push_notification_config: a2a_rs::domain::PushNotificationConfig {
-            id: Some("config-1".to_string()),
-            url: "https://client.example.com/webhook".to_string(),
-            token: Some("test-token".to_string()),
-            authentication: None,
-        },
+        id: "config-1".to_string(),
+        url: "https://client.example.com/webhook".to_string(),
+        token: "test-token".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     client
@@ -289,10 +288,7 @@ async fn test_http_client_push_config_list() {
     println!("Push configs: {:?}", configs);
 
     assert!(!configs.is_empty(), "Should have at least one config");
-    assert_eq!(
-        configs[0].push_notification_config.id,
-        Some("config-1".to_string())
-    );
+    assert_eq!(configs[0].id, "config-1".to_string());
 
     shutdown_tx.send(()).ok();
 }
@@ -307,13 +303,13 @@ async fn test_http_client_push_config_get() {
     // Set a push notification config
     let task_id = "task-0";
     let config = a2a_rs::domain::TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id.to_string(),
-        push_notification_config: a2a_rs::domain::PushNotificationConfig {
-            id: Some("config-get-test".to_string()),
-            url: "https://client.example.com/webhook".to_string(),
-            token: Some("test-token-get".to_string()),
-            authentication: None,
-        },
+        id: "config-get-test".to_string(),
+        url: "https://client.example.com/webhook".to_string(),
+        token: "test-token-get".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     client
@@ -329,14 +325,8 @@ async fn test_http_client_push_config_get() {
 
     println!("Retrieved push config: {:?}", retrieved_config);
 
-    assert_eq!(
-        retrieved_config.push_notification_config.id,
-        Some("config-get-test".to_string())
-    );
-    assert_eq!(
-        retrieved_config.push_notification_config.url,
-        "https://client.example.com/webhook"
-    );
+    assert_eq!(retrieved_config.id, "config-get-test".to_string());
+    assert_eq!(retrieved_config.url, "https://client.example.com/webhook");
 
     shutdown_tx.send(()).ok();
 }
@@ -351,13 +341,13 @@ async fn test_http_client_push_config_delete() {
     // Set a push notification config
     let task_id = "task-0";
     let config = a2a_rs::domain::TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id.to_string(),
-        push_notification_config: a2a_rs::domain::PushNotificationConfig {
-            id: Some("config-delete-test".to_string()),
-            url: "https://client.example.com/webhook".to_string(),
-            token: Some("test-token-delete".to_string()),
-            authentication: None,
-        },
+        id: "config-delete-test".to_string(),
+        url: "https://client.example.com/webhook".to_string(),
+        token: "test-token-delete".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     client
@@ -391,9 +381,7 @@ async fn test_http_client_push_config_delete() {
     // The config should either be empty or not contain our deleted config
     if !configs_after.is_empty() {
         assert!(
-            configs_after
-                .iter()
-                .all(|c| c.push_notification_config.id != Some("config-delete-test".to_string())),
+            configs_after.iter().all(|c| c.id != "config-delete-test"),
             "Deleted config should not appear in list"
         );
     }
@@ -413,13 +401,13 @@ async fn test_http_client_push_config_multiple() {
     // Set multiple push notification configs
     for i in 1..=3 {
         let config = a2a_rs::domain::TaskPushNotificationConfig {
+            tenant: String::new(),
             task_id: task_id.to_string(),
-            push_notification_config: a2a_rs::domain::PushNotificationConfig {
-                id: Some(format!("config-multi-{}", i)),
-                url: format!("https://client.example.com/webhook-{}", i),
-                token: Some(format!("token-{}", i)),
-                authentication: None,
-            },
+            id: format!("config-multi-{}", i),
+            url: format!("https://client.example.com/webhook-{}", i),
+            token: format!("token-{}", i),
+            authentication: None.into(),
+            ..Default::default()
         };
 
         client
@@ -441,28 +429,18 @@ async fn test_http_client_push_config_multiple() {
     assert!(!configs.is_empty(), "Should have at least one config");
 
     // The config should be one of the ones we set
-    let has_our_configs = configs.iter().any(|c| {
-        c.push_notification_config
-            .id
-            .as_ref()
-            .map(|id| id.starts_with("config-multi-"))
-            .unwrap_or(false)
-    });
+    let has_our_configs = configs.iter().any(|c| c.id.starts_with("config-multi-"));
     assert!(has_our_configs, "Should have our configs");
 
     // Verify we can retrieve the configs that exist
     for config_wrapper in &configs {
-        if let Some(config_id) = &config_wrapper.push_notification_config.id {
-            let retrieved = client
-                .get_push_notification_config(task_id, config_id)
-                .await
-                .expect("Failed to get individual config");
+        let config_id = &config_wrapper.id;
+        let retrieved = client
+            .get_push_notification_config(task_id, config_id)
+            .await
+            .expect("Failed to get individual config");
 
-            assert_eq!(
-                retrieved.push_notification_config.id,
-                Some(config_id.clone())
-            );
-        }
+        assert_eq!(retrieved.id, config_id.clone());
     }
 
     shutdown_tx.send(()).ok();
@@ -606,13 +584,13 @@ async fn test_http_client_delete_push_config_idempotent() {
 
     // Set a config
     let config = a2a_rs::domain::TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: task_id.to_string(),
-        push_notification_config: a2a_rs::domain::PushNotificationConfig {
-            id: Some(config_id.to_string()),
-            url: "https://client.example.com/webhook".to_string(),
-            token: Some("test-token".to_string()),
-            authentication: None,
-        },
+        id: config_id.to_string(),
+        url: "https://client.example.com/webhook".to_string(),
+        token: "test-token".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     client

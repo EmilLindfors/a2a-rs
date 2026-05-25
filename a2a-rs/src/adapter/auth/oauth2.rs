@@ -73,18 +73,16 @@ impl OAuth2Authenticator {
         let flow = AuthorizationCodeOAuthFlow {
             authorization_url: auth_url.as_str().to_string(),
             token_url: token_url.as_str().to_string(),
-            refresh_url: None,
+            refresh_url: String::new(),
             scopes,
+            ..Default::default()
         };
 
-        let scheme = SecurityScheme::OAuth2 {
-            flows: Box::new(OAuthFlows {
-                authorization_code: Some(flow),
-                ..Default::default()
-            }),
-            description: Some("OAuth2 Authorization Code Flow".to_string()),
-            metadata_url: None,
-        };
+        let scheme = SecurityScheme::oauth2(
+            OAuthFlows::authorization_code(flow),
+            Some("OAuth2 Authorization Code Flow".to_string()),
+            None,
+        );
 
         Self {
             client_id,
@@ -110,18 +108,16 @@ impl OAuth2Authenticator {
 
         let flow = ClientCredentialsOAuthFlow {
             token_url: token_url.as_str().to_string(),
-            refresh_url: None,
+            refresh_url: String::new(),
             scopes,
+            ..Default::default()
         };
 
-        let scheme = SecurityScheme::OAuth2 {
-            flows: Box::new(OAuthFlows {
-                client_credentials: Some(flow),
-                ..Default::default()
-            }),
-            description: Some("OAuth2 Client Credentials Flow".to_string()),
-            metadata_url: None,
-        };
+        let scheme = SecurityScheme::oauth2(
+            OAuthFlows::client_credentials(flow),
+            Some("OAuth2 Client Credentials Flow".to_string()),
+            None,
+        );
 
         Self {
             client_id,
@@ -244,10 +240,10 @@ impl OpenIdConnectAuthenticator {
                     A2AError::Internal(format!("Failed to discover OIDC provider: {}", e))
                 })?;
 
-        let scheme = SecurityScheme::OpenIdConnect {
-            open_id_connect_url: issuer_url.as_str().to_string(),
-            description: Some("OpenID Connect authentication".to_string()),
-        };
+        let scheme = SecurityScheme::open_id_connect(
+            issuer_url.as_str().to_string(),
+            Some("OpenID Connect authentication".to_string()),
+        );
 
         Ok(Self {
             client_id,

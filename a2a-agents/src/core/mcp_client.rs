@@ -9,7 +9,8 @@ use crate::core::config::{McpClientConfig, McpServerConnection};
 use rmcp::{
     Peer, RoleClient, ServiceExt,
     model::{
-        CallToolRequestParam, ClientCapabilities, ClientInfo, Implementation, ProtocolVersion, Tool,
+        CallToolRequestParams, ClientCapabilities, ClientInfo, Implementation, ProtocolVersion,
+        Tool,
     },
     transport::TokioChildProcess,
 };
@@ -32,9 +33,15 @@ pub struct McpClientManager {
 
 #[cfg(feature = "mcp-client")]
 struct McpServerInfo {
-    name: String,
     peer: Peer<RoleClient>,
     tools: Vec<Tool>,
+}
+
+#[cfg(feature = "mcp-client")]
+impl Default for McpClientManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[cfg(feature = "mcp-client")]
@@ -107,18 +114,12 @@ impl McpClientManager {
         // Create transport from the child process
         let (transport, _stderr) = TokioChildProcess::builder(cmd).spawn()?;
 
-        // Create MCP client with custom client info
-        let client_info = ClientInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ClientCapabilities::default(),
-            client_info: Implementation {
-                name: format!("a2a-agent-{}", config.name),
-                version: "0.1.0".to_string(),
-                title: None,
-                icons: None,
-                website_url: None,
-            },
-        };
+        // Create MCP client with custom client info. `ClientInfo` and
+        // `Implementation` are `#[non_exhaustive]` in rmcp 1.7 — use the
+        // typed builders rather than struct literals.
+        let implementation = Implementation::new(format!("a2a-agent-{}", config.name), "0.1.0");
+        let client_info = ClientInfo::new(ClientCapabilities::default(), implementation)
+            .with_protocol_version(ProtocolVersion::V_2024_11_05);
 
         // Start the client service
         let service = client_info.serve(transport).await?;
@@ -148,7 +149,6 @@ impl McpClientManager {
 
         // Store server info
         let server_info = McpServerInfo {
-            name: config.name.clone(),
             peer,
             tools: tools_result.tools,
         };
@@ -178,14 +178,16 @@ impl McpClientManager {
         );
 
         // Convert arguments to Map if provided
-        let args_map = arguments.and_then(|v| v.as_object().map(|o| o.clone()));
+        let args_map = arguments.and_then(|v| v.as_object().cloned());
+
+        let mut params = CallToolRequestParams::new(tool_name.to_string());
+        if let Some(map) = args_map {
+            params = params.with_arguments(map);
+        }
 
         let result = server
             .peer
-            .call_tool(CallToolRequestParam {
-                name: tool_name.to_string().into(),
-                arguments: args_map,
-            })
+            .call_tool(params)
             .await
             .map_err(|e| format!("Tool call failed: {}", e))?;
 

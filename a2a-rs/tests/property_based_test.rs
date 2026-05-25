@@ -5,11 +5,9 @@
 //! protocol compliance.
 
 use a2a_rs::{
-    MessageSendParams,
     adapter::SimpleAgentInfo,
-    domain::{AgentSkill, Message, Part, Role, Task, TaskState},
+    domain::{AgentSkill, Message, Part, Role, Task, TaskState, part},
 };
-use base64::Engine;
 use proptest::prelude::*;
 use serde_json::{self};
 
@@ -46,9 +44,12 @@ prop_compose! {
         text in ".*",
         metadata in prop::option::of(prop::collection::hash_map(".*", ".*", 0..3))
     ) -> Part {
-        Part::Text {
-            text,
-            metadata: metadata.map(|m| m.into_iter().map(|(k, v)| (k, serde_json::Value::String(v))).collect()),
+        if let Some(m) = metadata {
+            let metadata_val = serde_json::to_value(m).unwrap();
+            let struct_metadata: buffa_types::google::protobuf::Struct = serde_json::from_value(metadata_val).unwrap();
+            Part::text_with_metadata(text, struct_metadata)
+        } else {
+            Part::text(text)
         }
     }
 }
@@ -64,7 +65,9 @@ prop_compose! {
                 data.insert(key, serde_json::Value::Number(value.into()));
             }
         }
-        Part::Data { data, metadata: None }
+        let data_val = serde_json::Value::Object(data);
+        let proto_val: buffa_types::google::protobuf::Value = serde_json::from_value(data_val).unwrap();
+        Part::data(proto_val)
     }
 }
 
@@ -74,8 +77,7 @@ prop_compose! {
         name in prop::option::of(".*"),
         mime_type in prop::option::of(".*")
     ) -> Part {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(&content);
-        Part::file_from_bytes(encoded, name, mime_type)
+        Part::file_from_bytes(content, name, mime_type)
     }
 }
 
@@ -102,12 +104,13 @@ prop_compose! {
         let mut message = match role {
             Role::User => Message::user_text("placeholder".to_string(), message_id),
             Role::Agent => Message::agent_text("placeholder".to_string(), message_id),
+            _ => Message::user_text("placeholder".to_string(), message_id),
         };
 
         // Replace the placeholder text part with our generated parts
         message.parts = parts;
-        message.context_id = context_id;
-        message.task_id = task_id;
+        message.context_id = context_id.unwrap_or_default();
+        message.task_id = task_id.unwrap_or_default();
         message
     }
 }
@@ -125,11 +128,11 @@ prop_compose! {
             id,
             name,
             description,
-            examples: Some(vec![]), // Add empty examples for now
+            examples: Vec::new(),
             tags,
-            input_modes,
-            output_modes,
-            security: None,
+            input_modes: input_modes.unwrap_or_default(),
+            output_modes: output_modes.unwrap_or_default(),
+            ..Default::default()
         }
     }
 }
@@ -151,12 +154,11 @@ proptest! {
         let deserialized: Message = serde_json::from_value(json_value)?;
 
         // Core properties should be preserved
-        prop_assert_eq!(message.message_id, deserialized.message_id);
-        prop_assert_eq!(message.role, deserialized.role);
-        prop_assert_eq!(message.kind, deserialized.kind);
+        prop_assert_eq!(&message.message_id, &deserialized.message_id);
+        prop_assert_eq!(&message.role, &deserialized.role);
         prop_assert_eq!(message.parts.len(), deserialized.parts.len());
-        prop_assert_eq!(message.context_id, deserialized.context_id);
-        prop_assert_eq!(message.task_id, deserialized.task_id);
+        prop_assert_eq!(&message.context_id, &deserialized.context_id);
+        prop_assert_eq!(&message.task_id, &deserialized.task_id);
     }
 
     /// Test that task state transitions maintain consistency
@@ -180,24 +182,21 @@ proptest! {
             } else {
                 Some(messages[i % messages.len()].clone())
             };
-            task.update_status(state.clone(), maybe_message);
+            task.update_status(*state, maybe_message);
         }
 
         // Invariants that should always hold
-        prop_assert_eq!(task.id, task_id);
-        prop_assert_eq!(task.context_id, context_id);
-        prop_assert_eq!(task.kind, "task");
+        prop_assert_eq!(&task.id, &task_id);
+        prop_assert_eq!(&task.context_id, &context_id);
 
         // History should contain messages that were actually added to the task
-        if let Some(history) = &task.history {
-            // The history length should be at most the number of state updates that included messages
-            let updates_with_messages = if messages.is_empty() { 0 } else { states.len() };
-            prop_assert!(history.len() <= updates_with_messages);
-        }
+        let history = &task.history;
+        let updates_with_messages = if messages.is_empty() { 0 } else { states.len() };
+        prop_assert!(history.len() <= updates_with_messages);
 
         // Status should be the last applied state
         if let Some(last_state) = states.last() {
-            prop_assert_eq!(&task.status.state, last_state);
+            prop_assert_eq!(task.status.state, *last_state);
         }
     }
 
@@ -215,16 +214,16 @@ proptest! {
         let message = match role {
             Role::User => Message::user_text(text.clone(), message_id.clone()),
             Role::Agent => Message::agent_text(text.clone(), message_id.clone()),
+            _ => Message::user_text(text.clone(), message_id.clone()),
         };
 
         // Basic invariants
-        prop_assert_eq!(message.message_id, message_id);
+        prop_assert_eq!(&message.message_id, &message_id);
         prop_assert_eq!(message.role, role);
-        prop_assert_eq!(message.kind, "message");
         prop_assert!(!message.parts.is_empty());
 
         // First part should be the text we provided
-        if let Part::Text { text: part_text, .. } = &message.parts[0] {
+        if let Some(part_text) = message.parts[0].get_text() {
             prop_assert_eq!(part_text, &text);
         } else {
             prop_assert!(false, "First part should be text");
@@ -258,44 +257,7 @@ proptest! {
             agent_info = agent_info.add_skill(skill.id, skill.name, Some(skill.description));
         }
 
-        // Test that we can get an agent card (this is async, so we'll test the builder properties)
-        // The actual agent card retrieval would need to be tested in an async context
-
-        // For now, test that the agent info maintains its essential properties
-        // through a serialization roundtrip would require async context
-        prop_assert!(true); // Placeholder - this test validates the input generation works
-    }
-
-    /// Test that JSON-RPC message IDs are preserved through serialization
-    #[test]
-    fn jsonrpc_id_preservation(
-        id_value in prop_oneof![
-            any::<u64>().prop_map(|n| serde_json::Value::Number(n.into())),
-            ".*".prop_map(serde_json::Value::String),
-        ],
-        message in arb_message()
-    ) {
-        let params = MessageSendParams {
-            message,
-            configuration: None,
-            metadata: None,
-        };
-
-        let request = a2a_rs::application::SendMessageRequest {
-            jsonrpc: "2.0".to_string(),
-            method: "message/send".to_string(),
-            id: Some(id_value.clone()),
-            params,
-        };
-
-        // Serialize and deserialize
-        let json = serde_json::to_value(&request)?;
-        let deserialized: a2a_rs::application::SendMessageRequest = serde_json::from_value(json)?;
-
-        // ID should be preserved
-        prop_assert_eq!(request.id, deserialized.id);
-        prop_assert_eq!(request.jsonrpc, deserialized.jsonrpc);
-        prop_assert_eq!(request.method, deserialized.method);
+        prop_assert!(true);
     }
 
     /// Test that Part encoding/decoding maintains data integrity
@@ -308,22 +270,21 @@ proptest! {
         let deserialized: Part = serde_json::from_value(json_value)?;
 
         // Test based on part type
-        match (&part, &deserialized) {
-            (Part::Text { text: t1, .. }, Part::Text { text: t2, .. }) => {
+        prop_assert_eq!(&part.filename, &deserialized.filename);
+        prop_assert_eq!(&part.media_type, &deserialized.media_type);
+
+        match (&part.content, &deserialized.content) {
+            (Some(part::Content::Text(t1)), Some(part::Content::Text(t2))) => {
                 prop_assert_eq!(t1, t2);
             },
-            (Part::Data { data: d1, .. }, Part::Data { data: d2, .. }) => {
-                prop_assert_eq!(d1.len(), d2.len());
-                // Data content should be preserved
-                for (key, value) in d1 {
-                    prop_assert_eq!(Some(value), d2.get(key));
-                }
+            (Some(part::Content::Data(d1)), Some(part::Content::Data(d2))) => {
+                prop_assert_eq!(d1, d2);
             },
-            (Part::File { file: f1, .. }, Part::File { file: f2, .. }) => {
-                prop_assert_eq!(&f1.name, &f2.name);
-                prop_assert_eq!(&f1.mime_type, &f2.mime_type);
-                prop_assert_eq!(&f1.bytes, &f2.bytes);
-                prop_assert_eq!(&f1.uri, &f2.uri);
+            (Some(part::Content::Raw(r1)), Some(part::Content::Raw(r2))) => {
+                prop_assert_eq!(r1, r2);
+            },
+            (Some(part::Content::Url(u1)), Some(part::Content::Url(u2))) => {
+                prop_assert_eq!(u1, u2);
             },
             _ => prop_assert!(false, "Part types should match after deserialization"),
         }
@@ -352,8 +313,9 @@ proptest! {
         let limited_task = task.with_limited_history(Some(limit as u32));
 
         if limit == 0 {
-            prop_assert!(limited_task.history.is_none());
-        } else if let Some(history) = limited_task.history {
+            prop_assert!(limited_task.history.is_empty());
+        } else {
+            let history = &limited_task.history;
             prop_assert!(history.len() <= limit);
             prop_assert!(history.len() <= messages.len());
 
@@ -397,19 +359,18 @@ proptest! {
         // Apply final states - once a task reaches a final state,
         // it should maintain that final state
         for final_state in final_states {
-            task.update_status(final_state.clone(), None);
+            task.update_status(final_state, None);
 
             // After setting a final state, the task should be in that state
-            prop_assert_eq!(&task.status.state, &final_state);
+            prop_assert_eq!(task.status.state, final_state);
 
             // Final states should be final (this is more of a business logic test)
-            match &final_state {
+            match final_state {
                 TaskState::Completed | TaskState::Canceled |
                 TaskState::Failed | TaskState::Rejected => {
-                    // These are considered final states in most business logic
                     prop_assert!(true);
                 },
-                _ => prop_assert!(true), // Non-final states are also valid
+                _ => prop_assert!(true),
             }
         }
     }
@@ -432,38 +393,36 @@ mod edge_case_properties {
             if let (Some(text), Some(id)) = (minimal_text, minimal_id) {
                 if !id.is_empty() {
                     let message = Message::user_text(text.to_string(), id.to_string());
-                    prop_assert_eq!(message.message_id, id);
+                    prop_assert_eq!(&message.message_id, &id);
                     prop_assert_eq!(message.parts.len(), 1);
                 }
             }
         }
 
-        /// Test that base64 encoding/decoding is consistent
+        /// Test that file from bytes works
         #[test]
-        fn base64_consistency(
+        fn file_from_bytes_check(
             data in prop::collection::vec(any::<u8>(), 0..1000)
         ) {
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
             let file_part = Part::file_from_bytes(
-                encoded.clone(),
+                data.clone(),
                 Some("test.bin".to_string()),
                 Some("application/octet-stream".to_string())
             );
 
-            if let Part::File { file, .. } = file_part {
-                prop_assert_eq!(file.bytes, Some(encoded));
-                prop_assert_eq!(file.name, Some("test.bin".to_string()));
-                prop_assert_eq!(file.mime_type, Some("application/octet-stream".to_string()));
-                prop_assert_eq!(file.uri, None);
+            if let Some(part::Content::Raw(bytes)) = &file_part.content {
+                prop_assert_eq!(bytes, &data);
+                prop_assert_eq!(&file_part.filename, "test.bin");
+                prop_assert_eq!(&file_part.media_type, "application/octet-stream");
             } else {
-                prop_assert!(false, "Should create a File part");
+                prop_assert!(false, "Should create a Raw content part");
             }
         }
 
         /// Test Unicode handling in messages
         #[test]
         fn unicode_handling(
-            unicode_text in "\\PC*", // Unicode text pattern
+            unicode_text in "\\PC*",
             message_id in ".*"
         ) {
             if !message_id.is_empty() {
@@ -473,9 +432,11 @@ mod edge_case_properties {
                 let json = serde_json::to_value(&message).unwrap();
                 let deserialized: Message = serde_json::from_value(json).unwrap();
 
-                prop_assert_eq!(message.message_id, deserialized.message_id);
-                if let Part::Text { text, .. } = &deserialized.parts[0] {
+                prop_assert_eq!(&message.message_id, &deserialized.message_id);
+                if let Some(part::Content::Text(text)) = &deserialized.parts[0].content {
                     prop_assert_eq!(text, &unicode_text);
+                } else {
+                    prop_assert!(false, "First part should be text");
                 }
             }
         }

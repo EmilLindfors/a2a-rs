@@ -84,12 +84,12 @@ pub mod observability;
 pub use domain::{
     A2AError, AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension, AgentInterface,
     AgentProvider, AgentSkill, Artifact, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    DeleteTaskPushNotificationConfigParams, FileContent, GetTaskPushNotificationConfigParams,
-    ImplicitOAuthFlow, ListTaskPushNotificationConfigParams, ListTasksParams, ListTasksResult,
-    Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part, PasswordOAuthFlow,
-    PushNotificationAuthenticationInfo, PushNotificationConfig, Role, SecurityScheme, Task,
-    TaskArtifactUpdateEvent, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-    TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent, TransportProtocol,
+    DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow,
+    GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams, ListTasksParams,
+    ListTasksResult, Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part,
+    PushNotificationAuthenticationInfo, Role, SecurityScheme, Task, TaskArtifactUpdateEvent,
+    TaskIdParams, TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState,
+    TaskStatus, TaskStatusUpdateEvent,
 };
 
 // Port traits for better separation of concerns
@@ -102,14 +102,8 @@ pub use port::{
 #[cfg(feature = "http-client")]
 pub use adapter::HttpClient;
 
-#[cfg(feature = "ws-client")]
-pub use adapter::WebSocketClient;
-
 #[cfg(feature = "http-server")]
 pub use adapter::HttpServer;
-
-#[cfg(feature = "ws-server")]
-pub use adapter::WebSocketServer;
 
 #[cfg(feature = "server")]
 pub use adapter::{
@@ -120,9 +114,9 @@ pub use adapter::{
 #[cfg(all(feature = "server", feature = "http-client"))]
 pub use adapter::HttpPushNotificationSender;
 
-#[cfg(any(feature = "http-server", feature = "ws-server"))]
+#[cfg(feature = "http-server")]
 pub use adapter::{ApiKeyAuthenticator, BearerTokenAuthenticator, NoopAuthenticator};
 #[cfg(feature = "auth")]
 pub use adapter::{JwtAuthenticator, OAuth2Authenticator, OpenIdConnectAuthenticator};
-#[cfg(any(feature = "http-server", feature = "ws-server"))]
+#[cfg(feature = "http-server")]
 pub use port::Authenticator;

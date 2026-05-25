@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  CARGO_INCREMENTAL: 0
 
 jobs:
   build:
@@ -24,10 +25,10 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build workspace
-        run: cargo build --workspace --verbose
+        run: cargo build --workspace --verbose --locked
 
       - name: Run tests
-        run: cargo test --verbose --workspace
+        run: cargo test --verbose --workspace --locked --all-targets
 
   clippy:
     name: Clippy
@@ -48,8 +49,8 @@ jobs:
         run: cargo clippy -p a2a-rs --all-targets --all-features -- -D warnings
 
       # Run clippy on other workspace crates that support --all-features
-      - name: Run clippy (a2a-ap2, a2a-client, a2a-agents-common)
-        run: cargo clippy -p a2a-ap2 -p a2a-client -p a2a-agents-common --all-targets --all-features -- -D warnings
+      - name: Run clippy (a2a-ap2, a2a-web-client, a2a-agents-common)
+        run: cargo clippy -p a2a-ap2 -p a2a-web-client -p a2a-agents-common --all-targets --all-features -- -D warnings
 
       # Run clippy on a2a-agents with specific features (mcp-server/mcp-client
       # depend on a local path that is not available in CI)
@@ -87,7 +88,19 @@ jobs:
         run: cargo doc --no-deps --all-features -p a2a-rs
 
       - name: Check documentation (other crates)
-        run: cargo doc --no-deps -p a2a-ap2 -p a2a-client -p a2a-agents-common
+        run: cargo doc --no-deps -p a2a-ap2 -p a2a-web-client -p a2a-agents-common
 
       - name: Check documentation (a2a-agents)
         run: cargo doc --no-deps -p a2a-agents --features "reimbursement-agent,sqlx,ap2,auth"
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
+      - name: Run cargo-audit
+        run: cargo audit

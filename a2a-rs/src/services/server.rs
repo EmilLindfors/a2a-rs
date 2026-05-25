@@ -1,11 +1,6 @@
-//! Server service traits
-
 use async_trait::async_trait;
 
-use crate::{
-    application::{JSONRPCResponse, json_rpc::A2ARequest},
-    domain::{A2AError, AgentCard, AgentSkill},
-};
+use crate::domain::{A2AError, AgentCard, AgentSkill};
 
 /// A trait for providing agent information
 #[async_trait]
@@ -31,7 +26,7 @@ pub trait AgentInfoProvider: Send + Sync {
         Ok(skill.is_some())
     }
 
-    /// Get the authenticated extended agent card (v0.3.0)
+    /// Get the authenticated extended agent card (v1.0.0)
     ///
     /// Returns an extended version of the agent card with authenticated-only information.
     /// By default, returns AuthenticatedExtendedCardNotConfigured error.
@@ -39,14 +34,4 @@ pub trait AgentInfoProvider: Send + Sync {
     async fn get_authenticated_extended_card(&self) -> Result<AgentCard, A2AError> {
         Err(A2AError::AuthenticatedExtendedCardNotConfigured)
     }
-}
-
-/// An async trait for processing A2A protocol requests
-#[async_trait]
-pub trait AsyncA2ARequestProcessor: Send + Sync {
-    /// Process a raw JSON-RPC request string
-    async fn process_raw_request(&self, request: &str) -> Result<String, A2AError>;
-
-    /// Process a parsed A2A request
-    async fn process_request(&self, request: &A2ARequest) -> Result<JSONRPCResponse, A2AError>;
 }

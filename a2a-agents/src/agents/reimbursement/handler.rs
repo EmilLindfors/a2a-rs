@@ -1,3 +1,4 @@
+use a2a_rs::Artifact;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::Deserialize;
@@ -7,11 +8,11 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState};
+use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState, part};
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
-use super::ai_client::{AiClient, ChatMessage};
 use super::types::*;
+use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest};
 
 // NOTE: Task storage is handled by DefaultRequestProcessor + SQLx/InMemory storage
 // This handler is stateless and only processes messages
@@ -81,42 +82,55 @@ impl HandlerMetrics {
 #[derive(Clone)]
 pub struct ReimbursementHandler<T>
 where
-    T: a2a_rs::port::AsyncTaskManager + Clone + Send + Sync + 'static,
+    T: a2a_rs::port::AsyncTaskManager
+        + a2a_rs::port::AsyncStreamingHandler
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     task_manager: T,
     validation_rules: ValidationRules,
     #[allow(dead_code)]
     file_metadata_store: Arc<Mutex<HashMap<String, Map<String, Value>>>>,
     metrics: Arc<Mutex<HandlerMetrics>>,
-    ai_client: Option<AiClient>,
+    llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
 impl<T> ReimbursementHandler<T>
 where
-    T: a2a_rs::port::AsyncTaskManager + Clone + Send + Sync + 'static,
+    T: a2a_rs::port::AsyncTaskManager
+        + a2a_rs::port::AsyncStreamingHandler
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     pub fn new(task_manager: T) -> Self {
         // Try to initialize AI client from environment
-        let ai_client = match AiClient::from_env() {
-            Ok(client) => {
-                info!("AI client initialized successfully");
-                Some(client)
-            }
-            Err(e) => {
-                warn!(
-                    "Failed to initialize AI client: {}. Conversational features will be disabled.",
-                    e
-                );
-                None
-            }
+        let llm_provider: Option<Arc<dyn LlmProvider>> = if let Ok(gemini) =
+            a2a_agents_common::llm::gemini::GeminiProvider::from_env()
+        {
+            info!("Gemini client initialized successfully");
+            Some(Arc::new(gemini))
+        } else if let Ok(openai) = a2a_agents_common::llm::openai::OpenAiProvider::from_env() {
+            info!("OpenAI client initialized successfully");
+            Some(Arc::new(openai))
+        } else {
+            warn!("Failed to initialize any AI client. Conversational features will be disabled.");
+            None
         };
 
+        Self::with_llm(task_manager, llm_provider)
+    }
+
+    pub fn with_llm(task_manager: T, llm_provider: Option<Arc<dyn LlmProvider>>) -> Self {
         Self {
             task_manager,
             validation_rules: ValidationRules::default(),
             file_metadata_store: Arc::new(Mutex::new(HashMap::new())),
             metrics: Arc::new(Mutex::new(HandlerMetrics::default())),
-            ai_client,
+            llm_provider,
         }
     }
 
@@ -277,7 +291,7 @@ Example response when asking for info:
     fn extract_text_from_message(&self, message: &Message) -> String {
         let mut text_parts = Vec::new();
         for part in &message.parts {
-            if let Part::Text { text, .. } = part {
+            if let Some(part::Content::Text(text)) = &part.content {
                 text_parts.push(text.clone());
             }
         }
@@ -290,13 +304,16 @@ Example response when asking for info:
         let mut file_names = Vec::new();
 
         for part in &message.parts {
-            if let Part::File { file, .. } = part {
-                has_files = true;
-                if let Some(ref name) = file.name {
-                    file_names.push(name.clone());
-                } else {
-                    file_names.push("unnamed file".to_string());
+            match &part.content {
+                Some(part::Content::Raw(_)) | Some(part::Content::Url(_)) => {
+                    has_files = true;
+                    if !part.filename.is_empty() {
+                        file_names.push(part.filename.clone());
+                    } else {
+                        file_names.push("unnamed file".to_string());
+                    }
                 }
+                _ => {}
             }
         }
 
@@ -306,49 +323,49 @@ Example response when asking for info:
     /// Process a reimbursement request using AI
     async fn process_with_ai(
         &self,
+        task_id: &str,
         user_message: &str,
         task: Option<&Task>,
         current_message: &Message,
     ) -> Result<ReimbursementResponse, String> {
-        let ai_client = self
-            .ai_client
+        let llm_provider = self
+            .llm_provider
             .as_ref()
-            .ok_or_else(|| "AI client not available - cannot process request".to_string())?;
+            .ok_or_else(|| "LLM provider not available - cannot process request".to_string())?;
 
         let system_prompt = self.get_system_prompt();
 
         // Build conversation history
-        let mut history = Vec::new();
+        let mut history = vec![ChatMessage::system(system_prompt)];
 
         if let Some(task) = task {
-            if let Some(ref messages) = task.history {
-                for msg in messages {
-                    match msg.role {
-                        Role::User => {
-                            let text = self.extract_text_from_message(msg);
-                            let (has_files, file_names) = self.has_file_attachments(msg);
+            for msg in &task.history {
+                match msg.role {
+                    buffa::EnumValue::Known(Role::User) => {
+                        let text = self.extract_text_from_message(msg);
+                        let (has_files, file_names) = self.has_file_attachments(msg);
 
-                            let message_with_context = if has_files {
-                                format!(
-                                    "{}\n[User uploaded file(s): {}]",
-                                    text,
-                                    file_names.join(", ")
-                                )
-                            } else {
-                                text
-                            };
+                        let message_with_context = if has_files {
+                            format!(
+                                "{}\n[User uploaded file(s): {}]",
+                                text,
+                                file_names.join(", ")
+                            )
+                        } else {
+                            text
+                        };
 
-                            if !message_with_context.is_empty() {
-                                history.push(ChatMessage::user(message_with_context));
-                            }
-                        }
-                        Role::Agent => {
-                            let text = self.extract_text_from_message(msg);
-                            if !text.is_empty() {
-                                history.push(ChatMessage::assistant(text));
-                            }
+                        if !message_with_context.is_empty() {
+                            history.push(ChatMessage::user(message_with_context));
                         }
                     }
+                    buffa::EnumValue::Known(Role::Agent) => {
+                        let text = self.extract_text_from_message(msg);
+                        if !text.is_empty() {
+                            history.push(ChatMessage::assistant(text));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -368,12 +385,106 @@ Example response when asking for info:
         // Add current user message
         history.push(ChatMessage::user(current_message_text));
 
-        // Get AI response with JSON mode enforced
-        let ai_response = ai_client
-            .ask_with_history_json(&system_prompt, history)
-            .await?;
+        let request = LlmRequest::new(history)
+            .temperature(0.7)
+            .max_tokens(500)
+            .force_json(true);
 
-        info!(response_length = ai_response.len(), "Received AI response");
+        let mut stream = llm_provider
+            .chat_completion_stream(request)
+            .await
+            .map_err(|e| e.to_string())?;
+
+        let mut ai_response = String::new();
+        let artifact_id = uuid::Uuid::new_v4().to_string();
+
+        use futures::StreamExt;
+
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(a2a_agents_common::llm::LlmStreamEvent::ContentChunk(chunk)) => {
+                    ai_response.push_str(&chunk);
+
+                    // Push partial output to UI as an appending Artifact Update
+                    let artifact = Artifact {
+                        artifact_id: artifact_id.clone(),
+                        name: "AI Generating...".to_string(),
+                        description: String::new(),
+                        parts: vec![Part::text(chunk)],
+                        metadata: buffa::MessageField::none(),
+                        extensions: Vec::new(),
+                        ..Default::default()
+                    };
+
+                    let update_event = a2a_rs::domain::TaskArtifactUpdateEvent {
+                        task_id: task_id.to_string(),
+                        context_id: current_message.context_id.clone(),
+                        kind: "artifact-update".to_string(),
+                        artifact,
+                        append: Some(true),
+                        last_chunk: Some(false),
+                        metadata: None,
+                    };
+
+                    let _ = self
+                        .task_manager
+                        .broadcast_artifact_update(task_id, update_event)
+                        .await;
+                }
+                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCallChunk {
+                    arguments,
+                    name,
+                    ..
+                }) => {
+                    // Similar to above, but for tool calls
+                    ai_response.push_str(&arguments);
+
+                    let artifact = Artifact {
+                        artifact_id: artifact_id.clone(),
+                        name: format!(
+                            "Tool Call: {}",
+                            name.unwrap_or_else(|| "Unknown".to_string())
+                        ),
+                        description: String::new(),
+                        parts: vec![Part::text(arguments)],
+                        metadata: buffa::MessageField::none(),
+                        extensions: Vec::new(),
+                        ..Default::default()
+                    };
+
+                    let update_event = a2a_rs::domain::TaskArtifactUpdateEvent {
+                        task_id: task_id.to_string(),
+                        context_id: current_message.context_id.clone(),
+                        kind: "artifact-update".to_string(),
+                        artifact,
+                        append: Some(true),
+                        last_chunk: Some(false),
+                        metadata: None,
+                    };
+
+                    let _ = self
+                        .task_manager
+                        .broadcast_artifact_update(task_id, update_event)
+                        .await;
+                }
+                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCall(_)) => {
+                    // Ignore final tool call structure for now
+                }
+                Err(e) => {
+                    tracing::error!("LLM Stream error: {}", e);
+                    break;
+                }
+            }
+        }
+
+        if ai_response.is_empty() {
+            return Err("AI returned no text content".to_string());
+        }
+
+        info!(
+            response_length = ai_response.len(),
+            "Received AI response via stream"
+        );
 
         // Parse AI response as JSON
         self.parse_ai_response(&ai_response)
@@ -495,8 +606,15 @@ Example response when asking for info:
         let mut metadata_hints: Map<String, Value> = Map::new();
 
         for (idx, part) in message.parts.iter().enumerate() {
-            match part {
-                Part::Text { text, metadata } => {
+            let mut meta_map = Map::new();
+            if let Some(meta) = part.metadata.as_option() {
+                if let Ok(Value::Object(map)) = serde_json::to_value(meta) {
+                    meta_map = map;
+                }
+            }
+
+            match &part.content {
+                Some(part::Content::Text(text)) => {
                     debug!(
                         part_index = idx,
                         text_length = text.len(),
@@ -504,48 +622,54 @@ Example response when asking for info:
                     );
                     text_content.push(text.clone());
                     // Extract any metadata hints for processing
-                    if let Some(meta) = metadata {
-                        debug!(metadata_keys = ?meta.keys().collect::<Vec<_>>(), "Found text metadata");
-                        self.merge_metadata(&mut metadata_hints, meta);
+                    if !meta_map.is_empty() {
+                        debug!(metadata_keys = ?meta_map.keys().collect::<Vec<_>>(), "Found text metadata");
+                        self.merge_metadata(&mut metadata_hints, &meta_map);
                     }
                 }
-                Part::Data { data, metadata } => {
-                    debug!(part_index = idx, data_keys = ?data.keys().collect::<Vec<_>>(), "Processing data part");
+                Some(part::Content::Data(data)) => {
+                    let mut data_map = Map::new();
+                    if let Ok(Value::Object(map)) = serde_json::to_value(&**data) {
+                        data_map = map;
+                    }
+                    debug!(part_index = idx, data_keys = ?data_map.keys().collect::<Vec<_>>(), "Processing data part");
                     // Merge multiple data parts
                     if let Some(ref mut existing) = data_content {
-                        for (k, v) in data {
-                            existing.insert(k.clone(), v.clone());
+                        for (k, v) in data_map {
+                            existing.insert(k, v);
                         }
                     } else {
-                        data_content = Some(data.clone());
+                        data_content = Some(data_map);
                     }
                     // Extract metadata
-                    if let Some(meta) = metadata {
-                        debug!(metadata_keys = ?meta.keys().collect::<Vec<_>>(), "Found data metadata");
-                        self.merge_metadata(&mut metadata_hints, meta);
+                    if !meta_map.is_empty() {
+                        debug!(metadata_keys = ?meta_map.keys().collect::<Vec<_>>(), "Found data metadata");
+                        self.merge_metadata(&mut metadata_hints, &meta_map);
                     }
                 }
-                Part::File { file, metadata } => {
+                Some(part::Content::Raw(_)) | Some(part::Content::Url(_)) => {
                     // Store file references with metadata
-                    let file_id = if let Some(ref name) = file.name {
-                        name.clone()
+                    let file_id = if !part.filename.is_empty() {
+                        part.filename.clone()
                     } else {
                         format!("file_{}", Uuid::new_v4().simple())
                     };
-                    info!(part_index = idx, file_id = %file_id, mime_type = ?file.mime_type, "Processing file part");
+                    info!(part_index = idx, file_id = %file_id, mime_type = ?part.media_type, "Processing file part");
                     file_ids.push(file_id.clone());
 
                     // Store file metadata for later processing
-                    if let Some(meta) = metadata {
-                        let mut file_meta = meta.clone();
-                        file_meta.insert("file_id".to_string(), Value::String(file_id.clone()));
-                        if let Some(mime) = &file.mime_type {
-                            file_meta.insert("mime_type".to_string(), Value::String(mime.clone()));
-                        }
-                        debug!(file_id = %file_id, metadata_keys = ?file_meta.keys().collect::<Vec<_>>(), "Storing file metadata");
-                        self.store_file_metadata(&file_id, file_meta);
+                    let mut file_meta = meta_map.clone();
+                    file_meta.insert("file_id".to_string(), Value::String(file_id.clone()));
+                    if !part.media_type.is_empty() {
+                        file_meta.insert(
+                            "mime_type".to_string(),
+                            Value::String(part.media_type.clone()),
+                        );
                     }
+                    debug!(file_id = %file_id, metadata_keys = ?file_meta.keys().collect::<Vec<_>>(), "Storing file metadata");
+                    self.store_file_metadata(&file_id, file_meta);
                 }
+                None => {}
             }
         }
 
@@ -1171,13 +1295,18 @@ Example response when asking for info:
                         ),
                     );
 
+                    let metadata_struct: buffa_types::google::protobuf::Struct =
+                        serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
+                    let val: serde_json::Value =
+                        serde_json::from_str(&json_str).unwrap_or_default();
+                    let proto_val: buffa_types::google::protobuf::Value =
+                        serde_json::from_value(val).unwrap_or_default();
+
                     vec![
-                        Part::text_with_metadata(json_str.clone(), metadata.clone()),
-                        Part::Data {
-                            data: serde_json::from_str::<Map<String, Value>>(&json_str)
-                                .unwrap_or_default(),
-                            metadata: Some(metadata),
-                        },
+                        Part::text_with_metadata(json_str.clone(), metadata_struct.clone()),
+                        Part::data_builder(proto_val)
+                            .with_metadata(metadata_struct)
+                            .build(),
                     ]
                 } else {
                     vec![Part::text("Failed to serialize response".to_string())]
@@ -1197,13 +1326,18 @@ Example response when asking for info:
                     metadata.insert("request_id".to_string(), Value::String(request_id.clone()));
                     metadata.insert("status".to_string(), Value::String(format!("{:?}", status)));
 
+                    let metadata_struct: buffa_types::google::protobuf::Struct =
+                        serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
+                    let val: serde_json::Value =
+                        serde_json::from_str(&json_str).unwrap_or_default();
+                    let proto_val: buffa_types::google::protobuf::Value =
+                        serde_json::from_value(val).unwrap_or_default();
+
                     vec![
-                        Part::text_with_metadata(json_str.clone(), metadata.clone()),
-                        Part::Data {
-                            data: serde_json::from_str::<Map<String, Value>>(&json_str)
-                                .unwrap_or_default(),
-                            metadata: Some(metadata),
-                        },
+                        Part::text_with_metadata(json_str.clone(), metadata_struct.clone()),
+                        Part::data_builder(proto_val)
+                            .with_metadata(metadata_struct)
+                            .build(),
                     ]
                 } else {
                     vec![Part::text("Failed to serialize response".to_string())]
@@ -1221,7 +1355,10 @@ Example response when asking for info:
                 );
                 metadata.insert("error_code".to_string(), Value::String(code.clone()));
 
-                vec![Part::text_with_metadata(message.clone(), metadata)]
+                let metadata_struct: buffa_types::google::protobuf::Struct =
+                    serde_json::from_value(Value::Object(metadata)).unwrap_or_default();
+
+                vec![Part::text_with_metadata(message.clone(), metadata_struct)]
             }
         }
     }
@@ -1230,7 +1367,12 @@ Example response when asking for info:
 #[async_trait]
 impl<T> AsyncMessageHandler for ReimbursementHandler<T>
 where
-    T: a2a_rs::port::AsyncTaskManager + Clone + Send + Sync + 'static,
+    T: a2a_rs::port::AsyncTaskManager
+        + a2a_rs::port::AsyncStreamingHandler
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     #[instrument(skip(self, message), fields(
         task_id = %task_id,
@@ -1259,11 +1401,11 @@ where
 
         // If task doesn't exist, create it
         if existing_task.is_none() {
-            let context_id = message
-                .context_id
-                .as_ref()
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| Uuid::new_v4().to_string());
+            let context_id = if message.context_id.is_empty() {
+                Uuid::new_v4().to_string()
+            } else {
+                message.context_id.clone()
+            };
             self.task_manager.create_task(task_id, &context_id).await?;
         }
 
@@ -1282,7 +1424,7 @@ where
                     .role(Role::Agent)
                     .parts(vec![Part::text("Your expense has already been processed. Is there anything else I can help you with?".to_string())])
                     .message_id(Uuid::new_v4().to_string())
-                    .context_id(message.context_id.clone().unwrap_or_default())
+                    .context_id(message.context_id.clone())
                     .build();
 
                 // Add agent response and return
@@ -1305,7 +1447,7 @@ where
             .role(Role::Agent)
             .parts(vec![Part::text("Processing your request...".to_string())])
             .message_id(Uuid::new_v4().to_string())
-            .context_id(message.context_id.clone().unwrap_or_default())
+            .context_id(message.context_id.clone())
             .build();
 
         self.task_manager
@@ -1316,7 +1458,7 @@ where
         let handler = self.clone();
         let task_id_owned = task_id.to_string();
         let message_owned = message.clone();
-        let context_id = message.context_id.clone().unwrap_or_default();
+        let context_id = message.context_id.clone();
 
         // Log before spawning
         info!(task_id = %task_id, "About to spawn background worker for AI processing");
@@ -1325,7 +1467,7 @@ where
         let spawn_result = tokio::task::spawn(async move {
             info!(task_id = %task_id_owned, "🚀 Background worker STARTED - beginning AI processing");
 
-            // Extract text content from message
+            // Extract the user message text and optional task
             let text_content = handler.extract_text_from_message(&message_owned);
 
             // Get current task for context
@@ -1335,7 +1477,7 @@ where
                 .await
             {
                 Ok(task) => {
-                    info!(task_id = %task_id_owned, history_count = task.history.as_ref().map(|h| h.len()).unwrap_or(0), "Retrieved task for AI processing");
+                    info!(task_id = %task_id_owned, history_count = task.history.len(), "Retrieved task for AI processing");
                     Some(task)
                 }
                 Err(e) => {
@@ -1347,7 +1489,12 @@ where
             // Process with AI
             info!(task_id = %task_id_owned, "Calling AI for processing");
             let (response, auto_approved) = match handler
-                .process_with_ai(&text_content, current_task.as_ref(), &message_owned)
+                .process_with_ai(
+                    &task_id_owned,
+                    &text_content,
+                    current_task.as_ref(),
+                    &message_owned,
+                )
                 .await
             {
                 Ok(resp) => {
@@ -1404,14 +1551,14 @@ where
             info!(task_id = %task_id_owned, new_state = ?task_state, "Updating task with AI response");
             match handler
                 .task_manager
-                .update_task_status(&task_id_owned, task_state.clone(), Some(response_message))
+                .update_task_status(&task_id_owned, task_state, Some(response_message))
                 .await
             {
                 Ok(updated_task) => {
                     info!(
                         task_id = %task_id_owned,
                         task_state = ?task_state,
-                        history_count = updated_task.history.as_ref().map(|h| h.len()).unwrap_or(0),
+                        history_count = updated_task.history.len(),
                         "Background worker: Successfully updated task with AI response (push notification should have been sent)"
                     );
                 }
@@ -1444,8 +1591,8 @@ where
 
         // Validate individual parts
         for (idx, part) in message.parts.iter().enumerate() {
-            match part {
-                Part::Text { text, .. } => {
+            match &part.content {
+                Some(part::Content::Text(text)) => {
                     if text.trim().is_empty() {
                         return Err(A2AError::ValidationError {
                             field: format!("parts[{}].text", idx),
@@ -1453,24 +1600,24 @@ where
                         });
                     }
                 }
-                Part::Data { data, .. } => {
-                    if data.is_empty() {
+                Some(part::Content::Data(data)) => {
+                    if data.kind.is_none() {
                         return Err(A2AError::ValidationError {
                             field: format!("parts[{}].data", idx),
                             message: "Data content cannot be empty".to_string(),
                         });
                     }
                 }
-                Part::File { file, .. } => {
-                    if file.bytes.is_none() && file.uri.is_none() {
+                Some(part::Content::Raw(bytes)) => {
+                    if bytes.is_empty() {
                         return Err(A2AError::ValidationError {
                             field: format!("parts[{}].file", idx),
-                            message: "File must have either bytes or URI".to_string(),
+                            message: "File cannot be empty".to_string(),
                         });
                     }
 
                     // Validate mime type for receipts
-                    if let Some(ref mime) = file.mime_type {
+                    if !part.media_type.is_empty() {
                         let supported_types = [
                             "image/jpeg",
                             "image/png",
@@ -1480,14 +1627,48 @@ where
                             "image/heic",
                             "image/heif",
                         ];
-                        if !supported_types.contains(&mime.as_str()) {
+                        if !supported_types.contains(&part.media_type.as_str()) {
                             return Err(A2AError::ContentTypeNotSupported(format!(
                                 "Unsupported file type '{}'. Supported types: {}",
-                                mime,
+                                part.media_type,
                                 supported_types.join(", ")
                             )));
                         }
                     }
+                }
+                Some(part::Content::Url(uri)) => {
+                    if uri.is_empty() {
+                        return Err(A2AError::ValidationError {
+                            field: format!("parts[{}].file", idx),
+                            message: "File URL cannot be empty".to_string(),
+                        });
+                    }
+
+                    // Validate mime type for receipts
+                    if !part.media_type.is_empty() {
+                        let supported_types = [
+                            "image/jpeg",
+                            "image/png",
+                            "image/gif",
+                            "image/webp",
+                            "application/pdf",
+                            "image/heic",
+                            "image/heif",
+                        ];
+                        if !supported_types.contains(&part.media_type.as_str()) {
+                            return Err(A2AError::ContentTypeNotSupported(format!(
+                                "Unsupported file type '{}'. Supported types: {}",
+                                part.media_type,
+                                supported_types.join(", ")
+                            )));
+                        }
+                    }
+                }
+                None => {
+                    return Err(A2AError::ValidationError {
+                        field: format!("parts[{}]", idx),
+                        message: "Part content is required".to_string(),
+                    });
                 }
             }
         }

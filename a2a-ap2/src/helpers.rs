@@ -24,14 +24,20 @@ pub fn intent_mandate_to_part(mandate: &IntentMandate) -> Result<Part> {
         INTENT_MANDATE_DATA_KEY.into(),
         serde_json::to_value(mandate)?,
     );
-    Ok(Part::data(data))
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(
+        serde_json::Value::Object(data),
+    )?;
+    Ok(Part::data(proto_val))
 }
 
 /// Serialize a [`CartMandate`] into a `Part::Data`.
 pub fn cart_mandate_to_part(mandate: &CartMandate) -> Result<Part> {
     let mut data = Map::new();
     data.insert(CART_MANDATE_DATA_KEY.into(), serde_json::to_value(mandate)?);
-    Ok(Part::data(data))
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(
+        serde_json::Value::Object(data),
+    )?;
+    Ok(Part::data(proto_val))
 }
 
 /// Serialize a [`PaymentMandate`] into a `Part::Data`.
@@ -41,7 +47,10 @@ pub fn payment_mandate_to_part(mandate: &PaymentMandate) -> Result<Part> {
         PAYMENT_MANDATE_DATA_KEY.into(),
         serde_json::to_value(mandate)?,
     );
-    Ok(Part::data(data))
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(
+        serde_json::Value::Object(data),
+    )?;
+    Ok(Part::data(proto_val))
 }
 
 /// Serialize a [`PaymentReceipt`] into a `Part::Data`.
@@ -51,14 +60,20 @@ pub fn payment_receipt_to_part(receipt: &PaymentReceipt) -> Result<Part> {
         PAYMENT_RECEIPT_DATA_KEY.into(),
         serde_json::to_value(receipt)?,
     );
-    Ok(Part::data(data))
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(
+        serde_json::Value::Object(data),
+    )?;
+    Ok(Part::data(proto_val))
 }
 
 /// Create a `Part::Data` containing implementation-defined risk signals.
 pub fn risk_data_to_part(risk_signals: Map<String, Value>) -> Part {
     let mut data = Map::new();
     data.insert(RISK_DATA_KEY.into(), Value::Object(risk_signals));
-    Part::data(data)
+    let struct_val = serde_json::Value::Object(data);
+    let proto_val = serde_json::from_value::<::buffa_types::google::protobuf::Value>(struct_val)
+        .unwrap_or_default();
+    Part::data(proto_val)
 }
 
 // ---------------------------------------------------------------------------
@@ -136,11 +151,12 @@ pub fn cart_mandate_artifact(
     let part = cart_mandate_to_part(mandate)?;
     Ok(Artifact {
         artifact_id,
-        name,
-        description: None,
+        name: name.unwrap_or_default(),
+        description: String::new(),
         parts: vec![part],
-        metadata: None,
-        extensions: Some(vec![crate::types::AP2_EXTENSION_URI.to_string()]),
+        metadata: ::buffa::MessageField::none(),
+        extensions: vec![crate::types::AP2_EXTENSION_URI.to_string()],
+        ..Default::default()
     })
 }
 
@@ -160,14 +176,17 @@ pub fn payment_mandate_message(mandate: &PaymentMandate, message_id: String) -> 
 // ---------------------------------------------------------------------------
 
 fn extract_from_part<T: serde::de::DeserializeOwned>(part: &Part, key: &str) -> Result<Option<T>> {
-    match part {
-        Part::Data { data, .. } => match data.get(key) {
-            Some(value) => {
-                let t = serde_json::from_value(value.clone())?;
-                Ok(Some(t))
+    match &part.content {
+        Some(a2a_rs::domain::generated::part::Content::Data(data)) => {
+            let json_val = serde_json::to_value(data)?;
+            if let Some(map) = json_val.as_object() {
+                if let Some(value) = map.get(key) {
+                    let t = serde_json::from_value(value.clone())?;
+                    return Ok(Some(t));
+                }
             }
-            None => Ok(None),
-        },
+            Ok(None)
+        }
         _ => Ok(None),
     }
 }
@@ -256,10 +275,7 @@ mod tests {
         let msg = intent_mandate_message(&intent, "msg-1".into()).unwrap();
         let found = find_intent_mandate(&msg).unwrap().unwrap();
         assert_eq!(intent, found);
-        assert_eq!(
-            msg.extensions.as_ref().unwrap()[0],
-            crate::types::AP2_EXTENSION_URI
-        );
+        assert_eq!(msg.extensions[0], crate::types::AP2_EXTENSION_URI);
     }
 
     #[test]
@@ -279,7 +295,7 @@ mod tests {
 
     #[test]
     fn extract_returns_none_for_text_part() {
-        let part = Part::text("hello".into());
+        let part = Part::text("hello".to_string());
         assert!(extract_intent_mandate(&part).unwrap().is_none());
     }
 
@@ -288,9 +304,11 @@ mod tests {
         let mut signals = Map::new();
         signals.insert("score".into(), Value::Number(95.into()));
         let part = risk_data_to_part(signals);
-        match &part {
-            Part::Data { data, .. } => {
-                assert!(data.contains_key(RISK_DATA_KEY));
+        match &part.content {
+            Some(a2a_rs::domain::generated::part::Content::Data(data)) => {
+                let json_val = serde_json::to_value(data).unwrap();
+                let map = json_val.as_object().unwrap();
+                assert!(map.contains_key(RISK_DATA_KEY));
             }
             _ => panic!("expected data part"),
         }

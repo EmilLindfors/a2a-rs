@@ -181,30 +181,16 @@ async fn start_agent_only(args: Args) -> anyhow::Result<()> {
     let server = ReimbursementServer::from_config(config);
 
     match args.transport.as_str() {
-        "http" => {
-            println!("🌐 Starting HTTP server only...");
+        "http" | "both" | "all" => {
+            println!("🌐 Starting HTTP server...");
             server
                 .start_http()
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e))?;
         }
-        "websocket" | "ws" => {
-            println!("🔌 Starting WebSocket server only...");
-            server
-                .start_websocket()
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-        }
-        "both" | "all" => {
-            println!("🔄 Starting both HTTP and WebSocket servers...");
-            server
-                .start_all()
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e))?;
-        }
         _ => {
             eprintln!(
-                "❌ Invalid transport: {}. Use 'http', 'websocket', or 'both'",
+                "❌ Invalid or unsupported transport: {}. Only 'http' is supported.",
                 args.transport
             );
             std::process::exit(1);
@@ -305,20 +291,12 @@ async fn start_all(args: Args) -> anyhow::Result<()> {
 
     let agent_future = async move {
         match transport.as_str() {
-            "http" => agent_server
+            "http" | "both" | "all" => agent_server
                 .start_http()
                 .await
                 .map_err(|e| anyhow::anyhow!("{}", e)),
-            "websocket" | "ws" => agent_server
-                .start_websocket()
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e)),
-            "both" | "all" => agent_server
-                .start_all()
-                .await
-                .map_err(|e| anyhow::anyhow!("{}", e)),
             _ => {
-                eprintln!("❌ Invalid transport: {}", transport);
+                eprintln!("❌ Invalid or unsupported transport: {}", transport);
                 std::process::exit(1);
             }
         }
@@ -418,18 +396,15 @@ async fn start_frontend_server(
     host: &str,
     port: u16,
     http_url: String,
-    ws_url: String,
+    _ws_url: String,
     use_websocket: bool,
     webhook_token: String,
 ) -> anyhow::Result<()> {
-    let client = if use_websocket {
-        info!("Using WebSocket client for subscriptions at {}", ws_url);
-        info!("Using HTTP client for API calls at {}", http_url);
-        WebA2AClient::new_with_websocket(http_url, ws_url)
-    } else {
-        info!("Using HTTP client at {}", http_url);
-        WebA2AClient::new_http(http_url)
-    };
+    if use_websocket {
+        warn!("WebSocket client requested but no longer supported. Falling back to HTTP.");
+    }
+    info!("Using HTTP client at {}", http_url);
+    let client = WebA2AClient::new_http(http_url);
 
     let state = AppState {
         client: Arc::new(client),
@@ -511,17 +486,12 @@ async fn submit_expense(
             .unwrap_or_default()
     );
 
-    let message = Message {
-        role: Role::User,
-        parts: vec![Part::text(expense_details)],
-        metadata: None,
-        reference_task_ids: None,
-        message_id: Uuid::new_v4().to_string(),
-        task_id: Some(task_id.clone()),
-        context_id: None,
-        extensions: None,
-        kind: "message".to_string(),
-    };
+    let message = Message::builder()
+        .role(Role::User)
+        .parts(vec![Part::text(expense_details)])
+        .message_id(Uuid::new_v4().to_string())
+        .task_id(task_id.clone())
+        .build();
 
     let response = state
         .client
@@ -535,16 +505,16 @@ async fn submit_expense(
         task_id, response.status.state
     );
 
-    use a2a_rs::domain::{PushNotificationConfig, TaskPushNotificationConfig};
+    use a2a_rs::domain::TaskPushNotificationConfig;
 
     let push_config = TaskPushNotificationConfig {
+        tenant: String::new(),
+        id: String::new(),
         task_id: task_id.clone(),
-        push_notification_config: PushNotificationConfig {
-            id: None,
-            url: "http://localhost:3000/webhook/push-notification".to_string(),
-            token: Some(state.webhook_token.clone()),
-            authentication: None,
-        },
+        url: "http://localhost:3000/webhook/push-notification".to_string(),
+        token: state.webhook_token.clone(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     match state
@@ -618,13 +588,12 @@ async fn chat_page(
                 info!(
                     "Retrieved task {} with {} history items",
                     task_id,
-                    task.history.as_ref().map(|h| h.len()).unwrap_or(0)
+                    task.history.len()
                 );
 
                 let state = Some(format!("{:?}", task.status.state));
                 let messages = task
                     .history
-                    .unwrap_or_default()
                     .into_iter()
                     .map(MessageView::from_message_with_json_parsing)
                     .collect();
@@ -660,7 +629,7 @@ async fn send_message(
     State(state): State<Arc<AppState>>,
     mut multipart: Multipart,
 ) -> Result<AxumResponse, AppError> {
-    use a2a_rs::domain::{FileContent, Message, Part, Role};
+    use a2a_rs::domain::{Message, Part, Role};
 
     let mut task_id = String::new();
     let mut message_text = String::new();
@@ -702,18 +671,7 @@ async fn send_message(
                         data.len()
                     );
 
-                    use base64::Engine;
-                    let base64_data = base64::engine::general_purpose::STANDARD.encode(&data);
-
-                    let file_part = Part::File {
-                        file: FileContent {
-                            bytes: Some(base64_data),
-                            uri: None,
-                            name: file_name,
-                            mime_type: content_type,
-                        },
-                        metadata: None,
-                    };
+                    let file_part = Part::file_from_bytes(data.to_vec(), file_name, content_type);
                     parts.push(file_part);
                 }
             }
@@ -735,17 +693,12 @@ async fn send_message(
         return Err(AppError(anyhow::anyhow!("Message cannot be empty")));
     }
 
-    let message = Message {
-        role: Role::User,
-        parts,
-        metadata: None,
-        reference_task_ids: None,
-        message_id: Uuid::new_v4().to_string(),
-        task_id: Some(task_id.clone()),
-        context_id: None,
-        extensions: None,
-        kind: "message".to_string(),
-    };
+    let message = Message::builder()
+        .role(Role::User)
+        .parts(parts)
+        .message_id(Uuid::new_v4().to_string())
+        .task_id(task_id.clone())
+        .build();
 
     let response = state
         .client
@@ -757,19 +710,19 @@ async fn send_message(
     info!(
         "Message sent successfully for task {}, response has {} history items",
         task_id,
-        response.history.as_ref().map(|h| h.len()).unwrap_or(0)
+        response.history.len()
     );
 
-    use a2a_rs::domain::{PushNotificationConfig, TaskPushNotificationConfig};
+    use a2a_rs::domain::TaskPushNotificationConfig;
 
     let push_config = TaskPushNotificationConfig {
+        tenant: String::new(),
+        id: String::new(),
         task_id: task_id.clone(),
-        push_notification_config: PushNotificationConfig {
-            id: None,
-            url: "http://localhost:3000/webhook/push-notification".to_string(),
-            token: Some(state.webhook_token.clone()),
-            authentication: None,
-        },
+        url: "http://localhost:3000/webhook/push-notification".to_string(),
+        token: state.webhook_token.clone(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     match state

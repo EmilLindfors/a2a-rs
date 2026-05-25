@@ -64,16 +64,13 @@ where
                 message
                     .parts
                     .iter()
-                    .filter_map(|p| match p {
-                        crate::domain::Part::Text { text, .. } => Some(text.as_str()),
-                        _ => None,
-                    })
+                    .filter_map(|p| p.get_text())
                     .collect::<Vec<_>>()
                     .join(" ")
             ))])
             .message_id(uuid::Uuid::new_v4().to_string())
             .task_id(task_id.to_string())
-            .context_id(message.context_id.as_deref().unwrap_or("").to_string())
+            .context_id(message.context_id.clone())
             .build();
 
         // For the default handler, we'll add the response message to history but keep the task in Working state

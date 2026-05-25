@@ -8,10 +8,9 @@ A reusable Rust library for building web-based frontends for A2A (Agent-to-Agent
 
 ## Features
 
-- 🔌 **Unified Client API** - Single interface for HTTP and WebSocket transports
+- 🔌 **Unified Client API** - Single interface for HTTP transport
 - 📡 **SSE Streaming** - Server-Sent Events with automatic fallback to polling
 - 🎨 **View Models** - Ready-to-use view models for tasks and messages
-- 🔄 **Auto-reconnection** - Resilient WebSocket connections with retry logic
 - 🧩 **Modular Components** - Use only what you need via feature flags
 - 🦀 **Type-safe** - Leverages Rust's type system for protocol correctness
 
@@ -51,24 +50,6 @@ async fn main() -> anyhow::Result<()> {
 }
 ```
 
-### With WebSocket Support
-
-```rust
-use a2a_client::WebA2AClient;
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Auto-detect available transports
-    let client = WebA2AClient::auto_connect("http://localhost:8080").await?;
-
-    if client.has_websocket() {
-        println!("WebSocket support detected!");
-    }
-
-    Ok(())
-}
-```
-
 ### SSE Streaming with Axum
 
 ```rust
@@ -79,9 +60,8 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let client = Arc::new(
-        WebA2AClient::new_with_websocket(
-            "http://localhost:8080".to_string(),
-            "ws://localhost:8080/ws".to_string()
+        WebA2AClient::new_http(
+            "http://localhost:8080".to_string()
         )
     );
 
@@ -102,6 +82,37 @@ async fn stream_handler(
 ```
 
 ## Architecture
+
+```mermaid
+flowchart TD
+    subgraph WebApp[Web Application / Frontend]
+        UI[UI / Frontend Component]
+        AppState[AppState]
+        TaskView[TaskView / MessageView]
+    end
+
+    subgraph Client[a2a-client Crate]
+        WebClient[WebA2AClient]
+        HTTPClient[HttpClient]
+        SSE[create_sse_stream]
+    end
+
+    subgraph Server[A2A Agent Server]
+        AgentCard[/agent-card Endpoint]
+        Tasks[/tasks Endpoint]
+    end
+
+    UI --> AppState
+    AppState --> WebClient
+    WebClient --> HTTPClient
+
+    HTTPClient -->|Discover Transport / Fetch Card| AgentCard
+    HTTPClient -->|Send messages / Poll fallback| Tasks
+
+    SSE -->|Fetch Updates| HTTPClient
+    SSE -->|Emit Task Events| UI
+    TaskView -->|Map Domain Model| AppState
+```
 
 ```
 a2a-client/
@@ -124,16 +135,12 @@ The main client struct that wraps both HTTP and WebSocket clients:
 ```rust
 pub struct WebA2AClient {
     pub http: HttpClient,
-    pub ws: Option<Arc<WebSocketClient>>,
 }
 ```
 
 **Methods:**
 - `new_http(base_url)` - HTTP-only client
-- `new_with_websocket(http_url, ws_url)` - Client with both transports
 - `auto_connect(base_url)` - Auto-detect available transports
-- `has_websocket()` - Check if WebSocket is available
-- `websocket()` - Get WebSocket client reference
 
 ### View Models
 
@@ -176,7 +183,6 @@ pub fn create_sse_stream(
 ```
 
 **Features:**
-- Automatic WebSocket connection with retry logic
 - Graceful fallback to HTTP polling
 - Emits `task-update`, `task-status`, and `artifact` events
 - Keep-alive heartbeat
@@ -237,7 +243,6 @@ See the `examples/` directory for complete working examples:
 
 - `basic_client.rs` - Simple HTTP client usage (coming soon)
 - `sse_streaming.rs` - SSE streaming with Axum (coming soon)
-- `websocket_client.rs` - WebSocket integration (coming soon)
 
 ## Roadmap
 

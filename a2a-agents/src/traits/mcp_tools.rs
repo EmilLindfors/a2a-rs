@@ -9,6 +9,7 @@ use serde_json::Value;
 
 /// Extension trait for message handlers to easily call MCP tools
 #[cfg(feature = "mcp-client")]
+#[allow(async_fn_in_trait)]
 pub trait McpToolsExt {
     /// Get the MCP client manager
     fn mcp_client(&self) -> &McpClientManager;

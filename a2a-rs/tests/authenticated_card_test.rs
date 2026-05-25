@@ -1,4 +1,4 @@
-//! Integration tests for agent/getAuthenticatedExtendedCard endpoint (v0.3.0)
+//! Integration tests for agent/getAuthenticatedExtendedCard endpoint (v1.0.0)
 
 #![cfg(all(feature = "http-client", feature = "http-server"))]
 
@@ -8,9 +8,7 @@ use a2a_rs::{
     adapter::{
         DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
-    application::json_rpc,
     domain::A2AError,
-    services::AsyncA2AClient,
 };
 use common::TestBusinessHandler;
 use std::time::Duration;
@@ -57,27 +55,25 @@ async fn test_get_authenticated_extended_card_not_configured() {
 
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
-    // Create request for authenticated extended card
-    let request = json_rpc::GetAuthenticatedExtendedCardRequest::new();
-    let response = client
-        .send_request(&json_rpc::A2ARequest::GetAuthenticatedExtendedCard(request))
-        .await
-        .expect("Failed to send request");
+    let response = client.get_extended_agent_card(None).await;
 
     // Should return error -32007
-    assert!(response.error.is_some(), "Should have error response");
-    let error = response.error.unwrap();
-    assert_eq!(
-        error.code, -32007,
-        "Should return error code -32007 (AUTHENTICATED_EXTENDED_CARD_NOT_CONFIGURED)"
-    );
-    assert!(
-        error.message.contains("not configured")
-            || error.message.contains("not supported")
-            || error.message.contains("not available"),
-        "Error message should indicate card not configured: {}",
-        error.message
-    );
+    assert!(response.is_err(), "Should have error response");
+    if let Err(A2AError::JsonRpc { code, message, .. }) = response {
+        assert_eq!(
+            code, -32007,
+            "Should return error code -32007 (AUTHENTICATED_EXTENDED_CARD_NOT_CONFIGURED)"
+        );
+        assert!(
+            message.contains("not configured")
+                || message.contains("not supported")
+                || message.contains("not available"),
+            "Error message should indicate card not configured: {}",
+            message
+        );
+    } else {
+        panic!("Expected JsonRpc error, got {:?}", response);
+    }
 
     shutdown_tx.send(()).ok();
 }
@@ -89,36 +85,20 @@ async fn test_get_authenticated_extended_card_success() {
 
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
-    // Create request for authenticated extended card
-    let request = json_rpc::GetAuthenticatedExtendedCardRequest::new();
-    let response = client
-        .send_request(&json_rpc::A2ARequest::GetAuthenticatedExtendedCard(request))
-        .await
-        .expect("Failed to send request");
+    let response = client.get_extended_agent_card(None).await;
 
-    // Should return successful response with AgentCard
-    if let Some(ref err) = response.error {
-        eprintln!(
-            "Unexpected error: code={}, message={}",
-            err.code, err.message
-        );
-    }
-    assert!(response.error.is_none(), "Should not have error response");
-    assert!(response.result.is_some(), "Should have result");
-
-    let card_value = response.result.unwrap();
-    let card: a2a_rs::domain::AgentCard =
-        serde_json::from_value(card_value).expect("Failed to parse AgentCard");
+    assert!(response.is_ok(), "Should not have error response");
+    let card = response.unwrap();
 
     // Verify it's a valid agent card
     assert_eq!(card.name, "Authenticated Card Test Agent");
     assert!(!card.description.is_empty());
-    assert_eq!(card.protocol_version, "0.3.0");
+    assert_eq!(card.protocol_version(), "1.0");
 
     // Verify this is the authenticated version (may have additional info)
     // The authenticated card should support this capability
     assert!(
-        card.supports_authenticated_extended_card.unwrap_or(false),
+        card.capabilities.extended_agent_card.unwrap_or(false),
         "Authenticated card should indicate support"
     );
 
@@ -146,31 +126,27 @@ async fn test_authenticated_card_vs_regular_card() {
         .expect("Failed to parse regular agent card");
 
     // Get authenticated extended card
-    let request = json_rpc::GetAuthenticatedExtendedCardRequest::new();
-    let response = client
-        .send_request(&json_rpc::A2ARequest::GetAuthenticatedExtendedCard(request))
+    let auth_card = client
+        .get_extended_agent_card(None)
         .await
-        .expect("Failed to send request");
-
-    let auth_card: a2a_rs::domain::AgentCard = serde_json::from_value(response.result.unwrap())
-        .expect("Failed to parse authenticated card");
+        .expect("Failed to get authenticated extended card");
 
     // Both should have same basic info
     assert_eq!(regular_card.name, auth_card.name);
-    assert_eq!(regular_card.url, auth_card.url);
-    assert_eq!(regular_card.protocol_version, auth_card.protocol_version);
+    assert_eq!(regular_card.url(), auth_card.url());
+    assert_eq!(
+        regular_card.protocol_version(),
+        auth_card.protocol_version()
+    );
 
     // Both should indicate support for authenticated extended card
     assert!(
         regular_card
-            .supports_authenticated_extended_card
+            .capabilities
+            .extended_agent_card
             .unwrap_or(false)
     );
-    assert!(
-        auth_card
-            .supports_authenticated_extended_card
-            .unwrap_or(false)
-    );
+    assert!(auth_card.capabilities.extended_agent_card.unwrap_or(false));
 
     shutdown_tx.send(()).ok();
 }
@@ -183,24 +159,18 @@ async fn test_authenticated_card_error_structure() {
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
     // Try to get authenticated card when not configured
-    let request = json_rpc::GetAuthenticatedExtendedCardRequest::new();
-    let response = client
-        .send_request(&json_rpc::A2ARequest::GetAuthenticatedExtendedCard(request))
-        .await
-        .expect("Failed to send request");
+    let response = client.get_extended_agent_card(None).await;
 
-    assert!(response.error.is_some());
-    let error = response.error.unwrap();
+    assert!(response.is_err());
+    let error = response.unwrap_err();
 
     // Verify error structure matches JSON-RPC spec
-    assert_eq!(error.code, -32007);
-    assert!(!error.message.is_empty());
-
-    // Result should be None when there's an error
-    assert!(response.result.is_none());
-
-    // Response should have proper JSON-RPC version
-    assert_eq!(response.jsonrpc, "2.0");
+    if let A2AError::JsonRpc { code, message, .. } = error {
+        assert_eq!(code, -32007);
+        assert!(!message.is_empty());
+    } else {
+        panic!("Expected JsonRpc error, got {:?}", error);
+    }
 
     shutdown_tx.send(()).ok();
 }
@@ -226,21 +196,17 @@ async fn test_authenticated_card_with_extensions() {
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
     // Get authenticated card
-    let request = json_rpc::GetAuthenticatedExtendedCardRequest::new();
-    let response = client
-        .send_request(&json_rpc::A2ARequest::GetAuthenticatedExtendedCard(request))
+    let card = client
+        .get_extended_agent_card(None)
         .await
-        .expect("Failed to send request");
+        .expect("Failed to get card");
 
-    let card: a2a_rs::domain::AgentCard =
-        serde_json::from_value(response.result.unwrap()).expect("Failed to parse card");
-
-    // Card should have v0.3.0 fields
-    assert_eq!(card.protocol_version, "0.3.0");
-    assert_eq!(card.preferred_transport, "JSONRPC");
+    // Card should have v1.0.0 fields
+    assert_eq!(card.protocol_version(), "1.0");
+    assert_eq!(card.preferred_transport(), "JSONRPC");
 
     // Should be able to have extensions (even if empty)
-    // This verifies the authenticated card includes all v0.3.0 fields
+    // This verifies the authenticated card includes all v1.0.0 fields
     let capabilities = &card.capabilities;
     // Extensions field should be present in capabilities
     // (may be None or Some(vec![]))

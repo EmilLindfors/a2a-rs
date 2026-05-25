@@ -38,15 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_message = Message::builder()
         .role(Role::User)
         .parts(vec![Part::data(
-            json!({
+            serde_json::from_value(json!({
                 "date": "2024-01-15",
                 "amount": 250.00,
                 "purpose": "Team building dinner for Q1 planning",
                 "category": "meals"
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
+            }))
+            .unwrap(),
         )])
         .message_id(Uuid::new_v4().to_string())
         .context_id("conv-456".to_string())
@@ -63,17 +61,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let form_message = Message::builder()
         .role(Role::User)
         .parts(vec![Part::data(
-            json!({
+            serde_json::from_value(json!({
                 "request_id": "req_12345",
                 "date": "2024-01-20",
                 "amount": {"amount": 500.00, "currency": "USD"},
                 "purpose": "Conference registration and travel expenses",
                 "category": "travel",
                 "notes": "Annual tech conference in SF"
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
+            }))
+            .unwrap(),
         )])
         .message_id(Uuid::new_v4().to_string())
         .context_id("conv-789".to_string())
@@ -87,21 +83,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Test 4: Mixed content (text + file reference)
     println!("4. Testing mixed content with file:");
-    let file_content = a2a_rs::domain::FileContent {
-        name: Some("receipt_20240115.pdf".to_string()),
-        mime_type: Some("application/pdf".to_string()),
-        bytes: Some("SGVsbG8gV29ybGQh".to_string()), // Base64 encoded
-        uri: None,
-    };
+    let file_part = Part::file_builder()
+        .name("receipt_20240115.pdf".to_string())
+        .mime_type("application/pdf".to_string())
+        .bytes(b"Hello World!".to_vec())
+        .with_metadata(serde_json::from_value(json!({"extracted_amount": "$75.50"})).unwrap())
+        .build()
+        .unwrap();
 
     let mixed_message = Message::builder()
         .role(Role::User)
         .parts(vec![
             Part::text("Here's my receipt for the office supplies".to_string()),
-            Part::File {
-                file: file_content,
-                metadata: json!({"extracted_amount": "$75.50"}).as_object().cloned(),
-            },
+            file_part,
         ])
         .message_id(Uuid::new_v4().to_string())
         .build();

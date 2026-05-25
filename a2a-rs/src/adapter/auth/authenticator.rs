@@ -35,11 +35,11 @@ impl BearerTokenAuthenticator {
     pub fn new(tokens: Vec<String>) -> Self {
         Self {
             tokens,
-            scheme: SecurityScheme::Http {
-                scheme: "bearer".to_string(),
-                bearer_format: None,
-                description: Some("Bearer token authentication".to_string()),
-            },
+            scheme: SecurityScheme::http(
+                "bearer".to_string(),
+                None,
+                Some("Bearer token authentication".to_string()),
+            ),
         }
     }
 
@@ -47,11 +47,11 @@ impl BearerTokenAuthenticator {
     pub fn with_format(tokens: Vec<String>, format: String) -> Self {
         Self {
             tokens,
-            scheme: SecurityScheme::Http {
-                scheme: "bearer".to_string(),
-                bearer_format: Some(format),
-                description: Some("Bearer token authentication".to_string()),
-            },
+            scheme: SecurityScheme::http(
+                "bearer".to_string(),
+                Some(format),
+                Some("Bearer token authentication".to_string()),
+            ),
         }
     }
 }
@@ -149,11 +149,11 @@ impl ApiKeyAuthenticator {
     pub fn new(api_keys: Vec<String>, location: String, name: String) -> Self {
         Self {
             api_keys,
-            scheme: SecurityScheme::ApiKey {
-                location,
+            scheme: SecurityScheme::api_key(
                 name,
-                description: Some("API key authentication".to_string()),
-            },
+                location,
+                Some("API key authentication".to_string()),
+            ),
         }
     }
 
@@ -300,11 +300,11 @@ impl NoopAuthenticator {
     /// Create a new no-op authenticator
     pub fn new() -> Self {
         Self {
-            scheme: SecurityScheme::Http {
-                scheme: "none".to_string(),
-                bearer_format: None,
-                description: Some("No authentication required".to_string()),
-            },
+            scheme: SecurityScheme::http(
+                "none".to_string(),
+                None,
+                Some("No authentication required".to_string()),
+            ),
         }
     }
 }

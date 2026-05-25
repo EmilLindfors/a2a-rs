@@ -1,0 +1,24 @@
+# MCP server agent example
+# Flip features.mcp_server.enabled = true and the runtime serves this agent
+# over MCP stdio (using in-process handler dispatch, no backing HTTP server required).
+
+[agent]
+name = "Echo Agent (MCP)"
+description = "An echo agent exposed as MCP tools"
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 0
+ws_port = 0
+
+[features.mcp_server]
+enabled = true
+stdio = true
+
+[[skills]]
+id = "echo"
+name = "Echo"
+description = "Echoes back whatever you send"
+keywords = ["echo", "repeat", "test"]
+examples = ["Echo this message"]

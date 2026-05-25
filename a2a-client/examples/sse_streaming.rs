@@ -44,15 +44,10 @@ async fn main() -> anyhow::Result<()> {
     let client = Arc::new(
         WebA2AClient::builder()
             .http_url("http://localhost:8080")
-            .ws_url("ws://localhost:8080/ws")
             .build(),
     );
 
-    if client.has_websocket() {
-        println!("✓ WebSocket support enabled");
-    } else {
-        println!("! WebSocket not configured, will use HTTP polling fallback");
-    }
+    println!("✓ A2A Client configured");
 
     // Build the Axum router
     let app = Router::new()

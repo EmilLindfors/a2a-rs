@@ -11,13 +11,18 @@ keywords = ["a2a", "agent", "framework", "toml"]
 categories = ["api-bindings", "network-programming"]
 
 [dependencies]
-a2a-rs = { path = "../a2a-rs", version = "0.2", features = ["server", "http-server", "ws-server", "http-client", "tracing"] }
+a2a-rs = { path = "../a2a-rs", version = "0.2", features = ["server", "http-server", "tracing"] }
+a2a-agents-common = { path = "../a2a-agents-common", version = "0.2" }
 a2a-ap2 = { path = "../a2a-ap2", version = "0.2", optional = true }
 a2a-client = { package = "a2a-web-client", path = "../a2a-client", version = "0.2" }
+a2a-mcp = { path = "../a2a-mcp", version = "0.1", optional = true }
+rmcp = { version = "1.7", features = ["server", "client", "transport-io", "transport-child-process"], optional = true }
 
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+buffa = { version = "0.3.0", features = ["json"] }
+buffa-types = { version = "0.3.0", features = ["json"] }
 toml = "0.8"
 chrono = { version = "0.4", features = ["serde"] }
 thiserror = "1.0"
@@ -65,12 +70,19 @@ reimbursement-agent = []
 ap2 = ["dep:a2a-ap2"]
 sqlx = ["a2a-rs/sqlite"]
 auth = ["a2a-rs/auth", "dep:oauth2"]
-# MCP features require a local MCP SDK checkout (not yet published to crates.io).
-# These are declared so cfg(feature) checks compile, but cannot be enabled without
-# adding the rmcp dependency locally.
-mcp-server = []
-mcp-client = []
+# MCP server: expose any TOML-configured agent as an MCP stdio server via
+# `a2a-mcp::AgentToMcpBridge`. Pulls in `a2a-mcp` and the matching `rmcp` build.
+mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
+# MCP client: lets agents call out to external MCP servers (e.g. spawned as
+# child processes). The framework-level integration is still a work in progress
+# — see a2a-mcp/TODO.md — but the low-level `McpClientManager` compiles and is
+# usable directly.
+mcp-client = ["dep:rmcp"]
 
+[[bin]]
+name = "a2a"
+path = "bin/a2a.rs"
+required-features = ["reimbursement-agent", "mcp-server"]
 
 [[bin]]
 name = "reimbursement_demo"
@@ -104,6 +116,11 @@ required-features = ["sqlx"]
 name = "ap2_merchant_agent"
 path = "examples/ap2_merchant_agent.rs"
 required-features = ["ap2"]
+
+[[example]]
+name = "mcp_server_agent"
+path = "examples/mcp_server_agent.rs"
+required-features = ["mcp-server"]
 
 
 

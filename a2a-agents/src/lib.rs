@@ -1,7 +1,7 @@
 //! A2A Agents - Framework for building A2A Protocol agents
 //!
 //! This crate provides a declarative, configuration-driven framework for building
-//! agents that implement the A2A Protocol v0.3.0.
+//! agents that implement the A2A Protocol v1.0.0.
 //!
 //! # Architecture
 //!
@@ -33,13 +33,13 @@
 //!
 //! The core framework provides the essential building blocks:
 //!
-//! - [`AgentBuilder`](core::AgentBuilder) - Fluent API for agent construction
-//! - [`AgentConfig`](core::AgentConfig) - TOML-based configuration
-//! - [`AgentRuntime`](core::AgentRuntime) - Server lifecycle management
+//! - [`AgentBuilder`] - Fluent API for agent construction
+//! - [`AgentConfig`] - TOML-based configuration
+//! - [`AgentRuntime`] - Server lifecycle management
 //!
 //! # Plugin System
 //!
-//! Implement the [`AgentPlugin`](traits::AgentPlugin) trait to create agents that
+//! Implement the [`AgentPlugin`] trait to create agents that
 //! integrate seamlessly with the framework:
 //!
 //! ```rust

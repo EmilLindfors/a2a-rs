@@ -6,36 +6,41 @@
 #[cfg(feature = "mcp-server")]
 use a2a_mcp::bridge::agent_to_mcp::AgentToMcpBridge;
 #[cfg(feature = "mcp-server")]
-use a2a_rs::{adapter::transport::http::HttpClient, domain::AgentCard};
+use a2a_rs::{domain::AgentCard, port::AsyncMessageHandler};
 #[cfg(feature = "mcp-server")]
 use rmcp::{RoleServer, transport::stdio};
 #[cfg(feature = "mcp-server")]
-use tracing::{error, info};
+use tracing::info;
 
 #[cfg(feature = "mcp-server")]
 use crate::core::config::McpServerConfig;
 
-/// Run agent as MCP server via stdio transport
+/// Run agent as MCP server via stdio transport.
 ///
-/// This function starts the agent as an MCP server using stdin/stdout for communication.
-/// This is the standard way to integrate with Claude Desktop and other MCP clients.
+/// Bridges the in-process [`AsyncMessageHandler`] into an MCP server using
+/// stdin/stdout — no loopback HTTP server is involved, so there is no
+/// auth-config-ignored caveat and tool calls don't pay the round-trip cost.
+/// This is the standard way to integrate with Claude Desktop and other MCP
+/// stdio clients.
 #[cfg(feature = "mcp-server")]
-pub async fn run_mcp_server(
+pub async fn run_mcp_server<H>(
     config: &McpServerConfig,
     agent_card: AgentCard,
-    agent_url: String,
-) -> Result<(), Box<dyn std::error::Error>> {
+    handler: H,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    H: AsyncMessageHandler + Send + Sync + 'static,
+{
     if !config.enabled {
         return Ok(());
     }
 
     info!("Starting MCP server for agent: {}", agent_card.name);
 
-    // Create HTTP client for the agent
-    let http_client = HttpClient::new(agent_url.clone());
-
-    // Create the bridge that exposes A2A agent as MCP tools
-    let bridge = AgentToMcpBridge::new(http_client, agent_card.clone(), agent_url);
+    // Bridge the A2A agent into an MCP server handler. The bridge calls the
+    // handler in-process; tool-name namespace is derived from agent_card.url.
+    let bridge = AgentToMcpBridge::with_handler(handler, agent_card.clone())
+        .with_mcp_metadata(config.name.clone(), config.version.clone());
 
     if config.stdio {
         info!("Starting stdio transport for MCP server");
@@ -75,11 +80,14 @@ pub fn is_mcp_server_enabled(config: &McpServerConfig) -> bool {
 }
 
 #[cfg(not(feature = "mcp-server"))]
-pub async fn run_mcp_server(
+pub async fn run_mcp_server<H>(
     _config: &crate::core::config::McpServerConfig,
     _agent_card: a2a_rs::domain::AgentCard,
-    _agent_url: String,
-) -> Result<(), Box<dyn std::error::Error>> {
+    _handler: H,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    H: a2a_rs::port::AsyncMessageHandler + Send + Sync + 'static,
+{
     tracing::warn!("MCP server feature not enabled. Compile with --features mcp-server");
     Ok(())
 }

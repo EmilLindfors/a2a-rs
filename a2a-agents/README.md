@@ -80,8 +80,68 @@ The original hexagonal architecture approach with manual wiring:
 
 1. **Hexagonal Architecture**: Clean separation between domain logic and adapters
 2. **Framework Integration**: Uses `DefaultRequestProcessor` and storage backends
-3. **Protocol Compliance**: Full A2A protocol support with HTTP and WebSocket transports
+3. **Protocol Compliance**: Full A2A protocol support with HTTP transport
 4. **Modern Patterns**: Async/await, builder patterns, and structured error handling
+
+## 🔌 Model Context Protocol (MCP) Integration
+
+You can expose any declarative A2A Agent as a Model Context Protocol (MCP) server over `stdio` transport. This allows MCP-compatible clients (like Claude Desktop) to invoke the agent's skills as local tools.
+
+The bridge dispatches tool calls to the agent's message handler **in-process**, which means:
+- No backing HTTP server is required (you can set `http_port = 0` for a pure-stdio server).
+- Authentication checks are bypassed for local stdio calls (secure by design as it is run locally by the client), while HTTP endpoints can still use standard Bearer/OAuth2 token auth.
+
+### 1. Enable the MCP Server in `agent.toml`
+
+Add the `[features.mcp_server]` section to your config:
+
+```toml
+[agent]
+name = "My MCP Agent"
+version = "1.0.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 0 # Can be 0 for pure-stdio mode
+
+[features.mcp_server]
+enabled = true
+stdio = true
+name = "Custom MCP Service Name"     # Optional override
+version = "2.0.0"                    # Optional override
+```
+
+### 2. Run the MCP Agent
+
+Compile and run your agent with the `mcp-server` Cargo feature enabled:
+
+```bash
+cargo run -p a2a-agents --features mcp-server --example mcp_server_agent
+```
+
+### 3. Claude Desktop Configuration
+
+To connect Claude Desktop to your agent, add the following to your Claude Desktop configuration file (usually located at `%APPDATA%\Claude\claude_desktop_config.json` on Windows):
+
+```json
+{
+  "mcpServers": {
+    "a2a-echo-agent": {
+      "command": "cargo",
+      "args": [
+        "run",
+        "--release",
+        "-p",
+        "a2a-agents",
+        "--features",
+        "mcp-server",
+        "--example",
+        "mcp_server_agent"
+      ]
+    }
+  }
+}
+```
 
 ## Architecture
 
@@ -101,7 +161,7 @@ The server implementation using framework components:
 - Integrates with `DefaultBusinessHandler` for request processing
 - Uses `InMemoryTaskStorage` for task persistence
 - Configures `SimpleAgentInfo` with agent capabilities
-- Supports both HTTP and WebSocket transports
+- Supports both HTTP transport
 
 ## Usage
 
@@ -117,7 +177,7 @@ cargo run --bin reimbursement_demo
 ```
 
 This starts:
-- **Agent Backend** on `http://localhost:8080` (HTTP) and `ws://localhost:8081` (WebSocket)
+- **Agent Backend** on `http://localhost:8080` (HTTP)
 - **Web Frontend** on `http://localhost:3000`
 
 The frontend automatically connects to the local agent and provides an interactive interface for submitting expenses and viewing tasks.
@@ -127,7 +187,7 @@ The frontend automatically connects to the local agent and provides an interacti
 Run specific components:
 
 ```bash
-# Run only the agent backend (HTTP + WebSocket)
+# Run only the agent backend (HTTP)
 cargo run --bin reimbursement_demo -- --mode agent
 
 # Run only the web frontend (point it to an existing agent)
@@ -136,21 +196,17 @@ AGENT_HTTP_URL=http://localhost:8080 cargo run --bin reimbursement_demo -- --mod
 # Customize ports
 cargo run --bin reimbursement_demo -- \
   --agent-http-port 8080 \
-  --agent-ws-port 8081 \
   --frontend-port 3000
 
 # Run only HTTP transport for agent
 cargo run --bin reimbursement_demo -- --transport http
 
-# Enable WebSocket support in frontend
-cargo run --bin reimbursement_demo -- --frontend-use-websocket
 ```
 
 ### Available Endpoints
 
 **Agent Backend:**
-- HTTP API: `http://localhost:8080` (JSON-RPC)
-- WebSocket: `ws://localhost:8081`
+- HTTP API: `http://localhost:8080` (ConnectRPC)
 - Agent Card: `http://localhost:8080/agent-card`
 
 **Web Frontend:**
@@ -242,7 +298,7 @@ See [TODO.md](./TODO.md) for the comprehensive modernization roadmap including:
 - ✅ **DefaultBusinessHandler** integration  
 - ✅ **InMemoryTaskStorage** for task persistence
 - ✅ **SimpleAgentInfo** for agent metadata
-- ✅ **HTTP and WebSocket** transport support
+- ✅ **HTTP** transport support
 - ✅ **Structured error handling** with A2AError
 - ✅ **Modern async/await** patterns
 - ✅ **Builder patterns** for complex objects

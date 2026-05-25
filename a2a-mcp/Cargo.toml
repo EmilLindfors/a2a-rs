@@ -10,12 +10,15 @@ keywords = ["a2a", "mcp", "rmcp", "ai", "agent"]
 categories = ["ai", "network-programming"]
 
 [dependencies]
-# Local rmcp dependency from cloned rust-sdk
-rmcp = { version = "0.10.0", path = "rust-sdk/crates/rmcp", features = ["server", "client", "macros", "transport-io"] }
-rmcp-macros = { version = "0.10.0", path = "rust-sdk/crates/rmcp-macros" }
+rmcp = { version = "1.7", features = ["server", "client", "macros", "transport-io", "elicitation", "schemars", "base64"] }
+rmcp-macros = "1.7"
 
 # A2A core library
-a2a-rs = { path = "../a2a-rs", features = ["http-client", "http-server", "client", "server"] }
+a2a-rs = { path = "../a2a-rs", version = "0.2", features = ["http-client", "http-server", "client", "server"], default-features = false }
+a2a-agents-common = { path = "../a2a-agents-common" }
+connectrpc = { version = "0.3.2" }
+buffa = { version = "0.3.0", features = ["json"] }
+buffa-types = { version = "0.3.0", features = ["json"] }
 
 # Async runtime and utilities
 tokio = { version = "1", features = ["full"] }
@@ -25,6 +28,7 @@ futures = "0.3"
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+base64 = "0.22"
 
 # Error handling
 thiserror = "2"
@@ -46,3 +50,6 @@ uuid = { version = "1", features = ["v4", "serde"] }
 tokio = { version = "1", features = ["full"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1.0"
+
+[features]
+default = []

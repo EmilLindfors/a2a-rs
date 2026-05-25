@@ -5,7 +5,7 @@ mod sqlx_tests {
     use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
     use a2a_rs::domain::TaskState;
     use a2a_rs::port::{AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager};
-    use a2a_rs::{A2AError, PushNotificationConfig, TaskPushNotificationConfig};
+    use a2a_rs::{A2AError, TaskPushNotificationConfig};
     use std::sync::Arc;
     use uuid::Uuid;
 
@@ -170,29 +170,23 @@ mod sqlx_tests {
 
         // Set push notification config
         let config = TaskPushNotificationConfig {
+            tenant: String::new(),
             task_id: task_id.clone(),
-            push_notification_config: PushNotificationConfig {
-                id: None,
-                url: "https://example.com/webhook".to_string(),
-                token: None,
-                authentication: None,
-            },
+            id: String::new(),
+            url: "https://example.com/webhook".to_string(),
+            token: String::new(),
+            authentication: None.into(),
+            ..Default::default()
         };
 
         let set_config = storage.set_task_notification(&config).await?;
         assert_eq!(set_config.task_id, task_id);
-        assert_eq!(
-            set_config.push_notification_config.url,
-            "https://example.com/webhook"
-        );
+        assert_eq!(set_config.url, "https://example.com/webhook");
 
         // Get push notification config
         let retrieved_config = storage.get_task_notification(&task_id).await?;
         assert_eq!(retrieved_config.task_id, task_id);
-        assert_eq!(
-            retrieved_config.push_notification_config.url,
-            "https://example.com/webhook"
-        );
+        assert_eq!(retrieved_config.url, "https://example.com/webhook");
 
         // Remove push notification config
         storage.remove_task_notification(&task_id).await?;
@@ -312,7 +306,7 @@ mod sqlx_tests {
         Ok(())
     }
 
-    // ===== v0.3.0 Tests =====
+    // ===== v1.0.0 Tests =====
 
     #[tokio::test]
     async fn test_list_tasks_v3_basic() -> Result<(), Box<dyn std::error::Error>> {
@@ -415,13 +409,13 @@ mod sqlx_tests {
 
         // Set push notification config
         let config = TaskPushNotificationConfig {
+            tenant: String::new(),
             task_id: task_id.clone(),
-            push_notification_config: PushNotificationConfig {
-                id: Some("config-1".to_string()),
-                url: "https://example.com/webhook".to_string(),
-                token: Some("test-token".to_string()),
-                authentication: None,
-            },
+            id: "config-1".to_string(),
+            url: "https://example.com/webhook".to_string(),
+            token: "test-token".to_string(),
+            authentication: None.into(),
+            ..Default::default()
         };
         storage.set_task_notification(&config).await?;
 
@@ -432,17 +426,11 @@ mod sqlx_tests {
             metadata: None,
         };
         let retrieved = storage.get_push_notification_config(&get_params).await?;
-        assert_eq!(
-            retrieved.push_notification_config.url,
-            "https://example.com/webhook"
-        );
-        assert_eq!(
-            retrieved.push_notification_config.token,
-            Some("test-token".to_string())
-        );
+        assert_eq!(retrieved.url, "https://example.com/webhook");
+        assert_eq!(retrieved.token, "test-token");
 
         // List configs
-        let list_params = a2a_rs::domain::ListTaskPushNotificationConfigParams {
+        let list_params = a2a_rs::domain::ListTaskPushNotificationConfigsParams {
             id: task_id.clone(),
             metadata: None,
         };
@@ -476,29 +464,29 @@ mod sqlx_tests {
 
         // Set multiple configs
         let config1 = TaskPushNotificationConfig {
+            tenant: String::new(),
             task_id: task_id.clone(),
-            push_notification_config: PushNotificationConfig {
-                id: Some("config-1".to_string()),
-                url: "https://example.com/webhook1".to_string(),
-                token: None,
-                authentication: None,
-            },
+            id: "config-1".to_string(),
+            url: "https://example.com/webhook1".to_string(),
+            token: String::new(),
+            authentication: None.into(),
+            ..Default::default()
         };
         let config2 = TaskPushNotificationConfig {
+            tenant: String::new(),
             task_id: task_id.clone(),
-            push_notification_config: PushNotificationConfig {
-                id: Some("config-2".to_string()),
-                url: "https://example.com/webhook2".to_string(),
-                token: Some("token-2".to_string()),
-                authentication: None,
-            },
+            id: "config-2".to_string(),
+            url: "https://example.com/webhook2".to_string(),
+            token: "token-2".to_string(),
+            authentication: None.into(),
+            ..Default::default()
         };
 
         storage.set_task_notification(&config1).await?;
         storage.set_task_notification(&config2).await?;
 
         // List should return both
-        let list_params = a2a_rs::domain::ListTaskPushNotificationConfigParams {
+        let list_params = a2a_rs::domain::ListTaskPushNotificationConfigsParams {
             id: task_id.clone(),
             metadata: None,
         };

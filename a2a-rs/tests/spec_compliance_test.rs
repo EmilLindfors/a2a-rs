@@ -6,11 +6,8 @@
 mod common;
 
 use a2a_rs::{
-    MessageSendParams,
     adapter::SimpleAgentInfo,
-    application::SendMessageRequest,
-    domain::{Message, Part, Task, TaskState},
-    services::AgentInfoProvider,
+    domain::{Message, Part, TaskState},
 };
 use jsonschema::{Draft, Validator};
 use serde_json::{Value, json};
@@ -48,6 +45,7 @@ fn extract_definition(schema_content: &str, definition_name: &str) -> Value {
 
 #[tokio::test]
 async fn test_agent_card_compliance() {
+    use a2a_rs::services::AgentInfoProvider;
     // Create a sample AgentCard using our SimpleAgentInfo
     let agent_info = SimpleAgentInfo::new(
         "Test Agent".to_string(),
@@ -111,32 +109,28 @@ fn test_message_compliance() {
     let mut message = Message::user_text("Hello, agent!".to_string(), message_id.clone());
 
     // Add a data part
-    let data_part = Part::Data {
-        data: json!({
-            "key": "value",
-            "number": 42,
-            "nested": {
-                "array": [1, 2, 3]
-            }
-        })
-        .as_object()
-        .unwrap()
-        .clone(),
-        metadata: None,
-    };
+    let data_val: buffa_types::google::protobuf::Value = serde_json::from_value(json!({
+        "key": "value",
+        "number": 42,
+        "nested": {
+            "array": [1, 2, 3]
+        }
+    }))
+    .unwrap();
+    let data_part = Part::data(data_val);
     message.add_part(data_part);
 
     // Add a file part
     let file_part = Part::file_from_bytes(
-        "SGVsbG8gV29ybGQ=".to_string(), // "Hello World" in base64
+        "SGVsbG8gV29ybGQ=".to_string().into_bytes(), // "Hello World" in base64
         Some("test.txt".to_string()),
         Some("text/plain".to_string()),
     );
     message.add_part_validated(file_part).unwrap();
 
     // Set context and task IDs
-    message.context_id = Some("ctx-123".to_string());
-    message.task_id = Some("task-456".to_string());
+    message.context_id = "ctx-123".to_string();
+    message.task_id = "task-456".to_string();
 
     // Serialize to JSON
     let message_json = serde_json::to_value(&message).unwrap();
@@ -169,6 +163,7 @@ fn test_message_compliance() {
 fn test_task_compliance() {
     // Create a task
     let context_id = "ctx-789".to_string();
+    use a2a_rs::domain::Task;
     let mut task = Task::new("task-987".to_string(), context_id.clone());
 
     // Add history messages
@@ -202,48 +197,6 @@ fn test_task_compliance() {
             eprintln!("Instance path: {}", error.instance_path);
         }
         panic!("Task does not comply with A2A specification");
-    }
-}
-
-#[test]
-fn test_jsonrpc_request_compliance() {
-    // Test SendMessageRequest
-    let message = Message::user_text("Test message".to_string(), "msg-test".to_string());
-
-    let send_request = SendMessageRequest {
-        jsonrpc: "2.0".to_string(),
-        method: "message/send".to_string(),
-        id: Some(serde_json::Value::String("req-123".to_string())),
-        params: MessageSendParams {
-            message,
-            configuration: None,
-            metadata: None,
-        },
-    };
-
-    let request_json = serde_json::to_value(&send_request).unwrap();
-    println!(
-        "SendMessageRequest JSON: {}",
-        serde_json::to_string_pretty(&request_json).unwrap()
-    );
-
-    // Load and validate against SendMessageRequest schema
-    let schema_content = fs::read_to_string("../spec/specification.json")
-        .expect("Failed to read specification.json");
-    let request_schema = extract_definition(&schema_content, "SendMessageRequest");
-
-    let schema = Validator::options()
-        .with_draft(Draft::Draft7)
-        .build(&request_schema)
-        .expect("Failed to compile SendMessageRequest schema");
-
-    let result = schema.validate(&request_json);
-    if let Err(errors) = result {
-        for error in errors {
-            eprintln!("SendMessageRequest validation error: {}", error);
-            eprintln!("Instance path: {}", error.instance_path);
-        }
-        panic!("SendMessageRequest does not comply with A2A specification");
     }
 }
 
@@ -300,7 +253,7 @@ fn test_error_codes_compliance() {
         (-32603, "Internal error"),
     ];
 
-    // A2A-specific errors (v0.3.0 includes new -32007 error)
+    // A2A-specific errors (v1.0.0 includes new -32007 error)
     let a2a_errors = vec![
         (-32001, "Task not found"),
         (-32002, "Task not cancelable"),
@@ -336,68 +289,86 @@ fn test_authenticated_extended_card_error() {
 }
 
 #[test]
-fn test_agent_card_v030_fields() {
+fn test_agent_card_v100_fields() {
     use a2a_rs::domain::{AgentCapabilities, AgentCard, AgentCardSignature, AgentInterface};
     use std::collections::HashMap;
 
-    // Create an AgentCard with all v0.3.0 fields
-    let mut card = AgentCard::builder()
-        .name("Test Agent v0.3.0".to_string())
-        .description("Agent with v0.3.0 features".to_string())
+    // Create an AgentCard with all v1.0.0 fields using the v1.0.0 builder
+    let header_struct = {
+        let mut header = HashMap::new();
+        header.insert(
+            "alg".to_string(),
+            serde_json::Value::String("RS256".to_string()),
+        );
+        let header_val = serde_json::to_value(header).unwrap();
+        serde_json::from_value(header_val).unwrap()
+    };
+
+    let card = AgentCard::builder()
+        .name("Test Agent v1.0.0".to_string())
+        .description("Agent with v1.0.0 features".to_string())
         .url("https://api.example.com/jsonrpc".to_string())
         .version("2.0.0".to_string())
+        .protocol_version("0.3.0".to_string())
+        .preferred_transport("JSONRPC".to_string())
         .capabilities(AgentCapabilities::default())
         .default_input_modes(vec!["text".to_string()])
         .default_output_modes(vec!["text".to_string()])
+        .additional_interfaces(vec![
+            AgentInterface {
+                url: "https://api.example.com/grpc".to_string(),
+                protocol_binding: "GRPC".to_string(),
+                protocol_version: "0.3.0".to_string(),
+                ..Default::default()
+            },
+            AgentInterface {
+                url: "https://api.example.com/http".to_string(),
+                protocol_binding: "HTTP+JSON".to_string(),
+                protocol_version: "0.3.0".to_string(),
+                ..Default::default()
+            },
+        ])
+        .icon_url("https://example.com/icon.png".to_string())
+        .signatures(vec![AgentCardSignature {
+            protected: "eyJhbGciOiJSUzI1NiJ9".to_string(),
+            signature: "cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw".to_string(),
+            header: buffa::MessageField::some(header_struct),
+            ..Default::default()
+        }])
         .skills(vec![])
         .build();
 
+    println!(
+        "DEBUG: card.supported_interfaces = {:?}",
+        card.supported_interfaces
+    );
     // Test protocol_version (should default to "0.3.0")
-    assert_eq!(card.protocol_version, "0.3.0");
+    assert_eq!(card.protocol_version(), "0.3.0");
 
     // Test preferred_transport (should default to "JSONRPC")
-    assert_eq!(card.preferred_transport, "JSONRPC");
-
-    // Add additional_interfaces
-    card.additional_interfaces = Some(vec![
-        AgentInterface {
-            url: "https://api.example.com/grpc".to_string(),
-            transport: "GRPC".to_string(),
-        },
-        AgentInterface {
-            url: "https://api.example.com/http".to_string(),
-            transport: "HTTP+JSON".to_string(),
-        },
-    ]);
-
-    // Add icon_url
-    card.icon_url = Some("https://example.com/icon.png".to_string());
-
-    // Add signatures
-    let mut header = HashMap::new();
-    header.insert(
-        "alg".to_string(),
-        serde_json::Value::String("RS256".to_string()),
-    );
-
-    card.signatures = Some(vec![AgentCardSignature {
-        protected: "eyJhbGciOiJSUzI1NiJ9".to_string(),
-        signature: "cC4hiUPoj9Eetdgtv3hF80EGrhuB__dzERat0XF9g2VtQgr9PJbu3XOiZj5RZmh7AAuHIm4Bh-0Qc_lF5YKt_O8W2Fp5jujGbds9uJdbF9CUAr7t1dnZcAcQjbKBYNX4BAynRFdiuB--f_nZLgrnbyTyWzO75vRK5h6xBArLIARNPvkSjtQBMHlb1L07Qe7K0GarZRmB_eSN9383LcOLn6_dO--xi12jzDwusC-eOkHWEsqtFZESc6BfI7noOPqvhJ1phCnvWh6IeYI2w9QOYEUipUTI8np6LbgGY9Fs98rqVt5AXLIhWkWywlVmtVrBp0igcN_IoypGlUPQGe77Rw".to_string(),
-        header: Some(header),
-    }]);
+    assert_eq!(card.preferred_transport(), "JSONRPC");
 
     // Serialize and validate
     let card_json = serde_json::to_value(&card).unwrap();
     println!(
-        "AgentCard v0.3.0: {}",
+        "AgentCard v1.0.0: {}",
         serde_json::to_string_pretty(&card_json).unwrap()
     );
 
-    // Verify the v0.3.0 fields are present
-    assert_eq!(card_json["protocolVersion"], "0.3.0");
-    assert_eq!(card_json["preferredTransport"], "JSONRPC");
-    assert!(card_json["additionalInterfaces"].is_array());
-    assert_eq!(card_json["additionalInterfaces"][0]["transport"], "GRPC");
+    // Verify the v1.0.0 fields are present
+    assert_eq!(
+        card_json["supportedInterfaces"][0]["protocolVersion"],
+        "0.3.0"
+    );
+    assert_eq!(
+        card_json["supportedInterfaces"][0]["protocolBinding"],
+        "JSONRPC"
+    );
+    assert!(card_json["supportedInterfaces"].is_array());
+    assert_eq!(
+        card_json["supportedInterfaces"][1]["protocolBinding"],
+        "GRPC"
+    );
     assert_eq!(card_json["iconUrl"], "https://example.com/icon.png");
     assert!(card_json["signatures"].is_array());
 
@@ -414,10 +385,10 @@ fn test_agent_card_v030_fields() {
     let result = schema.validate(&card_json);
     if let Err(errors) = result {
         for error in errors {
-            eprintln!("AgentCard v0.3.0 validation error: {}", error);
+            eprintln!("AgentCard v1.0.0 validation error: {}", error);
             eprintln!("Instance path: {}", error.instance_path);
         }
-        panic!("AgentCard v0.3.0 does not comply with A2A specification");
+        panic!("AgentCard v1.0.0 does not comply with A2A specification");
     }
 }
 
@@ -434,21 +405,26 @@ fn test_agent_capabilities_extensions() {
         "version".to_string(),
         serde_json::Value::String("1.0".to_string()),
     );
+    let ext_params_val = serde_json::to_value(&ext_params).unwrap();
+    let ext_params_struct: buffa_types::google::protobuf::Struct =
+        serde_json::from_value(ext_params_val).unwrap();
 
-    capabilities.extensions = Some(vec![
+    capabilities.extensions = vec![
         AgentExtension {
             uri: "https://example.com/extensions/custom-auth".to_string(),
-            description: Some("Custom authentication extension".to_string()),
-            required: Some(true),
-            params: Some(ext_params.clone()),
+            description: "Custom authentication extension".to_string(),
+            required: true,
+            params: buffa::MessageField::some(ext_params_struct),
+            ..Default::default()
         },
         AgentExtension {
             uri: "https://example.com/extensions/advanced-features".to_string(),
-            description: Some("Advanced features extension".to_string()),
-            required: Some(false),
-            params: None,
+            description: "Advanced features extension".to_string(),
+            required: false,
+            params: buffa::MessageField::none(),
+            ..Default::default()
         },
-    ]);
+    ];
 
     // Serialize and verify
     let capabilities_json = serde_json::to_value(&capabilities).unwrap();
@@ -463,7 +439,7 @@ fn test_agent_capabilities_extensions() {
         "https://example.com/extensions/custom-auth"
     );
     assert_eq!(capabilities_json["extensions"][0]["required"], true);
-    assert_eq!(capabilities_json["extensions"][1]["required"], false);
+    assert!(capabilities_json["extensions"][1]["required"].is_null());
 
     // Validate against schema
     let schema_content = fs::read_to_string("../spec/specification.json")
@@ -511,9 +487,15 @@ fn test_agent_skill_security() {
         serde_json::to_string_pretty(&skill_json).unwrap()
     );
 
-    assert!(skill_json["security"].is_array());
-    assert_eq!(skill_json["security"][0]["oauth2"][0], "read:data");
-    assert_eq!(skill_json["security"][0]["oauth2"][1], "write:data");
+    assert!(skill_json["securityRequirements"].is_array());
+    assert_eq!(
+        skill_json["securityRequirements"][0]["schemes"]["oauth2"]["list"][0],
+        "read:data"
+    );
+    assert_eq!(
+        skill_json["securityRequirements"][0]["schemes"]["oauth2"]["list"][1],
+        "write:data"
+    );
 
     // Validate against schema
     let schema_content = fs::read_to_string("../spec/specification.json")
@@ -544,10 +526,10 @@ fn test_message_extensions_field() {
         format!("msg-{}", uuid::Uuid::new_v4()),
     );
 
-    message.extensions = Some(vec![
+    message.extensions = vec![
         "https://example.com/extensions/custom-protocol".to_string(),
         "https://example.com/extensions/advanced-features".to_string(),
-    ]);
+    ];
 
     // Serialize and verify
     let message_json = serde_json::to_value(&message).unwrap();
@@ -588,16 +570,12 @@ fn test_artifact_extensions_field() {
     // Create an artifact with extensions
     let artifact = Artifact {
         artifact_id: format!("artifact-{}", uuid::Uuid::new_v4()),
-        name: Some("Test Artifact".to_string()),
-        description: Some("Artifact with extension support".to_string()),
-        parts: vec![Part::Text {
-            text: "Artifact content".to_string(),
-            metadata: None,
-        }],
-        metadata: None,
-        extensions: Some(vec![
-            "https://example.com/extensions/artifact-encryption".to_string(),
-        ]),
+        name: "Test Artifact".to_string(),
+        description: "Artifact with extension support".to_string(),
+        parts: vec![Part::text("Artifact content".to_string())],
+        metadata: None.into(),
+        extensions: vec!["https://example.com/extensions/artifact-encryption".to_string()],
+        ..Default::default()
     };
 
     // Serialize and verify
@@ -636,9 +614,8 @@ fn test_artifact_extensions_field() {
 fn test_mutual_tls_security_scheme() {
     use a2a_rs::domain::SecurityScheme;
 
-    let mtls_scheme = SecurityScheme::MutualTls {
-        description: Some("Client certificate authentication".to_string()),
-    };
+    let mtls_scheme =
+        SecurityScheme::mutual_tls(Some("Client certificate authentication".to_string()));
 
     // Serialize and verify
     let scheme_json = serde_json::to_value(&mtls_scheme).unwrap();
@@ -647,9 +624,9 @@ fn test_mutual_tls_security_scheme() {
         serde_json::to_string_pretty(&scheme_json).unwrap()
     );
 
-    assert_eq!(scheme_json["type"], "mutualTLS");
+    assert!(scheme_json.get("mtlsSecurityScheme").is_some());
     assert_eq!(
-        scheme_json["description"],
+        scheme_json["mtlsSecurityScheme"]["description"],
         "Client certificate authentication"
     );
 
@@ -681,20 +658,18 @@ fn test_oauth2_with_metadata_url() {
     scopes.insert("read:data".to_string(), "Read access to data".to_string());
     scopes.insert("write:data".to_string(), "Write access to data".to_string());
 
-    let oauth2_scheme = SecurityScheme::OAuth2 {
-        flows: Box::new(OAuthFlows {
-            client_credentials: Some(ClientCredentialsOAuthFlow {
-                token_url: "https://auth.example.com/token".to_string(),
-                refresh_url: Some("https://auth.example.com/refresh".to_string()),
-                scopes,
-            }),
-            ..Default::default()
-        }),
-        description: Some("OAuth2 with metadata discovery".to_string()),
-        metadata_url: Some(
-            "https://auth.example.com/.well-known/oauth-authorization-server".to_string(),
-        ),
+    let flow = ClientCredentialsOAuthFlow {
+        token_url: "https://auth.example.com/token".to_string(),
+        refresh_url: "https://auth.example.com/refresh".to_string(),
+        scopes,
+        ..Default::default()
     };
+    let flows = OAuthFlows::client_credentials(flow);
+    let oauth2_scheme = SecurityScheme::oauth2(
+        flows,
+        Some("OAuth2 with metadata discovery".to_string()),
+        Some("https://auth.example.com/.well-known/oauth-authorization-server".to_string()),
+    );
 
     // Serialize and verify
     let scheme_json = serde_json::to_value(&oauth2_scheme).unwrap();
@@ -703,9 +678,9 @@ fn test_oauth2_with_metadata_url() {
         serde_json::to_string_pretty(&scheme_json).unwrap()
     );
 
-    assert_eq!(scheme_json["type"], "oauth2");
+    assert!(scheme_json.get("oauth2SecurityScheme").is_some());
     assert_eq!(
-        scheme_json["metadataUrl"],
+        scheme_json["oauth2SecurityScheme"]["oauth2MetadataUrl"],
         "https://auth.example.com/.well-known/oauth-authorization-server"
     );
 
@@ -739,7 +714,7 @@ fn test_list_tasks_params() {
         page_token: None,
         history_length: Some(10),
         include_artifacts: Some(true),
-        last_updated_after: Some(1704067200000), // 2024-01-01 00:00:00 UTC
+        status_timestamp_after: Some("2024-01-01T00:00:00Z".to_string()), // 2024-01-01 00:00:00 UTC
         metadata: None,
     };
 
@@ -751,11 +726,11 @@ fn test_list_tasks_params() {
     );
 
     assert_eq!(params_json["contextId"], "ctx-123");
-    assert_eq!(params_json["status"], "working");
+    assert_eq!(params_json["status"], "TASK_STATE_WORKING");
     assert_eq!(params_json["pageSize"], 25);
     assert_eq!(params_json["historyLength"], 10);
     assert_eq!(params_json["includeArtifacts"], true);
-    assert_eq!(params_json["lastUpdatedAfter"], 1704067200000_i64);
+    assert_eq!(params_json["statusTimestampAfter"], "2024-01-01T00:00:00Z");
 
     // Validate against schema
     let schema_content = fs::read_to_string("../spec/specification.json")
@@ -778,13 +753,16 @@ fn test_list_tasks_params() {
 
 #[test]
 fn test_push_notification_config_with_id() {
-    use a2a_rs::domain::PushNotificationConfig;
+    use a2a_rs::domain::TaskPushNotificationConfig;
+    let config = TaskPushNotificationConfig {
+        tenant: String::new(),
+        task_id: "dummy".to_string(),
 
-    let config = PushNotificationConfig {
-        id: Some("config-abc123".to_string()),
+        id: "config-abc123".to_string(),
         url: "https://client.example.com/webhook".to_string(),
-        token: Some("bearer-token-xyz".to_string()),
-        authentication: None,
+        token: "bearer-token-xyz".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     // Serialize and verify
@@ -817,33 +795,10 @@ fn test_push_notification_config_with_id() {
 }
 
 #[test]
-fn test_transport_protocol_enum() {
-    use a2a_rs::domain::TransportProtocol;
-
-    let protocols = vec![
-        TransportProtocol::JsonRpc,
-        TransportProtocol::Grpc,
-        TransportProtocol::HttpJson,
-    ];
-
-    for protocol in protocols {
-        let protocol_json = serde_json::to_value(&protocol).unwrap();
-        println!("TransportProtocol: {}", protocol_json);
-
-        // Verify serialization format
-        match protocol {
-            TransportProtocol::JsonRpc => assert_eq!(protocol_json, "JSONRPC"),
-            TransportProtocol::Grpc => assert_eq!(protocol_json, "GRPC"),
-            TransportProtocol::HttpJson => assert_eq!(protocol_json, "HTTP+JSON"),
-        }
-    }
-}
-
-#[test]
 fn test_message_send_configuration_optional_accepted_output_modes() {
     use a2a_rs::domain::MessageSendConfiguration;
 
-    // Test that acceptedOutputModes is now optional in v0.3.0
+    // Test that acceptedOutputModes is now optional in v1.0.0
     let config = MessageSendConfiguration {
         accepted_output_modes: None, // This should be valid now
         history_length: Some(10),
@@ -913,6 +868,7 @@ mod property_based_tests {
         fn task_id_validation(task_id in ".*") {
             if !task_id.is_empty() {
                 let context_id = "ctx-test".to_string();
+                use a2a_rs::domain::Task;
                 let task = Task::new(task_id.clone(), context_id);
                 prop_assert_eq!(task.id, task_id);
             }
@@ -928,7 +884,6 @@ async fn test_task_list_page_size_validation() {
         adapter::{
             DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
         },
-        application::json_rpc,
         services::AsyncA2AClient,
     };
     use common::TestBusinessHandler;
@@ -959,38 +914,32 @@ async fn test_task_list_page_size_validation() {
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
     // Test page_size > 100 (should clamp to 100, not error)
-    let request = json_rpc::ListTasksRequest::new(Some(a2a_rs::domain::ListTasksParams {
+    let params = a2a_rs::domain::ListTasksParams {
         page_size: Some(150),
         ..Default::default()
-    }));
+    };
 
-    let response = client
-        .send_request(&json_rpc::A2ARequest::ListTasks(request))
+    let result = client
+        .list_tasks(&params)
         .await
-        .expect("Failed to send request");
+        .expect("Failed to list tasks");
 
     // According to spec, page_size should be clamped, not return error
-    assert!(
-        response.error.is_none(),
-        "page_size > 100 should be clamped, not error"
-    );
+    assert_eq!(result.page_size, 100);
 
     // Test page_size < 1 (should clamp to 1, not error)
-    let request = json_rpc::ListTasksRequest::new(Some(a2a_rs::domain::ListTasksParams {
+    let params = a2a_rs::domain::ListTasksParams {
         page_size: Some(0),
         ..Default::default()
-    }));
+    };
 
-    let response = client
-        .send_request(&json_rpc::A2ARequest::ListTasks(request))
+    let result = client
+        .list_tasks(&params)
         .await
-        .expect("Failed to send request");
+        .expect("Failed to list tasks");
 
     // According to spec, page_size should be clamped, not return error
-    assert!(
-        response.error.is_none(),
-        "page_size < 1 should be clamped, not error"
-    );
+    assert_eq!(result.page_size, 1);
 
     shutdown_tx.send(()).ok();
 }
@@ -1081,7 +1030,7 @@ fn test_task_state_transitions_validation() {
             format!("Transitioning to {:?}", to_state),
             format!("msg-{}", uuid::Uuid::new_v4()),
         );
-        task.update_status(to_state.clone(), Some(msg));
+        task.update_status(to_state, Some(msg));
         assert_eq!(
             task.status.state, to_state,
             "Task should transition to {:?}",

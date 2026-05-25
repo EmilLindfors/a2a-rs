@@ -18,14 +18,8 @@ async fn test_message_roundtrip() {
     let original_message = Message::builder()
         .role(Role::User)
         .parts(vec![
-            Part::Text {
-                text: "Hello, world!".to_string(),
-                metadata: None,
-            },
-            Part::Text {
-                text: "This is a multi-part message.".to_string(),
-                metadata: None,
-            },
+            Part::text("Hello, world!".to_string()),
+            Part::text("This is a multi-part message.".to_string()),
         ])
         .message_id("msg-1".to_string())
         .build();
@@ -43,12 +37,8 @@ async fn test_message_roundtrip() {
     assert_eq!(converted_message.parts.len(), original_message.parts.len());
 
     // Check text content is preserved
-    if let Part::Text { text, .. } = &converted_message.parts[0] {
-        if let Part::Text {
-            text: original_text,
-            ..
-        } = &original_message.parts[0]
-        {
+    if let Some(text) = converted_message.parts[0].get_text() {
+        if let Some(original_text) = original_message.parts[0].get_text() {
             assert_eq!(text, original_text);
         }
     }
@@ -61,26 +51,16 @@ async fn test_task_to_tool_result_conversion() {
     let task = Task::builder()
         .id("task-1".to_string())
         .context_id("ctx-1".to_string())
-        .status(TaskStatus {
-            state: TaskState::Completed,
-            message: None,
-            timestamp: None,
-        })
+        .status(TaskStatus::new(TaskState::Completed, None))
         .history(vec![
             Message::builder()
                 .role(Role::User)
-                .parts(vec![Part::Text {
-                    text: "Do something".to_string(),
-                    metadata: None,
-                }])
+                .parts(vec![Part::text("Do something".to_string())])
                 .message_id("msg-1".to_string())
                 .build(),
             Message::builder()
                 .role(Role::Agent)
-                .parts(vec![Part::Text {
-                    text: "Task completed successfully".to_string(),
-                    metadata: None,
-                }])
+                .parts(vec![Part::text("Task completed successfully".to_string())])
                 .message_id("msg-2".to_string())
                 .build(),
         ])
@@ -104,17 +84,10 @@ async fn test_error_handling_bidirectional() {
     let failed_task = Task::builder()
         .id("task-failed".to_string())
         .context_id("ctx-failed".to_string())
-        .status(TaskStatus {
-            state: TaskState::Failed,
-            message: None,
-            timestamp: None,
-        })
+        .status(TaskStatus::new(TaskState::Failed, None))
         .history(vec![Message::builder()
             .role(Role::Agent)
-            .parts(vec![Part::Text {
-                text: "Error: Something went wrong".to_string(),
-                metadata: None,
-            }])
+            .parts(vec![Part::text("Error: Something went wrong".to_string())])
             .message_id("msg-error".to_string())
             .build()])
         .build();
@@ -143,24 +116,19 @@ async fn test_skill_tool_bidirectional_metadata() {
         .capabilities(Default::default())
         .default_input_modes(vec!["text".to_string()])
         .default_output_modes(vec!["text".to_string()])
-        .skills(vec![AgentSkill {
-            id: "test_skill".to_string(),
-            name: "Test Skill".to_string(),
-            description: "A skill for testing metadata preservation".to_string(),
-            tags: vec!["test".to_string(), "metadata".to_string()],
-            examples: Some(vec!["Example usage".to_string()]),
-            input_modes: Some(vec!["text".to_string()]),
-            output_modes: Some(vec!["text".to_string()]),
-            security: None,
-        }])
+        .skills(vec![AgentSkill::new(
+            "test_skill".to_string(),
+            "Test Skill".to_string(),
+            "A skill for testing metadata preservation".to_string(),
+            vec!["test".to_string(), "metadata".to_string()],
+        )
+        .with_examples(vec!["Example usage".to_string()])
+        .with_input_modes(vec!["text".to_string()])
+        .with_output_modes(vec!["text".to_string()])])
         .build();
 
     let client = HttpClient::new("https://example.com/agent".to_string());
-    let bridge = AgentToMcpBridge::new(
-        client,
-        agent_card.clone(),
-        "https://example.com/agent".to_string(),
-    );
+    let bridge = AgentToMcpBridge::new(client, agent_card.clone());
 
     // Verify bridge was created with the agent card
     let info = bridge.get_info();
@@ -217,8 +185,8 @@ async fn test_concurrent_bridges() {
     let client1 = HttpClient::new("https://agent1.example.com".to_string());
     let client2 = HttpClient::new("https://agent2.example.com".to_string());
 
-    let bridge1 = AgentToMcpBridge::new(client1, agent1, "https://agent1.example.com".to_string());
-    let bridge2 = AgentToMcpBridge::new(client2, agent2, "https://agent2.example.com".to_string());
+    let bridge1 = AgentToMcpBridge::new(client1, agent1);
+    let bridge2 = AgentToMcpBridge::new(client2, agent2);
 
     // Verify both bridges were created successfully
     let info1 = bridge1.get_info();
@@ -236,22 +204,19 @@ async fn test_data_part_conversion() {
 
     use serde_json::json;
 
+    let proto_val: buffa_types::google::protobuf::Value = serde_json::from_value(json!({
+        "result": "success",
+        "value": 42,
+        "details": {
+            "computation": "6 * 7",
+            "method": "multiplication"
+        }
+    }))
+    .unwrap();
+
     let data_message = Message::builder()
         .role(Role::Agent)
-        .parts(vec![Part::Data {
-            data: json!({
-                "result": "success",
-                "value": 42,
-                "details": {
-                    "computation": "6 * 7",
-                    "method": "multiplication"
-                }
-            })
-            .as_object()
-            .unwrap()
-            .clone(),
-            metadata: None,
-        }])
+        .parts(vec![Part::data(proto_val)])
         .message_id("msg-data".to_string())
         .build();
 

@@ -5,7 +5,7 @@
 [![CI](https://github.com/emillindfors/a2a-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/emillindfors/a2a-rs/actions/workflows/rust.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Rust implementation of the [Agent-to-Agent (A2A) Protocol](https://google.github.io/A2A/) v0.3.0. Provides a modular framework for building agents that communicate over a standardized JSON-RPC 2.0 protocol, following hexagonal architecture principles.
+A Rust implementation of the [Agent-to-Agent (A2A) Protocol](https://google.github.io/A2A/) v1.0.0. Provides a modular framework for building agents that communicate over ConnectRPC, following hexagonal architecture principles.
 
 ## Overview
 
@@ -55,9 +55,7 @@ The core library uses Cargo feature flags so you only compile what you need:
 | `server` (default) | Async server traits and in-memory storage |
 | `tracing` (default) | Structured logging via `tracing` |
 | `http-server` | Axum-based HTTP server |
-| `ws-server` | WebSocket server via tokio-tungstenite |
 | `http-client` | HTTP client via reqwest |
-| `ws-client` | WebSocket client |
 | `auth` | JWT, OAuth2, OpenID Connect authentication |
 | `sqlite` | SQLite storage via SQLx |
 | `postgres` | PostgreSQL storage via SQLx |
@@ -101,36 +99,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-### Streaming with WebSocket
-
-```rust
-use a2a_rs::{WebSocketClient, Message};
-use a2a_rs::services::StreamItem;
-use futures::StreamExt;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let client = WebSocketClient::new("ws://localhost:3030/ws".to_string());
-
-    let message = Message::user_text("Process my request".to_string());
-    let mut stream = client.subscribe_to_task("task-456", &message, None, None).await?;
-
-    while let Some(result) = stream.next().await {
-        match result? {
-            StreamItem::Task(task) => println!("Task: {:?}", task),
-            StreamItem::StatusUpdate(update) => {
-                println!("Status: {:?}", update);
-                if update.final_ { break; }
-            }
-            StreamItem::ArtifactUpdate(artifact) => {
-                println!("Artifact: {:?}", artifact);
-            }
-        }
-    }
-
-    Ok(())
-}
-```
 
 ### Declarative agent (TOML-based)
 
@@ -160,8 +128,8 @@ The core library follows hexagonal architecture with clear layer separation:
 ```
                         Application Layer
             ┌──────────────────┬─────────────────────┐
-            │  JSON-RPC        │  HTTP / WebSocket    │
-            │  Handlers        │  Transport           │
+            │  ConnectRPC      │  HTTP Transport     │
+            │  Handlers        │                     │
             └────────┬─────────┴──────────┬──────────┘
                      │                    │
                      v                    v
@@ -185,7 +153,7 @@ Port traits define the contracts between layers. Implement `AsyncMessageHandler`
 
 ## Protocol coverage
 
-Implements the full A2A v0.3.0 specification:
+Implements the full A2A v1.0.0 specification:
 
 - `message/send` and `message/stream` (blocking and streaming message exchange)
 - `tasks/get`, `tasks/list`, `tasks/cancel`, `tasks/resubscribe`

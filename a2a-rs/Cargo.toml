@@ -33,8 +33,6 @@ futures = { version = "0.3", optional = true }
 # HTTP client - optional
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
 
-# WebSocket - optional
-tokio-tungstenite = { version = "0.20", features = ["rustls", "connect", "stream", "handshake"], default-features = false, optional = true }
 
 # HTTP server - optional
 axum = { version = "0.8", optional = true }
@@ -47,6 +45,15 @@ openidconnect = { version = "4.0", optional = true }
 # Logging - optional
 tracing = { version = "0.1", optional = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+connectrpc = { version = "0.3.2", features = ["tls", "axum"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+webpki-roots = "0.26"
+buffa = { version = "0.3.0", features = ["json"] }
+buffa-types = { version = "0.3.0", features = ["json"] }
+http = "1.0"
+http-body = "1.0.1"
+prost = "0.14.3"
+prost-types = "0.14.3"
 
 [dev-dependencies]
 # Testing dependencies
@@ -60,17 +67,17 @@ arbitrary = { version = "1.3", features = ["derive"] }
 default = ["server", "tracing"]
 client = ["dep:tokio", "dep:async-trait", "dep:futures"]
 http-client = ["client", "dep:reqwest"]
-ws-client = ["client", "dep:tokio-tungstenite"]
+
 server = ["dep:tokio", "dep:async-trait", "dep:futures"]
 http-server = ["server", "dep:axum"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
-ws-server = ["server", "dep:tokio-tungstenite"]
+
 auth = ["dep:jsonwebtoken", "dep:oauth2", "dep:openidconnect", "dep:reqwest"]
 sqlx-storage = ["server", "dep:sqlx"]
 sqlite = ["sqlx-storage", "sqlx/sqlite"]
 postgres = ["sqlx-storage", "sqlx/postgres"]
 mysql = ["sqlx-storage", "sqlx/mysql"]
-full = ["http-client", "ws-client", "http-server", "ws-server", "tracing", "auth", "sqlite", "postgres"]
+full = ["http-client", "http-server", "tracing", "auth", "sqlite", "postgres"]
 
 
 [package.metadata.docs.rs]
@@ -82,10 +89,6 @@ name = "http_client_server"
 path = "examples/http_client_server.rs"
 required-features = ["http-server", "http-client"]
 
-[[example]]
-name = "websocket_client_server"
-path = "examples/websocket_client_server.rs"
-required-features = ["ws-server", "ws-client"]
 
 [[example]]
 name = "sqlx_storage_demo"
@@ -101,3 +104,8 @@ required-features = ["server", "tracing"]
 name = "a2a_performance"
 harness = false
 required-features = ["full"]
+
+[build-dependencies]
+connectrpc-build = "0.3.2"
+prost-build = "0.14.3"
+protoc-bin-vendored = "3.2.0"

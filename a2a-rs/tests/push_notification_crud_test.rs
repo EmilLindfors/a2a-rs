@@ -1,4 +1,4 @@
-//! Integration tests for push notification config CRUD endpoints (v0.3.0)
+//! Integration tests for push notification config CRUD endpoints (v1.0.0)
 //!
 //! Tests the spec-compliant implementation of:
 //! - tasks/pushNotificationConfig/list
@@ -10,10 +10,10 @@
 mod common;
 
 use a2a_rs::{
+    TaskPushNotificationConfig,
     adapter::{
         DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
-    domain::{PushNotificationConfig, TaskPushNotificationConfig},
     port::{AsyncNotificationManager, AsyncTaskManager},
     services::AsyncA2AClient,
 };
@@ -95,13 +95,13 @@ async fn test_set_and_list_push_notification_config() {
 
     // Set a push notification config using the storage API
     let config = TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: "task_with_config".to_string(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config_1".to_string()),
-            url: "https://example.com/webhook1".to_string(),
-            token: Some("secret_token_123".to_string()),
-            authentication: None,
-        },
+        id: "config_1".to_string(),
+        url: "https://example.com/webhook1".to_string(),
+        token: "secret_token_123".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     storage.set_task_notification(&config).await.unwrap();
@@ -129,18 +129,9 @@ async fn test_set_and_list_push_notification_config() {
     // Verify config details
     let returned_config = &configs[0];
     assert_eq!(returned_config.task_id, "task_with_config");
-    assert_eq!(
-        returned_config.push_notification_config.id,
-        Some("config_1".to_string())
-    );
-    assert_eq!(
-        returned_config.push_notification_config.url,
-        "https://example.com/webhook1"
-    );
-    assert_eq!(
-        returned_config.push_notification_config.token,
-        Some("secret_token_123".to_string())
-    );
+    assert_eq!(returned_config.id, "config_1".to_string());
+    assert_eq!(returned_config.url, "https://example.com/webhook1");
+    assert_eq!(returned_config.token, "secret_token_123".to_string());
 }
 
 #[tokio::test]
@@ -156,13 +147,13 @@ async fn test_get_push_notification_config() {
 
     // Set a push notification config
     let config = TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: "task_get_config".to_string(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config_abc".to_string()),
-            url: "https://example.com/notifications".to_string(),
-            token: Some("bearer_token_xyz".to_string()),
-            authentication: None,
-        },
+        id: "config_abc".to_string(),
+        url: "https://example.com/notifications".to_string(),
+        token: "bearer_token_xyz".to_string(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     storage.set_task_notification(&config).await.unwrap();
@@ -186,18 +177,9 @@ async fn test_get_push_notification_config() {
 
     // Verify config details
     assert_eq!(returned_config.task_id, "task_get_config");
-    assert_eq!(
-        returned_config.push_notification_config.id,
-        Some("config_abc".to_string())
-    );
-    assert_eq!(
-        returned_config.push_notification_config.url,
-        "https://example.com/notifications"
-    );
-    assert_eq!(
-        returned_config.push_notification_config.token,
-        Some("bearer_token_xyz".to_string())
-    );
+    assert_eq!(returned_config.id, "config_abc".to_string());
+    assert_eq!(returned_config.url, "https://example.com/notifications");
+    assert_eq!(returned_config.token, "bearer_token_xyz".to_string());
 }
 
 #[tokio::test]
@@ -237,13 +219,13 @@ async fn test_delete_push_notification_config() {
 
     // Set a push notification config
     let config = TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: "task_delete".to_string(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config_to_delete".to_string()),
-            url: "https://example.com/webhook".to_string(),
-            token: None,
-            authentication: None,
-        },
+        id: "config_to_delete".to_string(),
+        url: "https://example.com/webhook".to_string(),
+        token: String::new(),
+        authentication: None.into(),
+        ..Default::default()
     };
 
     storage.set_task_notification(&config).await.unwrap();
@@ -349,16 +331,18 @@ async fn test_push_notification_config_with_authentication() {
 
     // Set a push notification config with authentication
     let config = TaskPushNotificationConfig {
+        tenant: String::new(),
         task_id: "task_with_auth".to_string(),
-        push_notification_config: PushNotificationConfig {
-            id: Some("config_auth".to_string()),
-            url: "https://example.com/secure-webhook".to_string(),
-            token: Some("validation_token".to_string()),
-            authentication: Some(a2a_rs::domain::PushNotificationAuthenticationInfo {
-                schemes: vec!["Bearer".to_string()],
-                credentials: Some("secret_credentials".to_string()),
-            }),
-        },
+        id: "config_auth".to_string(),
+        url: "https://example.com/secure-webhook".to_string(),
+        token: "validation_token".to_string(),
+        authentication: Some(a2a_rs::domain::PushNotificationAuthenticationInfo {
+            scheme: "Bearer".to_string(),
+            credentials: "secret_credentials".to_string(),
+            ..Default::default()
+        })
+        .into(),
+        ..Default::default()
     };
 
     storage.set_task_notification(&config).await.unwrap();
@@ -377,20 +361,11 @@ async fn test_push_notification_config_with_authentication() {
     assert_eq!(configs.len(), 1);
 
     let returned_config = &configs[0];
-    assert!(
-        returned_config
-            .push_notification_config
-            .authentication
-            .is_some()
-    );
+    assert!(returned_config.authentication.as_option().is_some());
 
-    let auth = returned_config
-        .push_notification_config
-        .authentication
-        .as_ref()
-        .unwrap();
-    assert_eq!(auth.schemes, vec!["Bearer".to_string()]);
-    assert_eq!(auth.credentials, Some("secret_credentials".to_string()));
+    let auth = returned_config.authentication.as_option().unwrap();
+    assert_eq!(auth.scheme, "Bearer".to_string());
+    assert_eq!(auth.credentials, "secret_credentials".to_string());
 }
 
 #[tokio::test]

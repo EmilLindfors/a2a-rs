@@ -191,7 +191,7 @@ impl AsyncMessageHandler for MerchantHandler {
         message: &Message,
         _session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
-        let context_id = message.context_id.clone().unwrap_or_default();
+        let context_id = message.context_id.clone();
 
         // --- Try AP2 IntentMandate flow ---
         if let Some(intent) =
@@ -219,11 +219,10 @@ impl AsyncMessageHandler for MerchantHandler {
                 return Ok(Task::builder()
                     .id(task_id.to_string())
                     .context_id(context_id)
-                    .status(TaskStatus {
-                        state: TaskState::Completed,
-                        message: Some(response.clone()),
-                        timestamp: Some(chrono::Utc::now()),
-                    })
+                    .status(TaskStatus::new(
+                        TaskState::Completed,
+                        Some(response.clone()),
+                    ))
                     .history(vec![message.clone(), response])
                     .build());
             }
@@ -256,11 +255,10 @@ impl AsyncMessageHandler for MerchantHandler {
             return Ok(Task::builder()
                 .id(task_id.to_string())
                 .context_id(context_id)
-                .status(TaskStatus {
-                    state: TaskState::InputRequired,
-                    message: Some(response.clone()),
-                    timestamp: Some(chrono::Utc::now()),
-                })
+                .status(TaskStatus::new(
+                    TaskState::InputRequired,
+                    Some(response.clone()),
+                ))
                 .history(vec![message.clone(), response])
                 .artifacts(vec![cart_artifact])
                 .build());
@@ -321,21 +319,21 @@ impl AsyncMessageHandler for MerchantHandler {
 
             let receipt_artifact = Artifact {
                 artifact_id: Uuid::new_v4().to_string(),
-                name: Some("Payment Receipt".to_string()),
-                description: None,
+                name: "Payment Receipt".to_string(),
+                description: String::new(),
                 parts: response.parts.clone(),
-                metadata: None,
-                extensions: None,
+                metadata: buffa::MessageField::none(),
+                extensions: Vec::new(),
+                ..Default::default()
             };
 
             return Ok(Task::builder()
                 .id(task_id.to_string())
                 .context_id(context_id)
-                .status(TaskStatus {
-                    state: TaskState::Completed,
-                    message: Some(response.clone()),
-                    timestamp: Some(chrono::Utc::now()),
-                })
+                .status(TaskStatus::new(
+                    TaskState::Completed,
+                    Some(response.clone()),
+                ))
                 .history(vec![message.clone(), response])
                 .artifacts(vec![receipt_artifact])
                 .build());
@@ -352,11 +350,10 @@ impl AsyncMessageHandler for MerchantHandler {
         Ok(Task::builder()
             .id(task_id.to_string())
             .context_id(context_id)
-            .status(TaskStatus {
-                state: TaskState::Completed,
-                message: Some(response.clone()),
-                timestamp: Some(chrono::Utc::now()),
-            })
+            .status(TaskStatus::new(
+                TaskState::Completed,
+                Some(response.clone()),
+            ))
             .history(vec![message.clone(), response])
             .build())
     }

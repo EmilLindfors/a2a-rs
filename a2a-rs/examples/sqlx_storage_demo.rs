@@ -109,7 +109,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let task = storage.get_task(task_id, Some(10)).await?;
         println!("  📋 Task: {} (status: {:?})", task.id, task.status.state);
 
-        if let Some(history) = &task.history {
+        let history = &task.history;
+        if !history.is_empty() {
             println!("     History entries: {}", history.len());
 
             for (i, message) in history.iter().enumerate() {

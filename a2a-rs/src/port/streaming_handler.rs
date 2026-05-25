@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
 
+use crate::domain::core::task::TaskStateExt;
 use crate::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 
 /// A trait for subscribing to real-time updates
@@ -184,7 +185,7 @@ impl UpdateEvent {
     #[inline]
     pub fn is_final(&self) -> bool {
         match self {
-            UpdateEvent::StatusUpdate(event) => event.final_,
+            UpdateEvent::StatusUpdate(event) => event.status.state.is_terminal(),
             UpdateEvent::ArtifactUpdate(event) => event.last_chunk.unwrap_or(false),
         }
     }
