@@ -4,7 +4,9 @@
 //! a2a-agents framework. These are examples and starting points for building
 //! your own agents.
 
+#[cfg(feature = "reimbursement-agent")]
 pub mod reimbursement;
 
 // Re-export for convenience
+#[cfg(feature = "reimbursement-agent")]
 pub use reimbursement::ReimbursementHandler;

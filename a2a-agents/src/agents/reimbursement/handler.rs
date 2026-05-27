@@ -97,6 +97,7 @@ where
     llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
+#[allow(dead_code)]
 impl<T> ReimbursementHandler<T>
 where
     T: a2a_rs::port::AsyncTaskManager
