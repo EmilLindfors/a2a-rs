@@ -1,8 +1,14 @@
 name: Release Binaries
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "a2a-agents-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and upload binaries for (e.g. a2a-agents-v0.3.0)"
+        required: true
 
 permissions:
   contents: write
@@ -26,6 +32,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -41,9 +49,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ runner.os }}" = "Linux" ]; then
-            cross build --release --bin a2a --target ${{ matrix.target }} --features "mcp-server,reimbursement-agent"
+            cross build --release -p a2a-agents --bin a2a --target ${{ matrix.target }} --features "mcp-server,reimbursement-agent"
           else
-            cargo build --release --bin a2a --target ${{ matrix.target }} --features "mcp-server,reimbursement-agent"
+            cargo build --release -p a2a-agents --bin a2a --target ${{ matrix.target }} --features "mcp-server,reimbursement-agent"
           fi
 
       - name: Package binary (Unix)
@@ -60,10 +68,12 @@ jobs:
         if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: a2a-${{ matrix.target }}.tar.gz
 
       - name: Upload Release Asset (Windows)
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag || github.ref_name }}
           files: a2a-${{ matrix.target }}.zip
