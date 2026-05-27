@@ -19,3 +19,6 @@ a2a-mcp/rust-sdk/
 
 .vscode/
 .claude/
+
+!.vscode/mcp.json
+!a2a-agents/.env.example
