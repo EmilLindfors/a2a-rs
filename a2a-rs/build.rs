@@ -1,5 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("cargo:rerun-if-changed=../spec/a2a.proto");
+    println!("cargo:rerun-if-changed=proto/a2a.proto");
     println!("cargo:rerun-if-changed=build.rs");
 
     // Tell it to use the protoc binary provided by protoc-bin-vendored
@@ -9,8 +9,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Generate connectrpc client and server code, along with buffa message types
     connectrpc_build::Config::new()
-        .files(&["../spec/a2a.proto"])
-        .includes(&["../spec"])
+        .files(&["proto/a2a.proto"])
+        .includes(&["proto"])
         .compile()?;
 
     Ok(())
