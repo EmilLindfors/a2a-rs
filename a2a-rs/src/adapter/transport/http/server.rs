@@ -71,15 +71,12 @@ where
         }
     }
 
-    /// Start the HTTP server
-    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
-        server.address = %self.address,
-        server.has_auth = self.authenticator.is_some()
-    )))]
-    pub async fn start(&self) -> Result<(), A2AError> {
-        #[cfg(feature = "tracing")]
-        info!("Starting HTTP server");
-
+    /// Build the Axum router that exposes the A2A protocol.
+    ///
+    /// **ingram-services fork addition**: extracted from `start()` so callers
+    /// that need a custom transport (e.g. mTLS via `axum-server` with rustls)
+    /// can mount the same routes on their own listener. Upstream PR pending.
+    pub fn build_router(&self) -> Router {
         let processor = self.processor.clone();
         let agent_info = self.agent_info.clone();
 
@@ -106,6 +103,20 @@ where
             // Create an auth router with the authenticator
             app = with_auth(app, (*auth_clone).clone());
         }
+
+        app
+    }
+
+    /// Start the HTTP server
+    #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
+        server.address = %self.address,
+        server.has_auth = self.authenticator.is_some()
+    )))]
+    pub async fn start(&self) -> Result<(), A2AError> {
+        #[cfg(feature = "tracing")]
+        info!("Starting HTTP server");
+
+        let app = self.build_router();
 
         let listener = tokio::net::TcpListener::bind(&self.address)
             .await
