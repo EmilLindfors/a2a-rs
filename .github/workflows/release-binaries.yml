@@ -17,18 +17,24 @@ jobs:
   upload-assets:
     name: Build and upload binaries
     strategy:
+      fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
+            use_cross: false
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
+            use_cross: true
           - target: x86_64-apple-darwin
             os: macos-latest
+            use_cross: false
           - target: aarch64-apple-darwin
             os: macos-latest
+            use_cross: false
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+            use_cross: false
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -40,15 +46,14 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Install cross for cross-compilation on Linux
       - name: Install cross
-        if: runner.os == 'Linux'
+        if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
       - name: Build binary
         shell: bash
         run: |
-          if [ "${{ runner.os }}" = "Linux" ]; then
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release -p a2a-agents --bin a2a --target ${{ matrix.target }} --features "mcp-server,reimbursement-agent"
           else
             cargo build --release -p a2a-agents --bin a2a --target ${{ matrix.target }} --features "mcp-server,reimbursement-agent"
