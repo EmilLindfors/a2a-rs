@@ -47,7 +47,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 tokio = { version = "1.32", features = ["rt", "macros", "test-util"] }
-a2a-agents = { path = "../a2a-agents", version = "0.3" }
+a2a-agents = { path = "../a2a-agents" }
 
 [[test]]
 name = "integration_test"
