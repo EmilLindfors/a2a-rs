@@ -65,6 +65,12 @@ fn map_stream_response(resp: crate::domain::generated::StreamResponse) -> Option
     }
 }
 
+/// Per-call header injector. Invoked immediately before each connectrpc
+/// request so callers can produce dynamic headers tied to the current
+/// execution context — for example W3C TraceContext (`traceparent`,
+/// `tracestate`) propagation from the surrounding OpenTelemetry span.
+pub type CallHeaderInjector = std::sync::Arc<dyn Fn() -> http::HeaderMap + Send + Sync>;
+
 /// HTTP client for interacting with the A2A protocol via ConnectRPC
 pub struct HttpClient {
     /// Base URL of the A2A API
@@ -77,6 +83,10 @@ pub struct HttpClient {
     auth_token: Option<String>,
     /// Timeout in seconds
     timeout: u64,
+    /// Optional per-call header injector. When set, the closure runs
+    /// before every connectrpc call and its headers are merged into the
+    /// outgoing request via `CallOptions::with_headers`.
+    call_header_injector: Option<CallHeaderInjector>,
 }
 
 impl HttpClient {
@@ -108,6 +118,7 @@ impl HttpClient {
             connect_client,
             auth_token: None,
             timeout: 30,
+            call_header_injector: None,
         }
     }
 
@@ -141,6 +152,7 @@ impl HttpClient {
             connect_client,
             auth_token: Some(auth_token),
             timeout: 30,
+            call_header_injector: None,
         }
     }
 
@@ -171,6 +183,31 @@ impl HttpClient {
         }
 
         Ok(headers)
+    }
+
+    /// Install a callback that produces fresh HTTP headers for every
+    /// connectrpc call. Use this to inject W3C `traceparent`/`tracestate`
+    /// from the current OpenTelemetry context (or any other per-call
+    /// metadata) so the server can correlate the call with the caller.
+    pub fn with_call_header_injector(mut self, injector: CallHeaderInjector) -> Self {
+        self.call_header_injector = Some(injector);
+        self
+    }
+
+    fn make_call_options(&self) -> connectrpc::client::CallOptions {
+        if let Some(injector) = &self.call_header_injector {
+            let map = injector();
+            // HeaderMap iter yields `(Option<HeaderName>, HeaderValue)` so
+            // multi-valued keys can be distinguished. We don't need that
+            // for trace propagation, so drop the `None` follow-ups.
+            let pairs: Vec<_> = map
+                .into_iter()
+                .filter_map(|(n, v)| n.map(|n| (n, v)))
+                .collect();
+            connectrpc::client::CallOptions::default().with_headers(pairs)
+        } else {
+            connectrpc::client::CallOptions::default()
+        }
     }
 
     /// Get the base URL of the client
@@ -279,7 +316,7 @@ impl AsyncA2AClient for HttpClient {
 
         let response = self
             .connect_client
-            .send_message(request)
+            .send_message_with_options(request, self.make_call_options())
             .await
             .map_err(map_connect_err)?;
         let owned_response = response.into_owned();
