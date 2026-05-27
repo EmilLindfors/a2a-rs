@@ -80,6 +80,42 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
+    /// Create an HTTP client using a caller-supplied [`rustls::ClientConfig`].
+    ///
+    /// Use this when you need mTLS (custom root CA, client certificate + key)
+    /// or any other rustls customisation that doesn't fit the
+    /// `webpki_roots`-backed [`Self::new`] / [`Self::with_auth`] paths. The
+    /// same TLS config is plumbed through both the ConnectRPC transport and
+    /// the inner `reqwest::Client` used by the REST helpers
+    /// ([`Self::get_agent_card`], [`Self::get_extended_agent_card`]), so all
+    /// outgoing requests share a single TLS identity.
+    pub fn with_tls_config(
+        base_url: String,
+        tls_config: Arc<rustls::ClientConfig>,
+    ) -> Self {
+        let uri = base_url.parse::<http::Uri>().expect("Invalid base URL");
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let transport = connectrpc::client::HttpClient::with_tls(tls_config.clone());
+
+        let mut config = connectrpc::client::ClientConfig::new(uri);
+        config = config.default_timeout(Duration::from_secs(30));
+
+        let connect_client = A2aServiceClient::new(transport, config);
+
+        let rest_client = Client::builder()
+            .use_preconfigured_tls((*tls_config).clone())
+            .build()
+            .expect("reqwest with preconfigured rustls");
+
+        Self {
+            base_url,
+            client: rest_client,
+            connect_client,
+            auth_token: None,
+            timeout: 30,
+        }
+    }
+
     /// Create a new HTTP client with the given base URL
     pub fn new(base_url: String) -> Self {
         let uri = base_url.parse::<http::Uri>().expect("Invalid base URL");
