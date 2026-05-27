@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.2.0...a2a-rs-v0.2.1) - 2026-05-27
+
+### Fixed
+
+- allow clippy::result_large_err in request processor
+
+### Other
+
+- fmt,clippy
+- Fix clippy warnings and failing tests
+- migrate to Connect-Rust, refactor project structure, update protobuf specs, and clean up temporary scripts
+- docs
+
 ### Changed
 - Demoted the `⚠️ No WebSocket subscribers found for task` log in
   `InMemoryTaskStorage::broadcast_status_update` from WARN to DEBUG. The
