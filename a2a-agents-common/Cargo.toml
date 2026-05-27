@@ -1,6 +1,6 @@
 [package]
 name = "a2a-agents-common"
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Emil Lindfors <emil@lindfors.no>"]
@@ -47,7 +47,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
 tokio = { version = "1.32", features = ["rt", "macros", "test-util"] }
-a2a-agents = { path = "../a2a-agents", version = "0.2" }
+a2a-agents = { path = "../a2a-agents", version = "0.3" }
 
 [[test]]
 name = "integration_test"
