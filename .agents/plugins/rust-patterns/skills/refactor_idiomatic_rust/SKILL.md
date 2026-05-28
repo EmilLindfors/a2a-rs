@@ -16,6 +16,21 @@ https://microsoft.github.io/RustTraining/rust-patterns-book/
 - Use **Blanket Implementations** carefully but effectively (e.g. `impl<T: Display> ToString for T`) to give trait implementations for free to any type matching the constraints.
 - Maintain **Trait Object Safety Rules**: Traits meant for dynamic dispatch must not have `Self: Sized` bounds on methods meant for the vtable, no generic type parameters on methods, and no `Self` in return position (unless boxed).
 
+## Closures and Iterators
+- Use the weakest closure bound necessary: accept `FnMut` by default to be flexible for callers, require `Fn` only if called concurrently, and `FnOnce` if called exactly once.
+- Refactor imperative loops to functional combinator chains (e.g., `.iter().filter().map().collect()`) when operating on iterators.
+- Apply the **With Pattern** (bracketed resource access) for resources requiring guaranteed setup and teardown, passing a handle to a closure to ensure it doesn't escape the expected scope.
+
+## Error Handling
+- Use the `?` operator for clean error propagation. Remember it works by doing a `match`, `From::from(e)`, and early returning `Err`.
+- Avoid panicking in expected failure states. Return `Result` for expected errors (e.g. file IO or networking), and use `panic!` only for unrecoverable programming bugs (like indexing out of bounds).
+
+## API Ergonomics
+- Use `impl Into<T>` to accept any convertible type instead of forcing the caller to allocate/convert.
+- Use `impl AsRef<T>` or `&T` to accept any referential type for read-only access.
+- Use `Cow<'a, T>` to avoid allocations on the fast path, cloning only when mutation is necessary.
+- Prefer returning specific, validated types over raw `String` or numeric primitives to avoid "stringly-typed" APIs.
+
 ## Implementation Details
 - Provide concise, actionable suggestions for refactoring.
 - Show code snippets comparing "before" (un-idiomatic) and "after" (idiomatic).
