@@ -1,3 +1,8 @@
+---
+name: refactor_idiomatic_rust
+description: Refactor Rust code toward idiomatic patterns — generics vs dyn, associated vs generic trait parameters, enum dispatch, extension traits, closure bounds, iterator combinators, API ergonomics (Into/AsRef/Cow), and clean error propagation. Use when the user asks to make code more idiomatic, clean up a function, choose between dispatch strategies, or tighten an API surface.
+---
+
 # Refactor Idiomatic Rust
 
 This skill helps you refactor Rust code into idiomatic patterns based on the "Rust Patterns & Engineering How-Tos" guide.

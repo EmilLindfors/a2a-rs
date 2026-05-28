@@ -1,3 +1,27 @@
 {
-  "name": "rust-patterns"
+  "name": "rust-patterns",
+  "version": "0.1.0",
+  "description": "Guidance for idiomatic Rust and hexagonal architecture. Combines the Microsoft Rust Patterns Book (https://microsoft.github.io/RustTraining/rust-patterns-book/) with ports-and-adapters discipline for libraries and services.",
+  "keywords": [
+    "rust",
+    "architecture",
+    "hexagonal",
+    "ports-and-adapters",
+    "idiomatic",
+    "code-review",
+    "refactor"
+  ],
+  "commands": [
+    "commands/rust-review.md"
+  ],
+  "skills": [
+    "skills/architectural_review",
+    "skills/refactor_idiomatic_rust",
+    "skills/hexagonal_review",
+    "skills/refactor_to_hexagonal"
+  ],
+  "rules": [
+    "rules/rust_best_practices.md",
+    "rules/hexagonal_architecture.md"
+  ]
 }

@@ -1,3 +1,8 @@
+---
+name: architectural_review
+description: Review Rust code for advanced architectural patterns — capability mixins, typed commands, concurrency model choice, smart pointer/interior mutability selection, error-handling architecture, and memory layout. Use when the user asks to review system architecture, suggest broad design improvements, or evaluate trait composition and shared-state strategy in a Rust project. For ports-and-adapters layering specifically, prefer `hexagonal_review`.
+---
+
 # Architectural Review (Rust)
 
 This skill helps you perform an architectural review of Rust code based on advanced patterns found in the "Rust Patterns & Engineering How-Tos" guide.
