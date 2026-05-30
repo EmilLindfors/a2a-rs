@@ -96,8 +96,7 @@ pub use domain::{
 pub use port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt,
     AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery,
-    MessageHandler, NotificationManager, StreamingHandler, StreamingSubscriber, TaskManager,
-    UpdateEvent,
+    StreamingSubscriber, UpdateEvent,
 };
 
 #[cfg(feature = "http-client")]

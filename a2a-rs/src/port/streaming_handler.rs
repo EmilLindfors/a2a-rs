@@ -29,38 +29,6 @@ pub trait Subscriber<T>: Send + Sync {
     }
 }
 
-/// A trait for managing streaming connections and real-time updates
-pub trait StreamingHandler {
-    /// Add a status update subscriber for a task
-    fn add_status_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError>; // Returns subscription ID
-
-    /// Add an artifact update subscriber for a task
-    fn add_artifact_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError>; // Returns subscription ID
-
-    /// Remove a specific subscription
-    fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError>;
-
-    /// Remove all subscribers for a task
-    fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError>;
-
-    /// Get the number of active subscribers for a task
-    fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError>;
-
-    /// Check if a task has any active subscribers
-    fn has_subscribers(&self, task_id: &str) -> Result<bool, A2AError> {
-        let count = self.get_subscriber_count(task_id)?;
-        Ok(count > 0)
-    }
-}
-
 #[cfg(feature = "server")]
 #[async_trait]
 /// An async trait for managing streaming connections and real-time updates

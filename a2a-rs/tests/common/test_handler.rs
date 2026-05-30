@@ -15,8 +15,7 @@ use a2a_rs::{
     },
     port::{
         AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-        AsyncTaskQuery, MessageHandler, NotificationManager, StreamingHandler, TaskManager,
-        streaming_handler::Subscriber,
+        AsyncTaskQuery, streaming_handler::Subscriber,
     },
 };
 
@@ -54,123 +53,6 @@ impl TestBusinessHandler {
 impl Default for TestBusinessHandler {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-// Synchronous trait implementations - not supported since we use async storage
-impl MessageHandler for TestBusinessHandler {
-    fn process_message(
-        &self,
-        _task_id: &str,
-        _message: &Message,
-        _session_id: Option<&str>,
-    ) -> Result<Task, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous message processing not supported. Use async version.".to_string(),
-        ))
-    }
-}
-
-impl TaskManager for TestBusinessHandler {
-    fn create_task(&self, _task_id: &str, _context_id: &str) -> Result<Task, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous task creation not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn get_task(&self, _task_id: &str, _history_length: Option<u32>) -> Result<Task, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous task retrieval not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn update_task_status(
-        &self,
-        _task_id: &str,
-        _state: TaskState,
-        _message: Option<Message>,
-    ) -> Result<Task, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous task status update not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn cancel_task(&self, _task_id: &str) -> Result<Task, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous task cancellation not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn task_exists(&self, _task_id: &str) -> Result<bool, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous task existence check not supported. Use async version.".to_string(),
-        ))
-    }
-}
-
-impl NotificationManager for TestBusinessHandler {
-    fn set_task_notification(
-        &self,
-        _config: &a2a_rs::domain::TaskPushNotificationConfig,
-    ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous notification setup not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn get_task_notification(
-        &self,
-        _task_id: &str,
-    ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous notification retrieval not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn remove_task_notification(&self, _task_id: &str) -> Result<(), A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous notification removal not supported. Use async version.".to_string(),
-        ))
-    }
-}
-
-impl StreamingHandler for TestBusinessHandler {
-    fn add_status_subscriber(
-        &self,
-        _task_id: &str,
-        _subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous streaming subscription not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn add_artifact_subscriber(
-        &self,
-        _task_id: &str,
-        _subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous streaming subscription not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn remove_subscription(&self, _subscription_id: &str) -> Result<(), A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous streaming unsubscription not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn remove_task_subscribers(&self, _task_id: &str) -> Result<(), A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous streaming unsubscription not supported. Use async version.".to_string(),
-        ))
-    }
-
-    fn get_subscriber_count(&self, _task_id: &str) -> Result<usize, A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Synchronous subscriber count not supported. Use async version.".to_string(),
-        ))
     }
 }
 

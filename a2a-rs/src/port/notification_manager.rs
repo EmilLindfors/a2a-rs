@@ -49,46 +49,6 @@ fn validate_push_notification_url(config: &TaskPushNotificationConfig) -> Result
     Ok(())
 }
 
-/// A trait for managing push notification configurations and delivery
-pub trait NotificationManager {
-    /// Set up push notifications for a task
-    fn set_task_notification(
-        &self,
-        config: &TaskPushNotificationConfig,
-    ) -> Result<TaskPushNotificationConfig, A2AError>;
-
-    /// Get the push notification configuration for a task
-    fn get_task_notification(&self, task_id: &str) -> Result<TaskPushNotificationConfig, A2AError>;
-
-    /// Remove push notification configuration for a task
-    fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError>;
-
-    /// Check if push notifications are configured for a task
-    fn has_task_notification(&self, task_id: &str) -> Result<bool, A2AError> {
-        match self.get_task_notification(task_id) {
-            Ok(_) => Ok(true),
-            Err(A2AError::TaskNotFound(_)) => Ok(false),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Validate push notification configuration
-    fn validate_notification_config(
-        &self,
-        config: &TaskPushNotificationConfig,
-    ) -> Result<(), A2AError> {
-        validate_push_notification_url(config)
-    }
-
-    /// Send a test notification to verify configuration
-    fn send_test_notification(&self, config: &TaskPushNotificationConfig) -> Result<(), A2AError> {
-        // Default implementation - can be overridden
-        self.validate_notification_config(config)?;
-        // In a real implementation, this would send a test notification
-        Ok(())
-    }
-}
-
 /// Async management of push-notification configurations.
 ///
 /// Expressed in terms of the A2A v1.0.0 multi-config CRUD model — the richest
