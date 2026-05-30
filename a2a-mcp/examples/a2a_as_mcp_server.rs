@@ -14,9 +14,9 @@ use std::time::Duration;
 use a2a_mcp::AgentToMcpBridge;
 use a2a_rs::{
     adapter::{
-        business::{DefaultMessageHandler, DefaultRequestProcessor},
+        business::ResponderMessageHandler,
         storage::InMemoryTaskStorage,
-        transport::http::HttpClient,
+        transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
         HttpServer, SimpleAgentInfo,
     },
     domain::{error::A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
@@ -32,7 +32,7 @@ const AGENT_URL: &str = "http://127.0.0.1:18182";
 
 /// Minimal A2A handler that echoes incoming text.
 ///
-/// Wraps a `DefaultMessageHandler` to satisfy the storage-touching bits
+/// Wraps a `ResponderMessageHandler` to satisfy the storage-touching bits
 /// (task creation, history persistence) and overrides response generation
 /// with a simple echo.
 #[derive(Clone)]
@@ -48,9 +48,10 @@ impl AsyncMessageHandler for EchoHandler {
         message: &Message,
         session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
-        // Delegate to DefaultMessageHandler for proper storage semantics, then
+        // Delegate to ResponderMessageHandler for proper storage semantics, then
         // synthesize an echo response on top of whatever it returned.
-        let inner = DefaultMessageHandler::new((*self.storage).clone());
+        let inner =
+            ResponderMessageHandler::echo((*self.storage).clone(), (*self.storage).clone());
         let mut task = inner.process_message(task_id, message, session_id).await?;
 
         let echoed = message
@@ -94,7 +95,7 @@ async fn main() -> anyhow::Result<()> {
             Some("Repeat the input back".to_string()),
         );
 
-    let processor = DefaultRequestProcessor::new(
+    let processor = ConnectRpcAdapter::new(
         handler,
         (*storage).clone(),
         (*storage).clone(),

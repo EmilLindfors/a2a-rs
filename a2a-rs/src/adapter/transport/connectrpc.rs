@@ -1,13 +1,24 @@
-//! A default request processor implementation
+//! The ConnectRPC transport adapter.
+//!
+//! `ConnectRpcAdapter` is the **outer** half of the split described in
+//! `REFACTORING_PLAN.md` §4.2: a thin transport adapter that implements the
+//! generated [`A2aService`] surface. Its only job is to decode `buffa` wire
+//! views into domain values, delegate to the inner [`TaskService`], and re-encode
+//! the domain results (and map [`A2AError`] onto ConnectRPC error codes). All
+//! use-case orchestration lives in [`TaskService`]; this layer holds no port
+//! traits directly.
+//!
+//! The public constructors (`new`, `with_handler`, `with_streaming_handler`) are
+//! unchanged from before the split — they build the inner service and wrap it.
 
 use async_trait::async_trait;
 use buffa::Enumeration;
 use std::pin::Pin;
-use std::sync::Arc;
 
 use crate::{
+    application::TaskService,
     domain::{
-        A2AError, AgentCard, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
+        A2AError, AgentCard, Task, TaskArtifactUpdateEvent, TaskId, TaskPushNotificationConfig,
         TaskStatusUpdateEvent,
         generated::{
             A2aService, CancelTaskRequestView, DeleteTaskPushNotificationConfigRequestView,
@@ -22,103 +33,66 @@ use crate::{
         },
     },
     port::{
-        AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
-        UpdateEvent, streaming_handler::Subscriber,
+        AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
+        AsyncTaskQuery, UpdateEvent, streaming_handler::Subscriber,
     },
     services::server::AgentInfoProvider,
 };
 
-/// Default implementation of a request processor that routes ConnectRPC requests to business handlers
+/// ConnectRPC transport adapter over a [`TaskService`].
+///
+/// Holds no ports directly — it owns the inner application service and forwards
+/// decoded requests to it. Dispatch into the service goes through the service's
+/// `Arc<dyn …>` fields, which is a cold path against the I/O each call performs.
 #[derive(Clone)]
-pub struct DefaultRequestProcessor<
-    M,
-    T,
-    N,
-    A = crate::adapter::SimpleAgentInfo,
-    S = NoopStreamingHandler,
-> where
-    M: AsyncMessageHandler + Send + Sync + 'static,
-    T: AsyncTaskManager + Send + Sync + 'static,
-    N: AsyncNotificationManager + Send + Sync + 'static,
-    A: AgentInfoProvider + Send + Sync + 'static,
-    S: AsyncStreamingHandler + Send + Sync + 'static,
-{
-    /// Message handler
-    message_handler: Arc<M>,
-    /// Task manager
-    task_manager: Arc<T>,
-    /// Notification manager
-    notification_manager: Arc<N>,
-    /// Agent info provider
-    agent_info: Arc<A>,
-    /// Streaming handler
-    streaming_handler: Arc<S>,
+pub struct ConnectRpcAdapter {
+    service: TaskService,
 }
 
-impl<M, T, N, A> DefaultRequestProcessor<M, T, N, A, NoopStreamingHandler>
-where
-    M: AsyncMessageHandler + Send + Sync + 'static,
-    T: AsyncTaskManager + Send + Sync + 'static,
-    N: AsyncNotificationManager + Send + Sync + 'static,
-    A: AgentInfoProvider + Send + Sync + 'static,
-{
-    /// Create a new request processor with the given handlers and default NoopStreamingHandler
+impl ConnectRpcAdapter {
+    /// Create a new adapter from separate handlers, defaulting to a no-op
+    /// streaming handler.
+    ///
+    /// `tasks` supplies both the lifecycle and query capabilities.
     pub fn new(
-        message_handler: M,
-        task_manager: T,
-        notification_manager: N,
-        agent_info: A,
+        message_handler: impl AsyncMessageHandler + 'static,
+        tasks: impl AsyncTaskLifecycle + AsyncTaskQuery + 'static,
+        notification_manager: impl AsyncNotificationManager + 'static,
+        agent_info: impl AgentInfoProvider + 'static,
     ) -> Self {
         Self {
-            message_handler: Arc::new(message_handler),
-            task_manager: Arc::new(task_manager),
-            notification_manager: Arc::new(notification_manager),
-            agent_info: Arc::new(agent_info),
-            streaming_handler: Arc::new(NoopStreamingHandler),
+            service: TaskService::new(
+                message_handler,
+                tasks,
+                notification_manager,
+                agent_info,
+                NoopStreamingHandler,
+            ),
         }
     }
-}
 
-impl<H, A> DefaultRequestProcessor<H, H, H, A, NoopStreamingHandler>
-where
-    H: AsyncMessageHandler + AsyncTaskManager + AsyncNotificationManager + Send + Sync + 'static,
-    A: AgentInfoProvider + Send + Sync + 'static,
-{
-    /// Create a new request processor with a single handler that implements all traits
-    pub fn with_handler(handler: H, agent_info: A) -> Self {
-        let handler_arc = Arc::new(handler);
+    /// Create a new adapter from a single handler that implements every port,
+    /// defaulting to a no-op streaming handler.
+    pub fn with_handler(
+        handler: impl AsyncMessageHandler
+        + AsyncTaskLifecycle
+        + AsyncTaskQuery
+        + AsyncNotificationManager
+        + 'static,
+        agent_info: impl AgentInfoProvider + 'static,
+    ) -> Self {
         Self {
-            message_handler: handler_arc.clone(),
-            task_manager: handler_arc.clone(),
-            notification_manager: handler_arc,
-            agent_info: Arc::new(agent_info),
-            streaming_handler: Arc::new(NoopStreamingHandler),
+            service: TaskService::with_handler(handler, agent_info, NoopStreamingHandler),
         }
     }
-}
 
-impl<M, T, N, A, S> DefaultRequestProcessor<M, T, N, A, S>
-where
-    M: AsyncMessageHandler + Send + Sync + 'static,
-    T: AsyncTaskManager + Send + Sync + 'static,
-    N: AsyncNotificationManager + Send + Sync + 'static,
-    A: AgentInfoProvider + Send + Sync + 'static,
-    S: AsyncStreamingHandler + Send + Sync + 'static,
-{
-    /// Builder-style method to inject custom streaming handler support
-    pub fn with_streaming_handler<NewS>(
+    /// Builder-style method to inject custom streaming handler support.
+    pub fn with_streaming_handler(
         self,
-        streaming_handler: NewS,
-    ) -> DefaultRequestProcessor<M, T, N, A, NewS>
-    where
-        NewS: AsyncStreamingHandler + Send + Sync + 'static,
-    {
-        DefaultRequestProcessor {
-            message_handler: self.message_handler,
-            task_manager: self.task_manager,
-            notification_manager: self.notification_manager,
-            agent_info: self.agent_info,
-            streaming_handler: Arc::new(streaming_handler),
+        streaming_handler: impl AsyncStreamingHandler + 'static,
+    ) -> Self {
+        Self {
+            service: self.service.with_streaming_handler(streaming_handler),
         }
     }
 }
@@ -189,14 +163,25 @@ fn map_artifact_update(
     }
 }
 
-impl<M, T, N, A, S> A2aService for DefaultRequestProcessor<M, T, N, A, S>
-where
-    M: AsyncMessageHandler + Send + Sync + 'static,
-    T: AsyncTaskManager + Send + Sync + 'static,
-    N: AsyncNotificationManager + Send + Sync + 'static,
-    A: AgentInfoProvider + Send + Sync + 'static,
-    S: AsyncStreamingHandler + Send + Sync + 'static,
-{
+/// Map a domain [`UpdateEvent`] onto its wire [`StreamResponse`].
+fn map_update_event(evt: UpdateEvent) -> StreamResponse {
+    match evt {
+        UpdateEvent::StatusUpdate(event) => StreamResponse {
+            payload: Some(stream_response::Payload::StatusUpdate(Box::new(
+                map_status_update(event),
+            ))),
+            ..Default::default()
+        },
+        UpdateEvent::ArtifactUpdate(event) => StreamResponse {
+            payload: Some(stream_response::Payload::ArtifactUpdate(Box::new(
+                map_artifact_update(event),
+            ))),
+            ..Default::default()
+        },
+    }
+}
+
+impl A2aService for ConnectRpcAdapter {
     async fn send_message(
         &self,
         ctx: ::connectrpc::Context,
@@ -218,31 +203,13 @@ where
             Some(message.context_id.as_str())
         };
 
-        let mut history_limit = None;
+        let (push_config, history_limit) = decode_send_config(config);
 
-        // If push notification configuration is provided, configure it
-        if let Some(c) = config {
-            if let Some(mut push_config) = c.task_push_notification_config.into_option() {
-                push_config.task_id = task_id.clone();
-                self.notification_manager
-                    .set_task_notification_validated(&push_config)
-                    .await
-                    .map_err(map_err)?;
-            }
-            if let Some(limit) = c.history_length {
-                history_limit = Some(limit as u32);
-            }
-        }
-
-        let mut task = self
-            .message_handler
-            .process_message(&task_id, &message, session_id)
+        let task = self
+            .service
+            .send_message(&task_id, &message, session_id, push_config, history_limit)
             .await
             .map_err(map_err)?;
-
-        if let Some(limit) = history_limit {
-            task = task.with_limited_history(Some(limit));
-        }
 
         let response = SendMessageResponse {
             payload: Some(send_message_response::Payload::Task(Box::new(task))),
@@ -285,38 +252,13 @@ where
             Some(message.context_id.as_str())
         };
 
-        let mut history_limit = None;
+        let (push_config, history_limit) = decode_send_config(config);
 
-        // Setup notification if present
-        if let Some(c) = config {
-            if let Some(mut push_config) = c.task_push_notification_config.into_option() {
-                push_config.task_id = task_id.clone();
-                self.notification_manager
-                    .set_task_notification_validated(&push_config)
-                    .await
-                    .map_err(map_err)?;
-            }
-            if let Some(limit) = c.history_length {
-                history_limit = Some(limit as u32);
-            }
-        }
-
-        // Start updates stream first so we don't miss early updates
-        let update_stream = self
-            .streaming_handler
-            .start_task_streaming(&task_id)
+        let (task, update_stream) = self
+            .service
+            .send_streaming_message(&task_id, &message, session_id, push_config, history_limit)
             .await
             .map_err(map_err)?;
-
-        let mut task = self
-            .message_handler
-            .process_message(&task_id, &message, session_id)
-            .await
-            .map_err(map_err)?;
-
-        if let Some(limit) = history_limit {
-            task = task.with_limited_history(Some(limit));
-        }
 
         use futures::StreamExt;
 
@@ -325,23 +267,8 @@ where
             ..Default::default()
         };
 
-        let mapped_stream = update_stream.map(|item| {
-            item.map(|evt| match evt {
-                UpdateEvent::StatusUpdate(event) => StreamResponse {
-                    payload: Some(stream_response::Payload::StatusUpdate(Box::new(
-                        map_status_update(event),
-                    ))),
-                    ..Default::default()
-                },
-                UpdateEvent::ArtifactUpdate(event) => StreamResponse {
-                    payload: Some(stream_response::Payload::ArtifactUpdate(Box::new(
-                        map_artifact_update(event),
-                    ))),
-                    ..Default::default()
-                },
-            })
-            .map_err(map_err)
-        });
+        let mapped_stream =
+            update_stream.map(|item| item.map(map_update_event).map_err(map_err));
 
         let chained_stream =
             futures::stream::once(async { Ok(initial_response) }).chain(mapped_stream);
@@ -356,9 +283,10 @@ where
     ) -> Result<(Task, ::connectrpc::Context), ::connectrpc::ConnectError> {
         let req = request.to_owned_message();
         let history_length = req.history_length.map(|l| l as u32);
+        let id: TaskId = req.id.parse().map_err(map_err)?;
         let task = self
-            .task_manager
-            .get_task(&req.id, history_length)
+            .service
+            .get(&id, history_length)
             .await
             .map_err(map_err)?;
         Ok((task, ctx))
@@ -397,11 +325,7 @@ where
             metadata: None,
         };
 
-        let result = self
-            .task_manager
-            .list_tasks_v3(&params)
-            .await
-            .map_err(map_err)?;
+        let result = self.service.list(&params).await.map_err(map_err)?;
 
         let response = ListTasksResponse {
             tasks: result.tasks,
@@ -420,11 +344,8 @@ where
         request: ::buffa::view::OwnedView<CancelTaskRequestView<'static>>,
     ) -> Result<(Task, ::connectrpc::Context), ::connectrpc::ConnectError> {
         let req = request.to_owned_message();
-        let task = self
-            .task_manager
-            .cancel_task(&req.id)
-            .await
-            .map_err(map_err)?;
+        let id: TaskId = req.id.parse().map_err(map_err)?;
+        let task = self.service.cancel(&id).await.map_err(map_err)?;
         Ok((task, ctx))
     }
 
@@ -446,39 +367,14 @@ where
         ::connectrpc::ConnectError,
     > {
         let req = request.to_owned_message();
-        let task_id = req.id;
 
-        let initial_task = match self.task_manager.get_task(&task_id, None).await {
-            Ok(task) => Some(task),
-            Err(A2AError::TaskNotFound(_)) => None,
-            Err(e) => return Err(map_err(e)),
-        };
-
-        let update_stream = self
-            .streaming_handler
-            .start_task_streaming(&task_id)
-            .await
-            .map_err(map_err)?;
+        let (initial_task, update_stream) =
+            self.service.subscribe(&req.id).await.map_err(map_err)?;
 
         use futures::StreamExt;
 
-        let mapped_stream = update_stream.map(|item| {
-            item.map(|evt| match evt {
-                UpdateEvent::StatusUpdate(event) => StreamResponse {
-                    payload: Some(stream_response::Payload::StatusUpdate(Box::new(
-                        map_status_update(event),
-                    ))),
-                    ..Default::default()
-                },
-                UpdateEvent::ArtifactUpdate(event) => StreamResponse {
-                    payload: Some(stream_response::Payload::ArtifactUpdate(Box::new(
-                        map_artifact_update(event),
-                    ))),
-                    ..Default::default()
-                },
-            })
-            .map_err(map_err)
-        });
+        let mapped_stream =
+            update_stream.map(|item| item.map(map_update_event).map_err(map_err));
 
         if let Some(task) = initial_task {
             let initial_response = StreamResponse {
@@ -501,8 +397,8 @@ where
     {
         let config = request.to_owned_message();
         let created_config = self
-            .notification_manager
-            .set_task_notification_validated(&config)
+            .service
+            .set_push_config(&config)
             .await
             .map_err(map_err)?;
         Ok((created_config, ctx))
@@ -521,8 +417,8 @@ where
             metadata: None,
         };
         let config = self
-            .task_manager
-            .get_push_notification_config(&params)
+            .service
+            .get_push_config(&params)
             .await
             .map_err(map_err)?;
         Ok((config, ctx))
@@ -545,8 +441,8 @@ where
             metadata: None,
         };
         let configs = self
-            .task_manager
-            .list_push_notification_configs(&params)
+            .service
+            .list_push_configs(&params)
             .await
             .map_err(map_err)?;
         let response = ListTaskPushNotificationConfigsResponse {
@@ -563,8 +459,8 @@ where
     ) -> Result<(AgentCard, ::connectrpc::Context), ::connectrpc::ConnectError> {
         let _req = request.to_owned_message();
         let card = self
-            .agent_info
-            .get_authenticated_extended_card()
+            .service
+            .extended_agent_card()
             .await
             .map_err(map_err)?;
         Ok((card, ctx))
@@ -587,15 +483,29 @@ where
             push_notification_config_id: req.id,
             metadata: None,
         };
-        self.task_manager
-            .delete_push_notification_config(&params)
+        self.service
+            .delete_push_config(&params)
             .await
             .map_err(map_err)?;
         Ok((::buffa_types::google::protobuf::Empty::default(), ctx))
     }
 }
 
-/// A no-op AsyncStreamingHandler implementation for request processor defaulting
+/// Decode the optional `SendMessageConfiguration` view into the domain push
+/// config + history limit the service expects.
+fn decode_send_config(
+    config: Option<crate::domain::generated::SendMessageConfiguration>,
+) -> (Option<TaskPushNotificationConfig>, Option<u32>) {
+    let Some(c) = config else {
+        return (None, None);
+    };
+    let push_config = c.task_push_notification_config.into_option();
+    let history_limit = c.history_length.map(|limit| limit as u32);
+    (push_config, history_limit)
+}
+
+/// A no-op [`AsyncStreamingHandler`] used as the adapter's default streaming port
+/// when the caller has no real streaming backend to inject.
 #[derive(Clone, Debug, Default)]
 pub struct NoopStreamingHandler;
 

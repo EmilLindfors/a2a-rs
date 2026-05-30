@@ -34,9 +34,9 @@ use std::time::Duration;
 use a2a_mcp::{create_tool_call_message, AgentToMcpBridge, McpToA2ABridge};
 use a2a_rs::{
     adapter::{
-        business::{DefaultMessageHandler, DefaultRequestProcessor},
+        business::ResponderMessageHandler,
         storage::InMemoryTaskStorage,
-        transport::http::HttpClient,
+        transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
         HttpServer, SimpleAgentInfo,
     },
     domain::{error::A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
@@ -155,7 +155,8 @@ impl AsyncMessageHandler for EchoHandler {
         message: &Message,
         session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
-        let inner = DefaultMessageHandler::new((*self.storage).clone());
+        let inner =
+            ResponderMessageHandler::echo((*self.storage).clone(), (*self.storage).clone());
         let mut task = inner.process_message(task_id, message, session_id).await?;
 
         let echoed = extract_text(message);
@@ -269,7 +270,7 @@ async fn main() -> anyhow::Result<()> {
             ),
         );
 
-    let processor = DefaultRequestProcessor::new(
+    let processor = ConnectRpcAdapter::new(
         math_handler,
         (*storage).clone(),
         (*storage).clone(),

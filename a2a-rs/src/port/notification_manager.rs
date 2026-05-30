@@ -3,7 +3,10 @@
 #[cfg(feature = "server")]
 use async_trait::async_trait;
 
-use crate::domain::{A2AError, TaskIdParams, TaskPushNotificationConfig};
+use crate::domain::{
+    A2AError, DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
+    ListTaskPushNotificationConfigsParams, TaskPushNotificationConfig,
+};
 
 /// Validate a push notification config URL.
 ///
@@ -86,123 +89,69 @@ pub trait NotificationManager {
     }
 }
 
+/// Async management of push-notification configurations.
+///
+/// Expressed in terms of the A2A v1.0.0 multi-config CRUD model — the richest
+/// shape — so a single capability covers both single- and multi-config storage.
+/// Validation conveniences (URL/task-id checks) live on
+/// [`AsyncNotificationManagerExt`], which is blanket-implemented for every
+/// `AsyncNotificationManager`.
 #[cfg(feature = "server")]
 #[async_trait]
-/// An async trait for managing push notification configurations and delivery
 pub trait AsyncNotificationManager: Send + Sync {
-    /// Set up push notifications for a task
-    async fn set_task_notification(
+    /// Create or replace a push-notification config, returning it with any
+    /// server-assigned ID populated.
+    async fn set_config(
         &self,
         config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError>;
 
-    /// Get the push notification configuration for a task
-    async fn get_task_notification(
+    /// Get a push-notification config for a task.
+    async fn get_config(
         &self,
-        task_id: &str,
+        params: &GetTaskPushNotificationConfigParams,
     ) -> Result<TaskPushNotificationConfig, A2AError>;
 
-    /// Remove push notification configuration for a task
-    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError>;
-
-    /// Check if push notifications are configured for a task
-    async fn has_task_notification(&self, task_id: &str) -> Result<bool, A2AError> {
-        match self.get_task_notification(task_id).await {
-            Ok(_) => Ok(true),
-            Err(A2AError::TaskNotFound(_)) => Ok(false),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// Validate push notification configuration
-    async fn validate_notification_config(
+    /// List all push-notification configs for a task.
+    async fn list_configs(
         &self,
-        config: &TaskPushNotificationConfig,
-    ) -> Result<(), A2AError> {
+        params: &ListTaskPushNotificationConfigsParams,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2AError>;
+
+    /// Delete a push-notification config. Idempotent per the v1.0.0 spec.
+    async fn delete_config(
+        &self,
+        params: &DeleteTaskPushNotificationConfigParams,
+    ) -> Result<(), A2AError>;
+}
+
+/// Validation conveniences over [`AsyncNotificationManager`].
+///
+/// Blanket-implemented for every `AsyncNotificationManager`, so implementors
+/// only stub the core CRUD primitives.
+#[cfg(feature = "server")]
+#[async_trait]
+pub trait AsyncNotificationManagerExt: AsyncNotificationManager {
+    /// Validate a push-notification config's webhook URL.
+    fn validate_config(&self, config: &TaskPushNotificationConfig) -> Result<(), A2AError> {
         validate_push_notification_url(config)
     }
 
-    /// Send a test notification to verify configuration
-    async fn send_test_notification(
-        &self,
-        config: &TaskPushNotificationConfig,
-    ) -> Result<(), A2AError> {
-        // Default implementation - can be overridden
-        self.validate_notification_config(config).await?;
-        // In a real implementation, this would send a test notification
-        Ok(())
-    }
-
-    /// Set task notification with validation
-    async fn set_task_notification_validated(
+    /// Validate the task ID and webhook URL, then store the config.
+    async fn set_validated(
         &self,
         config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
-        // Validate the task ID
         if config.task_id.trim().is_empty() {
             return Err(A2AError::ValidationError {
                 field: "task_id".to_string(),
                 message: "Task ID cannot be empty".to_string(),
             });
         }
-
-        // Validate the notification config
-        self.validate_notification_config(config).await?;
-
-        // Set the notification
-        self.set_task_notification(config).await
-    }
-
-    /// Get task notification with validation
-    async fn get_task_notification_validated(
-        &self,
-        params: &TaskIdParams,
-    ) -> Result<TaskPushNotificationConfig, A2AError> {
-        if params.id.trim().is_empty() {
-            return Err(A2AError::ValidationError {
-                field: "task_id".to_string(),
-                message: "Task ID cannot be empty".to_string(),
-            });
-        }
-
-        self.get_task_notification(&params.id).await
-    }
-
-    /// Send notification for task status update
-    async fn notify_task_status_update(
-        &self,
-        task_id: &str,
-        _status_update: &crate::domain::TaskStatusUpdateEvent,
-    ) -> Result<(), A2AError> {
-        // Default implementation - can be overridden
-        // Check if notifications are configured for this task
-        if !self.has_task_notification(task_id).await? {
-            return Ok(()); // No notification configured, silently succeed
-        }
-
-        // In a real implementation, this would send the actual notification
-        // For now, just validate that we have the configuration
-        let _config = self.get_task_notification(task_id).await?;
-
-        Ok(())
-    }
-
-    /// Send notification for task artifact update
-    async fn notify_task_artifact_update(
-        &self,
-        task_id: &str,
-        _artifact_update: &crate::domain::TaskArtifactUpdateEvent,
-    ) -> Result<(), A2AError> {
-        // Default implementation - can be overridden
-        // Check if notifications are configured for this task
-        if !self.has_task_notification(task_id).await? {
-            return Ok(()); // No notification configured, silently succeed
-        }
-
-        // In a real implementation, this would send the actual notification
-        // For now, just validate that we have the configuration
-        let _config = self.get_task_notification(task_id).await?;
-
-        Ok(())
+        self.validate_config(config)?;
+        self.set_config(config).await
     }
 }
+
+#[cfg(feature = "server")]
+impl<T: AsyncNotificationManager + ?Sized> AsyncNotificationManagerExt for T {}

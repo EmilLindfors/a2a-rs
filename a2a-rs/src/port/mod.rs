@@ -24,8 +24,12 @@ pub use authenticator::{
     AuthContext, AuthContextExtractor, AuthPrincipal, Authenticator, CompositeAuthenticator,
 };
 pub use message_handler::{AsyncMessageHandler, MessageHandler};
-pub use notification_manager::{AsyncNotificationManager, NotificationManager};
+pub use notification_manager::{
+    AsyncNotificationManager, AsyncNotificationManagerExt, NotificationManager,
+};
 pub use streaming_handler::{
     AsyncStreamingHandler, StreamingHandler, Subscriber as StreamingSubscriber, UpdateEvent,
 };
-pub use task_manager::{AsyncTaskManager, TaskManager};
+pub use task_manager::{
+    AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery, TaskManager,
+};

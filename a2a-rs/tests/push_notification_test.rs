@@ -7,7 +7,7 @@ mod common;
 use a2a_rs::{
     TaskPushNotificationConfig,
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage,
+        ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage,
         PushNotificationSender, SimpleAgentInfo,
     },
     domain::{A2AError, Message, Part, TaskArtifactUpdateEvent, TaskStatusUpdateEvent},
@@ -95,7 +95,7 @@ async fn test_push_notifications() {
     );
 
     // Create a processor
-    let processor = DefaultRequestProcessor::with_handler(handler, test_agent_info);
+    let processor = ConnectRpcAdapter::with_handler(handler, test_agent_info);
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(

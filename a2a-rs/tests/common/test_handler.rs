@@ -8,11 +8,14 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use a2a_rs::{
-    adapter::{business::DefaultMessageHandler, storage::InMemoryTaskStorage},
-    domain::{A2AError, Message, Task, TaskArtifactUpdateEvent, TaskState, TaskStatusUpdateEvent},
+    adapter::{business::ResponderMessageHandler, storage::InMemoryTaskStorage},
+    domain::{
+        A2AError, ContextId, Message, Task, TaskArtifactUpdateEvent, TaskId, TaskState,
+        TaskStatusUpdateEvent,
+    },
     port::{
-        AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
-        MessageHandler, NotificationManager, StreamingHandler, TaskManager,
+        AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
+        AsyncTaskQuery, MessageHandler, NotificationManager, StreamingHandler, TaskManager,
         streaming_handler::Subscriber,
     },
 };
@@ -182,7 +185,8 @@ impl AsyncMessageHandler for TestBusinessHandler {
         session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
         // Create a message handler and delegate
-        let message_handler = DefaultMessageHandler::new((*self.storage).clone());
+        let message_handler =
+            ResponderMessageHandler::echo((*self.storage).clone(), (*self.storage).clone());
         message_handler
             .process_message(task_id, message, session_id)
             .await
@@ -190,81 +194,71 @@ impl AsyncMessageHandler for TestBusinessHandler {
 }
 
 #[async_trait]
-impl AsyncTaskManager for TestBusinessHandler {
-    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
-        self.storage.create_task(task_id, context_id).await
+impl AsyncTaskLifecycle for TestBusinessHandler {
+    async fn create(&self, id: &TaskId, context_id: &ContextId) -> Result<Task, A2AError> {
+        self.storage.create(id, context_id).await
     }
 
-    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
-        self.storage.get_task(task_id, history_length).await
+    async fn get(&self, id: &TaskId, history_length: Option<u32>) -> Result<Task, A2AError> {
+        self.storage.get(id, history_length).await
     }
 
-    async fn update_task_status(
+    async fn update_status(
         &self,
-        task_id: &str,
+        id: &TaskId,
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
-        self.storage
-            .update_task_status(task_id, state, message)
-            .await
+        self.storage.update_status(id, state, message).await
     }
 
-    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
-        self.storage.cancel_task(task_id).await
+    async fn cancel(&self, id: &TaskId) -> Result<Task, A2AError> {
+        self.storage.cancel(id).await
     }
 
-    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError> {
-        self.storage.task_exists(task_id).await
+    async fn exists(&self, id: &TaskId) -> Result<bool, A2AError> {
+        self.storage.exists(id).await
     }
+}
 
-    async fn list_tasks_v3(
+#[async_trait]
+impl AsyncTaskQuery for TestBusinessHandler {
+    async fn list(
         &self,
         params: &a2a_rs::domain::ListTasksParams,
     ) -> Result<a2a_rs::domain::ListTasksResult, A2AError> {
-        self.storage.list_tasks_v3(params).await
-    }
-
-    async fn get_push_notification_config(
-        &self,
-        params: &a2a_rs::domain::GetTaskPushNotificationConfigParams,
-    ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
-        self.storage.get_push_notification_config(params).await
-    }
-
-    async fn list_push_notification_configs(
-        &self,
-        params: &a2a_rs::domain::ListTaskPushNotificationConfigsParams,
-    ) -> Result<Vec<a2a_rs::domain::TaskPushNotificationConfig>, A2AError> {
-        self.storage.list_push_notification_configs(params).await
-    }
-
-    async fn delete_push_notification_config(
-        &self,
-        params: &a2a_rs::domain::DeleteTaskPushNotificationConfigParams,
-    ) -> Result<(), A2AError> {
-        self.storage.delete_push_notification_config(params).await
+        self.storage.list(params).await
     }
 }
 
 #[async_trait]
 impl AsyncNotificationManager for TestBusinessHandler {
-    async fn set_task_notification(
+    async fn set_config(
         &self,
         config: &a2a_rs::domain::TaskPushNotificationConfig,
     ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
-        self.storage.set_task_notification(config).await
+        self.storage.set_config(config).await
     }
 
-    async fn get_task_notification(
+    async fn get_config(
         &self,
-        task_id: &str,
+        params: &a2a_rs::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<a2a_rs::domain::TaskPushNotificationConfig, A2AError> {
-        self.storage.get_task_notification(task_id).await
+        self.storage.get_config(params).await
     }
 
-    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError> {
-        self.storage.remove_task_notification(task_id).await
+    async fn list_configs(
+        &self,
+        params: &a2a_rs::domain::ListTaskPushNotificationConfigsParams,
+    ) -> Result<Vec<a2a_rs::domain::TaskPushNotificationConfig>, A2AError> {
+        self.storage.list_configs(params).await
+    }
+
+    async fn delete_config(
+        &self,
+        params: &a2a_rs::domain::DeleteTaskPushNotificationConfigParams,
+    ) -> Result<(), A2AError> {
+        self.storage.delete_config(params).await
     }
 }
 

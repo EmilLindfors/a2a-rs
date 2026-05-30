@@ -29,7 +29,8 @@ where
     A: AgentInfoProvider + Send + Sync + 'static,
     Auth: Authenticator + Send + Sync + 'static,
 {
-    /// Request processor
+    /// The `A2aService` implementation this server dispatches requests to
+    /// (e.g. [`ConnectRpcAdapter`](crate::adapter::ConnectRpcAdapter)).
     processor: Arc<P>,
     /// Agent info provider
     agent_info: Arc<A>,

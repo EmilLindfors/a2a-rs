@@ -27,12 +27,12 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
-    A2AError, Artifact, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
-    TaskState, TaskStatus, TaskStatusUpdateEvent,
+    A2AError, Artifact, ContextId, Message, Task, TaskArtifactUpdateEvent,
+    TaskPushNotificationConfig, TaskId, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
-    AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
+    AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery,
     streaming_handler::Subscriber,
 };
 
@@ -490,8 +490,10 @@ impl SqlxTaskStorage {
 
 #[cfg(feature = "sqlx-storage")]
 #[async_trait]
-impl AsyncTaskManager for SqlxTaskStorage {
-    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
+impl AsyncTaskLifecycle for SqlxTaskStorage {
+    async fn create(&self, id: &TaskId, context_id: &ContextId) -> Result<Task, A2AError> {
+        let task_id = id.as_str();
+        let context_id = context_id.as_str();
         // Check if task already exists
         let existing = sqlx::query("SELECT id FROM tasks WHERE id = ?")
             .bind(task_id)
@@ -542,12 +544,13 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(task)
     }
 
-    async fn update_task_status(
+    async fn update_status(
         &self,
-        task_id: &str,
+        id: &TaskId,
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
+        let task_id = id.as_str();
         // Convert state to string
         let state_str = match state {
             TaskState::Submitted => "submitted",
@@ -576,19 +579,14 @@ impl AsyncTaskManager for SqlxTaskStorage {
         // Add to history
         self.add_to_history(task_id, state, message).await?;
 
-        // Get updated task
-        let task = self.get_task(task_id, None).await?;
-
-        // Clone status before broadcasting to avoid double clone
-        let status = task.status.clone().take().unwrap_or_default();
-
-        // Broadcast status update
-        self.broadcast_status_update(task_id, status).await?;
-
-        Ok(task)
+        // Persistence only: announcing the change to streaming subscribers is
+        // the orchestration layer's job (see `TaskStatusBroadcast` and
+        // `REFACTORING_PLAN.md` §4.0.2), not a side effect of the mutator.
+        self.get(id, None).await
     }
 
-    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError> {
+    async fn exists(&self, id: &TaskId) -> Result<bool, A2AError> {
+        let task_id = id.as_str();
         let row = sqlx::query("SELECT id FROM tasks WHERE id = ?")
             .bind(task_id)
             .fetch_optional(&self.pool)
@@ -600,7 +598,8 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(row.is_some())
     }
 
-    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
+    async fn get(&self, id: &TaskId, history_length: Option<u32>) -> Result<Task, A2AError> {
+        let task_id = id.as_str();
         // Get task from database
         let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
             .bind(task_id)
@@ -623,9 +622,10 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(task)
     }
 
-    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
+    async fn cancel(&self, id: &TaskId) -> Result<Task, A2AError> {
+        let task_id = id.as_str();
         // Get current task
-        let task = self.get_task(task_id, None).await?;
+        let task = self.get(id, None).await?;
 
         // Only working tasks can be canceled
         if task.status.state != TaskState::Working {
@@ -655,21 +655,16 @@ impl AsyncTaskManager for SqlxTaskStorage {
         self.add_to_history(task_id, TaskState::Canceled, Some(cancel_message))
             .await?;
 
-        // Get updated task
-        let updated_task = self.get_task(task_id, None).await?;
-
-        // Clone status before broadcasting to avoid double clone
-        let status = updated_task.status.clone().take().unwrap_or_default();
-
-        // Broadcast status update (with final flag set to true)
-        self.broadcast_status_update(task_id, status).await?;
-
-        Ok(updated_task)
+        // Persistence only: the orchestration layer announces the cancellation
+        // to streaming subscribers (see `REFACTORING_PLAN.md` §4.0.2).
+        self.get(id, None).await
     }
+}
 
-    // ===== v1.0.0 Methods =====
-
-    async fn list_tasks_v3(
+#[cfg(feature = "sqlx-storage")]
+#[async_trait]
+impl AsyncTaskQuery for SqlxTaskStorage {
+    async fn list(
         &self,
         params: &crate::domain::ListTasksParams,
     ) -> Result<crate::domain::ListTasksResult, A2AError> {
@@ -836,22 +831,30 @@ impl AsyncTaskManager for SqlxTaskStorage {
             next_page_token,
         })
     }
+}
 
-    async fn get_push_notification_config(
+#[cfg(feature = "sqlx-storage")]
+#[async_trait]
+impl AsyncNotificationManager for SqlxTaskStorage {
+    async fn get_config(
         &self,
         params: &crate::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<crate::domain::TaskPushNotificationConfig, A2AError> {
-        // Query the database for the specific config
-        // Note: push_notification_config_id filtering requires migration 002 to be applied
-        let config_id = params.push_notification_config_id.as_ref().ok_or_else(|| {
-            A2AError::TaskNotFound("push_notification_config_id is required".to_string())
-        })?;
-
-        let row = sqlx::query(
-            "SELECT id, task_id, url, token, authentication FROM push_notification_configs WHERE task_id = ? AND id = ?"
-        )
-        .bind(&params.id)
-        .bind(config_id)
+        // When a specific config id is supplied, filter by it; otherwise fall
+        // back to the task's config (single-config-per-task convenience, matching
+        // the in-memory adapter and the v1.0.0 single-config helpers).
+        // Note: push_notification_config_id filtering requires migration 002 to be applied.
+        let row = match params.push_notification_config_id.as_ref() {
+            Some(config_id) => sqlx::query(
+                "SELECT id, task_id, url, token, authentication FROM push_notification_configs WHERE task_id = ? AND id = ?"
+            )
+            .bind(&params.id)
+            .bind(config_id),
+            None => sqlx::query(
+                "SELECT id, task_id, url, token, authentication FROM push_notification_configs WHERE task_id = ? ORDER BY id LIMIT 1"
+            )
+            .bind(&params.id),
+        }
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| A2AError::DatabaseError(format!("Failed to get push config: {}", e)))?;
@@ -883,13 +886,18 @@ impl AsyncTaskManager for SqlxTaskStorage {
             })
         } else {
             Err(A2AError::TaskNotFound(format!(
-                "Push notification config not found for task {} with id {}",
-                params.id, config_id
+                "Push notification config not found for task {}{}",
+                params.id,
+                params
+                    .push_notification_config_id
+                    .as_ref()
+                    .map(|id| format!(" with id {}", id))
+                    .unwrap_or_default()
             )))
         }
     }
 
-    async fn list_push_notification_configs(
+    async fn list_configs(
         &self,
         params: &crate::domain::ListTaskPushNotificationConfigsParams,
     ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
@@ -931,30 +939,29 @@ impl AsyncTaskManager for SqlxTaskStorage {
         Ok(configs)
     }
 
-    async fn delete_push_notification_config(
+    async fn delete_config(
         &self,
         params: &crate::domain::DeleteTaskPushNotificationConfigParams,
     ) -> Result<(), A2AError> {
-        // Delete the specific config
-        let _result =
+        // Delete the specific config when an id is supplied; otherwise delete all
+        // configs for the task (single-config-per-task convenience, matching the
+        // in-memory adapter).
+        let query = if params.push_notification_config_id.is_empty() {
+            sqlx::query("DELETE FROM push_notification_configs WHERE task_id = ?").bind(&params.id)
+        } else {
             sqlx::query("DELETE FROM push_notification_configs WHERE task_id = ? AND id = ?")
                 .bind(&params.id)
                 .bind(&params.push_notification_config_id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    A2AError::DatabaseError(format!("Failed to delete push config: {}", e))
-                })?;
+        };
+        let _result = query.execute(&self.pool).await.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to delete push config: {}", e))
+        })?;
 
         // Idempotent - don't error if already deleted (v1.0.0 spec behavior)
         Ok(())
     }
-}
 
-#[cfg(feature = "sqlx-storage")]
-#[async_trait]
-impl AsyncNotificationManager for SqlxTaskStorage {
-    async fn set_task_notification(
+    async fn set_config(
         &self,
         config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
@@ -996,71 +1003,6 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         result_config.id = config_id;
         Ok(result_config)
     }
-
-    async fn get_task_notification(
-        &self,
-        task_id: &str,
-    ) -> Result<TaskPushNotificationConfig, A2AError> {
-        // Get from database (get first config for backwards compatibility)
-        let row =
-            sqlx::query("SELECT id, url, token, authentication FROM push_notification_configs WHERE task_id = ? LIMIT 1")
-                .bind(task_id)
-                .fetch_optional(&self.pool)
-                .await
-                .map_err(|e| {
-                    A2AError::DatabaseError(format!(
-                        "Failed to get push notification config: {}",
-                        e
-                    ))
-                })?;
-
-        if let Some(row) = row {
-            let id: String = row
-                .try_get("id")
-                .map_err(|e| A2AError::DatabaseError(format!("Failed to get id: {}", e)))?;
-            let url: String = row
-                .try_get("url")
-                .map_err(|e| A2AError::DatabaseError(format!("Failed to get url: {}", e)))?;
-            let token: Option<String> = row.try_get("token").ok();
-            let auth_json: Option<String> = row.try_get("authentication").ok();
-
-            let auth_info = if let Some(auth_str) = auth_json {
-                serde_json::from_str(&auth_str).ok()
-            } else {
-                None
-            };
-
-            Ok(TaskPushNotificationConfig {
-                task_id: task_id.to_string(),
-                id,
-                url,
-                token: token.unwrap_or_default(),
-                authentication: auth_info.into(),
-                tenant: "".to_string(),
-                ..Default::default()
-            })
-        } else {
-            Err(A2AError::TaskNotFound(format!(
-                "No push notification config found for task {}",
-                task_id
-            )))
-        }
-    }
-
-    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError> {
-        // Remove from database
-        sqlx::query("DELETE FROM push_notification_configs WHERE task_id = ?")
-            .bind(task_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| {
-                A2AError::DatabaseError(format!("Failed to remove push notification config: {}", e))
-            })?;
-
-        // Unregister from registry
-        self.push_notification_registry.unregister(task_id).await?;
-        Ok(())
-    }
 }
 
 #[cfg(feature = "sqlx-storage")]
@@ -1084,10 +1026,12 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
 
         // Try to get the current status to send as an initial update
         // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
-        if let Ok(task) = self.get_task(task_id, None).await {
-            let _ = self
-                .broadcast_status_update(task_id, (*task.status).clone())
-                .await;
+        if let Ok(tid) = task_id.parse::<TaskId>() {
+            if let Ok(task) = self.get(&tid, None).await {
+                let _ = self
+                    .broadcast_status_update(task_id, (*task.status).clone())
+                    .await;
+            }
         }
 
         Ok(format!("status-{}-{}", task_id, uuid::Uuid::new_v4()))
@@ -1111,11 +1055,13 @@ impl AsyncStreamingHandler for SqlxTaskStorage {
 
         // If there are existing artifacts, broadcast them
         // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
-        if let Ok(task) = self.get_task(task_id, None).await {
-            for artifact in task.artifacts {
-                let _ = self
-                    .broadcast_artifact_update(task_id, artifact, None, false)
-                    .await;
+        if let Ok(tid) = task_id.parse::<TaskId>() {
+            if let Ok(task) = self.get(&tid, None).await {
+                for artifact in task.artifacts {
+                    let _ = self
+                        .broadcast_artifact_update(task_id, artifact, None, false)
+                        .await;
+                }
             }
         }
 

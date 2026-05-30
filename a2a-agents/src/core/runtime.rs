@@ -7,10 +7,11 @@
 use crate::core::McpClientManager;
 use crate::core::config::{AgentConfig, AuthConfig, StorageConfig};
 use a2a_rs::adapter::{
-    BearerTokenAuthenticator, DefaultRequestProcessor, HttpServer, SimpleAgentInfo,
+    BearerTokenAuthenticator, ConnectRpcAdapter, HttpServer, SimpleAgentInfo,
 };
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
+    AsyncTaskQuery,
 };
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -34,7 +35,13 @@ pub struct AgentRuntime<H, S> {
 impl<H, S> AgentRuntime<H, S>
 where
     H: AsyncMessageHandler + Clone + Send + Sync + 'static,
-    S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+    S: AsyncTaskLifecycle
+        + AsyncTaskQuery
+        + AsyncNotificationManager
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     /// Create a new runtime
     pub fn new(config: AgentConfig, handler: Arc<H>, storage: Arc<S>) -> Self {
@@ -252,7 +259,7 @@ where
         );
         let agent_info = self.build_agent_info(base_url);
 
-        let processor = DefaultRequestProcessor::new(
+        let processor = ConnectRpcAdapter::new(
             (*self.handler).clone(),
             (*self.storage).clone(),
             (*self.storage).clone(),

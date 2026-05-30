@@ -6,7 +6,7 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
+        ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::A2AError,
 };
@@ -30,7 +30,7 @@ async fn setup_server(port: u16, supports_authenticated_card: bool) -> oneshot::
     }
 
     // Clone the agent info for the processor
-    let processor = DefaultRequestProcessor::with_handler(handler, agent_info.clone());
+    let processor = ConnectRpcAdapter::with_handler(handler, agent_info.clone());
 
     let server = HttpServer::new(processor, agent_info, format!("127.0.0.1:{}", port));
 

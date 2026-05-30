@@ -6,15 +6,23 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
+        ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::{ListTasksParams, Message, TaskState},
-    port::AsyncTaskManager,
+    port::AsyncTaskLifecycle,
     services::AsyncA2AClient,
 };
 use common::TestBusinessHandler;
 use std::time::Duration;
 use tokio::sync::oneshot;
+
+fn tid(s: &str) -> a2a_rs::domain::TaskId {
+    s.parse().unwrap()
+}
+
+fn cid(s: &str) -> a2a_rs::domain::ContextId {
+    s.parse().unwrap()
+}
 
 /// Helper function to setup a test server with pre-populated tasks
 async fn setup_test_server(port: u16) -> (oneshot::Sender<()>, InMemoryTaskStorage) {
@@ -26,14 +34,14 @@ async fn setup_test_server(port: u16) -> (oneshot::Sender<()>, InMemoryTaskStora
         let context_id = format!("ctx-{}", i % 2); // Alternate between ctx-0 and ctx-1
 
         storage
-            .create_task(&task_id, &context_id)
+            .create(&tid(&task_id), &cid(&context_id))
             .await
             .expect("Failed to create task");
 
         // Update task status with a message
         storage
-            .update_task_status(
-                &task_id,
+            .update_status(
+                &tid(&task_id),
                 if i % 2 == 0 {
                     TaskState::Working
                 } else {
@@ -56,7 +64,7 @@ async fn setup_test_server(port: u16) -> (oneshot::Sender<()>, InMemoryTaskStora
     .with_version("2.0.0".to_string())
     .with_description("Agent for v1.0.0 testing".to_string());
 
-    let processor = DefaultRequestProcessor::with_handler(handler, agent_info.clone());
+    let processor = ConnectRpcAdapter::with_handler(handler, agent_info.clone());
     let server = HttpServer::new(processor, agent_info, format!("127.0.0.1:{}", port));
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 

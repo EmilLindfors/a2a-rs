@@ -4,10 +4,19 @@
 mod sqlx_tests {
     use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
     use a2a_rs::domain::TaskState;
-    use a2a_rs::port::{AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager};
+    use a2a_rs::port::{
+        AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery,
+    };
     use a2a_rs::{A2AError, TaskPushNotificationConfig};
     use std::sync::Arc;
     use uuid::Uuid;
+
+    fn tid(s: &str) -> a2a_rs::domain::TaskId {
+        s.parse().unwrap()
+    }
+    fn cid(s: &str) -> a2a_rs::domain::ContextId {
+        s.parse().unwrap()
+    }
 
     async fn create_test_storage() -> Result<SqlxTaskStorage, A2AError> {
         // Use SQLite in-memory for tests
@@ -26,28 +35,28 @@ mod sqlx_tests {
         let context_id = "test-context";
 
         // Test task creation
-        let task = storage.create_task(&task_id, context_id).await?;
+        let task = storage.create(&tid(&task_id), &cid(context_id)).await?;
         assert_eq!(task.id, task_id);
         assert_eq!(task.context_id, context_id);
         assert_eq!(task.status.state, TaskState::Submitted);
 
         // Test task existence
-        assert!(storage.task_exists(&task_id).await?);
-        assert!(!storage.task_exists("non-existent").await?);
+        assert!(storage.exists(&tid(&task_id)).await?);
+        assert!(!storage.exists(&tid("non-existent")).await?);
 
         // Test status updates
         let working_task = storage
-            .update_task_status(&task_id, TaskState::Working, None)
+            .update_status(&tid(&task_id), TaskState::Working, None)
             .await?;
         assert_eq!(working_task.status.state, TaskState::Working);
 
         let completed_task = storage
-            .update_task_status(&task_id, TaskState::Completed, None)
+            .update_status(&tid(&task_id), TaskState::Completed, None)
             .await?;
         assert_eq!(completed_task.status.state, TaskState::Completed);
 
         // Test task retrieval with history
-        let retrieved_task = storage.get_task(&task_id, Some(10)).await?;
+        let retrieved_task = storage.get(&tid(&task_id), Some(10)).await?;
         assert_eq!(retrieved_task.id, task_id);
         assert_eq!(retrieved_task.status.state, TaskState::Completed);
         // Should have history: Submitted -> Working -> Completed
@@ -63,17 +72,17 @@ mod sqlx_tests {
         let task_id = Uuid::new_v4().to_string();
 
         // Create and start working on task
-        storage.create_task(&task_id, "test-context").await?;
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
         storage
-            .update_task_status(&task_id, TaskState::Working, None)
+            .update_status(&tid(&task_id), TaskState::Working, None)
             .await?;
 
         // Cancel the working task
-        let canceled_task = storage.cancel_task(&task_id).await?;
+        let canceled_task = storage.cancel(&tid(&task_id)).await?;
         assert_eq!(canceled_task.status.state, TaskState::Canceled);
 
         // Verify cancellation was successful
-        let task_with_history = storage.get_task(&task_id, None).await?;
+        let task_with_history = storage.get(&tid(&task_id), None).await?;
         assert_eq!(task_with_history.status.state, TaskState::Canceled);
         // Note: We're not fully implementing history loading in this version
         // In a full implementation, you'd verify the cancellation message was added
@@ -87,16 +96,16 @@ mod sqlx_tests {
         let task_id = Uuid::new_v4().to_string();
 
         // Create, work on, and complete task
-        storage.create_task(&task_id, "test-context").await?;
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
         storage
-            .update_task_status(&task_id, TaskState::Working, None)
+            .update_status(&tid(&task_id), TaskState::Working, None)
             .await?;
         storage
-            .update_task_status(&task_id, TaskState::Completed, None)
+            .update_status(&tid(&task_id), TaskState::Completed, None)
             .await?;
 
         // Try to cancel completed task - should fail
-        let result = storage.cancel_task(&task_id).await;
+        let result = storage.cancel(&tid(&task_id)).await;
         assert!(result.is_err());
 
         if let Err(A2AError::TaskNotCancelable(_)) = result {
@@ -114,10 +123,10 @@ mod sqlx_tests {
         let task_id = Uuid::new_v4().to_string();
 
         // Create first task
-        storage.create_task(&task_id, "test-context").await?;
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
 
         // Try to create duplicate - should fail
-        let result = storage.create_task(&task_id, "test-context").await;
+        let result = storage.create(&tid(&task_id), &cid("test-context")).await;
         assert!(result.is_err());
 
         if let Err(A2AError::TaskNotFound(_)) = result {
@@ -138,24 +147,24 @@ mod sqlx_tests {
         let task_id = Uuid::new_v4().to_string();
 
         // Create task and make several status changes
-        storage.create_task(&task_id, "test-context").await?;
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
         storage
-            .update_task_status(&task_id, TaskState::Working, None)
+            .update_status(&tid(&task_id), TaskState::Working, None)
             .await?;
         storage
-            .update_task_status(&task_id, TaskState::InputRequired, None)
+            .update_status(&tid(&task_id), TaskState::InputRequired, None)
             .await?;
         storage
-            .update_task_status(&task_id, TaskState::Working, None)
+            .update_status(&tid(&task_id), TaskState::Working, None)
             .await?;
         storage
-            .update_task_status(&task_id, TaskState::Completed, None)
+            .update_status(&tid(&task_id), TaskState::Completed, None)
             .await?;
 
         // Note: We're not fully implementing history loading in this version
         // In a full implementation, you'd test history limits here
-        let _task_limited = storage.get_task(&task_id, Some(3)).await?;
-        let _task_full = storage.get_task(&task_id, None).await?;
+        let _task_limited = storage.get(&tid(&task_id), Some(3)).await?;
+        let _task_full = storage.get(&tid(&task_id), None).await?;
 
         Ok(())
     }
@@ -166,7 +175,7 @@ mod sqlx_tests {
         let task_id = Uuid::new_v4().to_string();
 
         // Create task first
-        storage.create_task(&task_id, "test-context").await?;
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
 
         // Set push notification config
         let config = TaskPushNotificationConfig {
@@ -179,20 +188,38 @@ mod sqlx_tests {
             ..Default::default()
         };
 
-        let set_config = storage.set_task_notification(&config).await?;
+        let set_config = storage.set_config(&config).await?;
         assert_eq!(set_config.task_id, task_id);
         assert_eq!(set_config.url, "https://example.com/webhook");
 
         // Get push notification config
-        let retrieved_config = storage.get_task_notification(&task_id).await?;
+        let retrieved_config = storage
+            .get_config(&a2a_rs::domain::GetTaskPushNotificationConfigParams {
+                id: task_id.clone(),
+                push_notification_config_id: None,
+                metadata: None,
+            })
+            .await?;
         assert_eq!(retrieved_config.task_id, task_id);
         assert_eq!(retrieved_config.url, "https://example.com/webhook");
 
         // Remove push notification config
-        storage.remove_task_notification(&task_id).await?;
+        storage
+            .delete_config(&a2a_rs::domain::DeleteTaskPushNotificationConfigParams {
+                id: task_id.clone(),
+                push_notification_config_id: String::new(),
+                metadata: None,
+            })
+            .await?;
 
         // Verify it's removed
-        let result = storage.get_task_notification(&task_id).await;
+        let result = storage
+            .get_config(&a2a_rs::domain::GetTaskPushNotificationConfigParams {
+                id: task_id.clone(),
+                push_notification_config_id: None,
+                metadata: None,
+            })
+            .await;
         assert!(result.is_err());
 
         Ok(())
@@ -233,7 +260,7 @@ mod sqlx_tests {
         let task_id = Uuid::new_v4().to_string();
 
         // Create task
-        storage.create_task(&task_id, "test-context").await?;
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
 
         // Test subscriber count
         let count = storage.get_subscriber_count(&task_id).await?;
@@ -260,13 +287,13 @@ mod sqlx_tests {
             let handle = tokio::spawn(async move {
                 let task_id = format!("concurrent-task-{}", i);
                 let task = storage_clone
-                    .create_task(&task_id, "concurrent-context")
+                    .create(&tid(&task_id), &cid("concurrent-context"))
                     .await?;
                 storage_clone
-                    .update_task_status(&task_id, TaskState::Working, None)
+                    .update_status(&tid(&task_id), TaskState::Working, None)
                     .await?;
                 storage_clone
-                    .update_task_status(&task_id, TaskState::Completed, None)
+                    .update_status(&tid(&task_id), TaskState::Completed, None)
                     .await?;
                 Ok::<_, A2AError>(task)
             });
@@ -282,8 +309,8 @@ mod sqlx_tests {
         // Verify all tasks exist
         for i in 0..10 {
             let task_id = format!("concurrent-task-{}", i);
-            assert!(storage.task_exists(&task_id).await?);
-            let task = storage.get_task(&task_id, None).await?;
+            assert!(storage.exists(&tid(&task_id)).await?);
+            let task = storage.get(&tid(&task_id), None).await?;
             assert_eq!(task.status.state, TaskState::Completed);
         }
 
@@ -315,12 +342,12 @@ mod sqlx_tests {
         // Create some tasks
         for i in 0..5 {
             let task_id = format!("task-{}", i);
-            storage.create_task(&task_id, "test-context").await?;
+            storage.create(&tid(&task_id), &cid("test-context")).await?;
         }
 
         // List all tasks
         let params = a2a_rs::domain::ListTasksParams::default();
-        let result = storage.list_tasks_v3(&params).await?;
+        let result = storage.list(&params).await?;
 
         assert_eq!(result.total_size, 5, "Should have 5 tasks");
         assert_eq!(result.tasks.len(), 5, "Should return 5 tasks");
@@ -334,15 +361,15 @@ mod sqlx_tests {
         let storage = create_test_storage().await?;
 
         // Create tasks in different contexts and states
-        storage.create_task("task-a-1", "context-a").await?;
-        storage.create_task("task-a-2", "context-a").await?;
-        storage.create_task("task-b-1", "context-b").await?;
+        storage.create(&tid("task-a-1"), &cid("context-a")).await?;
+        storage.create(&tid("task-a-2"), &cid("context-a")).await?;
+        storage.create(&tid("task-b-1"), &cid("context-b")).await?;
 
         storage
-            .update_task_status("task-a-1", TaskState::Working, None)
+            .update_status(&tid("task-a-1"), TaskState::Working, None)
             .await?;
         storage
-            .update_task_status("task-a-2", TaskState::Completed, None)
+            .update_status(&tid("task-a-2"), TaskState::Completed, None)
             .await?;
 
         // Filter by context
@@ -350,7 +377,7 @@ mod sqlx_tests {
             context_id: Some("context-a".to_string()),
             ..Default::default()
         };
-        let result = storage.list_tasks_v3(&params).await?;
+        let result = storage.list(&params).await?;
         assert_eq!(result.total_size, 2, "Should have 2 tasks in context-a");
 
         // Filter by status
@@ -358,7 +385,7 @@ mod sqlx_tests {
             status: Some(TaskState::Working),
             ..Default::default()
         };
-        let result = storage.list_tasks_v3(&params).await?;
+        let result = storage.list(&params).await?;
         assert_eq!(result.total_size, 1, "Should have 1 working task");
 
         Ok(())
@@ -371,7 +398,7 @@ mod sqlx_tests {
         // Create 10 tasks
         for i in 0..10 {
             storage
-                .create_task(&format!("task-{}", i), "test-context")
+                .create(&tid(&format!("task-{}", i)), &cid("test-context"))
                 .await?;
         }
 
@@ -380,7 +407,7 @@ mod sqlx_tests {
             page_size: Some(3),
             ..Default::default()
         };
-        let page1 = storage.list_tasks_v3(&params).await?;
+        let page1 = storage.list(&params).await?;
         assert_eq!(page1.tasks.len(), 3, "Should return 3 tasks");
         assert!(
             !page1.next_page_token.is_empty(),
@@ -393,7 +420,7 @@ mod sqlx_tests {
             page_token: Some(page1.next_page_token.clone()),
             ..Default::default()
         };
-        let page2 = storage.list_tasks_v3(&params).await?;
+        let page2 = storage.list(&params).await?;
         assert_eq!(page2.tasks.len(), 3, "Should return 3 tasks");
 
         Ok(())
@@ -405,7 +432,7 @@ mod sqlx_tests {
         let task_id = Uuid::new_v4().to_string();
 
         // Create task first
-        storage.create_task(&task_id, "test-context").await?;
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
 
         // Set push notification config
         let config = TaskPushNotificationConfig {
@@ -417,7 +444,7 @@ mod sqlx_tests {
             authentication: None.into(),
             ..Default::default()
         };
-        storage.set_task_notification(&config).await?;
+        storage.set_config(&config).await?;
 
         // Get specific config
         let get_params = a2a_rs::domain::GetTaskPushNotificationConfigParams {
@@ -425,7 +452,7 @@ mod sqlx_tests {
             push_notification_config_id: Some("config-1".to_string()),
             metadata: None,
         };
-        let retrieved = storage.get_push_notification_config(&get_params).await?;
+        let retrieved = storage.get_config(&get_params).await?;
         assert_eq!(retrieved.url, "https://example.com/webhook");
         assert_eq!(retrieved.token, "test-token");
 
@@ -434,7 +461,7 @@ mod sqlx_tests {
             id: task_id.clone(),
             metadata: None,
         };
-        let configs = storage.list_push_notification_configs(&list_params).await?;
+        let configs = storage.list_configs(&list_params).await?;
         assert_eq!(configs.len(), 1, "Should have 1 config");
 
         // Delete config
@@ -443,12 +470,10 @@ mod sqlx_tests {
             push_notification_config_id: "config-1".to_string(),
             metadata: None,
         };
-        storage
-            .delete_push_notification_config(&delete_params)
-            .await?;
+        storage.delete_config(&delete_params).await?;
 
         // Verify deleted
-        let configs = storage.list_push_notification_configs(&list_params).await?;
+        let configs = storage.list_configs(&list_params).await?;
         assert_eq!(configs.len(), 0, "Config should be deleted");
 
         Ok(())
@@ -460,7 +485,7 @@ mod sqlx_tests {
         let task_id = Uuid::new_v4().to_string();
 
         // Create task
-        storage.create_task(&task_id, "test-context").await?;
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
 
         // Set multiple configs
         let config1 = TaskPushNotificationConfig {
@@ -482,15 +507,15 @@ mod sqlx_tests {
             ..Default::default()
         };
 
-        storage.set_task_notification(&config1).await?;
-        storage.set_task_notification(&config2).await?;
+        storage.set_config(&config1).await?;
+        storage.set_config(&config2).await?;
 
         // List should return both
         let list_params = a2a_rs::domain::ListTaskPushNotificationConfigsParams {
             id: task_id.clone(),
             metadata: None,
         };
-        let configs = storage.list_push_notification_configs(&list_params).await?;
+        let configs = storage.list_configs(&list_params).await?;
         assert_eq!(configs.len(), 2, "Should have 2 configs");
 
         Ok(())

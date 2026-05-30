@@ -10,16 +10,24 @@
 mod common;
 
 use a2a_rs::{
-    TaskPushNotificationConfig,
+    ContextId, TaskId, TaskPushNotificationConfig,
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
+        ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
-    port::{AsyncNotificationManager, AsyncTaskManager},
+    port::{AsyncNotificationManager, AsyncTaskLifecycle},
     services::AsyncA2AClient,
 };
 use common::TestBusinessHandler;
 use std::time::Duration;
 use tokio::sync::oneshot;
+
+fn tid(s: &str) -> TaskId {
+    s.parse().unwrap()
+}
+
+fn cid(s: &str) -> ContextId {
+    s.parse().unwrap()
+}
 
 /// Helper to set up a server with a task
 async fn setup_server(port: u16) -> (oneshot::Sender<()>, InMemoryTaskStorage) {
@@ -33,7 +41,7 @@ async fn setup_server(port: u16) -> (oneshot::Sender<()>, InMemoryTaskStorage) {
         format!("http://localhost:{}", port),
     );
 
-    let processor = DefaultRequestProcessor::with_handler(handler, test_agent_info);
+    let processor = ConnectRpcAdapter::with_handler(handler, test_agent_info);
 
     let agent_info = SimpleAgentInfo::new(
         "Push Config Test Agent".to_string(),
@@ -63,7 +71,7 @@ async fn test_list_push_notification_configs_empty() {
 
     // Create a task WITHOUT any push notification config
     storage
-        .create_task("task_no_configs", "test_context")
+        .create(&tid("task_no_configs"), &cid("test_context"))
         .await
         .unwrap();
 
@@ -89,7 +97,7 @@ async fn test_set_and_list_push_notification_config() {
 
     // Create a task
     storage
-        .create_task("task_with_config", "test_context")
+        .create(&tid("task_with_config"), &cid("test_context"))
         .await
         .unwrap();
 
@@ -104,7 +112,7 @@ async fn test_set_and_list_push_notification_config() {
         ..Default::default()
     };
 
-    storage.set_task_notification(&config).await.unwrap();
+    storage.set_config(&config).await.unwrap();
 
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
@@ -141,7 +149,7 @@ async fn test_get_push_notification_config() {
 
     // Create a task
     storage
-        .create_task("task_get_config", "test_context")
+        .create(&tid("task_get_config"), &cid("test_context"))
         .await
         .unwrap();
 
@@ -156,7 +164,7 @@ async fn test_get_push_notification_config() {
         ..Default::default()
     };
 
-    storage.set_task_notification(&config).await.unwrap();
+    storage.set_config(&config).await.unwrap();
 
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
@@ -189,7 +197,7 @@ async fn test_get_push_notification_config_not_found() {
 
     // Create a task WITHOUT a config
     storage
-        .create_task("task_no_config", "test_context")
+        .create(&tid("task_no_config"), &cid("test_context"))
         .await
         .unwrap();
 
@@ -213,7 +221,7 @@ async fn test_delete_push_notification_config() {
 
     // Create a task
     storage
-        .create_task("task_delete", "test_context")
+        .create(&tid("task_delete"), &cid("test_context"))
         .await
         .unwrap();
 
@@ -228,7 +236,7 @@ async fn test_delete_push_notification_config() {
         ..Default::default()
     };
 
-    storage.set_task_notification(&config).await.unwrap();
+    storage.set_config(&config).await.unwrap();
 
     let client = HttpClient::new(format!("http://localhost:{}", port));
 
@@ -277,7 +285,7 @@ async fn test_delete_nonexistent_push_config() {
 
     // Create a task without config
     storage
-        .create_task("task_empty", "test_context")
+        .create(&tid("task_empty"), &cid("test_context"))
         .await
         .unwrap();
 
@@ -325,7 +333,7 @@ async fn test_push_notification_config_with_authentication() {
 
     // Create a task
     storage
-        .create_task("task_with_auth", "test_context")
+        .create(&tid("task_with_auth"), &cid("test_context"))
         .await
         .unwrap();
 
@@ -345,7 +353,7 @@ async fn test_push_notification_config_with_authentication() {
         ..Default::default()
     };
 
-    storage.set_task_notification(&config).await.unwrap();
+    storage.set_config(&config).await.unwrap();
 
     let client = HttpClient::new(format!("http://localhost:{}", port));
 

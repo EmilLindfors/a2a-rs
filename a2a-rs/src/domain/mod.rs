@@ -4,6 +4,7 @@ pub mod core;
 pub mod error;
 pub mod events;
 pub mod generated;
+pub mod ids;
 #[cfg(test)]
 mod tests;
 pub mod validation;
@@ -21,5 +22,6 @@ pub use core::{
 };
 pub use error::A2AError;
 pub use events::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+pub use ids::{ContextId, PushConfigId, TaskId};
 pub use generated::{o_auth_flows, security_scheme};
 pub use validation::{Validate, ValidationResult};

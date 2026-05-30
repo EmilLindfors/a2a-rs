@@ -40,7 +40,7 @@
 //! ## Creating a server
 //!
 //! ```rust,ignore
-//! use a2a_rs::{HttpServer, SimpleAgentInfo, DefaultRequestProcessor};
+//! use a2a_rs::{HttpServer, SimpleAgentInfo, ConnectRpcAdapter};
 //! use my_app::{MyMessageHandler, MyTaskManager, MyNotificationManager};
 //!
 //! #[tokio::main]
@@ -51,8 +51,8 @@
 //!     let notification_manager = MyNotificationManager::new();
 //!     let agent_info = SimpleAgentInfo::new("my-agent".to_string(), "https://api.example.com".to_string());
 //!
-//!     // Create a request processor with your handlers
-//!     let processor = DefaultRequestProcessor::new(
+//!     // Wrap your handlers in the ConnectRPC transport adapter
+//!     let adapter = ConnectRpcAdapter::new(
 //!         message_handler,
 //!         task_manager,
 //!         notification_manager,
@@ -61,7 +61,7 @@
 //!
 //!     // Create and start the server
 //!     let server = HttpServer::new(
-//!         processor,
+//!         adapter,
 //!         agent_info,
 //!         "127.0.0.1:8080".to_string(),
 //!     );
@@ -84,17 +84,18 @@ pub mod observability;
 pub use domain::{
     A2AError, AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension, AgentInterface,
     AgentProvider, AgentSkill, Artifact, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow,
+    ContextId, DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow,
     GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams, ListTasksParams,
     ListTasksResult, Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part,
-    PushNotificationAuthenticationInfo, Role, SecurityScheme, Task, TaskArtifactUpdateEvent,
-    TaskIdParams, TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState,
-    TaskStatus, TaskStatusUpdateEvent,
+    PushConfigId, PushNotificationAuthenticationInfo, Role, SecurityScheme, Task,
+    TaskArtifactUpdateEvent, TaskId, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
+    TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 
 // Port traits for better separation of concerns
 pub use port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt,
+    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery,
     MessageHandler, NotificationManager, StreamingHandler, StreamingSubscriber, TaskManager,
     UpdateEvent,
 };
@@ -107,7 +108,7 @@ pub use adapter::HttpServer;
 
 #[cfg(feature = "server")]
 pub use adapter::{
-    DefaultRequestProcessor, InMemoryTaskStorage, NoopPushNotificationSender,
+    ConnectRpcAdapter, InMemoryTaskStorage, NoopPushNotificationSender,
     PushNotificationRegistry, PushNotificationSender, SimpleAgentInfo,
 };
 

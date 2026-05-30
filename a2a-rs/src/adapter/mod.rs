@@ -32,11 +32,13 @@ pub use auth::{JwtAuthenticator, OAuth2Authenticator, OpenIdConnectAuthenticator
 #[cfg(all(feature = "server", feature = "http-client"))]
 pub use business::HttpPushNotificationSender;
 #[cfg(feature = "server")]
-pub use business::{DefaultRequestProcessor, SimpleAgentInfo};
+pub use business::SimpleAgentInfo;
 #[cfg(feature = "server")]
 pub use business::{NoopPushNotificationSender, PushNotificationRegistry, PushNotificationSender};
 #[cfg(feature = "server")]
 pub use storage::InMemoryTaskStorage;
+#[cfg(feature = "server")]
+pub use transport::connectrpc::ConnectRpcAdapter;
 #[cfg(feature = "http-server")]
 pub use transport::http::HttpServer;
 

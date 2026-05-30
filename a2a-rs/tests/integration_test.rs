@@ -6,7 +6,7 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
+        ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::{Message, Part, TaskState},
     services::AsyncA2AClient,
@@ -33,7 +33,7 @@ async fn test_http_client_server_interaction() {
     );
 
     // Create a processor
-    let processor = DefaultRequestProcessor::with_handler(handler, test_agent_info);
+    let processor = ConnectRpcAdapter::with_handler(handler, test_agent_info);
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(

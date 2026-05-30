@@ -4,7 +4,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 
 use a2a_rs::adapter::{
-    BearerTokenAuthenticator, DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage,
+    BearerTokenAuthenticator, ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage,
     NoopPushNotificationSender, SimpleAgentInfo,
 };
 
@@ -57,7 +57,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         "test-agent".to_string(),
         "http://localhost:8080".to_string(),
     );
-    let processor = DefaultRequestProcessor::with_handler(handler, test_agent_info);
+    let processor = ConnectRpcAdapter::with_handler(handler, test_agent_info);
 
     // Create agent info
     let agent_info = SimpleAgentInfo::new(

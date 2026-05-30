@@ -8,12 +8,12 @@ use crate::core::McpClientManager;
 use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
 use crate::core::runtime::AgentRuntime;
 use a2a_rs::domain::{
-    A2AError, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskState,
-    TaskStatusUpdateEvent,
+    A2AError, ContextId, Task, TaskArtifactUpdateEvent, TaskId, TaskPushNotificationConfig,
+    TaskState, TaskStatusUpdateEvent,
 };
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
-    StreamingSubscriber, UpdateEvent,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
+    AsyncTaskQuery, StreamingSubscriber, UpdateEvent,
 };
 use a2a_rs::{HttpPushNotificationSender, InMemoryTaskStorage};
 use async_trait::async_trait;
@@ -37,82 +37,110 @@ pub enum AutoStorage {
 }
 
 #[async_trait]
-impl AsyncTaskManager for AutoStorage {
-    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
+impl AsyncTaskLifecycle for AutoStorage {
+    async fn create(&self, id: &TaskId, context_id: &ContextId) -> Result<Task, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.create_task(task_id, context_id).await,
+            AutoStorage::InMemory(s) => s.create(id, context_id).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.create_task(task_id, context_id).await,
+            AutoStorage::Sqlx(s) => s.create(id, context_id).await,
         }
     }
 
-    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
+    async fn get(&self, id: &TaskId, history_length: Option<u32>) -> Result<Task, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.get_task(task_id, history_length).await,
+            AutoStorage::InMemory(s) => s.get(id, history_length).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.get_task(task_id, history_length).await,
+            AutoStorage::Sqlx(s) => s.get(id, history_length).await,
         }
     }
 
-    async fn update_task_status(
+    async fn update_status(
         &self,
-        task_id: &str,
+        id: &TaskId,
         state: TaskState,
         message: Option<a2a_rs::domain::Message>,
     ) -> Result<Task, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.update_task_status(task_id, state, message).await,
+            AutoStorage::InMemory(s) => s.update_status(id, state, message).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.update_task_status(task_id, state, message).await,
+            AutoStorage::Sqlx(s) => s.update_status(id, state, message).await,
         }
     }
 
-    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
+    async fn cancel(&self, id: &TaskId) -> Result<Task, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.cancel_task(task_id).await,
+            AutoStorage::InMemory(s) => s.cancel(id).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.cancel_task(task_id).await,
+            AutoStorage::Sqlx(s) => s.cancel(id).await,
         }
     }
 
-    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError> {
+    async fn exists(&self, id: &TaskId) -> Result<bool, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.task_exists(task_id).await,
+            AutoStorage::InMemory(s) => s.exists(id).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.task_exists(task_id).await,
+            AutoStorage::Sqlx(s) => s.exists(id).await,
+        }
+    }
+}
+
+#[async_trait]
+impl AsyncTaskQuery for AutoStorage {
+    async fn list(
+        &self,
+        params: &a2a_rs::domain::ListTasksParams,
+    ) -> Result<a2a_rs::domain::ListTasksResult, A2AError> {
+        match self {
+            AutoStorage::InMemory(s) => s.list(params).await,
+            #[cfg(feature = "sqlx")]
+            AutoStorage::Sqlx(s) => s.list(params).await,
         }
     }
 }
 
 #[async_trait]
 impl AsyncNotificationManager for AutoStorage {
-    async fn set_task_notification(
+    async fn set_config(
         &self,
         config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.set_task_notification(config).await,
+            AutoStorage::InMemory(s) => s.set_config(config).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.set_task_notification(config).await,
+            AutoStorage::Sqlx(s) => s.set_config(config).await,
         }
     }
 
-    async fn get_task_notification(
+    async fn get_config(
         &self,
-        task_id: &str,
+        params: &a2a_rs::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.get_task_notification(task_id).await,
+            AutoStorage::InMemory(s) => s.get_config(params).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.get_task_notification(task_id).await,
+            AutoStorage::Sqlx(s) => s.get_config(params).await,
         }
     }
 
-    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError> {
+    async fn list_configs(
+        &self,
+        params: &a2a_rs::domain::ListTaskPushNotificationConfigsParams,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.remove_task_notification(task_id).await,
+            AutoStorage::InMemory(s) => s.list_configs(params).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.remove_task_notification(task_id).await,
+            AutoStorage::Sqlx(s) => s.list_configs(params).await,
+        }
+    }
+
+    async fn delete_config(
+        &self,
+        params: &a2a_rs::domain::DeleteTaskPushNotificationConfigParams,
+    ) -> Result<(), A2AError> {
+        match self {
+            AutoStorage::InMemory(s) => s.delete_config(params).await,
+            #[cfg(feature = "sqlx")]
+            AutoStorage::Sqlx(s) => s.delete_config(params).await,
         }
     }
 }
@@ -320,7 +348,13 @@ impl<H, S> AgentBuilder<H, S> {
     /// Set custom storage for this agent
     pub fn with_storage<NewS>(self, storage: NewS) -> AgentBuilder<H, NewS>
     where
-        NewS: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+        NewS: AsyncTaskLifecycle
+            + AsyncTaskQuery
+            + AsyncNotificationManager
+            + Clone
+            + Send
+            + Sync
+            + 'static,
     {
         AgentBuilder {
             config: self.config,
@@ -347,7 +381,13 @@ impl<H, S> AgentBuilder<H, S> {
 impl<H, S> AgentBuilder<H, S>
 where
     H: AsyncMessageHandler + Clone + Send + Sync + 'static,
-    S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+    S: AsyncTaskLifecycle
+        + AsyncTaskQuery
+        + AsyncNotificationManager
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     /// Build the agent runtime
     pub fn build(self) -> Result<AgentRuntime<H, S>, BuildError> {

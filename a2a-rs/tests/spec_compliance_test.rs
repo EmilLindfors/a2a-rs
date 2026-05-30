@@ -882,7 +882,7 @@ mod property_based_tests {
 async fn test_task_list_page_size_validation() {
     use a2a_rs::{
         adapter::{
-            DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
+            ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
         },
         services::AsyncA2AClient,
     };
@@ -898,7 +898,7 @@ async fn test_task_list_page_size_validation() {
         format!("http://localhost:{}", port),
     );
 
-    let processor = DefaultRequestProcessor::with_handler(handler, agent_info.clone());
+    let processor = ConnectRpcAdapter::with_handler(handler, agent_info.clone());
     let server = HttpServer::new(processor, agent_info, format!("127.0.0.1:{}", port));
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
 

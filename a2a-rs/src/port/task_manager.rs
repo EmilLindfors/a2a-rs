@@ -6,9 +6,8 @@ use async_trait::async_trait;
 use crate::{
     Message,
     domain::{
-        A2AError, DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-        ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult, Task,
-        TaskIdParams, TaskPushNotificationConfig, TaskQueryParams, TaskState,
+        A2AError, ContextId, ListTasksParams, ListTasksResult, Task, TaskId, TaskIdParams,
+        TaskQueryParams, TaskState,
     },
 };
 
@@ -84,67 +83,60 @@ pub trait TaskManager {
     }
 }
 
+/// Async task lifecycle management: the core CRUD capability over individual tasks.
+///
+/// A handler implements this trait if it can create, read, mutate, and cancel
+/// tasks. Listing/querying across tasks is a separate capability — see
+/// [`AsyncTaskQuery`]. Convenience wrappers that validate request parameters
+/// live on [`AsyncTaskLifecycleExt`], which is blanket-implemented for every
+/// `AsyncTaskLifecycle`.
 #[cfg(feature = "server")]
 #[async_trait]
-/// An async trait for managing task lifecycle and operations
-pub trait AsyncTaskManager: Send + Sync {
-    /// Create a new task
-    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError>;
+pub trait AsyncTaskLifecycle: Send + Sync {
+    /// Create a new task in the given context.
+    async fn create(&self, id: &TaskId, context_id: &ContextId) -> Result<Task, A2AError>;
 
-    /// Get a task by ID with optional history
-    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError>;
+    /// Get a task by ID with optional history length limit.
+    async fn get(&self, id: &TaskId, history_length: Option<u32>) -> Result<Task, A2AError>;
 
-    /// Update task status with an optional message to add to history
-    async fn update_task_status(
+    /// Update task status, optionally appending a message to history.
+    async fn update_status(
         &self,
-        task_id: &str,
+        id: &TaskId,
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError>;
 
-    /// Cancel a task
-    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError>;
+    /// Cancel a task.
+    async fn cancel(&self, id: &TaskId) -> Result<Task, A2AError>;
 
-    /// Check if a task exists
-    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError>;
+    /// Check whether a task exists.
+    async fn exists(&self, id: &TaskId) -> Result<bool, A2AError>;
+}
 
-    /// List tasks with optional filtering
-    async fn list_tasks(
-        &self,
-        _context_id: Option<&str>,
-        _limit: Option<u32>,
-    ) -> Result<Vec<Task>, A2AError> {
-        // Default implementation - can be overridden
-        // Basic implementation that doesn't support filtering
-        Err(A2AError::UnsupportedOperation(
-            "Task listing not implemented".to_string(),
-        ))
-    }
+/// Async task querying: listing tasks with filtering and pagination.
+///
+/// Kept distinct from [`AsyncTaskLifecycle`] so a handler that only stores and
+/// mutates individual tasks is not forced to implement cross-task search.
+#[cfg(feature = "server")]
+#[async_trait]
+pub trait AsyncTaskQuery: Send + Sync {
+    /// List tasks with filtering and pagination (A2A v1.0.0 `tasks/list`).
+    async fn list(&self, params: &ListTasksParams) -> Result<ListTasksResult, A2AError>;
+}
 
-    /// Get task metadata
-    async fn get_task_metadata(
-        &self,
-        task_id: &str,
-    ) -> Result<serde_json::Map<String, serde_json::Value>, A2AError> {
-        let task = self.get_task(task_id, None).await?;
-        if let Some(metadata) = task.metadata.as_option() {
-            let val = serde_json::to_value(metadata)?;
-            if let serde_json::Value::Object(map) = val {
-                return Ok(map);
-            }
-        }
-        Ok(serde_json::Map::new())
-    }
-
-    /// Validate task parameters
-    async fn validate_task_params(&self, params: &TaskQueryParams) -> Result<(), A2AError> {
-        if params.id.trim().is_empty() {
-            return Err(A2AError::ValidationError {
-                field: "task_id".to_string(),
-                message: "Task ID cannot be empty".to_string(),
-            });
-        }
-
+/// Validation conveniences over [`AsyncTaskLifecycle`].
+///
+/// Blanket-implemented for every `AsyncTaskLifecycle`, so implementors get these
+/// for free and only ever stub the core primitives. Constructing a [`TaskId`]
+/// from request parameters performs the empty-string validation, so these
+/// wrappers parse the wire parameters once at the boundary.
+#[cfg(feature = "server")]
+#[async_trait]
+pub trait AsyncTaskLifecycleExt: AsyncTaskLifecycle {
+    /// Validate query parameters, then fetch the task.
+    async fn get_validated(&self, params: &TaskQueryParams) -> Result<Task, A2AError> {
+        let id: TaskId = params.id.parse()?;
         if let Some(history_length) = params.history_length {
             if history_length > 1000 {
                 return Err(A2AError::ValidationError {
@@ -153,68 +145,15 @@ pub trait AsyncTaskManager: Send + Sync {
                 });
             }
         }
-
-        Ok(())
+        self.get(&id, params.history_length).await
     }
 
-    /// Get task with validation
-    async fn get_task_validated(&self, params: &TaskQueryParams) -> Result<Task, A2AError> {
-        self.validate_task_params(params).await?;
-        self.get_task(&params.id, params.history_length).await
-    }
-
-    /// Cancel task with validation
-    async fn cancel_task_validated(&self, params: &TaskIdParams) -> Result<Task, A2AError> {
-        if params.id.trim().is_empty() {
-            return Err(A2AError::ValidationError {
-                field: "task_id".to_string(),
-                message: "Task ID cannot be empty".to_string(),
-            });
-        }
-
-        self.cancel_task(&params.id).await
-    }
-
-    // ===== v1.0.0 New Methods =====
-
-    /// List tasks with comprehensive filtering and pagination (v1.0.0)
-    async fn list_tasks_v3(&self, _params: &ListTasksParams) -> Result<ListTasksResult, A2AError> {
-        // Default implementation returns unsupported error
-        Err(A2AError::UnsupportedOperation(
-            "Task listing with pagination not implemented".to_string(),
-        ))
-    }
-
-    /// Get push notification config by ID (v1.0.0)
-    async fn get_push_notification_config(
-        &self,
-        _params: &GetTaskPushNotificationConfigParams,
-    ) -> Result<TaskPushNotificationConfig, A2AError> {
-        // Default implementation returns unsupported error
-        Err(A2AError::UnsupportedOperation(
-            "Get push notification config not implemented".to_string(),
-        ))
-    }
-
-    /// List all push notification configs for a task (v1.0.0)
-    async fn list_push_notification_configs(
-        &self,
-        _params: &ListTaskPushNotificationConfigsParams,
-    ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
-        // Default implementation returns unsupported error
-        Err(A2AError::UnsupportedOperation(
-            "List push notification configs not implemented".to_string(),
-        ))
-    }
-
-    /// Delete a specific push notification config (v1.0.0)
-    async fn delete_push_notification_config(
-        &self,
-        _params: &DeleteTaskPushNotificationConfigParams,
-    ) -> Result<(), A2AError> {
-        // Default implementation returns unsupported error
-        Err(A2AError::UnsupportedOperation(
-            "Delete push notification config not implemented".to_string(),
-        ))
+    /// Validate ID parameters, then cancel the task.
+    async fn cancel_validated(&self, params: &TaskIdParams) -> Result<Task, A2AError> {
+        let id: TaskId = params.id.parse()?;
+        self.cancel(&id).await
     }
 }
+
+#[cfg(feature = "server")]
+impl<T: AsyncTaskLifecycle + ?Sized> AsyncTaskLifecycleExt for T {}

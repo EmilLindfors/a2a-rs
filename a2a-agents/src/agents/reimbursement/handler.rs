@@ -8,13 +8,14 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState, part};
+use a2a_rs::application::{HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
+use a2a_rs::domain::{A2AError, ContextId, Message, Part, Role, Task, TaskId, TaskState, part};
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
 use super::types::*;
 use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest};
 
-// NOTE: Task storage is handled by DefaultRequestProcessor + SQLx/InMemory storage
+// NOTE: Task storage is handled by ConnectRpcAdapter + SQLx/InMemory storage
 // This handler is stateless and only processes messages
 
 /// Metrics for tracking handler performance
@@ -80,16 +81,11 @@ impl HandlerMetrics {
 /// Reimbursement message handler with proper JSON parsing and validation
 /// Reimbursement handler that manages task history through a task manager
 #[derive(Clone)]
-pub struct ReimbursementHandler<T>
-where
-    T: a2a_rs::port::AsyncTaskManager
-        + a2a_rs::port::AsyncStreamingHandler
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
-    task_manager: T,
+pub struct ReimbursementHandler {
+    /// Per-task lifecycle port (create/get/update_status)
+    task_lifecycle: Arc<dyn a2a_rs::port::AsyncTaskLifecycle>,
+    /// Streaming port for broadcasting artifact updates
+    streaming: Arc<dyn a2a_rs::port::AsyncStreamingHandler>,
     validation_rules: ValidationRules,
     #[allow(dead_code)]
     file_metadata_store: Arc<Mutex<HashMap<String, Map<String, Value>>>>,
@@ -97,17 +93,30 @@ where
     llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
+// The handler holds both the lifecycle and streaming ports, so it hosts the
+// `TaskStatusBroadcast` mixin (see `.claude/rules/hexagonal_architecture.md`
+// §9): every status transition it drives goes through `update_and_broadcast`,
+// announcing the change to streaming subscribers. Storage no longer
+// self-broadcasts on mutation (REFACTORING_PLAN.md §4.0.2), so without these
+// accessors the agent's updates — including the background worker's final
+// state — would silently stop reaching subscribers and push notifications.
+impl HasTaskLifecycle for ReimbursementHandler {
+    fn lifecycle(&self) -> &dyn a2a_rs::port::AsyncTaskLifecycle {
+        self.task_lifecycle.as_ref()
+    }
+}
+
+impl HasStreaming for ReimbursementHandler {
+    fn streaming(&self) -> &dyn a2a_rs::port::AsyncStreamingHandler {
+        self.streaming.as_ref()
+    }
+}
+
 #[allow(dead_code)]
-impl<T> ReimbursementHandler<T>
-where
-    T: a2a_rs::port::AsyncTaskManager
-        + a2a_rs::port::AsyncStreamingHandler
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
-    pub fn new(task_manager: T) -> Self {
+impl ReimbursementHandler {
+    pub fn new(
+        storage: impl a2a_rs::port::AsyncTaskLifecycle + a2a_rs::port::AsyncStreamingHandler + 'static,
+    ) -> Self {
         // Try to initialize AI client from environment
         let llm_provider: Option<Arc<dyn LlmProvider>> = if let Ok(gemini) =
             a2a_agents_common::llm::gemini::GeminiProvider::from_env()
@@ -122,12 +131,17 @@ where
             None
         };
 
-        Self::with_llm(task_manager, llm_provider)
+        Self::with_llm(storage, llm_provider)
     }
 
-    pub fn with_llm(task_manager: T, llm_provider: Option<Arc<dyn LlmProvider>>) -> Self {
+    pub fn with_llm(
+        storage: impl a2a_rs::port::AsyncTaskLifecycle + a2a_rs::port::AsyncStreamingHandler + 'static,
+        llm_provider: Option<Arc<dyn LlmProvider>>,
+    ) -> Self {
+        let storage = Arc::new(storage);
         Self {
-            task_manager,
+            task_lifecycle: storage.clone(),
+            streaming: storage,
             validation_rules: ValidationRules::default(),
             file_metadata_store: Arc::new(Mutex::new(HashMap::new())),
             metrics: Arc::new(Mutex::new(HandlerMetrics::default())),
@@ -428,7 +442,7 @@ Example response when asking for info:
                     };
 
                     let _ = self
-                        .task_manager
+                        .streaming
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
@@ -464,7 +478,7 @@ Example response when asking for info:
                     };
 
                     let _ = self
-                        .task_manager
+                        .streaming
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
@@ -1151,7 +1165,7 @@ Example response when asking for info:
                     ProcessingStatus::Pending
                 };
 
-                // NOTE: Task storage is handled by DefaultRequestProcessor
+                // NOTE: Task storage is handled by ConnectRpcAdapter
                 // We just process the message and return a response
                 // (receipts metadata is still tracked in file_metadata_store if needed)
 
@@ -1177,7 +1191,7 @@ Example response when asking for info:
                 })
             }
             ReimbursementRequest::StatusQuery { request_id } => {
-                // NOTE: Actual task status is managed by DefaultRequestProcessor/SQLx
+                // NOTE: Actual task status is managed by ConnectRpcAdapter/SQLx
                 // This handler doesn't have access to task storage directly
                 // The client should use tasks/get instead for real status
                 {
@@ -1366,15 +1380,7 @@ Example response when asking for info:
 }
 
 #[async_trait]
-impl<T> AsyncMessageHandler for ReimbursementHandler<T>
-where
-    T: a2a_rs::port::AsyncTaskManager
-        + a2a_rs::port::AsyncStreamingHandler
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
+impl AsyncMessageHandler for ReimbursementHandler {
     #[instrument(skip(self, message), fields(
         task_id = %task_id,
         message_id = %message.message_id,
@@ -1393,9 +1399,11 @@ where
         );
         info!("Processing reimbursement request");
 
+        let id: TaskId = task_id.parse()?;
+
         // Check if task exists and get its current state
-        let existing_task = if self.task_manager.task_exists(task_id).await? {
-            Some(self.task_manager.get_task(task_id, Some(50)).await?)
+        let existing_task = if self.task_lifecycle.exists(&id).await? {
+            Some(self.task_lifecycle.get(&id, Some(50)).await?)
         } else {
             None
         };
@@ -1407,7 +1415,8 @@ where
             } else {
                 message.context_id.clone()
             };
-            self.task_manager.create_task(task_id, &context_id).await?;
+            let context_id: ContextId = context_id.parse()?;
+            self.task_lifecycle.create(&id, &context_id).await?;
         }
 
         // Check if this task already has a completed/approved expense
@@ -1416,8 +1425,7 @@ where
             if task.status.state == TaskState::Completed {
                 // This is a follow-up to a completed task
                 // Add user message to history
-                self.task_manager
-                    .update_task_status(task_id, TaskState::Working, Some(message.clone()))
+                self.update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
                     .await?;
 
                 // Send a simple acknowledgment
@@ -1430,8 +1438,7 @@ where
 
                 // Add agent response and return
                 let final_task = self
-                    .task_manager
-                    .update_task_status(task_id, TaskState::Completed, Some(response_message))
+                    .update_and_broadcast(&id, TaskState::Completed, Some(response_message))
                     .await?;
 
                 return Ok(final_task);
@@ -1439,8 +1446,7 @@ where
         }
 
         // Add the user's message to history first
-        self.task_manager
-            .update_task_status(task_id, TaskState::Working, Some(message.clone()))
+        self.update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
             .await?;
 
         // Send immediate acknowledgment
@@ -1451,13 +1457,13 @@ where
             .context_id(message.context_id.clone())
             .build();
 
-        self.task_manager
-            .update_task_status(task_id, TaskState::Working, Some(ack_message))
+        self.update_and_broadcast(&id, TaskState::Working, Some(ack_message))
             .await?;
 
         // Clone what we need for the background task
         let handler = self.clone();
         let task_id_owned = task_id.to_string();
+        let id_owned = id.clone();
         let message_owned = message.clone();
         let context_id = message.context_id.clone();
 
@@ -1473,8 +1479,8 @@ where
 
             // Get current task for context
             let current_task = match handler
-                .task_manager
-                .get_task(&task_id_owned, Some(50))
+                .task_lifecycle
+                .get(&id_owned, Some(50))
                 .await
             {
                 Ok(task) => {
@@ -1551,8 +1557,7 @@ where
             // Update task with AI response
             info!(task_id = %task_id_owned, new_state = ?task_state, "Updating task with AI response");
             match handler
-                .task_manager
-                .update_task_status(&task_id_owned, task_state, Some(response_message))
+                .update_and_broadcast(&id_owned, task_state, Some(response_message))
                 .await
             {
                 Ok(updated_task) => {
@@ -1578,7 +1583,7 @@ where
         info!(task_id = %task_id, "Returning immediate acknowledgment, AI processing in background");
 
         // Get the updated task with the acknowledgment message
-        let final_task = self.task_manager.get_task(task_id, Some(50)).await?;
+        let final_task = self.task_lifecycle.get(&id, Some(50)).await?;
         Ok(final_task)
     }
 

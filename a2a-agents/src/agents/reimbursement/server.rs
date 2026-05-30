@@ -1,8 +1,8 @@
 use a2a_rs::adapter::{
-    BearerTokenAuthenticator, DefaultRequestProcessor, HttpPushNotificationSender, HttpServer,
+    BearerTokenAuthenticator, ConnectRpcAdapter, HttpPushNotificationSender, HttpServer,
     InMemoryTaskStorage, SimpleAgentInfo,
 };
-use a2a_rs::port::{AsyncNotificationManager, AsyncTaskManager};
+use a2a_rs::port::{AsyncNotificationManager, AsyncTaskLifecycle, AsyncTaskQuery};
 
 // SQLx storage support (feature-gated)
 #[cfg(feature = "sqlx")]
@@ -99,7 +99,8 @@ impl ReimbursementServer {
     /// Start HTTP server
     pub async fn start<S>(&self, storage: S) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncTaskManager
+        S: AsyncTaskLifecycle
+            + AsyncTaskQuery
             + AsyncNotificationManager
             + a2a_rs::port::AsyncStreamingHandler
             + Clone
@@ -119,7 +120,8 @@ impl ReimbursementServer {
         storage: S,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncTaskManager
+        S: AsyncTaskLifecycle
+            + AsyncTaskQuery
             + AsyncNotificationManager
             + a2a_rs::port::AsyncStreamingHandler
             + Clone
@@ -163,9 +165,9 @@ impl ReimbursementServer {
         );
 
         // Create processor with separate handlers and agent info
-        let processor = DefaultRequestProcessor::new(
+        let processor = ConnectRpcAdapter::new(
             message_handler,
-            storage.clone(), // storage implements AsyncTaskManager
+            storage.clone(), // storage implements AsyncTaskLifecycle + AsyncTaskQuery
             storage,         // storage also implements AsyncNotificationManager
             agent_info.clone(),
         );

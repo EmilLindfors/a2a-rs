@@ -6,15 +6,19 @@ mod common;
 
 use a2a_rs::{
     adapter::{
-        DefaultRequestProcessor, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
+        ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
     },
     domain::{ListTasksParams, Message, TaskState},
-    port::AsyncTaskManager,
+    port::AsyncTaskLifecycle,
     services::AsyncA2AClient,
 };
 use common::TestBusinessHandler;
 use std::time::Duration;
 use tokio::sync::oneshot;
+
+fn tid(s: &str) -> a2a_rs::domain::TaskId {
+    s.parse().unwrap()
+}
 
 async fn setup_server_with_tasks(port: u16) -> (oneshot::Sender<()>, InMemoryTaskStorage) {
     let storage = InMemoryTaskStorage::new();
@@ -30,7 +34,7 @@ async fn setup_server_with_tasks(port: u16) -> (oneshot::Sender<()>, InMemoryTas
     );
 
     // Create a processor
-    let processor = DefaultRequestProcessor::with_handler(handler, test_agent_info);
+    let processor = ConnectRpcAdapter::with_handler(handler, test_agent_info);
 
     // Create an agent info provider
     let agent_info = SimpleAgentInfo::new(
@@ -201,11 +205,11 @@ async fn test_task_list_filter_by_status() {
 
     // Update task states directly through storage
     storage
-        .update_task_status(&task_id_1, TaskState::Working, None)
+        .update_status(&tid(&task_id_1), TaskState::Working, None)
         .await
         .expect("Failed to update task 1");
     storage
-        .update_task_status(&task_id_2, TaskState::Completed, None)
+        .update_status(&tid(&task_id_2), TaskState::Completed, None)
         .await
         .expect("Failed to update task 2");
     // task_id_3 remains in Submitted state
@@ -453,7 +457,7 @@ async fn test_task_list_include_artifacts() {
 
     // Add artifact through storage
     let mut task = storage
-        .get_task(&task_id, None)
+        .get(&tid(&task_id), None)
         .await
         .expect("Failed to get task");
 
@@ -473,7 +477,7 @@ async fn test_task_list_include_artifacts() {
         _ => TaskState::Unknown,
     };
     storage
-        .update_task_status(&task_id, task_state, None)
+        .update_status(&tid(&task_id), task_state, None)
         .await
         .ok();
 
@@ -550,18 +554,18 @@ async fn test_task_list_combined_filters() {
 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // All tasks start as Working (set by DefaultMessageHandler)
+    // All tasks start as Working (set by ResponderMessageHandler)
     // Update some tasks to other states - leave task_ids[0] and task_ids[1] as Working
     storage
-        .update_task_status(&task_ids[2], TaskState::Completed, None)
+        .update_status(&tid(&task_ids[2]), TaskState::Completed, None)
         .await
         .ok();
     storage
-        .update_task_status(&task_ids[3], TaskState::Completed, None)
+        .update_status(&tid(&task_ids[3]), TaskState::Completed, None)
         .await
         .ok();
     storage
-        .update_task_status(&task_ids[4], TaskState::Failed, None)
+        .update_status(&tid(&task_ids[4]), TaskState::Failed, None)
         .await
         .ok();
 
