@@ -392,9 +392,9 @@ impl Task {
         tracing::debug!("Validating task");
 
         let mut message_ids = std::collections::HashSet::new();
-        for (index, message) in self.history.iter().enumerate() {
+        for (_index, message) in self.history.iter().enumerate() {
             #[cfg(feature = "tracing")]
-            tracing::trace!("Validating message {} in history", index);
+            tracing::trace!("Validating message {} in history", _index);
 
             if !message_ids.insert(&message.message_id) {
                 #[cfg(feature = "tracing")]

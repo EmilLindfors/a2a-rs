@@ -1,6 +1,5 @@
 //! Push notification management port definitions
 
-#[cfg(feature = "server")]
 use async_trait::async_trait;
 
 use crate::domain::{
@@ -56,7 +55,6 @@ fn validate_push_notification_url(config: &TaskPushNotificationConfig) -> Result
 /// Validation conveniences (URL/task-id checks) live on
 /// [`AsyncNotificationManagerExt`], which is blanket-implemented for every
 /// `AsyncNotificationManager`.
-#[cfg(feature = "server")]
 #[async_trait]
 pub trait AsyncNotificationManager: Send + Sync {
     /// Create or replace a push-notification config, returning it with any
@@ -89,7 +87,6 @@ pub trait AsyncNotificationManager: Send + Sync {
 ///
 /// Blanket-implemented for every `AsyncNotificationManager`, so implementors
 /// only stub the core CRUD primitives.
-#[cfg(feature = "server")]
 #[async_trait]
 pub trait AsyncNotificationManagerExt: AsyncNotificationManager {
     /// Validate a push-notification config's webhook URL.
@@ -113,5 +110,4 @@ pub trait AsyncNotificationManagerExt: AsyncNotificationManager {
     }
 }
 
-#[cfg(feature = "server")]
 impl<T: AsyncNotificationManager + ?Sized> AsyncNotificationManagerExt for T {}

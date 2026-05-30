@@ -1,11 +1,9 @@
 //! Message handling port definitions
 
-#[cfg(feature = "server")]
 use async_trait::async_trait;
 
 use crate::domain::{A2AError, Message, Task};
 
-#[cfg(feature = "server")]
 #[async_trait]
 /// An async trait for handling message processing operations
 pub trait AsyncMessageHandler: Send + Sync {

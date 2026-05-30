@@ -1,6 +1,5 @@
 //! Streaming and real-time update handling port definitions
 
-#[cfg(feature = "server")]
 use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
@@ -9,7 +8,6 @@ use crate::domain::core::task::TaskStateExt;
 use crate::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 
 /// A trait for subscribing to real-time updates
-#[cfg(feature = "server")]
 #[async_trait]
 pub trait Subscriber<T>: Send + Sync {
     /// Handle an update
@@ -29,7 +27,6 @@ pub trait Subscriber<T>: Send + Sync {
     }
 }
 
-#[cfg(feature = "server")]
 #[async_trait]
 /// An async trait for managing streaming connections and real-time updates
 pub trait AsyncStreamingHandler: Send + Sync {

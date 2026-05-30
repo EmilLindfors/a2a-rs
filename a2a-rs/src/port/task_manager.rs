@@ -1,6 +1,5 @@
 //! Task management port definitions
 
-#[cfg(feature = "server")]
 use async_trait::async_trait;
 
 use crate::{
@@ -18,7 +17,6 @@ use crate::{
 /// [`AsyncTaskQuery`]. Convenience wrappers that validate request parameters
 /// live on [`AsyncTaskLifecycleExt`], which is blanket-implemented for every
 /// `AsyncTaskLifecycle`.
-#[cfg(feature = "server")]
 #[async_trait]
 pub trait AsyncTaskLifecycle: Send + Sync {
     /// Create a new task in the given context.
@@ -46,7 +44,6 @@ pub trait AsyncTaskLifecycle: Send + Sync {
 ///
 /// Kept distinct from [`AsyncTaskLifecycle`] so a handler that only stores and
 /// mutates individual tasks is not forced to implement cross-task search.
-#[cfg(feature = "server")]
 #[async_trait]
 pub trait AsyncTaskQuery: Send + Sync {
     /// List tasks with filtering and pagination (A2A v1.0.0 `tasks/list`).
@@ -59,7 +56,6 @@ pub trait AsyncTaskQuery: Send + Sync {
 /// for free and only ever stub the core primitives. Constructing a [`TaskId`]
 /// from request parameters performs the empty-string validation, so these
 /// wrappers parse the wire parameters once at the boundary.
-#[cfg(feature = "server")]
 #[async_trait]
 pub trait AsyncTaskLifecycleExt: AsyncTaskLifecycle {
     /// Validate query parameters, then fetch the task.
@@ -83,5 +79,4 @@ pub trait AsyncTaskLifecycleExt: AsyncTaskLifecycle {
     }
 }
 
-#[cfg(feature = "server")]
 impl<T: AsyncTaskLifecycle + ?Sized> AsyncTaskLifecycleExt for T {}
