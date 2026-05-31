@@ -21,6 +21,12 @@ pub mod transport;
 // Client re-exports (from transport)
 #[cfg(feature = "http-client")]
 pub use transport::http::HttpClient;
+#[cfg(feature = "jsonrpc-client")]
+pub use transport::jsonrpc_client::JsonRpcClient;
+#[cfg(feature = "client")]
+pub use transport::negotiation::{TransportFactory, TransportNegotiator, default_registry};
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+pub use transport::negotiation::{connect, fetch_agent_card};
 
 // Server re-exports (from various modules)
 #[cfg(feature = "http-server")]
@@ -45,7 +51,7 @@ pub use transport::http::HttpServer;
 pub use transport::jsonrpc::{JsonRpcAdapter, jsonrpc_router, rest_router};
 
 // Error re-exports
-#[cfg(feature = "http-client")]
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 pub use error::HttpClientError;
 #[cfg(feature = "http-server")]
 pub use error::HttpServerError;

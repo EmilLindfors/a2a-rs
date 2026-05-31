@@ -1,6 +1,6 @@
 //! Server-Sent Events (SSE) streaming components
 
-use a2a_rs::services::{AsyncA2AClient, StreamItem};
+use a2a_rs::StreamItem;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use futures::StreamExt;
 use std::{convert::Infallible, sync::Arc, time::Duration};
@@ -29,7 +29,7 @@ pub fn create_sse_stream(
         let mut is_terminal = false;
 
         loop {
-            match client.http.subscribe_to_task(&task_id, Some(50)).await {
+            match client.transport.subscribe_to_task(&task_id, Some(50)).await {
                 Ok(mut event_stream) => {
                     info!("Successfully subscribed to task {} via HTTP stream", task_id);
                     retry_count = 0; // Reset retries on successful connection

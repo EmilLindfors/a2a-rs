@@ -5,10 +5,7 @@ use a2a_client::{
     WebA2AClient,
     components::{MessageView, TaskView, create_sse_stream},
 };
-use a2a_rs::{
-    domain::{ListTasksParams, TaskState, TaskStatusUpdateEvent},
-    services::AsyncA2AClient,
-};
+use a2a_rs::domain::{ListTasksParams, TaskState, TaskStatusUpdateEvent};
 use askama::Template;
 use askama_axum::IntoResponse;
 use axum::{
@@ -495,7 +492,7 @@ async fn submit_expense(
 
     let response = state
         .client
-        .http
+        .transport
         .send_task_message(&task_id, &message, None, Some(50))
         .await
         .map_err(|e| AppError(anyhow::anyhow!("Failed to submit expense: {}", e)))?;
@@ -519,7 +516,7 @@ async fn submit_expense(
 
     match state
         .client
-        .http
+        .transport
         .set_task_push_notification(&push_config)
         .await
     {
@@ -559,7 +556,7 @@ async fn tasks_page(
 
     let result = state
         .client
-        .http
+        .transport
         .list_tasks(&params)
         .await
         .map_err(|e| AppError(anyhow::anyhow!("Failed to list tasks: {}", e)))?;
@@ -583,7 +580,7 @@ async fn chat_page(
     let max_retries = 3;
 
     let (messages, task_state) = loop {
-        match state.client.http.get_task(&task_id, Some(50)).await {
+        match state.client.transport.get_task(&task_id, Some(50)).await {
             Ok(task) => {
                 info!(
                     "Retrieved task {} with {} history items",
@@ -702,7 +699,7 @@ async fn send_message(
 
     let response = state
         .client
-        .http
+        .transport
         .send_task_message(&task_id, &message, None, Some(50))
         .await
         .map_err(|e| AppError(anyhow::anyhow!("Failed to send message: {}", e)))?;
@@ -727,7 +724,7 @@ async fn send_message(
 
     match state
         .client
-        .http
+        .transport
         .set_task_push_notification(&push_config)
         .await
     {
@@ -752,7 +749,7 @@ async fn cancel_task(
 ) -> Result<AxumResponse, AppError> {
     state
         .client
-        .http
+        .transport
         .cancel_task(&task_id)
         .await
         .map_err(|e| AppError(anyhow::anyhow!("Failed to cancel task: {}", e)))?;

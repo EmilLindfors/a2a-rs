@@ -5,7 +5,6 @@ use a2a_rs::{
     InMemoryTaskStorage,
     domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatusUpdateEvent},
     port::{AsyncMessageHandler, AsyncStreamingHandler},
-    services::client::AsyncA2AClient,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -116,7 +115,7 @@ async fn test_sse_stream_success() {
         .build();
 
     let task: Task = client
-        .http
+        .transport
         .send_task_message("test-task-1", &message, None, None)
         .await
         .unwrap();
@@ -124,7 +123,7 @@ async fn test_sse_stream_success() {
 
     // Check if subscribe_to_task works natively
     let mut native_stream = client
-        .http
+        .transport
         .subscribe_to_task("test-task-1", None)
         .await
         .unwrap();
@@ -137,7 +136,7 @@ async fn test_sse_stream_success() {
     // Now test SSE Stream
     // Note: Re-subscribing might only get new events, so we might need another task for SSE testing
     let task2 = client
-        .http
+        .transport
         .send_task_message("test-task-2", &message, None, None)
         .await
         .unwrap();

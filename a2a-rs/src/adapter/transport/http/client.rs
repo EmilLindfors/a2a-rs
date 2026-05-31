@@ -21,10 +21,10 @@ use crate::{
             GetExtendedAgentCardRequest, GetTaskPushNotificationConfigRequest, GetTaskRequest,
             ListTaskPushNotificationConfigsRequest, ListTasksRequest, SendMessageConfiguration,
             SendMessageRequest, SubscribeToTaskRequest, TaskState, send_message_response,
-            stream_response,
         },
     },
-    services::client::{AsyncA2AClient, StreamItem},
+    adapter::transport::codec::stream_response_to_item,
+    port::{StreamItem, Transport},
 };
 
 fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
@@ -49,19 +49,6 @@ fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
         code,
         message: err.message.clone().unwrap_or_default(),
         data: None,
-    }
-}
-
-fn map_stream_response(resp: crate::domain::generated::StreamResponse) -> Option<StreamItem> {
-    match resp.payload {
-        Some(stream_response::Payload::Task(task)) => Some(StreamItem::Task(*task)),
-        Some(stream_response::Payload::StatusUpdate(update)) => {
-            Some(StreamItem::StatusUpdate((*update).into()))
-        }
-        Some(stream_response::Payload::ArtifactUpdate(update)) => {
-            Some(StreamItem::ArtifactUpdate((*update).into()))
-        }
-        _ => None,
     }
 }
 
@@ -248,7 +235,11 @@ impl HttpClient {
 }
 
 #[async_trait]
-impl AsyncA2AClient for HttpClient {
+impl Transport for HttpClient {
+    fn protocol(&self) -> &str {
+        "CONNECTRPC"
+    }
+
     #[cfg_attr(
         feature = "tracing",
         instrument(skip(self, message), fields(task_id, session_id, history_length))
@@ -470,7 +461,7 @@ impl AsyncA2AClient for HttpClient {
             match s.message().await {
                 Ok(Some(view)) => {
                     let resp = view.to_owned_message();
-                    if let Some(item) = map_stream_response(resp) {
+                    if let Some(item) = stream_response_to_item(resp) {
                         Some((Ok(item), s))
                     } else {
                         Some((

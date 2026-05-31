@@ -1,3 +1,18 @@
+//! The client-side `Transport` port.
+//!
+//! [`Transport`] is the outbound port a client uses to talk to a remote A2A
+//! agent: the application names the capability it needs ("send a message", "get a
+//! task", "subscribe to updates"), and a concrete transport **adapter**
+//! (ConnectRPC, JSON-RPC 2.0, …) fulfils it over the wire. This is the mirror of
+//! the inbound server ports — same hexagonal shape, opposite direction.
+//!
+//! Each adapter reports its wire protocol via [`Transport::protocol`] so a
+//! card-driven negotiator can pick the right one from an agent card's
+//! `supported_interfaces`.
+//!
+//! The port carries no feature gate (hex rule 5 — gate adapters, not ports); it
+//! depends only on the always-available `async-trait`/`futures` and domain types.
+
 use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
@@ -7,9 +22,15 @@ use crate::domain::{
     TaskPushNotificationConfig, TaskStatusUpdateEvent,
 };
 
+/// The capability a client needs from a remote A2A agent, independent of wire
+/// protocol. Implemented by each transport adapter (`HttpClient` for ConnectRPC,
+/// `JsonRpcClient` for JSON-RPC 2.0, …).
 #[async_trait]
-/// An async trait defining the methods an async client should implement
-pub trait AsyncA2AClient: Send + Sync {
+pub trait Transport: Send + Sync {
+    /// The wire protocol this transport speaks, matching an agent interface's
+    /// `protocol_binding` (e.g. `"JSONRPC"`, `"CONNECTRPC"`, `"GRPC"`).
+    fn protocol(&self) -> &str;
+
     /// Send a message to a task
     async fn send_task_message(
         &self,
@@ -68,7 +89,16 @@ pub trait AsyncA2AClient: Send + Sync {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError>;
 }
 
-/// Items that can be streamed from the server during task subscriptions.\n///\n/// When subscribing to streaming updates for a task, the server can send\n/// different types of items:\n/// - `Task`: The complete initial task state when subscription starts\n/// - `StatusUpdate`: Updates to the task's status (state changes, progress)\n/// - `ArtifactUpdate`: Notifications about new or updated artifacts\n///\n/// This allows clients to receive real-time updates about task progress\n/// and results as they become available.
+/// Items that can be streamed from the server during task subscriptions.
+///
+/// When subscribing to streaming updates for a task, the server can send
+/// different types of items:
+/// - `Task`: The complete initial task state when subscription starts
+/// - `StatusUpdate`: Updates to the task's status (state changes, progress)
+/// - `ArtifactUpdate`: Notifications about new or updated artifacts
+///
+/// This allows clients to receive real-time updates about task progress
+/// and results as they become available.
 #[derive(Debug, Clone)]
 pub enum StreamItem {
     /// The initial task state

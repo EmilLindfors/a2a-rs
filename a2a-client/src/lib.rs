@@ -23,7 +23,7 @@
 //! ```rust,no_run
 //! use a2a_client::WebA2AClient;
 //! use a2a_rs::domain::Message;
-//! use a2a_rs::services::AsyncA2AClient;
+//! use a2a_rs::Transport;
 //!
 //! # #[tokio::main]
 //! # async fn main() -> anyhow::Result<()> {
@@ -33,7 +33,7 @@
 //! // Send a message
 //! let message = Message::user_text("Hello, agent!".to_string(), "msg-1".to_string());
 //!
-//! let task = client.http.send_task_message("task-1", &message, None, None).await?;
+//! let task = client.transport.send_task_message("task-1", &message, None, None).await?;
 //! println!("Task ID: {}", task.id);
 //! # Ok(())
 //! # }
@@ -110,7 +110,7 @@ pub mod utils;
 // Re-export commonly used types
 pub use error::{ClientError, Result};
 
-use a2a_rs::HttpClient;
+use a2a_rs::{HttpClient, Transport};
 
 /// Web-friendly A2A client that wraps both HTTP and WebSocket clients.
 ///
@@ -148,8 +148,11 @@ use a2a_rs::HttpClient;
 /// # }
 /// ```
 pub struct WebA2AClient {
-    /// HTTP client for A2A requests and streaming
-    pub http: HttpClient,
+    /// The negotiated transport for A2A requests and streaming.
+    ///
+    /// Boxed behind the [`Transport`] port so the client is agnostic to the
+    /// underlying wire protocol (ConnectRPC, JSON-RPC 2.0, …).
+    pub transport: Box<dyn Transport>,
 }
 
 impl WebA2AClient {
@@ -183,15 +186,17 @@ impl WebA2AClient {
     /// ```
     pub fn new_http(base_url: String) -> Self {
         Self {
-            http: HttpClient::new(base_url),
+            transport: Box::new(HttpClient::new(base_url)),
         }
     }
 
-    /// Auto-connect to an agent, attempting to detect available transports.
+    /// Auto-connect to an agent by fetching its card and negotiating a transport.
     ///
-    /// Probes for WebSocket support by fetching the agent card from the server.
-    /// Falls back to HTTP-only if agent card fetching fails or if WebSocket
-    /// is not supported.
+    /// Fetches the agent card from the well-known endpoint and selects a transport
+    /// from the card's `supported_interfaces` (ConnectRPC preferred, JSON-RPC 2.0
+    /// as interop fallback). If the card can't be fetched or none of its interfaces
+    /// match a compiled-in transport, falls back to a ConnectRPC client on
+    /// `base_url` so the call still works against a bare agent URL.
     ///
     /// # Arguments
     ///
@@ -209,13 +214,17 @@ impl WebA2AClient {
     /// # }
     /// ```
     pub async fn auto_connect(base_url: &str) -> Result<Self> {
-        // Validate URL format
+        // Validate URL format up front so a malformed URL is a hard error.
         let _ = reqwest::Url::parse(base_url).map_err(|e| ClientError::InvalidUrl {
             url: base_url.to_string(),
             reason: e.to_string(),
         })?;
 
-        Ok(Self::new_http(base_url.to_string()))
+        match a2a_rs::connect(base_url, &a2a_rs::default_registry()).await {
+            Ok(transport) => Ok(Self { transport }),
+            // Card fetch / negotiation failed — fall back to a direct ConnectRPC client.
+            Err(_) => Ok(Self::new_http(base_url.to_string())),
+        }
     }
 }
 /// Application state for Axum web applications.

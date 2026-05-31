@@ -44,7 +44,7 @@ a2a-rs = { version = "0.1.0", features = ["full"] }
 
 ```rust
 use a2a_rs::{HttpClient, Message};
-use a2a_rs::services::AsyncA2AClient;
+use a2a_rs::Transport;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

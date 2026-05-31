@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased] - 2026-05-24
 
 ### Added
+- **Client-side `Transport` port + JSON-RPC 2.0 client + card-driven negotiation (`a2a-rs`)**: The client gained a hexagonal transport abstraction mirroring the server side, plus a wire-compatible JSON-RPC 2.0 client so it can talk to any standard A2A agent.
+  - `port::client::Transport` (re-exported as `a2a_rs::Transport`) is the outbound client port — the renamed, relocated `AsyncA2AClient` with an added `protocol()` discriminator. `HttpClient` (ConnectRPC) reports `"CONNECTRPC"`.
+  - `JsonRpcClient` (new `jsonrpc-client` feature) implements `Transport` over the spec JSON-RPC 2.0 wire format (single `POST`, SSE for streaming), reusing the generated ProtoJSON request/response types. Its method names, error codes, and envelopes come from a shared `adapter::transport::jsonrpc_wire` module extracted from the server adapter, so the two directions are byte-compatible (proven by `tests/jsonrpc_client_interop_test.rs`, an in-process client↔server round-trip over a real socket: send/get/list/cancel, push-config CRUD, SSE subscribe, typed error mapping).
+  - `TransportFactory` + `TransportNegotiator` + `connect(base_url, &negotiator)` select a transport from an agent card's `supported_interfaces`, ranked by client preference (factory registration order). `default_registry()` prefers CONNECTRPC then JSON-RPC. Unit tests in `tests/transport_negotiation_test.rs`.
+  - `a2a-web-client`'s `WebA2AClient` now holds a `Box<dyn Transport>` (field `transport`, was `http`); `auto_connect` performs real card-driven negotiation, falling back to a direct ConnectRPC client.
 - **Wire-compatible JSON-RPC 2.0 + HTTP+JSON transport (`a2a-rs`)**: Added `JsonRpcAdapter`, a sibling of `ConnectRpcAdapter` that speaks the spec-mandated JSON-RPC 2.0 and HTTP+JSON (REST) bindings for interop with the canonical `a2aproject` SDK (and the Go/C#/Python SDKs). Behind the new `jsonrpc-server` feature.
   - Wraps the same inner `TaskService`; mounted at the composition edge via the `jsonrpc_router` / `rest_router` free functions (see `examples/jsonrpc_server.rs`).
   - JSON-RPC: single `POST /` with all 11 methods (`SendMessage`, `GetTask`, `ListTasks`, `CancelTask`, push-config CRUD, `GetExtendedAgentCard`), `A2AError` → spec error codes (`-32001`…, `-32700`/`-32601`/`-32602`), and SSE for the two streaming methods.
@@ -38,6 +43,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **`a2a-rs` transport**: Extracted the ConnectRPC adapter's request-decoding helpers (`decode_send_config`, `list_request_to_params`, `map_update_event`) to `pub(super)` so the new JSON-RPC adapter reuses them — both transports now share a single decode/encode path against the generated proto types.
+- **BREAKING — client port renamed and relocated (`a2a-rs`)**: The client trait `services::client::AsyncA2AClient` is now `port::client::Transport` (re-exported as `a2a_rs::Transport`), with a new required `fn protocol(&self) -> &str` method. `StreamItem` moved alongside it (`a2a_rs::StreamItem`). The `services::client` module and the `services::{AsyncA2AClient, StreamItem}` re-exports are gone. Call sites import `a2a_rs::Transport` / `a2a_rs::StreamItem`; method names are unchanged. `a2a-web-client`'s `WebA2AClient.http: HttpClient` field became `transport: Box<dyn Transport>`.
 
 ### Removed
 - Removed the printf-only `examples/minimal_example.rs` in `a2a-mcp`.

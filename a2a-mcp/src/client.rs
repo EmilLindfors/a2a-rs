@@ -3,19 +3,19 @@
 use crate::adapter::AgentToToolAdapter;
 use crate::error::{Error, Result};
 use a2a_rs::domain::agent::AgentCard;
-use a2a_rs::port::client::AsyncA2AClient;
+use a2a_rs::port::client::Transport;
 use rmcp::{Tool, ToolCall, ToolResponse};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use tracing::{info, debug, error};
 
 /// A client that accesses A2A agents as RMCP tools
-pub struct A2aRmcpClient<C: AsyncA2AClient> {
+pub struct A2aRmcpClient<C: Transport> {
     a2a_client: C,
     adapter: Arc<Mutex<AgentToToolAdapter>>,
 }
 
-impl<C: AsyncA2AClient> A2aRmcpClient<C> {
+impl<C: Transport> A2aRmcpClient<C> {
     /// Create a new client that discovers A2A agents
     pub fn new(a2a_client: C) -> Self {
         Self {

@@ -34,7 +34,7 @@ async-trait = "0.1"
 futures = "0.3"
 
 # HTTP client - optional
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false, optional = true }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false, optional = true }
 
 
 # HTTP server - optional
@@ -72,6 +72,9 @@ tower = { version = "0.5", features = ["util"] }
 default = ["server", "tracing"]
 client = ["dep:tokio"]
 http-client = ["client", "dep:reqwest"]
+# Wire-compatible JSON-RPC 2.0 client adapter (reqwest over the spec-mandated
+# JSON-RPC + SSE wire format). Lets our client talk to any standard A2A agent.
+jsonrpc-client = ["client", "dep:reqwest"]
 
 server = ["dep:tokio"]
 http-server = ["server", "dep:axum"]
@@ -85,7 +88,7 @@ sqlx-storage = ["server", "dep:sqlx"]
 sqlite = ["sqlx-storage", "sqlx/sqlite"]
 postgres = ["sqlx-storage", "sqlx/postgres"]
 mysql = ["sqlx-storage", "sqlx/mysql"]
-full = ["http-client", "http-server", "jsonrpc-server", "tracing", "auth", "sqlite", "postgres"]
+full = ["http-client", "http-server", "jsonrpc-server", "jsonrpc-client", "tracing", "auth", "sqlite", "postgres"]
 
 
 [package.metadata.docs.rs]

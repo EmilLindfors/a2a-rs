@@ -3,7 +3,6 @@ use a2a_client::WebA2AClient;
 use a2a_rs::adapter::{ConnectRpcAdapter, HttpServer, InMemoryTaskStorage, SimpleAgentInfo};
 use a2a_rs::domain::{A2AError, ContextId, Message, Task, TaskId, TaskState};
 use a2a_rs::port::AsyncMessageHandler;
-use a2a_rs::services::AsyncA2AClient;
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -111,7 +110,7 @@ async fn test_framework_lifecycle_e2e() {
     let message = Message::user_text("Hello Framework!".to_string(), "msg-1".to_string());
 
     let task = client
-        .http
+        .transport
         .send_task_message(&task_id, &message, None, None)
         .await
         .expect("Failed to send task");
@@ -124,7 +123,7 @@ async fn test_framework_lifecycle_e2e() {
 
     // 4. Client fetches final result
     let final_task = client
-        .http
+        .transport
         .get_task(&task_id, None)
         .await
         .expect("Failed to fetch task");

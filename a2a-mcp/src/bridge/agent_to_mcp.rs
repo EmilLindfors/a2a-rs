@@ -8,7 +8,7 @@ use a2a_rs::{
     adapter::transport::http::HttpClient,
     domain::{error::A2AError, AgentCard, Message, Part, Role, Task},
     port::AsyncMessageHandler,
-    services::client::AsyncA2AClient,
+    port::client::Transport,
 };
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
@@ -43,7 +43,7 @@ pub trait BridgeBackend: Send + Sync {
         Option<
             Pin<
                 Box<
-                    dyn Stream<Item = std::result::Result<a2a_rs::services::StreamItem, A2AError>>
+                    dyn Stream<Item = std::result::Result<a2a_rs::StreamItem, A2AError>>
                         + Send,
                 >,
             >,
@@ -166,7 +166,7 @@ where
         Option<
             Pin<
                 Box<
-                    dyn Stream<Item = std::result::Result<a2a_rs::services::StreamItem, A2AError>>
+                    dyn Stream<Item = std::result::Result<a2a_rs::StreamItem, A2AError>>
                         + Send,
                 >,
             >,
@@ -178,10 +178,10 @@ where
             let mapped = stream.map(|res| {
                 res.map(|event| match event {
                     a2a_rs::port::UpdateEvent::StatusUpdate(status) => {
-                        a2a_rs::services::StreamItem::StatusUpdate(status)
+                        a2a_rs::StreamItem::StatusUpdate(status)
                     }
                     a2a_rs::port::UpdateEvent::ArtifactUpdate(artifact) => {
-                        a2a_rs::services::StreamItem::ArtifactUpdate(artifact)
+                        a2a_rs::StreamItem::ArtifactUpdate(artifact)
                     }
                 })
             });
@@ -523,7 +523,7 @@ impl AgentToMcpBridge {
                     let item =
                         item_res.map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
                     match item {
-                        a2a_rs::services::StreamItem::Task(t) => {
+                        a2a_rs::StreamItem::Task(t) => {
                             debug!("Stream initial task for {}: {:?}", t.id, t.status.state);
                             task = t;
                             self.tasks_cache
@@ -634,7 +634,7 @@ impl AgentToMcpBridge {
                                 break;
                             }
                         }
-                        a2a_rs::services::StreamItem::StatusUpdate(event) => {
+                        a2a_rs::StreamItem::StatusUpdate(event) => {
                             debug!(
                                 "Stream status update for {}: {:?}",
                                 task.id, event.status.state
@@ -749,7 +749,7 @@ impl AgentToMcpBridge {
                                 break;
                             }
                         }
-                        a2a_rs::services::StreamItem::ArtifactUpdate(event) => {
+                        a2a_rs::StreamItem::ArtifactUpdate(event) => {
                             debug!(
                                 "Stream artifact update for {}: {}",
                                 task.id, event.artifact.artifact_id

@@ -67,7 +67,7 @@ The core library uses Cargo feature flags so you only compile what you need:
 
 ```rust
 use a2a_rs::{HttpClient, Message};
-use a2a_rs::port::AsyncA2AClient;
+use a2a_rs::Transport;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

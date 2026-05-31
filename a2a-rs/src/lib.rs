@@ -20,7 +20,7 @@
 //! # #[cfg(feature = "http-client")]
 //! # {
 //! use a2a_rs::{HttpClient, Message};
-//! use a2a_rs::services::AsyncA2AClient;
+//! use a2a_rs::Transport;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -95,12 +95,21 @@ pub use domain::{
 // Port traits for better separation of concerns
 pub use port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt,
-    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery,
-    StreamingSubscriber, UpdateEvent,
+    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery, StreamItem,
+    StreamingSubscriber, Transport, UpdateEvent,
 };
 
 #[cfg(feature = "http-client")]
 pub use adapter::HttpClient;
+
+#[cfg(feature = "jsonrpc-client")]
+pub use adapter::JsonRpcClient;
+
+#[cfg(feature = "client")]
+pub use adapter::{TransportFactory, TransportNegotiator, default_registry};
+
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+pub use adapter::{connect, fetch_agent_card};
 
 #[cfg(feature = "http-server")]
 pub use adapter::HttpServer;

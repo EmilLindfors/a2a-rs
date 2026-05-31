@@ -754,7 +754,7 @@ impl a2a_mcp::bridge::agent_to_mcp::BridgeBackend for MockPollingBackend {
         Option<
             Pin<
                 Box<
-                    dyn futures::Stream<Item = Result<a2a_rs::services::StreamItem, A2AError>>
+                    dyn futures::Stream<Item = Result<a2a_rs::StreamItem, A2AError>>
                         + Send,
                 >,
             >,
