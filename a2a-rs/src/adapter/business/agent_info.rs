@@ -7,7 +7,10 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 
 use crate::{
-    domain::{A2AError, AgentCard, AgentExtension, AgentProvider, AgentSkill, SecurityScheme},
+    domain::{
+        A2AError, AgentCard, AgentExtension, AgentInterface, AgentProvider, AgentSkill,
+        SecurityScheme,
+    },
     services::server::AgentInfoProvider,
 };
 
@@ -57,6 +60,44 @@ impl SimpleAgentInfo {
     /// Set the documentation URL of the agent
     pub fn with_documentation_url(mut self, url: String) -> Self {
         self.card.documentation_url = Some(url);
+        self
+    }
+
+    /// Set the transport protocol a client should prefer when connecting
+    /// (e.g. `"JSONRPC"`, `"HTTP+JSON"`, `"GRPC"`).
+    ///
+    /// The card has no standalone "preferred transport" field — the *first*
+    /// entry in `supportedInterfaces` is the preferred one (that is what
+    /// [`AgentCard::preferred_transport`] reads). This sets the protocol binding
+    /// of that primary interface (creating one if the card has none), which a
+    /// card-driven A2A client uses to rank transports during negotiation.
+    pub fn with_preferred_transport(mut self, transport: String) -> Self {
+        if let Some(primary) = self.card.supported_interfaces.first_mut() {
+            primary.protocol_binding = transport;
+        } else {
+            self.card.supported_interfaces.push(AgentInterface {
+                protocol_binding: transport,
+                protocol_version: "1.0".to_string(),
+                ..Default::default()
+            });
+        }
+        self
+    }
+
+    /// Advertise an additional transport interface — a `(url, protocol_binding)`
+    /// pair — on the agent card so card-driven clients can negotiate to it.
+    ///
+    /// A server mounting both the JSON-RPC and REST routers advertises both: the
+    /// primary interface (from [`SimpleAgentInfo::new`]) already carries the
+    /// JSON-RPC binding, so add the REST one with
+    /// `.add_interface(base, "HTTP+JSON")`.
+    pub fn add_interface(mut self, url: String, protocol_binding: String) -> Self {
+        self.card.supported_interfaces.push(AgentInterface {
+            url,
+            protocol_binding,
+            protocol_version: "1.0".to_string(),
+            ..Default::default()
+        });
         self
     }
 

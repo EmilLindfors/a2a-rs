@@ -41,6 +41,8 @@ pub use storage::InMemoryTaskStorage;
 pub use transport::connectrpc::ConnectRpcAdapter;
 #[cfg(feature = "http-server")]
 pub use transport::http::HttpServer;
+#[cfg(feature = "jsonrpc-server")]
+pub use transport::jsonrpc::{JsonRpcAdapter, jsonrpc_router, rest_router};
 
 // Error re-exports
 #[cfg(feature = "http-client")]

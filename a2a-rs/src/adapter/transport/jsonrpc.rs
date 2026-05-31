@@ -1,41 +1,76 @@
-//! The JSON-RPC 2.0 + HTTP+JSON transport adapter (DRAFT skeleton).
+//! The JSON-RPC 2.0 + HTTP+JSON (REST) transport adapter.
 //!
 //! `JsonRpcAdapter` is a **sibling** of [`ConnectRpcAdapter`](super::connectrpc::ConnectRpcAdapter):
 //! a thin transport adapter that wraps the same inner [`TaskService`] but speaks
 //! the spec-mandated, ecosystem-interoperable **JSON-RPC 2.0** wire format
 //! (and, via [`rest_router`], HTTP+JSON / REST). Its only job is to parse a
-//! JSON-RPC envelope, deserialize `params` into the matching A2A param type,
-//! delegate to [`TaskService`], wrap the domain result in the field-presence
-//! union the spec requires, and map [`A2AError`] onto JSON-RPC error codes.
+//! JSON-RPC envelope, deserialize `params` into the matching A2A request type,
+//! delegate to [`TaskService`], and re-encode the domain result — mapping
+//! [`A2AError`] onto JSON-RPC error codes.
 //!
 //! All use-case orchestration lives in [`TaskService`]; this layer holds no port
 //! traits directly — exactly the layering of `connectrpc.rs`.
 //!
-//! # Status: DRAFT
+//! # Wire format
 //!
-//! This module is a structural skeleton accompanying `JSONRPC_ADAPTER_PLAN.md`.
-//! It is **not yet wired into `adapter/transport/mod.rs`** and is **not yet
-//! feature-gated or built**. The wire-fidelity of the message bodies depends on
-//! whether `buffa`'s JSON serialization matches ProtoJSON — that must be settled
-//! with golden tests (plan §6) before this is trusted for interop. Items needing
-//! that decision are marked `// VERIFY:`.
+//! Request `params` and the `result` body are the **generated proto types**
+//! (`SendMessageRequest`, `Task`, `SendMessageResponse`, …). Those already
+//! serialize as canonical ProtoJSON — camelCase fields, SCREAMING_SNAKE enums,
+//! RFC3339 timestamps, base64 `bytes`, bare `Struct` metadata, and tag-free
+//! field-presence unions (`{"task": …}` / `{"statusUpdate": …}`). This is the
+//! same representation the official SDK and the Go/C#/Python SDKs use, so an
+//! off-the-shelf A2A client can talk to this server. The decode/encode helpers
+//! (`decode_send_config`, `list_request_to_params`, `map_update_event`) are
+//! **shared with the Connect adapter** so both transports agree on the wire.
+//!
+//! The hand-written A2A param types in `domain/core/task.rs` (`MessageSendParams`
+//! with `pushNotificationConfig`/`blocking`) are the *legacy* JSON-RPC v0.x shape
+//! and are intentionally **not** used here — the proto request types are the
+//! v1.0 contract.
 
-#![allow(dead_code)] // DRAFT: not yet wired in.
+use std::convert::Infallible;
+use std::pin::Pin;
+use std::sync::Arc;
 
-use serde::{Deserialize, Serialize, Serializer, ser::SerializeMap};
+use axum::{
+    Json, Router,
+    body::Bytes,
+    extract::{Path, Query, State},
+    http::StatusCode,
+    response::{
+        IntoResponse, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::{get, post},
+};
+use futures::{Stream, StreamExt};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::{
     application::TaskService,
     domain::{
-        A2AError, Message, Task, TaskArtifactUpdateEvent, TaskStatusUpdateEvent,
-        ListTasksParams,
+        A2AError, TaskId, TaskPushNotificationConfig,
+        generated::{
+            CancelTaskRequest, DeleteTaskPushNotificationConfigRequest, GetTaskPushNotificationConfigRequest,
+            GetTaskRequest, ListTaskPushNotificationConfigsRequest,
+            ListTaskPushNotificationConfigsResponse, ListTasksRequest, ListTasksResponse,
+            SendMessageRequest, SendMessageResponse, StreamResponse, SubscribeToTaskRequest,
+            send_message_response, stream_response,
+        },
     },
     port::{
         AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-        AsyncTaskQuery, UpdateEvent,
+        AsyncTaskQuery,
     },
     services::server::AgentInfoProvider,
 };
+
+use super::connectrpc::{NoopStreamingHandler, decode_send_config, list_request_to_params, map_update_event};
+
+/// A stream of wire [`StreamResponse`]s — the unified output of both streaming
+/// methods, before it is framed as SSE (enveloped for JSON-RPC, bare for REST).
+type StreamResponseStream = Pin<Box<dyn Stream<Item = Result<StreamResponse, A2AError>> + Send>>;
 
 // ---------------------------------------------------------------------------
 // Adapter
@@ -54,7 +89,7 @@ impl JsonRpcAdapter {
     /// Create an adapter from separate handlers (no real streaming backend).
     ///
     /// `tasks` supplies both the lifecycle and query capabilities. Uses the same
-    /// `NoopStreamingHandler` default as the Connect adapter.
+    /// [`NoopStreamingHandler`] default as the Connect adapter.
     pub fn new(
         message_handler: impl AsyncMessageHandler + 'static,
         tasks: impl AsyncTaskLifecycle + AsyncTaskQuery + 'static,
@@ -67,7 +102,7 @@ impl JsonRpcAdapter {
                 tasks,
                 notification_manager,
                 agent_info,
-                super::connectrpc::NoopStreamingHandler,
+                NoopStreamingHandler,
             ),
         }
     }
@@ -82,11 +117,7 @@ impl JsonRpcAdapter {
         agent_info: impl AgentInfoProvider + 'static,
     ) -> Self {
         Self {
-            service: TaskService::with_handler(
-                handler,
-                agent_info,
-                super::connectrpc::NoopStreamingHandler,
-            ),
+            service: TaskService::with_handler(handler, agent_info, NoopStreamingHandler),
         }
     }
 
@@ -98,11 +129,6 @@ impl JsonRpcAdapter {
         Self {
             service: self.service.with_streaming_handler(streaming_handler),
         }
-    }
-
-    /// Build the inner service reference (used by the routers).
-    fn service(&self) -> &TaskService {
-        &self.service
     }
 }
 
@@ -151,10 +177,11 @@ pub mod error_code {
 #[derive(Debug, Clone, Deserialize)]
 pub struct JsonRpcRequest {
     pub jsonrpc: String,
+    #[serde(default)]
     pub id: JsonRpcId,
     pub method: String,
     #[serde(default)]
-    pub params: Option<serde_json::Value>,
+    pub params: Option<Value>,
 }
 
 /// Outgoing JSON-RPC response envelope.
@@ -163,13 +190,13 @@ pub struct JsonRpcResponse {
     pub jsonrpc: &'static str,
     pub id: JsonRpcId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
+    pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<JsonRpcError>,
 }
 
 impl JsonRpcResponse {
-    pub fn ok(id: JsonRpcId, result: serde_json::Value) -> Self {
+    pub fn ok(id: JsonRpcId, result: Value) -> Self {
         Self { jsonrpc: "2.0", id, result: Some(result), error: None }
     }
 
@@ -179,18 +206,13 @@ impl JsonRpcResponse {
 }
 
 /// JSON-RPC request id — preserves the wire type (string, number, or null).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum JsonRpcId {
     Str(String),
     Num(i64),
+    #[default]
     Null,
-}
-
-impl Default for JsonRpcId {
-    fn default() -> Self {
-        Self::Null
-    }
 }
 
 /// JSON-RPC error object. `data` carries typed A2A error details when available.
@@ -199,7 +221,7 @@ pub struct JsonRpcError {
     pub code: i32,
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<serde_json::Value>,
+    pub data: Option<Value>,
 }
 
 /// Map a domain [`A2AError`] onto a JSON-RPC error object.
@@ -223,7 +245,6 @@ pub fn a2a_to_jsonrpc(err: &A2AError) -> JsonRpcError {
         A2AError::ValidationError { field, message } => JsonRpcError {
             code: INVALID_PARAMS,
             message: format!("{field}: {message}"),
-            // VERIFY: shape against google.rpc.BadRequest fieldViolations.
             data: Some(serde_json::json!([{
                 "@type": "type.googleapis.com/google.rpc.BadRequest",
                 "fieldViolations": [{ "field": field, "description": message }],
@@ -253,216 +274,464 @@ pub fn a2a_to_jsonrpc(err: &A2AError) -> JsonRpcError {
 }
 
 // ---------------------------------------------------------------------------
-// Field-presence union result types (spec wire shape)
-// ---------------------------------------------------------------------------
-//
-// The A2A spec serializes these unions with NO discriminator tag — only the
-// active field is present. This is the one piece `buffa` does not give us as a
-// plain serde enum, so we hand-write the Serialize. The message bodies (Task,
-// Message, events) are reused from the domain (VERIFY their JSON is ProtoJSON-
-// clean; if not, convert through dedicated `wire::*` DTOs — plan §2 Option B).
-
-/// `SendMessage` result: a finished `Task` or a direct `Message`.
-pub enum SendMessageResult {
-    Task(Task),
-    Message(Message),
-}
-
-impl Serialize for SendMessageResult {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut m = s.serialize_map(Some(1))?;
-        match self {
-            Self::Task(t) => m.serialize_entry("task", t)?,
-            Self::Message(msg) => m.serialize_entry("message", msg)?,
-        }
-        m.end()
-    }
-}
-
-/// Streaming result: task snapshot | message | status update | artifact update.
-pub enum StreamResult {
-    Task(Task),
-    Message(Message),
-    StatusUpdate(TaskStatusUpdateEvent),
-    ArtifactUpdate(TaskArtifactUpdateEvent),
-}
-
-impl Serialize for StreamResult {
-    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        let mut m = s.serialize_map(Some(1))?;
-        match self {
-            Self::Task(t) => m.serialize_entry("task", t)?,
-            Self::Message(msg) => m.serialize_entry("message", msg)?,
-            Self::StatusUpdate(e) => m.serialize_entry("statusUpdate", e)?,
-            Self::ArtifactUpdate(e) => m.serialize_entry("artifactUpdate", e)?,
-        }
-        m.end()
-    }
-}
-
-impl From<UpdateEvent> for StreamResult {
-    fn from(evt: UpdateEvent) -> Self {
-        match evt {
-            UpdateEvent::StatusUpdate(e) => Self::StatusUpdate(e),
-            UpdateEvent::ArtifactUpdate(e) => Self::ArtifactUpdate(e),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Method dispatch (transport-neutral core)
+// Method dispatch (transport-neutral core, shared by JSON-RPC and REST)
 // ---------------------------------------------------------------------------
 
 impl JsonRpcAdapter {
     /// Handle a single non-streaming JSON-RPC request, producing a response
     /// envelope. Streaming methods are handled by the SSE path in the router and
     /// must not reach here.
-    ///
-    /// VERIFY: each `params` deserialization target must match the spec request
-    /// shape. The A2A param types (`MessageSendParams`, `TaskQueryParams`,
-    /// `ListTasksParams`, …) are the hand-written serde structs in
-    /// `domain/core/task.rs`.
     pub async fn handle_unary(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
-
-        if req.jsonrpc != "2.0" {
-            return JsonRpcResponse::err(
-                id,
-                JsonRpcError {
-                    code: error_code::INVALID_REQUEST,
-                    message: "jsonrpc must be \"2.0\"".to_string(),
-                    data: None,
-                },
-            );
-        }
-
-        let result: Result<serde_json::Value, A2AError> = match req.method.as_str() {
-            methods::GET_TASK => self.handle_get_task(req.params).await,
-            methods::LIST_TASKS => self.handle_list_tasks(req.params).await,
-            methods::CANCEL_TASK => self.handle_cancel_task(req.params).await,
-            methods::SEND_MESSAGE => self.handle_send_message(req.params).await,
-            methods::GET_EXTENDED_AGENT_CARD => self.handle_extended_card().await,
-            // TODO: push-config CRUD methods.
-            methods::SEND_STREAMING_MESSAGE | methods::SUBSCRIBE_TO_TASK => {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError {
-                        code: error_code::INTERNAL_ERROR,
-                        message: "streaming method routed to unary handler".to_string(),
-                        data: None,
-                    },
-                );
-            }
-            unknown => Err(A2AError::MethodNotFound(unknown.to_string())),
-        };
-
+        let result = self.dispatch_unary(&req.method, req.params).await;
         match result {
             Ok(value) => JsonRpcResponse::ok(id, value),
             Err(e) => JsonRpcResponse::err(id, a2a_to_jsonrpc(&e)),
         }
     }
 
-    async fn handle_get_task(
+    /// Route a unary method name + `params` to the service and return the wire
+    /// `result` value. Reused by both JSON-RPC and REST.
+    async fn dispatch_unary(
         &self,
-        params: Option<serde_json::Value>,
-    ) -> Result<serde_json::Value, A2AError> {
-        // VERIFY: spec uses `{ "id": "...", "historyLength": n }`.
-        let p: crate::domain::TaskQueryParams = parse_params(params)?;
-        let id = p.id.parse()?;
-        let task = self.service.get(&id, p.history_length).await?;
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, A2AError> {
+        match method {
+            methods::GET_TASK => self.get_task(params).await,
+            methods::LIST_TASKS => self.list_tasks(params).await,
+            methods::CANCEL_TASK => self.cancel_task(params).await,
+            methods::SEND_MESSAGE => self.send_message(params).await,
+            methods::CREATE_PUSH_CONFIG => self.create_push_config(params).await,
+            methods::GET_PUSH_CONFIG => self.get_push_config(params).await,
+            methods::LIST_PUSH_CONFIGS => self.list_push_configs(params).await,
+            methods::DELETE_PUSH_CONFIG => self.delete_push_config(params).await,
+            methods::GET_EXTENDED_AGENT_CARD => self.extended_card().await,
+            methods::SEND_STREAMING_MESSAGE | methods::SUBSCRIBE_TO_TASK => Err(
+                A2AError::InvalidParams("streaming method requires SSE transport".to_string()),
+            ),
+            unknown => Err(A2AError::MethodNotFound(unknown.to_string())),
+        }
+    }
+
+    async fn get_task(&self, params: Option<Value>) -> Result<Value, A2AError> {
+        let req: GetTaskRequest = parse_params(params)?;
+        let id: TaskId = req.id.parse()?;
+        let task = self.service.get(&id, req.history_length.map(|l| l as u32)).await?;
         to_value(&task)
     }
 
-    async fn handle_list_tasks(
-        &self,
-        params: Option<serde_json::Value>,
-    ) -> Result<serde_json::Value, A2AError> {
-        let p: ListTasksParams = parse_params(params)?;
-        let result = self.service.list(&p).await?;
-        to_value(&result)
+    async fn list_tasks(&self, params: Option<Value>) -> Result<Value, A2AError> {
+        let req: ListTasksRequest = parse_params(params)?;
+        let result = self.service.list(&list_request_to_params(req)).await?;
+        let response = ListTasksResponse {
+            tasks: result.tasks,
+            next_page_token: result.next_page_token,
+            page_size: result.page_size,
+            total_size: result.total_size,
+            ..Default::default()
+        };
+        to_value(&response)
     }
 
-    async fn handle_cancel_task(
-        &self,
-        params: Option<serde_json::Value>,
-    ) -> Result<serde_json::Value, A2AError> {
-        let p: crate::domain::TaskIdParams = parse_params(params)?;
-        let id = p.id.parse()?;
+    async fn cancel_task(&self, params: Option<Value>) -> Result<Value, A2AError> {
+        let req: CancelTaskRequest = parse_params(params)?;
+        let id: TaskId = req.id.parse()?;
         let task = self.service.cancel(&id).await?;
         to_value(&task)
     }
 
-    async fn handle_send_message(
-        &self,
-        params: Option<serde_json::Value>,
-    ) -> Result<serde_json::Value, A2AError> {
-        let p: crate::domain::MessageSendParams = parse_params(params)?;
-        // VERIFY: MessageSendParams field names + how task_id/context_id are
-        // sourced (message carries them in the canonical shape). Mirror the
-        // decode logic in connectrpc.rs::send_message.
-        let task_id = p.message.task_id.clone();
-        let session_id = (!p.message.context_id.is_empty()).then_some(p.message.context_id.as_str());
-        let (push_config, history_limit) = decode_send_config(p.configuration);
-
+    async fn send_message(&self, params: Option<Value>) -> Result<Value, A2AError> {
+        let (task_id, message, session_id, push_config, history_limit) =
+            decode_send_message(parse_params(params)?)?;
         let task = self
             .service
-            .send_message(&task_id, &p.message, session_id, push_config, history_limit)
+            .send_message(&task_id, &message, session_id.as_deref(), push_config, history_limit)
             .await?;
-
-        // Spec union: serialize as { "task": { ... } }.
-        to_value(&SendMessageResult::Task(task))
+        let response = SendMessageResponse {
+            payload: Some(send_message_response::Payload::Task(Box::new(task))),
+            ..Default::default()
+        };
+        to_value(&response)
     }
 
-    async fn handle_extended_card(&self) -> Result<serde_json::Value, A2AError> {
+    async fn create_push_config(&self, params: Option<Value>) -> Result<Value, A2AError> {
+        let config: TaskPushNotificationConfig = parse_params(params)?;
+        let created = self.service.set_push_config(&config).await?;
+        to_value(&created)
+    }
+
+    async fn get_push_config(&self, params: Option<Value>) -> Result<Value, A2AError> {
+        let req: GetTaskPushNotificationConfigRequest = parse_params(params)?;
+        let domain_params = crate::domain::GetTaskPushNotificationConfigParams {
+            id: req.task_id,
+            push_notification_config_id: Some(req.id),
+            metadata: None,
+        };
+        let config = self.service.get_push_config(&domain_params).await?;
+        to_value(&config)
+    }
+
+    async fn list_push_configs(&self, params: Option<Value>) -> Result<Value, A2AError> {
+        let req: ListTaskPushNotificationConfigsRequest = parse_params(params)?;
+        let domain_params = crate::domain::ListTaskPushNotificationConfigsParams {
+            id: req.task_id,
+            metadata: None,
+        };
+        let configs = self.service.list_push_configs(&domain_params).await?;
+        let response = ListTaskPushNotificationConfigsResponse {
+            configs,
+            ..Default::default()
+        };
+        to_value(&response)
+    }
+
+    async fn delete_push_config(&self, params: Option<Value>) -> Result<Value, A2AError> {
+        let req: DeleteTaskPushNotificationConfigRequest = parse_params(params)?;
+        let domain_params = crate::domain::DeleteTaskPushNotificationConfigParams {
+            id: req.task_id,
+            push_notification_config_id: req.id,
+            metadata: None,
+        };
+        self.service.delete_push_config(&domain_params).await?;
+        Ok(serde_json::json!({}))
+    }
+
+    async fn extended_card(&self) -> Result<Value, A2AError> {
         let card = self.service.extended_agent_card().await?;
         to_value(&card)
     }
+
+    // -- streaming --------------------------------------------------------
+
+    /// Open the SSE stream for a streaming method, returning a unified stream of
+    /// wire [`StreamResponse`]s (initial task snapshot first, then updates).
+    async fn open_stream(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<StreamResponseStream, A2AError> {
+        match method {
+            methods::SEND_STREAMING_MESSAGE => {
+                let (task_id, message, session_id, push_config, history_limit) =
+                    decode_send_message(parse_params(params)?)?;
+                let (task, updates) = self
+                    .service
+                    .send_streaming_message(
+                        &task_id,
+                        &message,
+                        session_id.as_deref(),
+                        push_config,
+                        history_limit,
+                    )
+                    .await?;
+                Ok(chain_initial_task(Some(task), updates))
+            }
+            methods::SUBSCRIBE_TO_TASK => {
+                let req: SubscribeToTaskRequest = parse_params(params)?;
+                let (initial, updates) = self.service.subscribe(&req.id).await?;
+                Ok(chain_initial_task(initial, updates))
+            }
+            unknown => Err(A2AError::MethodNotFound(unknown.to_string())),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Routers (axum)
+// ---------------------------------------------------------------------------
+
+/// Build the JSON-RPC 2.0 router: a single `POST /` endpoint.
+///
+/// Compose it at the edge with [`rest_router`] and the agent-card route, e.g.
+/// `jsonrpc_router(adapter.clone()).merge(rest_router(adapter))`.
+pub fn jsonrpc_router(adapter: Arc<JsonRpcAdapter>) -> Router {
+    Router::new()
+        .route("/", post(jsonrpc_handler))
+        .with_state(adapter)
+}
+
+async fn jsonrpc_handler(State(adapter): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
+    let req: JsonRpcRequest = match serde_json::from_slice(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            return Json(JsonRpcResponse::err(
+                JsonRpcId::Null,
+                JsonRpcError { code: error_code::PARSE_ERROR, message: e.to_string(), data: None },
+            ))
+            .into_response();
+        }
+    };
+
+    if req.jsonrpc != "2.0" {
+        return Json(JsonRpcResponse::err(
+            req.id,
+            JsonRpcError {
+                code: error_code::INVALID_REQUEST,
+                message: "jsonrpc must be \"2.0\"".to_string(),
+                data: None,
+            },
+        ))
+        .into_response();
+    }
+
+    if methods::is_streaming(&req.method) {
+        let id = req.id.clone();
+        match adapter.open_stream(&req.method, req.params).await {
+            Ok(stream) => jsonrpc_sse(id, stream).into_response(),
+            Err(e) => Json(JsonRpcResponse::err(id, a2a_to_jsonrpc(&e))).into_response(),
+        }
+    } else {
+        Json(adapter.handle_unary(req).await).into_response()
+    }
+}
+
+/// Frame a [`StreamResponseStream`] as JSON-RPC SSE — each event is a
+/// `JsonRpcResponse` whose `result` is the (tag-free union) `StreamResponse`.
+fn jsonrpc_sse(
+    id: JsonRpcId,
+    stream: StreamResponseStream,
+) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let events = stream.map(move |item| {
+        let resp = match item {
+            Ok(sr) => JsonRpcResponse::ok(id.clone(), serde_json::to_value(&sr).unwrap_or(Value::Null)),
+            Err(e) => JsonRpcResponse::err(id.clone(), a2a_to_jsonrpc(&e)),
+        };
+        Ok(Event::default().data(serde_json::to_string(&resp).unwrap_or_default()))
+    });
+    Sse::new(events).keep_alive(KeepAlive::default())
+}
+
+/// Build the HTTP+JSON (REST) router with the official-SDK paths (no `/v1`
+/// prefix). Bodies and responses are bare ProtoJSON (no JSON-RPC envelope).
+///
+/// The canonical custom-method paths use a `:`-suffix on a collection segment
+/// (`/message:send`) — those work as pure-literal segments. The *task*
+/// custom-method paths (`/tasks/{id}:cancel`) would put a `:`-suffix on the
+/// **same segment as a path parameter**, which axum's matchit router rejects
+/// (it conflicts with `/tasks/{id}`). We therefore serve the equivalent
+/// slash-form aliases (`/tasks/{id}/cancel`) for those, which official clients
+/// also accept.
+pub fn rest_router(adapter: Arc<JsonRpcAdapter>) -> Router {
+    Router::new()
+        .route("/message:send", post(rest_send_message))
+        .route("/message/send", post(rest_send_message))
+        .route("/message:stream", post(rest_stream_message))
+        .route("/message/stream", post(rest_stream_message))
+        .route("/tasks", get(rest_list_tasks))
+        .route("/tasks/{id}", get(rest_get_task))
+        .route("/tasks/{id}/cancel", post(rest_cancel_task))
+        .route("/tasks/{id}/subscribe", get(rest_subscribe))
+        .route(
+            "/tasks/{id}/pushNotificationConfigs",
+            post(rest_create_push_config).get(rest_list_push_configs),
+        )
+        .route(
+            "/tasks/{id}/pushNotificationConfigs/{cfg}",
+            get(rest_get_push_config).delete(rest_delete_push_config),
+        )
+        .route("/extendedAgentCard", get(rest_extended_card))
+        .route("/card", get(rest_extended_card))
+        .with_state(adapter)
+}
+
+/// Convert a unary `Result<Value, A2AError>` into a REST HTTP response: 200 with
+/// the bare ProtoJSON body, or an error status + `{code, message, data?}`.
+fn rest_result(result: Result<Value, A2AError>) -> Response {
+    match result {
+        Ok(value) => Json(value).into_response(),
+        Err(e) => a2a_to_http(&e),
+    }
+}
+
+/// Map a domain [`A2AError`] onto an HTTP status + JSON error body for REST.
+fn a2a_to_http(err: &A2AError) -> Response {
+    let status = match err {
+        A2AError::TaskNotFound(_) | A2AError::MethodNotFound(_) => StatusCode::NOT_FOUND,
+        A2AError::InvalidParams(_) | A2AError::ValidationError { .. } => StatusCode::BAD_REQUEST,
+        A2AError::UnsupportedOperation(_) => StatusCode::NOT_IMPLEMENTED,
+        A2AError::AuthenticatedExtendedCardNotConfigured => StatusCode::PRECONDITION_FAILED,
+        _ => StatusCode::INTERNAL_SERVER_ERROR,
+    };
+    (status, Json(a2a_to_jsonrpc(err))).into_response()
+}
+
+async fn rest_send_message(State(a): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
+    rest_result(a.send_message(parse_body(&body)).await)
+}
+
+async fn rest_list_tasks(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    rest_result(a.list_tasks(Some(query_to_list_request(&q))).await)
+}
+
+async fn rest_get_task(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Path(id): Path<String>,
+    Query(q): Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let mut req = serde_json::json!({ "id": id });
+    if let Some(h) = q.get("historyLength").and_then(|s| s.parse::<i64>().ok()) {
+        req["historyLength"] = h.into();
+    }
+    rest_result(a.get_task(Some(req)).await)
+}
+
+async fn rest_cancel_task(State(a): State<Arc<JsonRpcAdapter>>, Path(id): Path<String>) -> Response {
+    rest_result(a.cancel_task(Some(serde_json::json!({ "id": id }))).await)
+}
+
+async fn rest_create_push_config(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Path(id): Path<String>,
+    body: Bytes,
+) -> Response {
+    // The path task id is authoritative for the config's parent.
+    let mut config = parse_body(&body).unwrap_or_else(|| serde_json::json!({}));
+    config["taskId"] = id.into();
+    rest_result(a.create_push_config(Some(config)).await)
+}
+
+async fn rest_list_push_configs(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Path(id): Path<String>,
+) -> Response {
+    rest_result(a.list_push_configs(Some(serde_json::json!({ "taskId": id }))).await)
+}
+
+async fn rest_get_push_config(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Path((id, cfg)): Path<(String, String)>,
+) -> Response {
+    rest_result(a.get_push_config(Some(serde_json::json!({ "taskId": id, "id": cfg }))).await)
+}
+
+async fn rest_delete_push_config(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Path((id, cfg)): Path<(String, String)>,
+) -> Response {
+    rest_result(a.delete_push_config(Some(serde_json::json!({ "taskId": id, "id": cfg }))).await)
+}
+
+async fn rest_extended_card(State(a): State<Arc<JsonRpcAdapter>>) -> Response {
+    rest_result(a.extended_card().await)
+}
+
+async fn rest_stream_message(State(a): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
+    match a.open_stream(methods::SEND_STREAMING_MESSAGE, parse_body(&body)).await {
+        Ok(stream) => rest_sse(stream).into_response(),
+        Err(e) => a2a_to_http(&e),
+    }
+}
+
+async fn rest_subscribe(State(a): State<Arc<JsonRpcAdapter>>, Path(id): Path<String>) -> Response {
+    match a
+        .open_stream(methods::SUBSCRIBE_TO_TASK, Some(serde_json::json!({ "id": id })))
+        .await
+    {
+        Ok(stream) => rest_sse(stream).into_response(),
+        Err(e) => a2a_to_http(&e),
+    }
+}
+
+/// Frame a [`StreamResponseStream`] as bare-ProtoJSON SSE (REST has no envelope).
+fn rest_sse(stream: StreamResponseStream) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    let events = stream.map(|item| {
+        let data = match item {
+            Ok(sr) => serde_json::to_string(&sr).unwrap_or_default(),
+            Err(e) => serde_json::to_string(&a2a_to_jsonrpc(&e)).unwrap_or_default(),
+        };
+        Ok(Event::default().data(data))
+    });
+    Sse::new(events).keep_alive(KeepAlive::default())
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Deserialize JSON-RPC `params` into a concrete A2A param type, mapping serde
-/// failures to `InvalidParams`.
-fn parse_params<T: serde::de::DeserializeOwned>(
-    params: Option<serde_json::Value>,
-) -> Result<T, A2AError> {
-    let value = params.unwrap_or(serde_json::Value::Null);
-    serde_json::from_value(value)
+/// Deserialize JSON-RPC `params` into a concrete proto request type, mapping
+/// serde failures to `InvalidParams`.
+fn parse_params<T: serde::de::DeserializeOwned>(params: Option<Value>) -> Result<T, A2AError> {
+    serde_json::from_value(params.unwrap_or(Value::Null))
         .map_err(|e| A2AError::InvalidParams(format!("invalid params: {e}")))
 }
 
-/// Serialize a domain/wire value into the JSON-RPC `result`, mapping failures to
-/// an internal error.
-fn to_value<T: Serialize>(value: &T) -> Result<serde_json::Value, A2AError> {
+/// Parse a REST request body into a JSON value (empty body → `None`).
+fn parse_body(body: &Bytes) -> Option<Value> {
+    if body.is_empty() {
+        None
+    } else {
+        serde_json::from_slice(body).ok()
+    }
+}
+
+/// Serialize a domain/wire value into a JSON `result`, mapping failures to an
+/// internal error.
+fn to_value<T: Serialize>(value: &T) -> Result<Value, A2AError> {
     serde_json::to_value(value)
         .map_err(|e| A2AError::InvalidParams(format!("failed to serialize result: {e}")))
 }
 
-/// Decode the optional `MessageSendConfiguration` into the push config + history
-/// limit the service expects. Mirrors `connectrpc::decode_send_config`.
-///
-/// VERIFY: field names on `MessageSendConfiguration` vs the spec.
-fn decode_send_config(
-    config: Option<crate::domain::MessageSendConfiguration>,
-) -> (Option<crate::domain::TaskPushNotificationConfig>, Option<u32>) {
-    match config {
-        Some(c) => (c.push_notification_config, c.history_length),
-        None => (None, None),
+/// Decode a [`SendMessageRequest`] into the arguments [`TaskService::send_message`]
+/// expects. Mirrors the Connect adapter's `send_message` decode exactly.
+type SendArgs = (String, crate::domain::Message, Option<String>, Option<TaskPushNotificationConfig>, Option<u32>);
+fn decode_send_message(req: SendMessageRequest) -> Result<SendArgs, A2AError> {
+    let message = req
+        .message
+        .into_option()
+        .ok_or_else(|| A2AError::InvalidParams("missing message".to_string()))?;
+    let task_id = message.task_id.clone();
+    let session_id = (!message.context_id.is_empty()).then(|| message.context_id.clone());
+    let (push_config, history_limit) = decode_send_config(req.configuration.into_option());
+    Ok((task_id, message, session_id, push_config, history_limit))
+}
+
+/// Build the SSE stream: initial task snapshot (if present) followed by the
+/// mapped update events. Mirrors `connectrpc.rs`'s `stream::once(task).chain(...)`.
+fn chain_initial_task(
+    initial: Option<crate::domain::Task>,
+    updates: crate::application::UpdateStream,
+) -> StreamResponseStream {
+    let mapped = updates.map(|item| item.map(map_update_event));
+    match initial {
+        Some(task) => {
+            let head = StreamResponse {
+                payload: Some(stream_response::Payload::Task(Box::new(task))),
+                ..Default::default()
+            };
+            Box::pin(futures::stream::once(async move { Ok(head) }).chain(mapped))
+        }
+        None => Box::pin(mapped),
     }
 }
 
-// ---------------------------------------------------------------------------
-// Router stubs (axum) — to flesh out under the `jsonrpc-server` feature.
-// ---------------------------------------------------------------------------
-//
-// pub fn jsonrpc_router(adapter: Arc<JsonRpcAdapter>) -> axum::Router { ... }
-//   POST "/" -> parse JsonRpcRequest; if methods::is_streaming -> SSE path
-//               (each event a JsonRpcResponse whose result is a StreamResult,
-//                first event the initial Task — see connectrpc.rs:265-276);
-//               else -> adapter.handle_unary(req).
-//
-// pub fn rest_router(adapter: Arc<JsonRpcAdapter>) -> axum::Router { ... }
-//   REST routes from JSONRPC_ADAPTER_PLAN.md §4, delegating to the same
-//   TaskService methods; HTTP status derived from A2AError.
+/// Assemble a `ListTasksRequest`-shaped JSON object from REST query parameters,
+/// coercing numeric/boolean fields to their proto JSON types.
+fn query_to_list_request(q: &std::collections::HashMap<String, String>) -> Value {
+    let mut req = serde_json::Map::new();
+    if let Some(v) = q.get("contextId") {
+        req.insert("contextId".to_string(), v.clone().into());
+    }
+    if let Some(v) = q.get("status") {
+        req.insert("status".to_string(), v.clone().into());
+    }
+    if let Some(v) = q.get("pageToken") {
+        req.insert("pageToken".to_string(), v.clone().into());
+    }
+    if let Some(v) = q.get("pageSize").and_then(|s| s.parse::<i64>().ok()) {
+        req.insert("pageSize".to_string(), v.into());
+    }
+    if let Some(v) = q.get("historyLength").and_then(|s| s.parse::<i64>().ok()) {
+        req.insert("historyLength".to_string(), v.into());
+    }
+    if let Some(v) = q.get("includeArtifacts").and_then(|s| s.parse::<bool>().ok()) {
+        req.insert("includeArtifacts".to_string(), v.into());
+    }
+    if let Some(v) = q.get("statusTimestampAfter") {
+        req.insert("statusTimestampAfter".to_string(), v.clone().into());
+    }
+    Value::Object(req)
+}

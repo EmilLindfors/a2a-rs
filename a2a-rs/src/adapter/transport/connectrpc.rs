@@ -24,7 +24,8 @@ use crate::{
             A2aService, CancelTaskRequestView, DeleteTaskPushNotificationConfigRequestView,
             GetExtendedAgentCardRequestView, GetTaskPushNotificationConfigRequestView,
             GetTaskRequestView, ListTaskPushNotificationConfigsRequestView,
-            ListTaskPushNotificationConfigsResponse, ListTasksRequestView, ListTasksResponse,
+            ListTaskPushNotificationConfigsResponse, ListTasksRequest, ListTasksRequestView,
+            ListTasksResponse,
             SendMessageRequestView, SendMessageResponse, StreamResponse,
             SubscribeToTaskRequestView, TaskArtifactUpdateEvent as GenTaskArtifactUpdateEvent,
             TaskPushNotificationConfigView, TaskState,
@@ -164,7 +165,10 @@ fn map_artifact_update(
 }
 
 /// Map a domain [`UpdateEvent`] onto its wire [`StreamResponse`].
-fn map_update_event(evt: UpdateEvent) -> StreamResponse {
+///
+/// Shared with the JSON-RPC adapter so both transports map streaming updates
+/// through one path.
+pub(super) fn map_update_event(evt: UpdateEvent) -> StreamResponse {
     match evt {
         UpdateEvent::StatusUpdate(event) => StreamResponse {
             payload: Some(stream_response::Payload::StatusUpdate(Box::new(
@@ -298,32 +302,7 @@ impl A2aService for ConnectRpcAdapter {
         request: ::buffa::view::OwnedView<ListTasksRequestView<'static>>,
     ) -> Result<(ListTasksResponse, ::connectrpc::Context), ::connectrpc::ConnectError> {
         let req = request.to_owned_message();
-
-        let params = crate::domain::ListTasksParams {
-            context_id: if req.context_id.is_empty() {
-                None
-            } else {
-                Some(req.context_id)
-            },
-            status: match req.status.to_i32() {
-                0 => None,
-                val => Some(TaskState::from_i32(val).unwrap_or(TaskState::TASK_STATE_UNSPECIFIED)),
-            },
-            page_size: req.page_size,
-            page_token: if req.page_token.is_empty() {
-                None
-            } else {
-                Some(req.page_token)
-            },
-            history_length: req.history_length,
-            include_artifacts: req.include_artifacts,
-            status_timestamp_after: req.status_timestamp_after.as_option().map(|t| {
-                let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(t.seconds, t.nanos as u32)
-                    .unwrap_or_default();
-                dt.to_rfc3339()
-            }),
-            metadata: None,
-        };
+        let params = list_request_to_params(req);
 
         let result = self.service.list(&params).await.map_err(map_err)?;
 
@@ -491,9 +470,42 @@ impl A2aService for ConnectRpcAdapter {
     }
 }
 
+/// Map a generated `ListTasksRequest` (proto wire message) onto the domain
+/// [`ListTasksParams`]. Shared with the JSON-RPC adapter.
+pub(super) fn list_request_to_params(req: ListTasksRequest) -> crate::domain::ListTasksParams {
+    crate::domain::ListTasksParams {
+        context_id: if req.context_id.is_empty() {
+            None
+        } else {
+            Some(req.context_id)
+        },
+        status: match req.status.to_i32() {
+            0 => None,
+            val => Some(TaskState::from_i32(val).unwrap_or(TaskState::TASK_STATE_UNSPECIFIED)),
+        },
+        page_size: req.page_size,
+        page_token: if req.page_token.is_empty() {
+            None
+        } else {
+            Some(req.page_token)
+        },
+        history_length: req.history_length,
+        include_artifacts: req.include_artifacts,
+        status_timestamp_after: req.status_timestamp_after.as_option().map(|t| {
+            let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(t.seconds, t.nanos as u32)
+                .unwrap_or_default();
+            dt.to_rfc3339()
+        }),
+        metadata: None,
+    }
+}
+
 /// Decode the optional `SendMessageConfiguration` view into the domain push
 /// config + history limit the service expects.
-fn decode_send_config(
+///
+/// Shared with the JSON-RPC adapter (both decode the same generated config
+/// message), so the two transports agree on the wire shape.
+pub(super) fn decode_send_config(
     config: Option<crate::domain::generated::SendMessageConfiguration>,
 ) -> (Option<TaskPushNotificationConfig>, Option<u32>) {
     let Some(c) = config else {

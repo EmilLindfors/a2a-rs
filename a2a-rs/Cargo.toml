@@ -65,6 +65,8 @@ proptest-derive = "0.5"
 jsonschema = "0.22"
 criterion = { version = "0.5", features = ["html_reports"] }
 arbitrary = { version = "1.3", features = ["derive"] }
+# Drives the axum routers via `ServiceExt::oneshot` in the JSON-RPC router tests.
+tower = { version = "0.5", features = ["util"] }
 
 [features]
 default = ["server", "tracing"]
@@ -73,6 +75,9 @@ http-client = ["client", "dep:reqwest"]
 
 server = ["dep:tokio"]
 http-server = ["server", "dep:axum"]
+# Wire-compatible JSON-RPC 2.0 + HTTP+JSON (REST) transport adapter. Needs axum
+# for its routers; the dispatch core itself only needs `server`.
+jsonrpc-server = ["server", "dep:axum"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
 
 auth = ["dep:jsonwebtoken", "dep:oauth2", "dep:openidconnect", "dep:reqwest"]
@@ -80,7 +85,7 @@ sqlx-storage = ["server", "dep:sqlx"]
 sqlite = ["sqlx-storage", "sqlx/sqlite"]
 postgres = ["sqlx-storage", "sqlx/postgres"]
 mysql = ["sqlx-storage", "sqlx/mysql"]
-full = ["http-client", "http-server", "tracing", "auth", "sqlite", "postgres"]
+full = ["http-client", "http-server", "jsonrpc-server", "tracing", "auth", "sqlite", "postgres"]
 
 
 [package.metadata.docs.rs]
@@ -91,6 +96,11 @@ rustdoc-args = ["--cfg", "docsrs"]
 name = "http_client_server"
 path = "examples/http_client_server.rs"
 required-features = ["http-server", "http-client"]
+
+[[example]]
+name = "jsonrpc_server"
+path = "examples/jsonrpc_server.rs"
+required-features = ["jsonrpc-server"]
 
 
 [[example]]
