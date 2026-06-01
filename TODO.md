@@ -1,20 +1,22 @@
 # A2A-RS Follow-Ups and Future Work
 
-> **Status (2026-06-01).** The `0.4` branch landed the hexagonal trait refactor
-> (capability-split ports `AsyncTaskLifecycle`/`AsyncTaskQuery`, `Arc<dyn …>`
-> dispatch, newtype IDs, `*Ext` validation traits) **and** the wire-interop
-> transport arc: the JSON-RPC 2.0 + HTTP+JSON **server** adapter (`JsonRpcAdapter`),
-> the client-side **`Transport` port** (`port::client`), a wire-compatible
-> **`JsonRpcClient`** (`jsonrpc-client` feature), and **card-driven transport
-> negotiation** (`TransportFactory` / `TransportNegotiator` / `connect`). The two
-> roadmap sections below track what's left for 0.4 and what's deliberately
-> deferred to 0.5; the older backlog further down is unchanged and still open.
+> **Status (2026-06-01).** The `0.4` branch **completed the full port-layer
+> refactor**: capability-split ports (`AsyncTaskLifecycle`/`AsyncTaskQuery`,
+> push-config reconciled into `AsyncNotificationManager`), `Arc<dyn …>` dispatch
+> (no viral generics), newtype IDs (`TaskId`/`ContextId`/`PushConfigId`), `*Ext`
+> validation traits, the `TaskStatusBroadcast` cross-port mixin, the
+> `TaskService`/transport split, and the **storage/streaming/push struct-split**
+> (storage is persistence-only; streaming lives in
+> `adapter::streaming::InMemoryStreamingHandler`; webhook delivery sits behind the
+> `AsyncPushNotifier` port). It also landed the wire-interop transport arc: the
+> JSON-RPC 2.0 + HTTP+JSON **server** adapter (`JsonRpcAdapter`), the client-side
+> **`Transport` port** (`port::client`), a wire-compatible **`JsonRpcClient`**
+> (`jsonrpc-client` feature), and **card-driven transport negotiation**
+> (`TransportFactory` / `TransportNegotiator` / `connect`).
 >
-> **Update.** The **Phase 4 storage/streaming/push struct-split**
-> (`REFACTORING_PLAN.md` §4.3, final) has now also landed on `0.4`: storage
-> adapters shed streaming and push-delivery, streaming moved to
-> `adapter::streaming::InMemoryStreamingHandler`, and push-webhook delivery became
-> the `AsyncPushNotifier` port. It was originally scoped for 0.5.
+> The refactor is done bar one idiomatic-modernization straggler (the `Result<T>`
+> alias, item 4 below). The roadmap sections track what's left for 0.4 and what's
+> deferred to 0.5; the older backlog further down is unchanged and still open.
 
 ## 0.4 — remaining to finish the release
 
@@ -23,9 +25,9 @@ Round out the transport/interop story the rest of 0.4 already tells.
 1. **CLI (`a2acli`-equivalent).** The single most natural follow-on — `OFFICIAL_SDK_COMPARISON.md` #1 ("verify interop empirically") + #4. A small bin/crate that drives the new client `Transport`: `card`, `send`, `stream`, `get`, `cancel`. Self-contained, zero blast radius; doubles as the manual interop harness.
 2. **Empirical cross-SDK interop check.** Point the official `a2aproject/a2acli` at our `examples/jsonrpc_server.rs` agent, and/or our `JsonRpcClient` at a stock A2A agent. (`tests/jsonrpc_client_interop_test.rs` already proves *our*-client ↔ *our*-server byte-compat; this validates against the canonical SDKs.)
 3. **Runnable `jsonrpc_client` / `auto_connect` example** mirroring `examples/jsonrpc_server.rs`. Also satisfies the General item on compile-checked rustdoc examples.
-4. **`pub type Result<T> = std::result::Result<T, A2AError>`** (`REFACTORING_PLAN.md` §3.2) — the one explicit Phase-3 idiomatic-modernization item still missing; natural to land before tagging 0.4 since the rest of that phase did.
+4. **`pub type Result<T> = std::result::Result<T, A2AError>`** in the domain module (re-exported from the crate root) — the last idiomatic-modernization item from the now-completed port-layer refactor (the standard `std::io`/`serde_json`/`sqlx` one-liner). Add the alias, then trim `Result<X, A2AError>` signatures down to `Result<X>` while touching them. Natural to land before tagging 0.4.
 
-## 0.5 — deferred (by the plan, or by weight)
+## 0.5 — deferred (by weight)
 
 - **`TaskStore` versioning (`u64` optimistic concurrency)** — `OFFICIAL_SDK_COMPARISON.md` §4.4. Touches the storage port + every impl.
 - **`CallInterceptor` before/after middleware (client + server)** — §4.4. A new cross-cutting abstraction; design-heavy.
@@ -52,7 +54,7 @@ Round out the transport/interop story the rest of 0.4 already tells.
 
 ## General
 - Refine existing Rustdoc examples and ensure they are all compile-checked.
-- Resolve any remaining compilation warnings across the workspace. *(Clean under `clippy --workspace --all-features --all-targets -D warnings` as of the 0.4 transport work. A few `--no-default-features` warnings remain — `unused_enumerate_index` in `domain/core/task.rs` and unused vars in `adapter/storage/task_storage.rs`, both from vars used only inside `#[cfg(feature = "tracing")]` blocks.)*
+- Resolve any remaining compilation warnings across the workspace. *(Clean under `clippy --workspace --all-features --all-targets -D warnings` **and** `cargo check -p a2a-rs --no-default-features` as of the 0.4 struct-split work — the earlier `--no-default-features` warnings in `adapter/storage/task_storage.rs` went away with the streaming/broadcast code removed from storage.)*
 
 ---
 
