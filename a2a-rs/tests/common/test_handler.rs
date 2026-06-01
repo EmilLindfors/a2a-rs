@@ -8,7 +8,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use a2a_rs::{
-    adapter::{business::ResponderMessageHandler, storage::InMemoryTaskStorage},
+    adapter::{
+        business::ResponderMessageHandler, storage::InMemoryTaskStorage,
+        streaming::InMemoryStreamingHandler,
+    },
     domain::{
         A2AError, ContextId, Message, Task, TaskArtifactUpdateEvent, TaskId, TaskState,
         TaskStatusUpdateEvent,
@@ -23,8 +26,10 @@ use a2a_rs::{
 /// by delegating to InMemoryTaskStorage
 #[derive(Clone)]
 pub struct TestBusinessHandler {
-    /// Task storage that implements all the business capabilities
+    /// Task storage (persistence + push-config CRUD)
     storage: Arc<InMemoryTaskStorage>,
+    /// Dedicated streaming fan-out (Phase 4 struct-split)
+    streaming: InMemoryStreamingHandler,
 }
 
 impl TestBusinessHandler {
@@ -32,6 +37,7 @@ impl TestBusinessHandler {
     pub fn new() -> Self {
         Self {
             storage: Arc::new(InMemoryTaskStorage::new()),
+            streaming: InMemoryStreamingHandler::new(),
         }
     }
 
@@ -40,6 +46,7 @@ impl TestBusinessHandler {
     pub fn with_storage(storage: InMemoryTaskStorage) -> Self {
         Self {
             storage: Arc::new(storage),
+            streaming: InMemoryStreamingHandler::new(),
         }
     }
 
@@ -66,9 +73,12 @@ impl AsyncMessageHandler for TestBusinessHandler {
         message: &Message,
         session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
-        // Create a message handler and delegate
-        let message_handler =
-            ResponderMessageHandler::echo((*self.storage).clone(), (*self.storage).clone());
+        // Create a message handler and delegate, sharing the streaming handler.
+        let message_handler = ResponderMessageHandler::echo(
+            (*self.storage).clone(),
+            self.streaming.clone(),
+            self.storage.push_notifier(),
+        );
         message_handler
             .process_message(task_id, message, session_id)
             .await
@@ -151,7 +161,7 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         task_id: &str,
         subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
-        self.storage
+        self.streaming
             .add_status_subscriber(task_id, subscriber)
             .await
     }
@@ -161,21 +171,21 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         task_id: &str,
         subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
-        self.storage
+        self.streaming
             .add_artifact_subscriber(task_id, subscriber)
             .await
     }
 
     async fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError> {
-        self.storage.remove_subscription(subscription_id).await
+        self.streaming.remove_subscription(subscription_id).await
     }
 
     async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
-        self.storage.remove_task_subscribers(task_id).await
+        self.streaming.remove_task_subscribers(task_id).await
     }
 
     async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
-        self.storage.get_subscriber_count(task_id).await
+        self.streaming.get_subscriber_count(task_id).await
     }
 
     async fn broadcast_status_update(
@@ -183,7 +193,7 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.storage.broadcast_status_update(task_id, update).await
+        self.streaming.broadcast_status_update(task_id, update).await
     }
 
     async fn broadcast_artifact_update(
@@ -191,7 +201,7 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         task_id: &str,
         update: TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.storage
+        self.streaming
             .broadcast_artifact_update(task_id, update)
             .await
     }
@@ -205,7 +215,7 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         >,
         A2AError,
     > {
-        self.storage.status_update_stream(task_id).await
+        self.streaming.status_update_stream(task_id).await
     }
 
     async fn artifact_update_stream(
@@ -217,7 +227,7 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         >,
         A2AError,
     > {
-        self.storage.artifact_update_stream(task_id).await
+        self.streaming.artifact_update_stream(task_id).await
     }
 
     async fn combined_update_stream(
@@ -233,6 +243,6 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         >,
         A2AError,
     > {
-        self.storage.combined_update_stream(task_id).await
+        self.streaming.combined_update_stream(task_id).await
     }
 }

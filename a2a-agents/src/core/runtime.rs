@@ -10,8 +10,7 @@ use a2a_rs::adapter::{
     BearerTokenAuthenticator, ConnectRpcAdapter, HttpServer, SimpleAgentInfo,
 };
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-    AsyncTaskQuery,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncTaskLifecycle, AsyncTaskQuery,
 };
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -434,10 +433,7 @@ where
     }
 
     /// Start the appropriate server(s) based on configuration
-    pub async fn run(self) -> Result<(), RuntimeError>
-    where
-        S: AsyncStreamingHandler,
-    {
+    pub async fn run(self) -> Result<(), RuntimeError> {
         // Check if MCP server mode is enabled
         if self.config.features.mcp_server.enabled {
             return self.run_as_mcp_server().await;

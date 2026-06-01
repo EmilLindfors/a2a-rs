@@ -254,23 +254,25 @@ mod sqlx_tests {
         Ok(())
     }
 
+    /// Subscriber management is no longer a storage responsibility (Phase 4
+    /// struct-split): it lives in `InMemoryStreamingHandler`. This pins the same
+    /// registry semantics on that adapter.
     #[tokio::test]
     async fn test_streaming_subscribers() -> Result<(), Box<dyn std::error::Error>> {
-        let storage = create_test_storage().await?;
+        use a2a_rs::InMemoryStreamingHandler;
+
+        let streaming = InMemoryStreamingHandler::new();
         let task_id = Uuid::new_v4().to_string();
 
-        // Create task
-        storage.create(&tid(&task_id), &cid("test-context")).await?;
-
-        // Test subscriber count
-        let count = storage.get_subscriber_count(&task_id).await?;
+        // No subscribers registered for an unknown task.
+        let count = streaming.get_subscriber_count(&task_id).await?;
         assert_eq!(count, 0);
 
-        // Test removing non-existent subscribers
-        storage.remove_task_subscribers(&task_id).await?;
+        // Removing subscribers for a task with none is a no-op.
+        streaming.remove_task_subscribers(&task_id).await?;
 
-        // Test unsupported operations
-        let result = storage.remove_subscription("fake-id").await;
+        // Removal by subscription ID is unsupported by the in-memory handler.
+        let result = streaming.remove_subscription("fake-id").await;
         assert!(matches!(result, Err(A2AError::UnsupportedOperation(_))));
 
         Ok(())

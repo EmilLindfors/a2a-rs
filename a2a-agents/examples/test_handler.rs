@@ -1,4 +1,5 @@
 use a2a_agents::agents::reimbursement::handler::ReimbursementHandler;
+use a2a_rs::InMemoryStreamingHandler;
 use a2a_rs::adapter::storage::InMemoryTaskStorage;
 use a2a_rs::domain::{Message, Part, Role};
 use a2a_rs::port::message_handler::AsyncMessageHandler;
@@ -10,9 +11,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::fmt().with_env_filter("debug").init();
 
-    // Create handler with in-memory task storage
+    // Create handler with in-memory task storage and a dedicated streaming
+    // handler (streaming and push are separate ports).
     let task_storage = InMemoryTaskStorage::new();
-    let handler = ReimbursementHandler::new(task_storage);
+    let push = task_storage.push_notifier();
+    let handler =
+        ReimbursementHandler::new(task_storage, InMemoryStreamingHandler::new(), push);
 
     println!("=== Testing Reimbursement Handler ===\n");
 

@@ -2,7 +2,7 @@ use a2a_agents::core::AgentBuilder;
 use a2a_client::WebA2AClient;
 use a2a_client::components::create_sse_stream;
 use a2a_rs::{
-    InMemoryTaskStorage,
+    InMemoryStreamingHandler, InMemoryTaskStorage,
     domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatusUpdateEvent},
     port::{AsyncMessageHandler, AsyncStreamingHandler},
 };
@@ -14,7 +14,7 @@ use tokio::time::sleep;
 
 #[derive(Clone)]
 struct StreamingHandler {
-    storage: Arc<InMemoryTaskStorage>,
+    streaming: InMemoryStreamingHandler,
 }
 
 #[async_trait]
@@ -40,12 +40,12 @@ impl AsyncMessageHandler for StreamingHandler {
             .build();
 
         // Spawn a background task to simulate a streaming delay
-        let storage = self.storage.clone();
+        let streaming = self.streaming.clone();
         let tid = task_id.to_string();
 
         tokio::spawn(async move {
             sleep(Duration::from_millis(1000)).await;
-            let _ = storage
+            let _ = streaming
                 .broadcast_status_update(
                     &tid,
                     TaskStatusUpdateEvent {
@@ -87,7 +87,7 @@ async fn test_sse_stream_success() {
 
     let storage = Arc::new(InMemoryTaskStorage::new());
     let handler = StreamingHandler {
-        storage: storage.clone(),
+        streaming: InMemoryStreamingHandler::new(),
     };
 
     let runtime = AgentBuilder::from_toml(toml_config)

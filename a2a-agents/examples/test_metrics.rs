@@ -2,6 +2,7 @@ use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use a2a_agents::agents::reimbursement::handler::ReimbursementHandler;
+use a2a_rs::InMemoryStreamingHandler;
 use a2a_rs::adapter::storage::InMemoryTaskStorage;
 use a2a_rs::domain::{Message, Part, Role};
 use a2a_rs::port::message_handler::AsyncMessageHandler;
@@ -16,9 +17,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_line_number(true)
         .init();
 
-    // Initialize the handler with in-memory task storage
+    // Initialize the handler with in-memory task storage and a dedicated
+    // streaming handler (streaming and push are separate ports).
     let task_storage = InMemoryTaskStorage::new();
-    let handler = ReimbursementHandler::new(task_storage);
+    let push = task_storage.push_notifier();
+    let handler =
+        ReimbursementHandler::new(task_storage, InMemoryStreamingHandler::new(), push);
 
     println!("=== Testing Metrics and Logging ===\n");
 

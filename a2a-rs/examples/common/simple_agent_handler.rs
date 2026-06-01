@@ -12,6 +12,7 @@ use async_trait::async_trait;
 
 use a2a_rs::{
     adapter::storage::InMemoryTaskStorage,
+    adapter::streaming::InMemoryStreamingHandler,
     domain::{
         A2AError, ContextId, Message, Task, TaskArtifactUpdateEvent, TaskId,
         TaskPushNotificationConfig, TaskState, TaskStatusUpdateEvent,
@@ -35,8 +36,11 @@ use a2a_rs::{
 /// `AsyncMessageHandler` and compose it with storage using `ConnectRpcAdapter`.
 #[derive(Clone)]
 pub struct SimpleAgentHandler {
-    /// Task storage that implements all the business capabilities
+    /// Task storage (persistence + push-config CRUD)
     storage: Arc<InMemoryTaskStorage>,
+    /// Dedicated streaming fan-out, shared between this handler's broadcasts and
+    /// its subscriber registry (Phase 4 struct-split).
+    streaming: InMemoryStreamingHandler,
 }
 
 impl SimpleAgentHandler {
@@ -44,6 +48,7 @@ impl SimpleAgentHandler {
     pub fn new() -> Self {
         Self {
             storage: Arc::new(InMemoryTaskStorage::new()),
+            streaming: InMemoryStreamingHandler::new(),
         }
     }
 
@@ -51,6 +56,7 @@ impl SimpleAgentHandler {
     pub fn with_storage(storage: InMemoryTaskStorage) -> Self {
         Self {
             storage: Arc::new(storage),
+            streaming: InMemoryStreamingHandler::new(),
         }
     }
 
@@ -77,10 +83,12 @@ impl AsyncMessageHandler for SimpleAgentHandler {
         message: &Message,
         session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
-        // Create a message handler and delegate
+        // Create a message handler and delegate, sharing the streaming handler so
+        // the echo handler's broadcasts reach this handler's subscribers.
         let message_handler = a2a_rs::adapter::business::ResponderMessageHandler::echo(
             (*self.storage).clone(),
-            (*self.storage).clone(),
+            self.streaming.clone(),
+            self.storage.push_notifier(),
         );
         message_handler
             .process_message(task_id, message, session_id)
@@ -164,7 +172,7 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
         task_id: &str,
         subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
-        self.storage
+        self.streaming
             .add_status_subscriber(task_id, subscriber)
             .await
     }
@@ -174,21 +182,21 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
         task_id: &str,
         subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
     ) -> Result<String, A2AError> {
-        self.storage
+        self.streaming
             .add_artifact_subscriber(task_id, subscriber)
             .await
     }
 
     async fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError> {
-        self.storage.remove_subscription(subscription_id).await
+        self.streaming.remove_subscription(subscription_id).await
     }
 
     async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
-        self.storage.remove_task_subscribers(task_id).await
+        self.streaming.remove_task_subscribers(task_id).await
     }
 
     async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
-        self.storage.get_subscriber_count(task_id).await
+        self.streaming.get_subscriber_count(task_id).await
     }
 
     async fn broadcast_status_update(
@@ -196,7 +204,7 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.storage.broadcast_status_update(task_id, update).await
+        self.streaming.broadcast_status_update(task_id, update).await
     }
 
     async fn broadcast_artifact_update(
@@ -204,7 +212,7 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
         task_id: &str,
         update: TaskArtifactUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.storage
+        self.streaming
             .broadcast_artifact_update(task_id, update)
             .await
     }
@@ -218,7 +226,7 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
         >,
         A2AError,
     > {
-        self.storage.status_update_stream(task_id).await
+        self.streaming.status_update_stream(task_id).await
     }
 
     async fn artifact_update_stream(
@@ -230,7 +238,7 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
         >,
         A2AError,
     > {
-        self.storage.artifact_update_stream(task_id).await
+        self.streaming.artifact_update_stream(task_id).await
     }
 
     async fn combined_update_stream(
@@ -246,6 +254,6 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
         >,
         A2AError,
     > {
-        self.storage.combined_update_stream(task_id).await
+        self.streaming.combined_update_stream(task_id).await
     }
 }

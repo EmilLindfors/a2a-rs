@@ -108,6 +108,7 @@ impl JsonRpcAdapter {
                 notification_manager,
                 agent_info,
                 NoopStreamingHandler,
+                crate::port::NoopPushNotifier,
             ),
         }
     }
@@ -122,7 +123,12 @@ impl JsonRpcAdapter {
         agent_info: impl AgentInfoProvider + 'static,
     ) -> Self {
         Self {
-            service: TaskService::with_handler(handler, agent_info, NoopStreamingHandler),
+            service: TaskService::with_handler(
+                handler,
+                agent_info,
+                NoopStreamingHandler,
+                crate::port::NoopPushNotifier,
+            ),
         }
     }
 
@@ -133,6 +139,16 @@ impl JsonRpcAdapter {
     ) -> Self {
         Self {
             service: self.service.with_streaming_handler(streaming_handler),
+        }
+    }
+
+    /// Inject a real push notifier (required for webhook delivery).
+    pub fn with_push_notifier(
+        self,
+        push_notifier: impl crate::port::AsyncPushNotifier + 'static,
+    ) -> Self {
+        Self {
+            service: self.service.with_push_notifier(push_notifier),
         }
     }
 }

@@ -1,5 +1,37 @@
 # A2A-RS Follow-Ups and Future Work
 
+> **Status (2026-06-01).** The `0.4` branch landed the hexagonal trait refactor
+> (capability-split ports `AsyncTaskLifecycle`/`AsyncTaskQuery`, `Arc<dyn …>`
+> dispatch, newtype IDs, `*Ext` validation traits) **and** the wire-interop
+> transport arc: the JSON-RPC 2.0 + HTTP+JSON **server** adapter (`JsonRpcAdapter`),
+> the client-side **`Transport` port** (`port::client`), a wire-compatible
+> **`JsonRpcClient`** (`jsonrpc-client` feature), and **card-driven transport
+> negotiation** (`TransportFactory` / `TransportNegotiator` / `connect`). The two
+> roadmap sections below track what's left for 0.4 and what's deliberately
+> deferred to 0.5; the older backlog further down is unchanged and still open.
+>
+> **Update.** The **Phase 4 storage/streaming/push struct-split**
+> (`REFACTORING_PLAN.md` §4.3, final) has now also landed on `0.4`: storage
+> adapters shed streaming and push-delivery, streaming moved to
+> `adapter::streaming::InMemoryStreamingHandler`, and push-webhook delivery became
+> the `AsyncPushNotifier` port. It was originally scoped for 0.5.
+
+## 0.4 — remaining to finish the release
+
+Round out the transport/interop story the rest of 0.4 already tells.
+
+1. **CLI (`a2acli`-equivalent).** The single most natural follow-on — `OFFICIAL_SDK_COMPARISON.md` #1 ("verify interop empirically") + #4. A small bin/crate that drives the new client `Transport`: `card`, `send`, `stream`, `get`, `cancel`. Self-contained, zero blast radius; doubles as the manual interop harness.
+2. **Empirical cross-SDK interop check.** Point the official `a2aproject/a2acli` at our `examples/jsonrpc_server.rs` agent, and/or our `JsonRpcClient` at a stock A2A agent. (`tests/jsonrpc_client_interop_test.rs` already proves *our*-client ↔ *our*-server byte-compat; this validates against the canonical SDKs.)
+3. **Runnable `jsonrpc_client` / `auto_connect` example** mirroring `examples/jsonrpc_server.rs`. Also satisfies the General item on compile-checked rustdoc examples.
+4. **`pub type Result<T> = std::result::Result<T, A2AError>`** (`REFACTORING_PLAN.md` §3.2) — the one explicit Phase-3 idiomatic-modernization item still missing; natural to land before tagging 0.4 since the rest of that phase did.
+
+## 0.5 — deferred (by the plan, or by weight)
+
+- **`TaskStore` versioning (`u64` optimistic concurrency)** — `OFFICIAL_SDK_COMPARISON.md` §4.4. Touches the storage port + every impl.
+- **`CallInterceptor` before/after middleware (client + server)** — §4.4. A new cross-cutting abstraction; design-heavy.
+- **Multi-tenancy** — thread a `tenant` through requests/storage (§4.4/§7). Currently only placeholder fields exist.
+- **Richer typed error details** — Google-RPC `ErrorInfo`/`FieldViolation` beyond the current `BadRequest`-on-validation in `error.data`.
+
 ## Agent Payments Protocol (AP2) Integration
 - Expand `a2a-ap2` crate to fully support AP2 primitives (Payment Request, Payment Receipt).
 - Bridge AP2 features with native LLM tool calling (allow LLMs to request and verify payments).
@@ -20,15 +52,18 @@
 
 ## General
 - Refine existing Rustdoc examples and ensure they are all compile-checked.
-- Resolve any remaining compilation warnings across the workspace.
+- Resolve any remaining compilation warnings across the workspace. *(Clean under `clippy --workspace --all-features --all-targets -D warnings` as of the 0.4 transport work. A few `--no-default-features` warnings remain — `unused_enumerate_index` in `domain/core/task.rs` and unused vars in `adapter/storage/task_storage.rs`, both from vars used only inside `#[cfg(feature = "tracing")]` blocks.)*
 
 ---
 
-# 0.3.1 follow-ups
+# Release-pipeline & workspace tech debt (open backlog)
 
-Items deferred from the 0.3.0 release. Ordered roughly by impact.
+Items deferred from the 0.3.0 release and still unresolved as of the 0.4 work
+(verified 2026-06-01: ws_port, the `a2a-mcp` edition bump, `[workspace.dependencies]`,
+and `release-plz.toml` are all still pending). Independent of the 0.4 transport
+arc — fold into 0.4 or a 0.4.x as convenient. Ordered roughly by impact.
 
-## Technical debt left after 0.3.0
+## Technical debt
 
 ### 1. MCP HTTP transport
 `a2a-agents/src/core/mcp.rs:71` currently logs *"Only stdio transport is currently supported for MCP server"*. `rmcp` 1.7 already ships `streamable_http_server`, `sse`, and `ws` transports (see `rmcp-1.7.0/src/transport/`).
@@ -89,6 +124,6 @@ The 0.3.0 a2a-rs CHANGELOG says: *"Deleted legacy WebSocket transport infrastruc
 
 ---
 
-## Recommended 0.3.1 slice
+## Recommended slice
 
-If picking just three: **1 (MCP HTTP transport)**, **5 (`release-plz.toml`)**, **4 (proto-drift fix)** — they have the highest payoff per unit of effort and unblock the release pipeline before another version goes out.
+If picking just three from this backlog: **1 (MCP HTTP transport)**, **5 (`release-plz.toml`)**, **4 (proto-drift fix)** — highest payoff per unit of effort, and the pipeline ones (5) make the 0.4 tag come out clean.

@@ -157,6 +157,47 @@ mixin.
   storage no longer streams as a side effect. To announce transitions, host the
   `TaskStatusBroadcast` mixin (hold both ports) or use `DefaultMessageHandler`.
 
+### Breaking — storage/streaming/push struct-split (`REFACTORING_PLAN.md` §4.3, final)
+
+The storage adapters shed their two non-persistence jobs. `InMemoryTaskStorage`
+and `SqlxTaskStorage` previously implemented persistence **and** streaming
+fan-out **and** fired push notifications inside their broadcast helpers. Each of
+those is now its own adapter behind its own port, wired at the composition edge.
+
+- **Removed** the `AsyncStreamingHandler` impl (and the internal `subscribers`
+  map) from `InMemoryTaskStorage` and `SqlxTaskStorage`. They now implement only
+  `AsyncTaskLifecycle` + `AsyncTaskQuery` + `AsyncNotificationManager`
+  (persistence and push-config CRUD).
+- **Added** `adapter::streaming::InMemoryStreamingHandler` — the in-memory
+  subscriber registry and broadcast fan-out, extracted out of the storage
+  structs. Re-exported from the crate root.
+- **Added** the `AsyncPushNotifier` port (`port::notification_manager`) — the
+  out-of-band webhook **delivery** capability, separate from config CRUD
+  (`AsyncNotificationManager`) and from streaming. `PushNotificationRegistry`
+  implements it (the `PushNotificationSender` trait remains the pluggable backend
+  seam: HTTP, no-op, custom). **Added** `NoopPushNotifier`, and a deref-forwarding
+  impl so `Arc<dyn AsyncPushNotifier>` satisfies `impl AsyncPushNotifier`.
+- **Added** `InMemoryTaskStorage::push_notifier()` / `SqlxTaskStorage::push_notifier()`
+  returning the store's registry as an `Arc<dyn AsyncPushNotifier>` — so a config
+  written via `set_config` is visible to the notifier at the composition edge.
+- **`TaskStatusBroadcast`** gained a third ingredient `HasPushNotifier`: the
+  mixin now fires push delivery (best-effort, logged on failure) alongside the
+  streaming broadcast, and gained a `broadcast_artifact` method. Every host
+  (`TaskService`, `ReimbursementMessageHandler`, `ResponderMessageHandler`) now
+  also exposes `HasPushNotifier`.
+- **Breaking constructors:** `TaskService::new`/`with_handler`,
+  `ResponderMessageHandler::new`/`echo`, and `ReimbursementHandler::new`/`with_llm`
+  take a separate `impl AsyncPushNotifier`; `ResponderMessageHandler` and
+  `ReimbursementHandler` also take the streaming port separately (no longer
+  requiring the storage to be the streaming handler). The transport adapters
+  (`ConnectRpcAdapter`, `JsonRpcAdapter`) default to `NoopPushNotifier` and gained
+  a `with_push_notifier` builder method.
+- **Behavior change — no replay on subscribe:** `add_status_subscriber` /
+  `add_artifact_subscriber` no longer replay the task's current state to a new
+  subscriber (the streaming adapter has no task access). This is spec-compliant —
+  the initial `Task` snapshot is delivered by `TaskService::subscribe` /
+  `send_streaming_message` and emitted by the transport before stream items.
+
 ### Added — injected `Responder` on `DefaultMessageHandler`
 
 `DefaultMessageHandler` now separates lifecycle/streaming plumbing from the

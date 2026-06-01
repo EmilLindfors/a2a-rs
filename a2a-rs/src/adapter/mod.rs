@@ -13,6 +13,8 @@ pub mod auth;
 pub mod business;
 pub mod error;
 pub mod storage;
+#[cfg(feature = "server")]
+pub mod streaming;
 pub mod transport;
 
 // Legacy re-exports for backward compatibility
@@ -43,6 +45,10 @@ pub use business::SimpleAgentInfo;
 pub use business::{NoopPushNotificationSender, PushNotificationRegistry, PushNotificationSender};
 #[cfg(feature = "server")]
 pub use storage::InMemoryTaskStorage;
+#[cfg(feature = "server")]
+pub use streaming::InMemoryStreamingHandler;
+#[cfg(feature = "server")]
+pub use transport::connectrpc::NoopStreamingHandler;
 #[cfg(feature = "server")]
 pub use transport::connectrpc::ConnectRpcAdapter;
 #[cfg(feature = "http-server")]

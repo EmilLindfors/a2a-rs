@@ -22,14 +22,14 @@ use std::sync::Arc;
 
 use futures::Stream;
 
-use crate::application::{HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
+use crate::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
 use crate::domain::{
     A2AError, AgentCard, DeleteTaskPushNotificationConfigParams,
     GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams, ListTasksParams,
     ListTasksResult, Message, Task, TaskId, TaskPushNotificationConfig,
 };
 use crate::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier,
     AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery, UpdateEvent,
 };
 use crate::services::server::AgentInfoProvider;
@@ -52,6 +52,7 @@ pub struct TaskService {
     notification_manager: Arc<dyn AsyncNotificationManager>,
     agent_info: Arc<dyn AgentInfoProvider>,
     streaming_handler: Arc<dyn AsyncStreamingHandler>,
+    push_notifier: Arc<dyn AsyncPushNotifier>,
 }
 
 impl TaskService {
@@ -65,6 +66,7 @@ impl TaskService {
         notification_manager: impl AsyncNotificationManager + 'static,
         agent_info: impl AgentInfoProvider + 'static,
         streaming_handler: impl AsyncStreamingHandler + 'static,
+        push_notifier: impl AsyncPushNotifier + 'static,
     ) -> Self {
         let tasks = Arc::new(tasks);
         Self {
@@ -74,6 +76,7 @@ impl TaskService {
             notification_manager: Arc::new(notification_manager),
             agent_info: Arc::new(agent_info),
             streaming_handler: Arc::new(streaming_handler),
+            push_notifier: Arc::new(push_notifier),
         }
     }
 
@@ -86,6 +89,7 @@ impl TaskService {
         + 'static,
         agent_info: impl AgentInfoProvider + 'static,
         streaming_handler: impl AsyncStreamingHandler + 'static,
+        push_notifier: impl AsyncPushNotifier + 'static,
     ) -> Self {
         let handler = Arc::new(handler);
         Self {
@@ -95,6 +99,7 @@ impl TaskService {
             notification_manager: handler,
             agent_info: Arc::new(agent_info),
             streaming_handler: Arc::new(streaming_handler),
+            push_notifier: Arc::new(push_notifier),
         }
     }
 
@@ -104,6 +109,12 @@ impl TaskService {
         streaming_handler: impl AsyncStreamingHandler + 'static,
     ) -> Self {
         self.streaming_handler = Arc::new(streaming_handler);
+        self
+    }
+
+    /// Replace the push notifier, returning the updated service.
+    pub fn with_push_notifier(mut self, push_notifier: impl AsyncPushNotifier + 'static) -> Self {
+        self.push_notifier = Arc::new(push_notifier);
         self
     }
 
@@ -260,5 +271,11 @@ impl HasTaskLifecycle for TaskService {
 impl HasStreaming for TaskService {
     fn streaming(&self) -> &dyn AsyncStreamingHandler {
         self.streaming_handler.as_ref()
+    }
+}
+
+impl HasPushNotifier for TaskService {
+    fn push_notifier(&self) -> &dyn AsyncPushNotifier {
+        self.push_notifier.as_ref()
     }
 }

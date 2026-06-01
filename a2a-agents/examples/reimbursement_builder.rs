@@ -36,8 +36,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("Failed to create storage: {}", e))?;
 
-    // Create the handler
-    let handler = ReimbursementHandler::new(storage.clone());
+    // Create the handler with a dedicated streaming handler and the store's
+    // push notifier (streaming and push are separate ports since the Phase 4
+    // struct-split).
+    let streaming = a2a_rs::InMemoryStreamingHandler::new();
+    let push = storage.push_notifier();
+    let handler = ReimbursementHandler::new(storage.clone(), streaming, push);
 
     // Build and run the agent - this is where the magic happens!
     // The configuration file defines all the metadata, skills, and features

@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use a2a_rs::application::{HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
+use a2a_rs::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
 use a2a_rs::domain::{A2AError, ContextId, Message, Part, Role, Task, TaskId, TaskState, part};
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
@@ -86,6 +86,8 @@ pub struct ReimbursementHandler {
     task_lifecycle: Arc<dyn a2a_rs::port::AsyncTaskLifecycle>,
     /// Streaming port for broadcasting artifact updates
     streaming: Arc<dyn a2a_rs::port::AsyncStreamingHandler>,
+    /// Push-notifier port for out-of-band webhook delivery on each transition
+    push_notifier: Arc<dyn a2a_rs::port::AsyncPushNotifier>,
     validation_rules: ValidationRules,
     #[allow(dead_code)]
     file_metadata_store: Arc<Mutex<HashMap<String, Map<String, Value>>>>,
@@ -112,10 +114,18 @@ impl HasStreaming for ReimbursementHandler {
     }
 }
 
+impl HasPushNotifier for ReimbursementHandler {
+    fn push_notifier(&self) -> &dyn a2a_rs::port::AsyncPushNotifier {
+        self.push_notifier.as_ref()
+    }
+}
+
 #[allow(dead_code)]
 impl ReimbursementHandler {
     pub fn new(
-        storage: impl a2a_rs::port::AsyncTaskLifecycle + a2a_rs::port::AsyncStreamingHandler + 'static,
+        task_lifecycle: impl a2a_rs::port::AsyncTaskLifecycle + 'static,
+        streaming: impl a2a_rs::port::AsyncStreamingHandler + 'static,
+        push_notifier: impl a2a_rs::port::AsyncPushNotifier + 'static,
     ) -> Self {
         // Try to initialize AI client from environment
         let llm_provider: Option<Arc<dyn LlmProvider>> = if let Ok(gemini) =
@@ -131,17 +141,19 @@ impl ReimbursementHandler {
             None
         };
 
-        Self::with_llm(storage, llm_provider)
+        Self::with_llm(task_lifecycle, streaming, push_notifier, llm_provider)
     }
 
     pub fn with_llm(
-        storage: impl a2a_rs::port::AsyncTaskLifecycle + a2a_rs::port::AsyncStreamingHandler + 'static,
+        task_lifecycle: impl a2a_rs::port::AsyncTaskLifecycle + 'static,
+        streaming: impl a2a_rs::port::AsyncStreamingHandler + 'static,
+        push_notifier: impl a2a_rs::port::AsyncPushNotifier + 'static,
         llm_provider: Option<Arc<dyn LlmProvider>>,
     ) -> Self {
-        let storage = Arc::new(storage);
         Self {
-            task_lifecycle: storage.clone(),
-            streaming: storage,
+            task_lifecycle: Arc::new(task_lifecycle),
+            streaming: Arc::new(streaming),
+            push_notifier: Arc::new(push_notifier),
             validation_rules: ValidationRules::default(),
             file_metadata_store: Arc::new(Mutex::new(HashMap::new())),
             metrics: Arc::new(Mutex::new(HandlerMetrics::default())),

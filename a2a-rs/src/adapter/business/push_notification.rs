@@ -15,6 +15,7 @@ use tokio::sync::Mutex;
 use crate::domain::{
     A2AError, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent,
 };
+use crate::port::AsyncPushNotifier;
 
 /// Interface for a push notification sender
 #[async_trait]
@@ -429,5 +430,28 @@ impl PushNotificationRegistry {
             // No push notification configured for this task
             Ok(())
         }
+    }
+}
+
+/// The registry is the in-house [`AsyncPushNotifier`] adapter: it looks up the
+/// per-task config it holds and dispatches through its pluggable
+/// [`PushNotificationSender`] backend. The two trait methods are exactly the
+/// existing inherent `send_*` methods.
+#[async_trait]
+impl AsyncPushNotifier for PushNotificationRegistry {
+    async fn notify_status(
+        &self,
+        task_id: &str,
+        event: &TaskStatusUpdateEvent,
+    ) -> Result<(), A2AError> {
+        self.send_status_update(task_id, event).await
+    }
+
+    async fn notify_artifact(
+        &self,
+        task_id: &str,
+        event: &TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError> {
+        self.send_artifact_update(task_id, event).await
     }
 }

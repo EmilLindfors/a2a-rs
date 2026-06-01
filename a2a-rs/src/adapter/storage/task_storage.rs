@@ -17,39 +17,24 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
-    A2AError, Artifact, ContextId, Message, Task, TaskArtifactUpdateEvent,
-    TaskPushNotificationConfig, TaskId, TaskState, TaskStatus, TaskStatusUpdateEvent,
+    A2AError, ContextId, Message, Task, TaskPushNotificationConfig, TaskId, TaskState,
 };
 use crate::port::{
-    AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery,
-    streaming_handler::Subscriber,
+    AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle, AsyncTaskQuery,
 };
 
-type StatusSubscribers = Vec<Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>>;
-type ArtifactSubscribers = Vec<Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>>;
-
-/// Structure to hold subscribers for a task
-pub(crate) struct TaskSubscribers {
-    status: StatusSubscribers,
-    artifacts: ArtifactSubscribers,
-}
-
-impl TaskSubscribers {
-    fn new() -> Self {
-        Self {
-            status: Vec::new(),
-            artifacts: Vec::new(),
-        }
-    }
-}
-
-/// Simple in-memory task storage for testing and example purposes
+/// Simple in-memory task storage for testing and example purposes.
+///
+/// Persistence-only since the Phase 4 struct-split: streaming fan-out lives in
+/// [`InMemoryStreamingHandler`](crate::adapter::InMemoryStreamingHandler) and
+/// push-webhook delivery behind the [`AsyncPushNotifier`] port (this struct hands
+/// out its registry via [`push_notifier`](Self::push_notifier)). The store still
+/// owns push-config CRUD ([`AsyncNotificationManager`]) because that is config
+/// *persistence*.
 pub struct InMemoryTaskStorage {
     /// Tasks stored by ID
     pub(crate) tasks: Arc<Mutex<HashMap<String, Task>>>,
-    /// Subscribers for task updates
-    pub(crate) subscribers: Arc<Mutex<HashMap<String, TaskSubscribers>>>,
-    /// Push notification registry
+    /// Push notification registry (config store + delivery backend)
     pub(crate) push_notification_registry: Arc<PushNotificationRegistry>,
 }
 
@@ -66,7 +51,6 @@ impl InMemoryTaskStorage {
 
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
-            subscribers: Arc::new(Mutex::new(HashMap::new())),
             push_notification_registry: Arc::new(push_registry),
         }
     }
@@ -77,186 +61,24 @@ impl InMemoryTaskStorage {
 
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
-            subscribers: Arc::new(Mutex::new(HashMap::new())),
             push_notification_registry: Arc::new(push_registry),
         }
     }
 
-    /// Add a status update subscriber for streaming (convenience method)
-    pub async fn add_status_subscriber_legacy(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<(), A2AError> {
-        self.add_status_subscriber(task_id, subscriber)
-            .await
-            .map(|_| ())
-    }
-
-    /// Add an artifact update subscriber for streaming (convenience method)
-    pub async fn add_artifact_subscriber_legacy(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<(), A2AError> {
-        self.add_artifact_subscriber(task_id, subscriber)
-            .await
-            .map(|_| ())
+    /// Hand out this store's push-notification registry as an
+    /// [`AsyncPushNotifier`].
+    ///
+    /// The returned notifier shares the same config registry the store writes to
+    /// via [`AsyncNotificationManager::set_config`], so a config registered on
+    /// the store is immediately visible to the notifier at the composition edge.
+    pub fn push_notifier(&self) -> Arc<dyn AsyncPushNotifier> {
+        self.push_notification_registry.clone()
     }
 }
 
 impl Default for InMemoryTaskStorage {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-impl InMemoryTaskStorage {
-    /// Look up the context_id for a task
-    async fn get_task_context_id(&self, task_id: &str) -> String {
-        let tasks_guard = self.tasks.lock().await;
-        tasks_guard
-            .get(task_id)
-            .map(|t| t.context_id.clone())
-            .unwrap_or_else(|| "default".to_string())
-    }
-
-    /// Send a status update to all subscribers for a task
-    pub(crate) async fn broadcast_status_update(
-        &self,
-        task_id: &str,
-        status: TaskStatus,
-    ) -> Result<(), A2AError> {
-        let context_id = self.get_task_context_id(task_id).await;
-
-        // Create the update event
-        let event = TaskStatusUpdateEvent {
-            task_id: task_id.to_string(),
-            context_id,
-            kind: "status-update".to_string(),
-            status: status.clone(),
-            metadata: None,
-        };
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            task_id = %task_id,
-            state = ?status.state,
-            "📡 Broadcasting status update to subscribers"
-        );
-
-        // Get all subscribers for this task and notify them
-        let subscriber_count = {
-            let subscribers_guard = self.subscribers.lock().await;
-
-            if let Some(task_subscribers) = subscribers_guard.get(task_id) {
-                let count = task_subscribers.status.len();
-                #[cfg(feature = "tracing")]
-                tracing::info!(
-                    task_id = %task_id,
-                    subscriber_count = count,
-                    state = ?status.state,
-                    "📡 Notifying WebSocket subscribers of status update"
-                );
-
-                // Clone the subscribers so we don't hold the lock during notification
-                for (i, subscriber) in task_subscribers.status.iter().enumerate() {
-                    if let Err(e) = subscriber.on_update(event.clone()).await {
-                        #[cfg(feature = "tracing")]
-                        tracing::error!(
-                            task_id = %task_id,
-                            subscriber_index = i,
-                            error = %e,
-                            "❌ Failed to notify subscriber"
-                        );
-                        eprintln!("Failed to notify subscriber: {}", e);
-                    } else {
-                        #[cfg(feature = "tracing")]
-                        tracing::debug!(
-                            task_id = %task_id,
-                            subscriber_index = i,
-                            "✅ Successfully notified subscriber"
-                        );
-                    }
-                }
-                count
-            } else {
-                // No subscribers is the steady-state for tasks created via
-                // message/send (no streaming requested). Only worth tracing
-                // at DEBUG — WARN here floods logs in normal operation.
-                #[cfg(feature = "tracing")]
-                tracing::debug!(
-                    task_id = %task_id,
-                    "no WebSocket subscribers for task; status broadcast skipped"
-                );
-                0
-            }
-        }; // Lock is dropped here
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            task_id = %task_id,
-            notified_count = subscriber_count,
-            "📡 Finished broadcasting to WebSocket subscribers"
-        );
-
-        // Send push notification if configured
-        if let Err(e) = self
-            .push_notification_registry
-            .send_status_update(task_id, &event)
-            .await
-        {
-            eprintln!("Failed to send push notification: {}", e);
-        }
-
-        Ok(())
-    }
-
-    /// Send an artifact update to all subscribers for a task
-    pub(crate) async fn broadcast_artifact_update(
-        &self,
-        task_id: &str,
-        artifact: Artifact,
-        _index: Option<u32>,
-        _final: bool,
-    ) -> Result<(), A2AError> {
-        let context_id = self.get_task_context_id(task_id).await;
-
-        // Create the update event
-        let event = TaskArtifactUpdateEvent {
-            task_id: task_id.to_string(),
-            context_id,
-            kind: "artifact-update".to_string(),
-            artifact,
-            append: None,
-            last_chunk: None,
-            metadata: None,
-        };
-
-        // Get all subscribers for this task
-        {
-            let subscribers_guard = self.subscribers.lock().await;
-
-            if let Some(task_subscribers) = subscribers_guard.get(task_id) {
-                // Clone the subscribers so we don't hold the lock during notification
-                for subscriber in task_subscribers.artifacts.iter() {
-                    if let Err(e) = subscriber.on_update(event.clone()).await {
-                        eprintln!("Failed to notify subscriber: {}", e);
-                    }
-                }
-            }
-        }; // Lock is dropped here
-
-        // Send push notification if configured
-        if let Err(e) = self
-            .push_notification_registry
-            .send_artifact_update(task_id, &event)
-            .await
-        {
-            eprintln!("Failed to send push notification: {}", e);
-        }
-
-        Ok(())
     }
 }
 
@@ -533,185 +355,10 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
     }
 }
 
-// AsyncStreamingHandler implementation
-#[async_trait]
-impl AsyncStreamingHandler for InMemoryTaskStorage {
-    async fn add_status_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
-        #[cfg(feature = "tracing")]
-        tracing::info!(
-            task_id = %task_id,
-            "✅ Adding WebSocket subscriber for status updates"
-        );
-
-        // Add the subscriber
-        {
-            let mut subscribers_guard = self.subscribers.lock().await;
-
-            let task_subscribers = subscribers_guard
-                .entry(task_id.to_string())
-                .or_insert_with(TaskSubscribers::new);
-
-            task_subscribers.status.push(subscriber);
-
-            #[cfg(feature = "tracing")]
-            tracing::info!(
-                task_id = %task_id,
-                subscriber_count = task_subscribers.status.len(),
-                "✅ WebSocket subscriber added successfully"
-            );
-        } // Lock is dropped here
-
-        // Try to get the current status to send as an initial update
-        // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
-        if let Ok(tid) = task_id.parse::<TaskId>() {
-            if let Ok(task) = self.get(&tid, None).await {
-                let _ = self
-                    .broadcast_status_update(
-                        task_id,
-                        task.status.clone().into_option().unwrap_or_default(),
-                    )
-                    .await;
-            }
-        }
-
-        Ok(format!("status-{}-{}", task_id, uuid::Uuid::new_v4()))
-    }
-
-    async fn add_artifact_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
-        // Add the subscriber
-        {
-            let mut subscribers_guard = self.subscribers.lock().await;
-
-            let task_subscribers = subscribers_guard
-                .entry(task_id.to_string())
-                .or_insert_with(TaskSubscribers::new);
-
-            task_subscribers.artifacts.push(subscriber);
-        } // Lock is dropped here
-
-        // If there are existing artifacts, broadcast them
-        // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
-        if let Ok(tid) = task_id.parse::<TaskId>() {
-            if let Ok(task) = self.get(&tid, None).await {
-                for artifact in &task.artifacts {
-                    let _ = self
-                        .broadcast_artifact_update(task_id, artifact.clone(), None, false)
-                        .await;
-                }
-            }
-        }
-
-        Ok(format!("artifact-{}-{}", task_id, uuid::Uuid::new_v4()))
-    }
-
-    async fn remove_subscription(&self, _subscription_id: &str) -> Result<(), A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Subscription removal by ID requires storage layer refactoring".to_string(),
-        ))
-    }
-
-    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
-        // Remove all subscribers
-        {
-            let mut subscribers_guard = self.subscribers.lock().await;
-            subscribers_guard.remove(task_id);
-        } // Lock is dropped here
-
-        Ok(())
-    }
-
-    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
-        let subscribers_guard = self.subscribers.lock().await;
-
-        if let Some(task_subscribers) = subscribers_guard.get(task_id) {
-            Ok(task_subscribers.status.len() + task_subscribers.artifacts.len())
-        } else {
-            Ok(0)
-        }
-    }
-
-    async fn broadcast_status_update(
-        &self,
-        task_id: &str,
-        update: TaskStatusUpdateEvent,
-    ) -> Result<(), A2AError> {
-        self.broadcast_status_update(task_id, update.status).await
-    }
-
-    async fn broadcast_artifact_update(
-        &self,
-        task_id: &str,
-        update: TaskArtifactUpdateEvent,
-    ) -> Result<(), A2AError> {
-        self.broadcast_artifact_update(
-            task_id,
-            update.artifact,
-            None,
-            update.last_chunk.unwrap_or(false),
-        )
-        .await
-    }
-
-    async fn status_update_stream(
-        &self,
-        _task_id: &str,
-    ) -> Result<
-        std::pin::Pin<
-            Box<dyn futures::Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>,
-        >,
-        A2AError,
-    > {
-        Err(A2AError::UnsupportedOperation(
-            "Status update stream requires storage layer refactoring".to_string(),
-        ))
-    }
-
-    async fn artifact_update_stream(
-        &self,
-        _task_id: &str,
-    ) -> Result<
-        std::pin::Pin<
-            Box<dyn futures::Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>,
-        >,
-        A2AError,
-    > {
-        Err(A2AError::UnsupportedOperation(
-            "Artifact update stream requires storage layer refactoring".to_string(),
-        ))
-    }
-
-    async fn combined_update_stream(
-        &self,
-        _task_id: &str,
-    ) -> Result<
-        std::pin::Pin<
-            Box<
-                dyn futures::Stream<
-                        Item = Result<crate::port::streaming_handler::UpdateEvent, A2AError>,
-                    > + Send,
-            >,
-        >,
-        A2AError,
-    > {
-        Err(A2AError::UnsupportedOperation(
-            "Combined update stream requires storage layer refactoring".to_string(),
-        ))
-    }
-}
-
 impl Clone for InMemoryTaskStorage {
     fn clone(&self) -> Self {
         Self {
             tasks: self.tasks.clone(),
-            subscribers: self.subscribers.clone(),
             push_notification_registry: self.push_notification_registry.clone(),
         }
     }

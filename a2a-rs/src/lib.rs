@@ -94,9 +94,9 @@ pub use domain::{
 
 // Port traits for better separation of concerns
 pub use port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt,
-    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery, StreamItem,
-    StreamingSubscriber, Transport, UpdateEvent,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier,
+    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery,
+    NoopPushNotifier, StreamItem, StreamingSubscriber, Transport, UpdateEvent,
 };
 
 #[cfg(feature = "http-client")]
@@ -116,8 +116,8 @@ pub use adapter::HttpServer;
 
 #[cfg(feature = "server")]
 pub use adapter::{
-    ConnectRpcAdapter, InMemoryTaskStorage, NoopPushNotificationSender,
-    PushNotificationRegistry, PushNotificationSender, SimpleAgentInfo,
+    ConnectRpcAdapter, InMemoryStreamingHandler, InMemoryTaskStorage, NoopPushNotificationSender,
+    NoopStreamingHandler, PushNotificationRegistry, PushNotificationSender, SimpleAgentInfo,
 };
 
 #[cfg(all(feature = "server", feature = "http-client"))]

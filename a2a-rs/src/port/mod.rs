@@ -26,7 +26,9 @@ pub use authenticator::{
 };
 pub use client::{StreamItem, Transport};
 pub use message_handler::AsyncMessageHandler;
-pub use notification_manager::{AsyncNotificationManager, AsyncNotificationManagerExt};
+pub use notification_manager::{
+    AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier, NoopPushNotifier,
+};
 pub use streaming_handler::{
     AsyncStreamingHandler, Subscriber as StreamingSubscriber, UpdateEvent,
 };

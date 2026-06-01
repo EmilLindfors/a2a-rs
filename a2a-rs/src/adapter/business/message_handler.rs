@@ -28,9 +28,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use crate::{
-    application::{HasStreaming, HasTaskLifecycle, TaskStatusBroadcast},
+    application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast},
     domain::{A2AError, ContextId, Message, Part, Role, Task, TaskId, TaskState},
-    port::{AsyncMessageHandler, AsyncStreamingHandler, AsyncTaskLifecycle},
+    port::{AsyncMessageHandler, AsyncPushNotifier, AsyncStreamingHandler, AsyncTaskLifecycle},
 };
 
 /// The business decision behind a message handler: given the incoming `message`
@@ -99,6 +99,8 @@ pub struct ResponderMessageHandler {
     task_lifecycle: Arc<dyn AsyncTaskLifecycle>,
     /// Streaming port for announcing status transitions to subscribers
     streaming: Arc<dyn AsyncStreamingHandler>,
+    /// Push-notifier port for out-of-band webhook delivery on each transition
+    push_notifier: Arc<dyn AsyncPushNotifier>,
     /// The business decision: what to reply and which state to end in
     responder: Arc<dyn Responder>,
 }
@@ -106,17 +108,20 @@ pub struct ResponderMessageHandler {
 impl ResponderMessageHandler {
     /// Create a handler with a custom [`Responder`].
     ///
-    /// The lifecycle and streaming ports are commonly the same storage instance
-    /// (which satisfies both), but they are accepted separately so the handler
-    /// depends only on the capabilities it uses.
+    /// The lifecycle, streaming, and push-notifier ports are accepted separately
+    /// so the handler depends only on the capabilities it uses; at the
+    /// composition edge the streaming and push ports typically come from a
+    /// dedicated streaming adapter and the store's `push_notifier()`.
     pub fn new(
         task_lifecycle: impl AsyncTaskLifecycle + 'static,
         streaming: impl AsyncStreamingHandler + 'static,
+        push_notifier: impl AsyncPushNotifier + 'static,
         responder: impl Responder + 'static,
     ) -> Self {
         Self {
             task_lifecycle: Arc::new(task_lifecycle),
             streaming: Arc::new(streaming),
+            push_notifier: Arc::new(push_notifier),
             responder: Arc::new(responder),
         }
     }
@@ -125,8 +130,9 @@ impl ResponderMessageHandler {
     pub fn echo(
         task_lifecycle: impl AsyncTaskLifecycle + 'static,
         streaming: impl AsyncStreamingHandler + 'static,
+        push_notifier: impl AsyncPushNotifier + 'static,
     ) -> Self {
-        Self::new(task_lifecycle, streaming, EchoResponder)
+        Self::new(task_lifecycle, streaming, push_notifier, EchoResponder)
     }
 }
 
@@ -139,6 +145,12 @@ impl HasTaskLifecycle for ResponderMessageHandler {
 impl HasStreaming for ResponderMessageHandler {
     fn streaming(&self) -> &dyn AsyncStreamingHandler {
         self.streaming.as_ref()
+    }
+}
+
+impl HasPushNotifier for ResponderMessageHandler {
+    fn push_notifier(&self) -> &dyn AsyncPushNotifier {
+        self.push_notifier.as_ref()
     }
 }
 
@@ -177,6 +189,7 @@ impl AsyncMessageHandler for ResponderMessageHandler {
 mod tests {
     use super::*;
     use crate::adapter::storage::InMemoryTaskStorage;
+    use crate::adapter::streaming::InMemoryStreamingHandler;
 
     /// A responder that ignores the input and drives the task to a terminal
     /// state with a fixed reply — proof that the injected responder, not the
@@ -203,7 +216,10 @@ mod tests {
     #[tokio::test]
     async fn injected_responder_controls_reply_and_state() {
         let storage = InMemoryTaskStorage::new();
-        let handler = ResponderMessageHandler::new(storage.clone(), storage, FixedResponder);
+        let streaming = InMemoryStreamingHandler::new();
+        let push = storage.push_notifier();
+        let handler =
+            ResponderMessageHandler::new(storage, streaming, push, FixedResponder);
 
         let message = Message::user_text("anything".to_string(), "m1".to_string());
         let task = handler

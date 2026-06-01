@@ -16,6 +16,7 @@ use a2a_rs::{
     adapter::{
         business::ResponderMessageHandler,
         storage::InMemoryTaskStorage,
+        streaming::InMemoryStreamingHandler,
         transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
         HttpServer, SimpleAgentInfo,
     },
@@ -38,6 +39,7 @@ const AGENT_URL: &str = "http://127.0.0.1:18182";
 #[derive(Clone)]
 struct EchoHandler {
     storage: Arc<InMemoryTaskStorage>,
+    streaming: InMemoryStreamingHandler,
 }
 
 #[async_trait]
@@ -50,8 +52,11 @@ impl AsyncMessageHandler for EchoHandler {
     ) -> Result<Task, A2AError> {
         // Delegate to ResponderMessageHandler for proper storage semantics, then
         // synthesize an echo response on top of whatever it returned.
-        let inner =
-            ResponderMessageHandler::echo((*self.storage).clone(), (*self.storage).clone());
+        let inner = ResponderMessageHandler::echo(
+            (*self.storage).clone(),
+            self.streaming.clone(),
+            self.storage.push_notifier(),
+        );
         let mut task = inner.process_message(task_id, message, session_id).await?;
 
         let echoed = message
@@ -85,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
     let storage = Arc::new(InMemoryTaskStorage::new());
     let handler = EchoHandler {
         storage: storage.clone(),
+        streaming: InMemoryStreamingHandler::new(),
     };
 
     let agent_info = SimpleAgentInfo::new("Echo Agent".to_string(), AGENT_URL.to_string())

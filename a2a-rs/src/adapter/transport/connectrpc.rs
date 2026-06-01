@@ -68,6 +68,7 @@ impl ConnectRpcAdapter {
                 notification_manager,
                 agent_info,
                 NoopStreamingHandler,
+                crate::port::NoopPushNotifier,
             ),
         }
     }
@@ -83,7 +84,12 @@ impl ConnectRpcAdapter {
         agent_info: impl AgentInfoProvider + 'static,
     ) -> Self {
         Self {
-            service: TaskService::with_handler(handler, agent_info, NoopStreamingHandler),
+            service: TaskService::with_handler(
+                handler,
+                agent_info,
+                NoopStreamingHandler,
+                crate::port::NoopPushNotifier,
+            ),
         }
     }
 
@@ -94,6 +100,16 @@ impl ConnectRpcAdapter {
     ) -> Self {
         Self {
             service: self.service.with_streaming_handler(streaming_handler),
+        }
+    }
+
+    /// Builder-style method to inject a custom push notifier.
+    pub fn with_push_notifier(
+        self,
+        push_notifier: impl crate::port::AsyncPushNotifier + 'static,
+    ) -> Self {
+        Self {
+            service: self.service.with_push_notifier(push_notifier),
         }
     }
 }

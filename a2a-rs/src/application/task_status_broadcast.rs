@@ -25,8 +25,10 @@
 
 use async_trait::async_trait;
 
-use crate::domain::{A2AError, Message, Task, TaskId, TaskState, TaskStatusUpdateEvent};
-use crate::port::{AsyncStreamingHandler, AsyncTaskLifecycle};
+use crate::domain::{
+    A2AError, Message, Task, TaskArtifactUpdateEvent, TaskId, TaskState, TaskStatusUpdateEvent,
+};
+use crate::port::{AsyncPushNotifier, AsyncStreamingHandler, AsyncTaskLifecycle};
 
 /// Ingredient: an assembly that can hand out a task-lifecycle port.
 ///
@@ -41,6 +43,16 @@ pub trait HasStreaming {
     fn streaming(&self) -> &dyn AsyncStreamingHandler;
 }
 
+/// Ingredient: an assembly that can hand out a push-notifier port.
+///
+/// Kept separate from [`HasStreaming`] on purpose: in-process streaming fan-out
+/// and out-of-band webhook delivery are distinct capabilities with distinct
+/// backends, so the mixin orchestrates both rather than fusing them into one
+/// adapter.
+pub trait HasPushNotifier {
+    fn push_notifier(&self) -> &dyn AsyncPushNotifier;
+}
+
 /// Derived capability: mutate task status through the lifecycle port, then
 /// broadcast the resulting status to streaming subscribers.
 ///
@@ -52,7 +64,7 @@ pub trait HasStreaming {
 ///
 /// [`update_and_broadcast`]: TaskStatusBroadcast::update_and_broadcast
 #[async_trait]
-pub trait TaskStatusBroadcast: HasTaskLifecycle + HasStreaming + Send + Sync {
+pub trait TaskStatusBroadcast: HasTaskLifecycle + HasStreaming + HasPushNotifier + Send + Sync {
     /// Update a task's status, then broadcast the new status to subscribers.
     ///
     /// The broadcast is best-effort relative to the store: the status is
@@ -109,11 +121,32 @@ pub trait TaskStatusBroadcast: HasTaskLifecycle + HasStreaming + Send + Sync {
         Ok(task)
     }
 
-    /// Announce a task's current status to streaming subscribers.
+    /// Broadcast an artifact update: fan it out to streaming subscribers, then
+    /// deliver it to the task's push endpoint (best-effort).
+    ///
+    /// The artifact counterpart to the status path. Hosts that produce artifacts
+    /// route through here so streaming and push stay consistent — exactly as the
+    /// status mutators do via [`broadcast_current_status`](Self::broadcast_current_status).
+    async fn broadcast_artifact(
+        &self,
+        id: &TaskId,
+        event: TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError> {
+        self.streaming()
+            .broadcast_artifact_update(id.as_str(), event.clone())
+            .await?;
+        self.notify_push_artifact(id, &event).await;
+        Ok(())
+    }
+
+    /// Announce a task's current status to streaming subscribers, then deliver a
+    /// push notification (best-effort).
     ///
     /// Shared by the mutate-then-broadcast methods above; not intended to be
     /// overridden. The event is built from the freshly-committed `task` so the
-    /// announcement always reflects what the store now holds.
+    /// announcement always reflects what the store now holds. Push delivery is
+    /// best-effort: a webhook that is down is logged but does not fail the
+    /// mutation that triggered it.
     #[doc(hidden)]
     async fn broadcast_current_status(
         &self,
@@ -129,28 +162,63 @@ pub trait TaskStatusBroadcast: HasTaskLifecycle + HasStreaming + Send + Sync {
         };
 
         self.streaming()
-            .broadcast_status_update(id.as_str(), event)
+            .broadcast_status_update(id.as_str(), event.clone())
+            .await?;
+        self.notify_push_status(id, &event).await;
+        Ok(())
+    }
+
+    /// Deliver a status push notification, swallowing (and logging) any delivery
+    /// error so it never fails the mutation.
+    #[doc(hidden)]
+    async fn notify_push_status(&self, id: &TaskId, event: &TaskStatusUpdateEvent) {
+        if let Err(_e) = self.push_notifier().notify_status(id.as_str(), event).await {
+            #[cfg(feature = "tracing")]
+            tracing::warn!(task_id = %id.as_str(), error = %_e, "push status notification failed");
+        }
+    }
+
+    /// Deliver an artifact push notification, swallowing (and logging) any
+    /// delivery error.
+    #[doc(hidden)]
+    async fn notify_push_artifact(&self, id: &TaskId, event: &TaskArtifactUpdateEvent) {
+        if let Err(_e) = self
+            .push_notifier()
+            .notify_artifact(id.as_str(), event)
             .await
+        {
+            #[cfg(feature = "tracing")]
+            tracing::warn!(task_id = %id.as_str(), error = %_e, "push artifact notification failed");
+        }
     }
 }
 
 /// The single blanket impl — the linchpin of the pattern. `?Sized` lets the
 /// mixin attach to a `dyn`-typed host as well as a concrete one.
-impl<T: HasTaskLifecycle + HasStreaming + Send + Sync + ?Sized> TaskStatusBroadcast for T {}
+impl<T: HasTaskLifecycle + HasStreaming + HasPushNotifier + Send + Sync + ?Sized> TaskStatusBroadcast
+    for T
+{
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapter::storage::InMemoryTaskStorage;
+    use crate::adapter::streaming::InMemoryStreamingHandler;
     use crate::port::streaming_handler::Subscriber;
+    use crate::port::NoopPushNotifier;
     use std::sync::{Arc, Mutex};
 
-    /// A "partial platform" test rig: it wires only the two ingredients this
-    /// mixin needs, over a single in-memory adapter that happens to satisfy
-    /// both ports. Standing this up requires neither the transport layer nor
-    /// the full request processor — the orchestration is tested in isolation.
+    /// A "partial platform" test rig: it wires the three ingredients this mixin
+    /// needs — a persistence adapter, a separate streaming adapter, and a push
+    /// notifier — over in-memory implementations. Standing this up requires
+    /// neither the transport layer nor the full request processor, so the
+    /// orchestration is tested in isolation. The split between `store` and
+    /// `streaming` is the whole point: they are distinct ports now.
     struct BroadcastRig {
         store: Arc<InMemoryTaskStorage>,
+        streaming: InMemoryStreamingHandler,
+        push: NoopPushNotifier,
     }
 
     impl HasTaskLifecycle for BroadcastRig {
@@ -161,7 +229,13 @@ mod tests {
 
     impl HasStreaming for BroadcastRig {
         fn streaming(&self) -> &dyn AsyncStreamingHandler {
-            self.store.as_ref()
+            &self.streaming
+        }
+    }
+
+    impl HasPushNotifier for BroadcastRig {
+        fn push_notifier(&self) -> &dyn AsyncPushNotifier {
+            &self.push
         }
     }
 
@@ -180,6 +254,14 @@ mod tests {
         }
     }
 
+    fn rig(store: Arc<InMemoryTaskStorage>) -> BroadcastRig {
+        BroadcastRig {
+            store,
+            streaming: InMemoryStreamingHandler::new(),
+            push: NoopPushNotifier,
+        }
+    }
+
     #[tokio::test]
     async fn update_and_broadcast_persists_then_announces() {
         let store = Arc::new(InMemoryTaskStorage::new());
@@ -192,9 +274,9 @@ mod tests {
             .await
             .unwrap();
 
-        let rig = BroadcastRig { store };
+        let rig = rig(store);
 
-        // The mixin method exists purely because the rig exposes BOTH ingredients.
+        // The mixin method exists purely because the rig exposes ALL ingredients.
         let task = rig
             .update_and_broadcast(&id, TaskState::Completed, None)
             .await
@@ -204,17 +286,18 @@ mod tests {
     }
 
     /// A direct lifecycle mutation must NOT announce anything: persistence and
-    /// streaming are decoupled in the adapter (§4.0.2). Subscribing *before* the
-    /// task exists avoids the initial-status push `add_status_subscriber` makes
-    /// for an existing task, so the recorder starts empty.
+    /// streaming are fully separate adapters now. The subscriber lives on the
+    /// streaming handler, which the bare store mutation never touches, so the
+    /// recorder stays empty.
     #[tokio::test]
     async fn bare_update_status_does_not_broadcast() {
         let store = Arc::new(InMemoryTaskStorage::new());
         let id = TaskId::try_from("task-1").unwrap();
         let ctx = crate::domain::ContextId::try_from("ctx-1").unwrap();
 
+        let streaming = InMemoryStreamingHandler::new();
         let recorder = Recorder::default();
-        store
+        streaming
             .add_status_subscriber(id.as_str(), Box::new(recorder.clone()))
             .await
             .unwrap();
@@ -234,22 +317,24 @@ mod tests {
 
     /// Routed through the mixin, the same mutations DO reach subscribers — once
     /// each, in order. (One announcement per call proves there is no lingering
-    /// self-broadcast doubling the events.)
+    /// self-broadcast doubling the events.) The recorder is registered on the
+    /// rig's *streaming* handler, which the mixin fans out to.
     #[tokio::test]
     async fn mixin_announces_each_mutation_once() {
         let store = Arc::new(InMemoryTaskStorage::new());
         let id = TaskId::try_from("task-1").unwrap();
         let ctx = crate::domain::ContextId::try_from("ctx-1").unwrap();
 
+        store.create(&id, &ctx).await.unwrap();
+
+        let rig = rig(store);
+
         let recorder = Recorder::default();
-        store
+        rig.streaming
             .add_status_subscriber(id.as_str(), Box::new(recorder.clone()))
             .await
             .unwrap();
 
-        store.create(&id, &ctx).await.unwrap();
-
-        let rig = BroadcastRig { store };
         rig.update_and_broadcast(&id, TaskState::Working, None)
             .await
             .unwrap();

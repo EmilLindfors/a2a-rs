@@ -4,7 +4,8 @@ use async_trait::async_trait;
 
 use crate::domain::{
     A2AError, DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-    ListTaskPushNotificationConfigsParams, TaskPushNotificationConfig,
+    ListTaskPushNotificationConfigsParams, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
+    TaskStatusUpdateEvent,
 };
 
 /// Validate a push notification config URL.
@@ -111,3 +112,85 @@ pub trait AsyncNotificationManagerExt: AsyncNotificationManager {
 }
 
 impl<T: AsyncNotificationManager + ?Sized> AsyncNotificationManagerExt for T {}
+
+/// Out-of-band delivery of task updates to a task's configured push endpoint.
+///
+/// This is the **delivery** half of push notifications, deliberately separate
+/// from the config-CRUD capability ([`AsyncNotificationManager`]) and from the
+/// in-process streaming fan-out ([`AsyncStreamingHandler`](crate::port::AsyncStreamingHandler)).
+/// Keeping delivery behind its own port is what lets the orchestration layer
+/// (the [`TaskStatusBroadcast`](crate::application::TaskStatusBroadcast) mixin)
+/// "commit, announce to subscribers, then notify the webhook" without any one
+/// adapter taking on a second job — and lets the notification backend be swapped
+/// freely (HTTP webhook, no-op, a queue, a test spy) at the composition edge.
+///
+/// Errors are surfaced to the caller, but the orchestration layer treats
+/// delivery as best-effort: a webhook that is down must not fail the task
+/// mutation that triggered it.
+#[async_trait]
+pub trait AsyncPushNotifier: Send + Sync {
+    /// Deliver a status update to the task's configured push endpoint, if any.
+    ///
+    /// A task with no registered config is not an error — implementations
+    /// return `Ok(())`.
+    async fn notify_status(
+        &self,
+        task_id: &str,
+        event: &TaskStatusUpdateEvent,
+    ) -> Result<(), A2AError>;
+
+    /// Deliver an artifact update to the task's configured push endpoint, if any.
+    async fn notify_artifact(
+        &self,
+        task_id: &str,
+        event: &TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError>;
+}
+
+/// Deref-forwarding impl so an `Arc<dyn AsyncPushNotifier>` (e.g. the value
+/// handed out by `InMemoryTaskStorage::push_notifier`) satisfies `impl
+/// AsyncPushNotifier` bounds directly, without re-wrapping.
+#[async_trait]
+impl<T: AsyncPushNotifier + ?Sized> AsyncPushNotifier for std::sync::Arc<T> {
+    async fn notify_status(
+        &self,
+        task_id: &str,
+        event: &TaskStatusUpdateEvent,
+    ) -> Result<(), A2AError> {
+        (**self).notify_status(task_id, event).await
+    }
+
+    async fn notify_artifact(
+        &self,
+        task_id: &str,
+        event: &TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError> {
+        (**self).notify_artifact(task_id, event).await
+    }
+}
+
+/// A no-op [`AsyncPushNotifier`] for compositions with no push backend wired.
+///
+/// Every method succeeds without doing anything, mirroring `NoopStreamingHandler`
+/// on the streaming side.
+#[derive(Clone, Debug, Default)]
+pub struct NoopPushNotifier;
+
+#[async_trait]
+impl AsyncPushNotifier for NoopPushNotifier {
+    async fn notify_status(
+        &self,
+        _task_id: &str,
+        _event: &TaskStatusUpdateEvent,
+    ) -> Result<(), A2AError> {
+        Ok(())
+    }
+
+    async fn notify_artifact(
+        &self,
+        _task_id: &str,
+        _event: &TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError> {
+        Ok(())
+    }
+}

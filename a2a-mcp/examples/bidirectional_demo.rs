@@ -36,6 +36,7 @@ use a2a_rs::{
     adapter::{
         business::ResponderMessageHandler,
         storage::InMemoryTaskStorage,
+        streaming::InMemoryStreamingHandler,
         transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
         HttpServer, SimpleAgentInfo,
     },
@@ -145,6 +146,7 @@ impl ServerHandler for CalcServer {
 #[derive(Clone)]
 struct EchoHandler {
     storage: Arc<InMemoryTaskStorage>,
+    streaming: InMemoryStreamingHandler,
 }
 
 #[async_trait]
@@ -155,8 +157,11 @@ impl AsyncMessageHandler for EchoHandler {
         message: &Message,
         session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
-        let inner =
-            ResponderMessageHandler::echo((*self.storage).clone(), (*self.storage).clone());
+        let inner = ResponderMessageHandler::echo(
+            (*self.storage).clone(),
+            self.streaming.clone(),
+            self.storage.push_notifier(),
+        );
         let mut task = inner.process_message(task_id, message, session_id).await?;
 
         let echoed = extract_text(message);
@@ -254,6 +259,7 @@ async fn main() -> anyhow::Result<()> {
     let storage = Arc::new(InMemoryTaskStorage::new());
     let echo = EchoHandler {
         storage: storage.clone(),
+        streaming: InMemoryStreamingHandler::new(),
     };
     let mcp_to_a2a = Arc::new(McpToA2ABridge::new(calc_peer, echo).await?);
     let math_handler = MathHandler { bridge: mcp_to_a2a };

@@ -8,18 +8,14 @@ use crate::core::McpClientManager;
 use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
 use crate::core::runtime::AgentRuntime;
 use a2a_rs::domain::{
-    A2AError, ContextId, Task, TaskArtifactUpdateEvent, TaskId, TaskPushNotificationConfig,
-    TaskState, TaskStatusUpdateEvent,
+    A2AError, ContextId, Task, TaskId, TaskPushNotificationConfig, TaskState,
 };
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-    AsyncTaskQuery, StreamingSubscriber, UpdateEvent,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncTaskLifecycle, AsyncTaskQuery,
 };
 use a2a_rs::{HttpPushNotificationSender, InMemoryTaskStorage};
 use async_trait::async_trait;
-use futures::Stream;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
 #[cfg(feature = "mcp-client")]
 use tracing::info;
@@ -180,116 +176,13 @@ impl AutoStorage {
             )),
         }
     }
-}
 
-#[async_trait]
-impl AsyncStreamingHandler for AutoStorage {
-    async fn add_status_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn StreamingSubscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
+    /// Hand out the inner store's push notifier (shares its config registry).
+    pub fn push_notifier(&self) -> Arc<dyn a2a_rs::port::AsyncPushNotifier> {
         match self {
-            AutoStorage::InMemory(s) => s.add_status_subscriber(task_id, subscriber).await,
+            AutoStorage::InMemory(s) => s.push_notifier(),
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.add_status_subscriber(task_id, subscriber).await,
-        }
-    }
-
-    async fn add_artifact_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn StreamingSubscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.add_artifact_subscriber(task_id, subscriber).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.add_artifact_subscriber(task_id, subscriber).await,
-        }
-    }
-
-    async fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.remove_subscription(subscription_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.remove_subscription(subscription_id).await,
-        }
-    }
-
-    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.remove_task_subscribers(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.remove_task_subscribers(task_id).await,
-        }
-    }
-
-    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.get_subscriber_count(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.get_subscriber_count(task_id).await,
-        }
-    }
-
-    async fn broadcast_status_update(
-        &self,
-        task_id: &str,
-        update: TaskStatusUpdateEvent,
-    ) -> Result<(), A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.broadcast_status_update(task_id, update).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.broadcast_status_update(task_id, update).await,
-        }
-    }
-
-    async fn broadcast_artifact_update(
-        &self,
-        task_id: &str,
-        update: TaskArtifactUpdateEvent,
-    ) -> Result<(), A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.broadcast_artifact_update(task_id, update).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.broadcast_artifact_update(task_id, update).await,
-        }
-    }
-
-    async fn status_update_stream(
-        &self,
-        task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError>
-    {
-        match self {
-            AutoStorage::InMemory(s) => s.status_update_stream(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.status_update_stream(task_id).await,
-        }
-    }
-
-    async fn artifact_update_stream(
-        &self,
-        task_id: &str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>,
-        A2AError,
-    > {
-        match self {
-            AutoStorage::InMemory(s) => s.artifact_update_stream(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.artifact_update_stream(task_id).await,
-        }
-    }
-
-    async fn combined_update_stream(
-        &self,
-        task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.combined_update_stream(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.combined_update_stream(task_id).await,
+            AutoStorage::Sqlx(s) => s.push_notifier(),
         }
     }
 }
