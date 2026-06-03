@@ -22,6 +22,7 @@ use reqwest::{
 use serde::{Serialize, de::DeserializeOwned};
 use std::collections::VecDeque;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::{
@@ -39,7 +40,9 @@ use crate::{
             send_message_response,
         },
     },
-    port::{StreamItem, Transport},
+    port::{
+        CallContext, CallInterceptor, CallSide, StreamItem, Transport, run_after, run_before,
+    },
 };
 
 use super::jsonrpc_wire::{JsonRpcId, JsonRpcRequest, JsonRpcResponse, jsonrpc_to_a2a, methods};
@@ -55,6 +58,8 @@ pub struct JsonRpcClient {
     auth_token: Option<String>,
     /// Request timeout in seconds.
     timeout: u64,
+    /// Client-side interceptor chain wrapping every call.
+    interceptors: Vec<Arc<dyn CallInterceptor>>,
 }
 
 impl JsonRpcClient {
@@ -65,6 +70,7 @@ impl JsonRpcClient {
             client: Client::new(),
             auth_token: None,
             timeout: 30,
+            interceptors: Vec::new(),
         }
     }
 
@@ -75,12 +81,23 @@ impl JsonRpcClient {
             client: Client::new(),
             auth_token: Some(auth_token),
             timeout: 30,
+            interceptors: Vec::new(),
         }
     }
 
     /// Set the request timeout (seconds).
     pub fn with_timeout(mut self, timeout: u64) -> Self {
         self.timeout = timeout;
+        self
+    }
+
+    /// Append a client-side [`CallInterceptor`] to the chain.
+    ///
+    /// Interceptors wrap every call (`rpc` and the streaming subscribe):
+    /// `before` hooks run in registration order, then the request is sent, then
+    /// `after` hooks run in reverse. Chainable.
+    pub fn with_interceptor(mut self, interceptor: impl CallInterceptor + 'static) -> Self {
+        self.interceptors.push(Arc::new(interceptor));
         self
     }
 
@@ -137,8 +154,25 @@ impl JsonRpcClient {
         )))
     }
 
-    /// Send a JSON-RPC request envelope and decode the typed `result`.
+    /// Send a JSON-RPC request envelope and decode the typed `result`, running
+    /// the client interceptor chain around the call.
     async fn rpc<P: Serialize, T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: &P,
+    ) -> Result<T, A2AError> {
+        if self.interceptors.is_empty() {
+            return self.rpc_inner(method, params).await;
+        }
+        let ctx = CallContext::new(method, CallSide::Client);
+        run_before(&self.interceptors, &ctx).await?;
+        let result = self.rpc_inner(method, params).await;
+        run_after(&self.interceptors, &ctx, result.as_ref().map(|_| ())).await;
+        result
+    }
+
+    /// The un-intercepted JSON-RPC round-trip.
+    async fn rpc_inner<P: Serialize, T: DeserializeOwned>(
         &self,
         method: &str,
         params: &P,
@@ -176,6 +210,43 @@ impl JsonRpcClient {
             .ok_or_else(|| A2AError::Internal("JSON-RPC response missing result".to_string()))?;
         serde_json::from_value(result)
             .map_err(|e| A2AError::Internal(format!("failed to decode result: {e}")))
+    }
+
+    /// The un-intercepted streaming subscribe (SSE round-trip).
+    async fn subscribe_inner(
+        &self,
+        task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
+        let request = JsonRpcRequest {
+            jsonrpc: "2.0".to_string(),
+            id: JsonRpcId::Num(1),
+            method: methods::SUBSCRIBE_TO_TASK.to_string(),
+            params: Some(
+                serde_json::to_value(SubscribeToTaskRequest {
+                    id: task_id.to_string(),
+                    ..Default::default()
+                })
+                .map_err(|e| A2AError::Internal(format!("failed to encode params: {e}")))?,
+            ),
+        };
+
+        let response = self
+            .client
+            .post(&self.base_url)
+            .headers(self.headers()?)
+            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .json(&request)
+            .send()
+            .await
+            .map_err(HttpClientError::Reqwest)?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(HttpClientError::Response { status, message: body }.into());
+        }
+
+        Ok(Box::pin(sse_stream(response)))
     }
 }
 
@@ -331,36 +402,14 @@ impl Transport for JsonRpcClient {
         task_id: &str,
         _history_length: Option<u32>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
-        let request = JsonRpcRequest {
-            jsonrpc: "2.0".to_string(),
-            id: JsonRpcId::Num(1),
-            method: methods::SUBSCRIBE_TO_TASK.to_string(),
-            params: Some(
-                serde_json::to_value(SubscribeToTaskRequest {
-                    id: task_id.to_string(),
-                    ..Default::default()
-                })
-                .map_err(|e| A2AError::Internal(format!("failed to encode params: {e}")))?,
-            ),
-        };
-
-        let response = self
-            .client
-            .post(&self.base_url)
-            .headers(self.headers()?)
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&request)
-            .send()
-            .await
-            .map_err(HttpClientError::Reqwest)?;
-
-        if !response.status().is_success() {
-            let status = response.status().as_u16();
-            let body = response.text().await.unwrap_or_default();
-            return Err(HttpClientError::Response { status, message: body }.into());
+        if self.interceptors.is_empty() {
+            return self.subscribe_inner(task_id).await;
         }
-
-        Ok(Box::pin(sse_stream(response)))
+        let ctx = CallContext::new(methods::SUBSCRIBE_TO_TASK, CallSide::Client);
+        run_before(&self.interceptors, &ctx).await?;
+        let result = self.subscribe_inner(task_id).await;
+        run_after(&self.interceptors, &ctx, result.as_ref().map(|_| ())).await;
+        result
     }
 }
 

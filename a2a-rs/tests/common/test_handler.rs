@@ -28,7 +28,7 @@ use a2a_rs::{
 pub struct TestBusinessHandler {
     /// Task storage (persistence + push-config CRUD)
     storage: Arc<InMemoryTaskStorage>,
-    /// Dedicated streaming fan-out (Phase 4 struct-split)
+    /// Dedicated streaming fan-out
     streaming: InMemoryStreamingHandler,
 }
 

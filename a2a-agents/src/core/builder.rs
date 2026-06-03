@@ -11,7 +11,8 @@ use a2a_rs::domain::{
     A2AError, ContextId, Task, TaskId, TaskPushNotificationConfig, TaskState,
 };
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncTaskLifecycle, AsyncTaskQuery,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
+    AsyncTaskQuery,
 };
 use a2a_rs::{HttpPushNotificationSender, InMemoryTaskStorage};
 use async_trait::async_trait;
@@ -192,6 +193,7 @@ pub struct AgentBuilder<H = (), S = ()> {
     config: AgentConfig,
     handler: Option<H>,
     storage: Option<S>,
+    streaming: Option<Arc<dyn AsyncStreamingHandler>>,
 }
 
 impl AgentBuilder<(), ()> {
@@ -202,6 +204,7 @@ impl AgentBuilder<(), ()> {
             config,
             handler: None,
             storage: None,
+            streaming: None,
         })
     }
 
@@ -212,6 +215,7 @@ impl AgentBuilder<(), ()> {
             config,
             handler: None,
             storage: None,
+            streaming: None,
         })
     }
 
@@ -221,6 +225,7 @@ impl AgentBuilder<(), ()> {
             config,
             handler: None,
             storage: None,
+            streaming: None,
         }
     }
 }
@@ -235,6 +240,7 @@ impl<H, S> AgentBuilder<H, S> {
             config: self.config,
             handler: Some(handler),
             storage: self.storage,
+            streaming: self.streaming,
         }
     }
 
@@ -253,7 +259,24 @@ impl<H, S> AgentBuilder<H, S> {
             config: self.config,
             handler: self.handler,
             storage: Some(storage),
+            streaming: self.streaming,
         }
+    }
+
+    /// Attach a shared streaming backend for real-time updates.
+    ///
+    /// Pass the *same* [`AsyncStreamingHandler`] instance your handler
+    /// broadcasts to (clones of an `InMemoryStreamingHandler` share their
+    /// subscriber registry). The built [`AgentRuntime`] injects it into the
+    /// transport so `tasks/subscribe` SSE streams observe those broadcasts —
+    /// without it, the transport defaults to a no-op and updates never reach
+    /// clients.
+    pub fn with_streaming(
+        mut self,
+        streaming: impl AsyncStreamingHandler + 'static,
+    ) -> Self {
+        self.streaming = Some(Arc::new(streaming));
+        self
     }
 
     /// Access the configuration
@@ -287,11 +310,11 @@ where
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
         let storage = self.storage.ok_or(BuildError::MissingStorage)?;
 
-        Ok(AgentRuntime::new(
-            self.config,
-            Arc::new(handler),
-            Arc::new(storage),
-        ))
+        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        if let Some(streaming) = self.streaming {
+            runtime = runtime.with_streaming(streaming);
+        }
+        Ok(runtime)
     }
 }
 
@@ -304,6 +327,7 @@ where
     /// based on what's configured in the TOML file
     pub async fn build_with_auto_storage(self) -> Result<AgentRuntime<H, AutoStorage>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
+        let streaming = self.streaming;
 
         let storage = match &self.config.server.storage {
             StorageConfig::InMemory => {
@@ -354,19 +378,23 @@ where
                 )));
             }
 
-            return Ok(AgentRuntime::with_mcp_client(
+            let mut runtime = AgentRuntime::with_mcp_client(
                 self.config,
                 Arc::new(handler),
                 Arc::new(storage),
                 mcp_client,
-            ));
+            );
+            if let Some(streaming) = streaming {
+                runtime = runtime.with_streaming(streaming);
+            }
+            return Ok(runtime);
         }
 
-        Ok(AgentRuntime::new(
-            self.config,
-            Arc::new(handler),
-            Arc::new(storage),
-        ))
+        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        if let Some(streaming) = streaming {
+            runtime = runtime.with_streaming(streaming);
+        }
+        Ok(runtime)
     }
 
     /// Create storage from configuration with custom migrations
@@ -377,6 +405,7 @@ where
         migrations: &'static [&'static str],
     ) -> Result<AgentRuntime<H, AutoStorage>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
+        let streaming = self.streaming;
 
         let storage = match &self.config.server.storage {
             StorageConfig::InMemory => {
@@ -425,19 +454,23 @@ where
                 )));
             }
 
-            return Ok(AgentRuntime::with_mcp_client(
+            let mut runtime = AgentRuntime::with_mcp_client(
                 self.config,
                 Arc::new(handler),
                 Arc::new(storage),
                 mcp_client,
-            ));
+            );
+            if let Some(streaming) = streaming {
+                runtime = runtime.with_streaming(streaming);
+            }
+            return Ok(runtime);
         }
 
-        Ok(AgentRuntime::new(
-            self.config,
-            Arc::new(handler),
-            Arc::new(storage),
-        ))
+        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        if let Some(streaming) = streaming {
+            runtime = runtime.with_streaming(streaming);
+        }
+        Ok(runtime)
     }
 }
 

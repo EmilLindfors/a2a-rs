@@ -122,5 +122,12 @@ name = "mcp_server_agent"
 path = "examples/mcp_server_agent.rs"
 required-features = ["mcp-server"]
 
+# Kitchen-sink example: TOML config + optional LLM tool-calling + MCP tool
+# consumption (McpToA2ABridge) + live SSE streaming + native task lifecycle.
+[[example]]
+name = "complex_agent"
+path = "examples/complex_agent.rs"
+required-features = ["mcp-server"]
+
 
 

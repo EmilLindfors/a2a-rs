@@ -84,19 +84,21 @@ pub mod observability;
 pub use domain::{
     A2AError, AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension, AgentInterface,
     AgentProvider, AgentSkill, Artifact, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    ContextId, DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow,
-    GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams, ListTasksParams,
-    ListTasksResult, Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part,
-    PushConfigId, PushNotificationAuthenticationInfo, Role, SecurityScheme, Task,
-    TaskArtifactUpdateEvent, TaskId, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-    TaskSendParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
+    ContextId, DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow, ErrorDetail, ErrorInfo,
+    FieldViolation, GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams,
+    ListTasksParams, ListTasksResult, Message, MessageSendConfiguration, MessageSendParams,
+    OAuthFlows, Part, PushConfigId, PushNotificationAuthenticationInfo, Result, Role,
+    SecurityScheme, Task, TaskArtifactUpdateEvent, TaskId, TaskIdParams,
+    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    TaskStatusUpdateEvent, VersionedTask,
 };
 
 // Port traits for better separation of concerns
 pub use port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier,
     AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery,
-    NoopPushNotifier, StreamItem, StreamingSubscriber, Transport, UpdateEvent,
+    AsyncTaskVersioning, CallContext, CallInterceptor, CallSide, NoopPushNotifier, StreamItem,
+    StreamingSubscriber, Transport, UpdateEvent,
 };
 
 #[cfg(feature = "http-client")]
@@ -129,3 +131,6 @@ pub use adapter::{ApiKeyAuthenticator, BearerTokenAuthenticator, NoopAuthenticat
 pub use adapter::{JwtAuthenticator, OAuth2Authenticator, OpenIdConnectAuthenticator};
 #[cfg(feature = "http-server")]
 pub use port::Authenticator;
+
+#[cfg(feature = "tracing")]
+pub use adapter::LoggingInterceptor;

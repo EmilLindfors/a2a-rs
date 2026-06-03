@@ -120,6 +120,84 @@ pub trait AsyncStreamingHandler: Send + Sync {
     }
 }
 
+/// Forwarding impl so a type-erased `Arc<dyn AsyncStreamingHandler>` can itself
+/// be passed wherever an `impl AsyncStreamingHandler` is expected (e.g.
+/// `TaskService::with_streaming_handler`). This lets a single shared streaming
+/// backend be injected into both a message handler and a transport adapter
+/// without naming its concrete type. Only the required methods are forwarded;
+/// the trait's default methods ride along on top of them.
+#[async_trait]
+impl AsyncStreamingHandler for std::sync::Arc<dyn AsyncStreamingHandler> {
+    async fn add_status_subscriber(
+        &self,
+        task_id: &str,
+        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
+    ) -> Result<String, A2AError> {
+        (**self).add_status_subscriber(task_id, subscriber).await
+    }
+
+    async fn add_artifact_subscriber(
+        &self,
+        task_id: &str,
+        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
+    ) -> Result<String, A2AError> {
+        (**self).add_artifact_subscriber(task_id, subscriber).await
+    }
+
+    async fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError> {
+        (**self).remove_subscription(subscription_id).await
+    }
+
+    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
+        (**self).remove_task_subscribers(task_id).await
+    }
+
+    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
+        (**self).get_subscriber_count(task_id).await
+    }
+
+    async fn broadcast_status_update(
+        &self,
+        task_id: &str,
+        update: TaskStatusUpdateEvent,
+    ) -> Result<(), A2AError> {
+        (**self).broadcast_status_update(task_id, update).await
+    }
+
+    async fn broadcast_artifact_update(
+        &self,
+        task_id: &str,
+        update: TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError> {
+        (**self).broadcast_artifact_update(task_id, update).await
+    }
+
+    async fn status_update_stream(
+        &self,
+        task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError>
+    {
+        (**self).status_update_stream(task_id).await
+    }
+
+    async fn artifact_update_stream(
+        &self,
+        task_id: &str,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>,
+        A2AError,
+    > {
+        (**self).artifact_update_stream(task_id).await
+    }
+
+    async fn combined_update_stream(
+        &self,
+        task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError> {
+        (**self).combined_update_stream(task_id).await
+    }
+}
+
 /// Union type for different kinds of updates that can be streamed
 #[derive(Debug, Clone)]
 pub enum UpdateEvent {

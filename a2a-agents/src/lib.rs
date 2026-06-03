@@ -83,14 +83,15 @@ pub mod traits;
 pub mod utils;
 
 // Example agent implementations
-// Note: Currently public for binaries/examples, will be private in Phase 3
+// Note: public for binaries/examples; intended to become private once agents
+// are extracted into their own crates.
 pub mod agents;
 
 // Convenience re-exports for the most commonly used types
 pub use core::{AgentBuilder, AgentConfig, AgentRuntime, BuildError, ConfigError, RuntimeError};
 pub use traits::{AgentPlugin, SkillDefinition};
 
-// Re-export the reimbursement agent for backward compatibility
-// (This will be removed in Phase 3 when agents are extracted)
+// Re-export the reimbursement agent as a convenience
+// (intended to be removed once agents are extracted into their own crates)
 #[cfg(feature = "reimbursement-agent")]
 pub use agents::reimbursement::ReimbursementHandler;

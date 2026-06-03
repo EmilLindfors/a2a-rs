@@ -1,12 +1,12 @@
 //! The task application service: use-case orchestration over the port traits.
 //!
-//! `TaskService` is the **inner** half of the split described in
-//! `REFACTORING_PLAN.md` §4.2. It owns the ports (`Arc<dyn …>`), orchestrates
-//! them, and speaks only the domain vocabulary (`Task`, `Message`, `TaskId`,
-//! `A2AError`). It knows nothing about ConnectRPC, `buffa` views, or wire
-//! error codes — that glue lives in the transport adapter
-//! ([`ConnectRpcAdapter`](crate::adapter::ConnectRpcAdapter)), which
-//! decodes wire requests into these domain calls and re-encodes the results.
+//! `TaskService` is the **inner** half of the service/transport split: it owns
+//! the ports (`Arc<dyn …>`), orchestrates them, and speaks only the domain
+//! vocabulary (`Task`, `Message`, `TaskId`, `A2AError`). It knows nothing about
+//! ConnectRPC, `buffa` views, or wire error codes — that glue lives in the
+//! transport adapter ([`ConnectRpcAdapter`](crate::adapter::ConnectRpcAdapter)),
+//! which decodes wire requests into these domain calls and re-encodes the
+//! results.
 //!
 //! Because the service holds both the lifecycle and streaming ports it exposes
 //! them as mixin ingredients ([`HasTaskLifecycle`], [`HasStreaming`]) and so
@@ -257,8 +257,8 @@ impl TaskService {
 }
 
 // The service is the composed assembly holding both the lifecycle and streaming
-// ports, so it exposes them as mixin ingredients (see `REFACTORING_PLAN.md` §4.1
-// and `.claude/rules/hexagonal_architecture.md` §9). This grants it the
+// ports, so it exposes them as mixin ingredients (see
+// `.claude/rules/hexagonal_architecture.md` §9). This grants it the
 // `TaskStatusBroadcast::update_and_broadcast` "commit then announce" capability
 // for free, without coupling either port to the other. The accessors return
 // `&dyn` **ports**, never the concrete adapters behind them.

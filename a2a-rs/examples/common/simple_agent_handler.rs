@@ -39,7 +39,7 @@ pub struct SimpleAgentHandler {
     /// Task storage (persistence + push-config CRUD)
     storage: Arc<InMemoryTaskStorage>,
     /// Dedicated streaming fan-out, shared between this handler's broadcasts and
-    /// its subscriber registry (Phase 4 struct-split).
+    /// its subscriber registry.
     streaming: InMemoryStreamingHandler,
 }
 

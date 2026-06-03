@@ -12,6 +12,7 @@
 pub mod auth;
 pub mod business;
 pub mod error;
+pub mod interceptor;
 pub mod storage;
 #[cfg(feature = "server")]
 pub mod streaming;
@@ -55,6 +56,10 @@ pub use transport::connectrpc::ConnectRpcAdapter;
 pub use transport::http::HttpServer;
 #[cfg(feature = "jsonrpc-server")]
 pub use transport::jsonrpc::{JsonRpcAdapter, jsonrpc_router, rest_router};
+
+// Interceptor re-exports
+#[cfg(feature = "tracing")]
+pub use interceptor::LoggingInterceptor;
 
 // Error re-exports
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]

@@ -25,10 +25,12 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
     A2AError, ContextId, Message, Task, TaskPushNotificationConfig, TaskId, TaskState, TaskStatus,
+    VersionedTask,
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
     AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle, AsyncTaskQuery,
+    AsyncTaskVersioning,
 };
 
 #[cfg(feature = "sqlx-storage")]
@@ -37,7 +39,7 @@ use std::sync::Arc;
 #[cfg(feature = "sqlx-storage")]
 /// SQLx-based task storage for persistent storage.
 ///
-/// Persistence-only since the Phase 4 struct-split: streaming fan-out lives in
+/// Persistence-only: streaming fan-out lives in
 /// [`InMemoryStreamingHandler`](crate::adapter::InMemoryStreamingHandler) and
 /// push-webhook delivery behind the [`AsyncPushNotifier`] port (handed out via
 /// [`push_notifier`](Self::push_notifier)). The store still owns push-config
@@ -170,6 +172,19 @@ impl SqlxTaskStorage {
         .execute(pool)
         .await
         .map_err(|e| A2AError::DatabaseError(format!("Migration 002 failed: {}", e)))?;
+
+        // Migration 003 is an `ALTER TABLE ADD COLUMN`, which SQLite cannot
+        // express idempotently. Since base migrations re-run on every `new()`,
+        // tolerate the "duplicate column name" error on an already-migrated DB.
+        if let Err(e) = sqlx::query(include_str!("../../../migrations/003_task_version.sql"))
+            .execute(pool)
+            .await
+        {
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                return Err(A2AError::DatabaseError(format!("Migration 003 failed: {msg}")));
+            }
+        }
 
         Ok(())
     }
@@ -445,8 +460,8 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
             TaskState::Unknown => "unknown",
         };
 
-        // Update task in database
-        let result = sqlx::query("UPDATE tasks SET status_state = ? WHERE id = ?")
+        // Update task in database (bump the optimistic-concurrency version)
+        let result = sqlx::query("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?")
             .bind(state_str)
             .bind(task_id)
             .execute(&self.pool)
@@ -461,8 +476,8 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         self.add_to_history(task_id, state, message).await?;
 
         // Persistence only: announcing the change to streaming subscribers is
-        // the orchestration layer's job (see `TaskStatusBroadcast` and
-        // `REFACTORING_PLAN.md` §4.0.2), not a side effect of the mutator.
+        // the orchestration layer's job (see `TaskStatusBroadcast`), not a side
+        // effect of the mutator.
         self.get(id, None).await
     }
 
@@ -524,8 +539,8 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         cancel_message.task_id = task_id.to_string();
         cancel_message.context_id = task.context_id.clone();
 
-        // Update task status
-        sqlx::query("UPDATE tasks SET status_state = ? WHERE id = ?")
+        // Update task status (bump the optimistic-concurrency version)
+        sqlx::query("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?")
             .bind("canceled")
             .bind(task_id)
             .execute(&self.pool)
@@ -537,8 +552,98 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
             .await?;
 
         // Persistence only: the orchestration layer announces the cancellation
-        // to streaming subscribers (see `REFACTORING_PLAN.md` §4.0.2).
+        // to streaming subscribers (see `TaskStatusBroadcast`).
         self.get(id, None).await
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl SqlxTaskStorage {
+    /// Read the current stored version of a task, or `None` if it doesn't exist.
+    async fn current_version(&self, task_id: &str) -> Result<Option<u64>, A2AError> {
+        let row = sqlx::query("SELECT version FROM tasks WHERE id = ?")
+            .bind(task_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to read task version: {}", e)))?;
+        match row {
+            Some(row) => {
+                let v: i64 = row.try_get("version").map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to get version column: {}", e))
+                })?;
+                Ok(Some(v as u64))
+            }
+            None => Ok(None),
+        }
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+#[async_trait]
+impl AsyncTaskVersioning for SqlxTaskStorage {
+    async fn version(&self, id: &TaskId) -> Result<u64, A2AError> {
+        self.current_version(id.as_str())
+            .await?
+            .ok_or_else(|| A2AError::TaskNotFound(id.as_str().to_string()))
+    }
+
+    async fn get_versioned(
+        &self,
+        id: &TaskId,
+        history_length: Option<u32>,
+    ) -> Result<VersionedTask, A2AError> {
+        let task = self.get(id, history_length).await?;
+        let version = self.version(id).await?;
+        Ok(VersionedTask::new(task, version))
+    }
+
+    async fn update_status_checked(
+        &self,
+        id: &TaskId,
+        expected: u64,
+        state: TaskState,
+        message: Option<Message>,
+    ) -> Result<VersionedTask, A2AError> {
+        let task_id = id.as_str();
+        let state_str = match state {
+            TaskState::Submitted => "submitted",
+            TaskState::Working => "working",
+            TaskState::InputRequired => "input-required",
+            TaskState::Completed => "completed",
+            TaskState::Canceled => "canceled",
+            TaskState::Failed => "failed",
+            TaskState::Rejected => "rejected",
+            TaskState::AuthRequired => "auth-required",
+            TaskState::Unknown => "unknown",
+        };
+
+        // Conditional update: SQLite applies it atomically, so the row count
+        // tells us whether the version matched without a separate lock.
+        let result = sqlx::query(
+            "UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ? AND version = ?",
+        )
+        .bind(state_str)
+        .bind(task_id)
+        .bind(expected as i64)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| A2AError::DatabaseError(format!("Failed to update task status: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            // No row matched: either the task is gone or the version moved on.
+            return match self.current_version(task_id).await? {
+                Some(actual) => Err(A2AError::VersionConflict {
+                    id: task_id.to_string(),
+                    expected,
+                    actual,
+                }),
+                None => Err(A2AError::TaskNotFound(task_id.to_string())),
+            };
+        }
+
+        self.add_to_history(task_id, state, message).await?;
+        let task = self.get(id, None).await?;
+        Ok(VersionedTask::new(task, expected + 1))
     }
 }
 

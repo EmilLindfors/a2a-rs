@@ -10,11 +10,11 @@
 //!
 //! This split keeps the broadcasting in one place: because the handler holds
 //! both the lifecycle and streaming ports it hosts the [`TaskStatusBroadcast`]
-//! mixin (`REFACTORING_PLAN.md` §4.1), so every transition it drives — the
-//! incoming-message append *and* the responder's reply — goes through
-//! [`update_and_broadcast`], announcing to streaming subscribers. Storage
-//! mutators no longer self-broadcast (§4.0.2), so a `Responder` author never has
-//! to think about streaming at all.
+//! mixin, so every transition it drives — the incoming-message append *and* the
+//! responder's reply — goes through [`update_and_broadcast`], announcing to
+//! streaming subscribers. Storage mutators are persistence-only and do not
+//! self-broadcast, so a `Responder` author never has to think about streaming
+//! at all.
 //!
 //! `Responder` is synchronous-shaped (`message + task → reply + state`); agents
 //! that need "acknowledge now, finish later" semantics implement
@@ -89,10 +89,10 @@ impl Responder for EchoResponder {
 /// A message handler that owns task-lifecycle plumbing and streaming
 /// announcements, delegating the reply to an injected [`Responder`].
 ///
-/// Holds its ports as `Arc<dyn …>` trait objects (the composition edge — see
-/// `REFACTORING_PLAN.md` Phase 2), so the handler carries no generic parameter.
-/// Because it holds both the lifecycle and streaming ports it is a host for the
-/// [`TaskStatusBroadcast`] capability mixin (§4.1).
+/// Holds its ports as `Arc<dyn …>` trait objects (injected at the composition
+/// edge), so the handler carries no generic parameter. Because it holds both the
+/// lifecycle and streaming ports it is a host for the [`TaskStatusBroadcast`]
+/// capability mixin.
 #[derive(Clone)]
 pub struct ResponderMessageHandler {
     /// Task lifecycle port for handling task operations

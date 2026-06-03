@@ -37,8 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map_err(|e| format!("Failed to create storage: {}", e))?;
 
     // Create the handler with a dedicated streaming handler and the store's
-    // push notifier (streaming and push are separate ports since the Phase 4
-    // struct-split).
+    // push notifier (streaming and push are separate ports from storage).
     let streaming = a2a_rs::InMemoryStreamingHandler::new();
     let push = storage.push_notifier();
     let handler = ReimbursementHandler::new(storage.clone(), streaming, push);

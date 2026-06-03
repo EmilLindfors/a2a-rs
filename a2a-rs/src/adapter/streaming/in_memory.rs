@@ -1,9 +1,8 @@
 //! In-memory streaming fan-out adapter.
 //!
-//! `InMemoryStreamingHandler` is the [`AsyncStreamingHandler`] adapter extracted
-//! out of the storage structs (`REFACTORING_PLAN.md` §4.3, final struct-split).
-//! It owns **only** the per-task subscriber registry and fans broadcast events
-//! out to those subscribers. It deliberately does *not*:
+//! `InMemoryStreamingHandler` is the [`AsyncStreamingHandler`] adapter. It owns
+//! **only** the per-task subscriber registry and fans broadcast events out to
+//! those subscribers. It deliberately does *not*:
 //!
 //! - touch the task store (so it cannot replay current task state on subscribe —
 //!   the initial `Task` snapshot is delivered by the application service before
@@ -48,8 +47,7 @@ impl TaskSubscribers {
 /// best-effort fan-out.
 ///
 /// Cloning shares the underlying subscriber map (an `Arc<Mutex<…>>`), so a clone
-/// observes the same subscriptions — the same sharing semantics the storage
-/// adapters had before the split.
+/// observes the same subscriptions.
 #[derive(Clone, Default)]
 pub struct InMemoryStreamingHandler {
     subscribers: Arc<Mutex<HashMap<String, TaskSubscribers>>>,

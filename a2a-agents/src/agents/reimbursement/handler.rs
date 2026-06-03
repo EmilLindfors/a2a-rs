@@ -98,10 +98,10 @@ pub struct ReimbursementHandler {
 // The handler holds both the lifecycle and streaming ports, so it hosts the
 // `TaskStatusBroadcast` mixin (see `.claude/rules/hexagonal_architecture.md`
 // §9): every status transition it drives goes through `update_and_broadcast`,
-// announcing the change to streaming subscribers. Storage no longer
-// self-broadcasts on mutation (REFACTORING_PLAN.md §4.0.2), so without these
-// accessors the agent's updates — including the background worker's final
-// state — would silently stop reaching subscribers and push notifications.
+// announcing the change to streaming subscribers. Storage is persistence-only
+// and does not self-broadcast on mutation, so without these accessors the
+// agent's updates — including the background worker's final state — would
+// silently stop reaching subscribers and push notifications.
 impl HasTaskLifecycle for ReimbursementHandler {
     fn lifecycle(&self) -> &dyn a2a_rs::port::AsyncTaskLifecycle {
         self.task_lifecycle.as_ref()

@@ -10,7 +10,8 @@ use a2a_rs::adapter::{
     BearerTokenAuthenticator, ConnectRpcAdapter, HttpServer, SimpleAgentInfo,
 };
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncTaskLifecycle, AsyncTaskQuery,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
+    AsyncTaskQuery,
 };
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -27,6 +28,11 @@ pub struct AgentRuntime<H, S> {
     config: AgentConfig,
     handler: Arc<H>,
     storage: Arc<S>,
+    /// Optional shared streaming backend. When set, it is injected into the
+    /// transport adapter so SSE subscribers see the same broadcasts the handler
+    /// emits (e.g. via the `TaskStatusBroadcast` mixin). Without it, the adapter
+    /// defaults to a no-op streaming handler and updates never reach clients.
+    streaming: Option<Arc<dyn AsyncStreamingHandler>>,
     #[cfg(feature = "mcp-client")]
     mcp_client: Option<McpClientManager>,
 }
@@ -48,6 +54,7 @@ where
             config,
             handler,
             storage,
+            streaming: None,
             #[cfg(feature = "mcp-client")]
             mcp_client: None,
         }
@@ -65,8 +72,20 @@ where
             config,
             handler,
             storage,
+            streaming: None,
             mcp_client: Some(mcp_client),
         }
+    }
+
+    /// Attach a shared streaming backend.
+    ///
+    /// Pass the *same* [`AsyncStreamingHandler`] instance the message handler
+    /// broadcasts to (clones of an `InMemoryStreamingHandler` share their
+    /// subscriber registry). The runtime injects it into the transport adapter
+    /// so `tasks/subscribe` SSE streams observe those broadcasts.
+    pub fn with_streaming(mut self, streaming: Arc<dyn AsyncStreamingHandler>) -> Self {
+        self.streaming = Some(streaming);
+        self
     }
 
     /// Get the MCP client manager (if enabled)
@@ -258,12 +277,20 @@ where
         );
         let agent_info = self.build_agent_info(base_url);
 
-        let processor = ConnectRpcAdapter::new(
+        let mut processor = ConnectRpcAdapter::new(
             (*self.handler).clone(),
             (*self.storage).clone(),
             (*self.storage).clone(),
             agent_info.clone(),
         );
+
+        // Share the handler's streaming backend with the transport so SSE
+        // subscribers observe the same broadcasts. Without this the adapter
+        // keeps its default no-op streaming handler and updates never surface.
+        if let Some(streaming) = &self.streaming {
+            processor = processor.with_streaming_handler(streaming.clone());
+            info!("📡 Streaming backend wired into transport (SSE subscribers live)");
+        }
 
         let bind_address = format!(
             "{}:{}",

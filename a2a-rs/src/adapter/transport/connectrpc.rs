@@ -1,15 +1,14 @@
 //! The ConnectRPC transport adapter.
 //!
-//! `ConnectRpcAdapter` is the **outer** half of the split described in
-//! `REFACTORING_PLAN.md` §4.2: a thin transport adapter that implements the
-//! generated [`A2aService`] surface. Its only job is to decode `buffa` wire
-//! views into domain values, delegate to the inner [`TaskService`], and re-encode
-//! the domain results (and map [`A2AError`] onto ConnectRPC error codes). All
-//! use-case orchestration lives in [`TaskService`]; this layer holds no port
-//! traits directly.
+//! `ConnectRpcAdapter` is the **outer** half of the service/transport split: a
+//! thin transport adapter that implements the generated [`A2aService`] surface.
+//! Its only job is to decode `buffa` wire views into domain values, delegate to
+//! the inner [`TaskService`], and re-encode the domain results (and map
+//! [`A2AError`] onto ConnectRPC error codes). All use-case orchestration lives
+//! in [`TaskService`]; this layer holds no port traits directly.
 //!
-//! The public constructors (`new`, `with_handler`, `with_streaming_handler`) are
-//! unchanged from before the split — they build the inner service and wrap it.
+//! The public constructors (`new`, `with_handler`, `with_streaming_handler`)
+//! each build the inner service and wrap it.
 
 use async_trait::async_trait;
 use buffa::Enumeration;

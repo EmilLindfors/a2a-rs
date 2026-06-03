@@ -6,7 +6,7 @@ use crate::{
     Message,
     domain::{
         A2AError, ContextId, ListTasksParams, ListTasksResult, Task, TaskId, TaskIdParams,
-        TaskQueryParams, TaskState,
+        TaskQueryParams, TaskState, VersionedTask,
     },
 };
 
@@ -48,6 +48,52 @@ pub trait AsyncTaskLifecycle: Send + Sync {
 pub trait AsyncTaskQuery: Send + Sync {
     /// List tasks with filtering and pagination (A2A v1.0.0 `tasks/list`).
     async fn list(&self, params: &ListTasksParams) -> Result<ListTasksResult, A2AError>;
+}
+
+/// Optimistic-concurrency control over task mutations.
+///
+/// A distinct capability from [`AsyncTaskLifecycle`] (hex rule 2 — narrow ports):
+/// a store that needs lost-update protection implements this, while the plain
+/// lifecycle path stays version-free for callers that don't. The version is a
+/// monotonic counter the store bumps on **every** successful mutation, including
+/// the unversioned [`AsyncTaskLifecycle`] writes — so the two views never drift.
+///
+/// The classic read-modify-write loop:
+///
+/// ```ignore
+/// let VersionedTask { task, version } = store.get_versioned(&id, None).await?;
+/// // … decide the next state from `task` …
+/// match store.update_status_checked(&id, version, next_state, msg).await {
+///     Ok(updated) => { /* committed at updated.version */ }
+///     Err(A2AError::VersionConflict { .. }) => { /* re-read and retry */ }
+///     Err(e) => return Err(e),
+/// }
+/// ```
+#[async_trait]
+pub trait AsyncTaskVersioning: Send + Sync {
+    /// Current stored version of a task. Bumped on every successful mutation.
+    async fn version(&self, id: &TaskId) -> Result<u64, A2AError>;
+
+    /// Fetch a task together with its current version (history-limited as in
+    /// [`AsyncTaskLifecycle::get`]).
+    async fn get_versioned(
+        &self,
+        id: &TaskId,
+        history_length: Option<u32>,
+    ) -> Result<VersionedTask, A2AError>;
+
+    /// Update status only if the stored version equals `expected`.
+    ///
+    /// On success returns the mutated task and its newly bumped version. If the
+    /// stored version has advanced past `expected`, fails with
+    /// [`A2AError::VersionConflict`] and leaves the task untouched.
+    async fn update_status_checked(
+        &self,
+        id: &TaskId,
+        expected: u64,
+        state: TaskState,
+        message: Option<Message>,
+    ) -> Result<VersionedTask, A2AError>;
 }
 
 /// Validation conveniences over [`AsyncTaskLifecycle`].

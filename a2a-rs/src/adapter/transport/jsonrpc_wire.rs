@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::domain::A2AError;
+use crate::domain::{A2AError, ErrorDetail, ErrorInfo};
 
 /// A2A JSON-RPC method names (PascalCase, per spec).
 pub mod methods {
@@ -50,6 +50,9 @@ pub mod error_code {
     pub const CONTENT_TYPE_NOT_SUPPORTED: i32 = -32005;
     pub const INVALID_AGENT_RESPONSE: i32 = -32006;
     pub const EXTENDED_CARD_NOT_CONFIGURED: i32 = -32007;
+
+    /// Custom application range (outside the spec's reserved codes).
+    pub const VERSION_CONFLICT: i32 = -32101;
 }
 
 /// JSON-RPC request envelope (server deserializes; client serializes).
@@ -104,57 +107,49 @@ pub struct JsonRpcError {
     pub data: Option<Value>,
 }
 
-/// Map a domain [`A2AError`] onto a JSON-RPC error object.
-///
-/// This is the JSON-RPC analogue of `connectrpc::map_err`. For
-/// [`A2AError::ValidationError`] we surface a Google-RPC-style `BadRequest` in
-/// `data` so clients can read field violations.
-pub fn a2a_to_jsonrpc(err: &A2AError) -> JsonRpcError {
+/// The JSON-RPC error code for a domain [`A2AError`].
+fn a2a_error_code(err: &A2AError) -> i32 {
     use error_code::*;
     match err {
-        A2AError::TaskNotFound(msg) => JsonRpcError {
-            code: TASK_NOT_FOUND,
-            message: msg.clone(),
-            data: None,
-        },
-        A2AError::InvalidParams(msg) => JsonRpcError {
-            code: INVALID_PARAMS,
-            message: msg.clone(),
-            data: None,
-        },
-        A2AError::ValidationError { field, message } => JsonRpcError {
-            code: INVALID_PARAMS,
-            message: format!("{field}: {message}"),
-            data: Some(serde_json::json!([{
-                "@type": "type.googleapis.com/google.rpc.BadRequest",
-                "fieldViolations": [{ "field": field, "description": message }],
-            }])),
-        },
-        A2AError::UnsupportedOperation(msg) => JsonRpcError {
-            code: UNSUPPORTED_OPERATION,
-            message: msg.clone(),
-            data: None,
-        },
-        A2AError::AuthenticatedExtendedCardNotConfigured => JsonRpcError {
-            code: EXTENDED_CARD_NOT_CONFIGURED,
-            message: "Authenticated extended card not configured".to_string(),
-            data: None,
-        },
-        A2AError::MethodNotFound(msg) => JsonRpcError {
-            code: METHOD_NOT_FOUND,
-            message: msg.clone(),
-            data: None,
-        },
-        other => JsonRpcError {
-            code: INTERNAL_ERROR,
-            message: other.to_string(),
-            data: None,
-        },
+        A2AError::JsonRpc { code, .. } => *code,
+        A2AError::JsonParse(_) => PARSE_ERROR,
+        A2AError::InvalidRequest(_) => INVALID_REQUEST,
+        A2AError::MethodNotFound(_) => METHOD_NOT_FOUND,
+        A2AError::InvalidParams(_) | A2AError::ValidationError { .. } => INVALID_PARAMS,
+        A2AError::TaskNotFound(_) => TASK_NOT_FOUND,
+        A2AError::TaskNotCancelable(_) => TASK_NOT_CANCELABLE,
+        A2AError::PushNotificationNotSupported => PUSH_NOTIFICATION_NOT_SUPPORTED,
+        A2AError::UnsupportedOperation(_) => UNSUPPORTED_OPERATION,
+        A2AError::ContentTypeNotSupported(_) => CONTENT_TYPE_NOT_SUPPORTED,
+        A2AError::InvalidAgentResponse(_) => INVALID_AGENT_RESPONSE,
+        A2AError::AuthenticatedExtendedCardNotConfigured => EXTENDED_CARD_NOT_CONFIGURED,
+        A2AError::VersionConflict { .. } => VERSION_CONFLICT,
+        _ => INTERNAL_ERROR,
     }
+}
+
+/// Map a domain [`A2AError`] onto a JSON-RPC error object.
+///
+/// This is the JSON-RPC analogue of `connectrpc::map_err`. The `data` array
+/// carries the error's [typed details](A2AError::error_details): a Google-RPC
+/// `BadRequest` for validation failures, plus an `ErrorInfo` reason code on every
+/// error so clients can branch on a stable machine code rather than the message
+/// string. [`jsonrpc_to_a2a`] reverses this.
+pub fn a2a_to_jsonrpc(err: &A2AError) -> JsonRpcError {
+    let message = match err {
+        A2AError::ValidationError { field, message } => format!("{field}: {message}"),
+        other => other.to_string(),
+    };
+    let details = err.error_details();
+    let data = (!details.is_empty()).then(|| serde_json::json!(details));
+    JsonRpcError { code: a2a_error_code(err), message, data }
 }
 
 /// Map a JSON-RPC error object back onto a domain [`A2AError`] — the inverse of
 /// [`a2a_to_jsonrpc`], used by the client to reconstruct typed errors.
+///
+/// A [`A2AError::VersionConflict`] is rebuilt from its `ErrorInfo` metadata when
+/// present, so the typed expected/actual versions survive the round-trip.
 pub fn jsonrpc_to_a2a(err: &JsonRpcError) -> A2AError {
     use error_code::*;
     match err.code {
@@ -163,6 +158,74 @@ pub fn jsonrpc_to_a2a(err: &JsonRpcError) -> A2AError {
         METHOD_NOT_FOUND => A2AError::MethodNotFound(err.message.clone()),
         UNSUPPORTED_OPERATION => A2AError::UnsupportedOperation(err.message.clone()),
         EXTENDED_CARD_NOT_CONFIGURED => A2AError::AuthenticatedExtendedCardNotConfigured,
+        VERSION_CONFLICT => version_conflict_from_data(err)
+            .unwrap_or_else(|| A2AError::Internal(err.message.clone())),
         code => A2AError::JsonRpc { code, message: err.message.clone(), data: err.data.clone() },
+    }
+}
+
+/// Reconstruct a [`A2AError::VersionConflict`] from the `ErrorInfo` metadata in a
+/// wire error's `data` array, if it carries the expected/actual versions.
+fn version_conflict_from_data(err: &JsonRpcError) -> Option<A2AError> {
+    let details: Vec<ErrorDetail> = serde_json::from_value(err.data.clone()?).ok()?;
+    let ErrorInfo { metadata, .. } = details.into_iter().find_map(|d| match d {
+        ErrorDetail::ErrorInfo(info) => Some(info),
+        _ => None,
+    })?;
+    Some(A2AError::VersionConflict {
+        id: metadata.get("task_id").cloned().unwrap_or_default(),
+        expected: metadata.get("expected").and_then(|s| s.parse().ok())?,
+        actual: metadata.get("actual").and_then(|s| s.parse().ok())?,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validation_error_surfaces_bad_request_details() {
+        let err = A2AError::ValidationError {
+            field: "history_length".to_string(),
+            message: "too large".to_string(),
+        };
+        let wire = a2a_to_jsonrpc(&err);
+        assert_eq!(wire.code, error_code::INVALID_PARAMS);
+        let data = wire.data.expect("validation errors carry data");
+        // First detail is a Google-RPC BadRequest naming the field.
+        assert_eq!(
+            data[0]["@type"],
+            "type.googleapis.com/google.rpc.BadRequest"
+        );
+        assert_eq!(data[0]["fieldViolations"][0]["field"], "history_length");
+        // Second detail is the stable reason code.
+        assert_eq!(data[1]["reason"], "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn version_conflict_round_trips_through_the_wire() {
+        let err = A2AError::VersionConflict {
+            id: "task-42".to_string(),
+            expected: 3,
+            actual: 5,
+        };
+        let wire = a2a_to_jsonrpc(&err);
+        assert_eq!(wire.code, error_code::VERSION_CONFLICT);
+        match jsonrpc_to_a2a(&wire) {
+            A2AError::VersionConflict { id, expected, actual } => {
+                assert_eq!(id, "task-42");
+                assert_eq!(expected, 3);
+                assert_eq!(actual, 5);
+            }
+            other => panic!("expected VersionConflict, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_error_carries_a_reason_code() {
+        let wire = a2a_to_jsonrpc(&A2AError::TaskNotFound("x".to_string()));
+        let data = wire.data.expect("errors carry an ErrorInfo reason");
+        assert_eq!(data[0]["reason"], "TASK_NOT_FOUND");
+        assert_eq!(data[0]["domain"], "a2a-rs");
     }
 }

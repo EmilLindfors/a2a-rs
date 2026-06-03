@@ -15,5 +15,5 @@ pub use task::{
     DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
     ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult,
     MessageSendConfiguration, MessageSendParams, Task, TaskIdParams, TaskPushNotificationConfig,
-    TaskQueryParams, TaskSendParams, TaskState, TaskStateExt, TaskStatus,
+    TaskQueryParams, TaskSendParams, TaskState, TaskStateExt, TaskStatus, VersionedTask,
 };

@@ -15,6 +15,7 @@
 // Business capability ports (focused domain interfaces)
 pub mod authenticator;
 pub mod client;
+pub mod interceptor;
 pub mod message_handler;
 pub mod notification_manager;
 pub mod streaming_handler;
@@ -25,6 +26,7 @@ pub use authenticator::{
     AuthContext, AuthContextExtractor, AuthPrincipal, Authenticator, CompositeAuthenticator,
 };
 pub use client::{StreamItem, Transport};
+pub use interceptor::{CallContext, CallInterceptor, CallSide, run_after, run_before};
 pub use message_handler::AsyncMessageHandler;
 pub use notification_manager::{
     AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier, NoopPushNotifier,
@@ -32,4 +34,6 @@ pub use notification_manager::{
 pub use streaming_handler::{
     AsyncStreamingHandler, Subscriber as StreamingSubscriber, UpdateEvent,
 };
-pub use task_manager::{AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery};
+pub use task_manager::{
+    AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery, AsyncTaskVersioning,
+};

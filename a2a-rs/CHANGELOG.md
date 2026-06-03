@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`impl AsyncStreamingHandler for Arc<dyn AsyncStreamingHandler>`** — a
+  forwarding blanket impl so a type-erased, shared streaming backend can be
+  passed wherever an `impl AsyncStreamingHandler` is expected (e.g.
+  `TaskService::with_streaming_handler`). This lets one streaming instance be
+  injected into both a message handler and a transport adapter without naming
+  its concrete type, so handler broadcasts and SSE subscribers share a registry.
+
 ### Breaking Changes — Port capability decomposition
 
 The server-side `AsyncTaskManager` port trait carried 17 methods spanning four

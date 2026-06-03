@@ -17,6 +17,27 @@
 > The refactor is done bar one idiomatic-modernization straggler (the `Result<T>`
 > alias, item 4 below). The roadmap sections track what's left for 0.4 and what's
 > deferred to 0.5; the older backlog further down is unchanged and still open.
+>
+> **Update (0.4, cherry-picked from the 0.5 backlog).** Three of the four 0.5
+> "cheap wins" from `OFFICIAL_SDK_COMPARISON.md` §4.4 landed in 0.4 and are green
+> under `clippy --workspace --all-features --all-targets -D warnings`,
+> `--no-default-features`, and the full test suite:
+> **typed error details** (`ErrorInfo`/`FieldViolation`/`BadRequest` in the
+> JSON-RPC `error.data` array, round-tripped by the client), **`TaskStore`
+> optimistic-concurrency versioning** (the `AsyncTaskVersioning` port + `u64`
+> versions in both the in-memory and sqlx adapters, with a `VersionConflict`
+> error), and the **`CallInterceptor` before/after chain** on both the JSON-RPC
+> client and server (plus a built-in `LoggingInterceptor`). Multi-tenancy stays
+> deferred — see the 0.5 section.
+>
+> **Update (2026-06-02).** The **Complex Agent Example** ("kitchen-sink") landed:
+> `a2a-agents/examples/complex_agent.rs` (TOML + optional LLM tool-calling +
+> `McpToA2ABridge` + live SSE streaming + native tasks). Building it surfaced and
+> fixed a real framework gap — the `AgentBuilder`/`AgentRuntime` path defaulted
+> the transport to a **no-op streaming handler**, so handler broadcasts never
+> reached `tasks/subscribe` SSE clients. New `with_streaming` builder/runtime
+> hooks (backed by a blanket `impl AsyncStreamingHandler for Arc<dyn …>`) close
+> it. See the Complex Agent Example section below.
 
 ## 0.4 — remaining to finish the release
 
@@ -29,10 +50,15 @@ Round out the transport/interop story the rest of 0.4 already tells.
 
 ## 0.5 — deferred (by weight)
 
-- **`TaskStore` versioning (`u64` optimistic concurrency)** — `OFFICIAL_SDK_COMPARISON.md` §4.4. Touches the storage port + every impl.
-- **`CallInterceptor` before/after middleware (client + server)** — §4.4. A new cross-cutting abstraction; design-heavy.
-- **Multi-tenancy** — thread a `tenant` through requests/storage (§4.4/§7). Currently only placeholder fields exist.
-- **Richer typed error details** — Google-RPC `ErrorInfo`/`FieldViolation` beyond the current `BadRequest`-on-validation in `error.data`.
+Landed early in 0.4 (struck through; see the status note at the top):
+
+- ~~**`TaskStore` versioning (`u64` optimistic concurrency)**~~ — done: `AsyncTaskVersioning` port (`version` / `get_versioned` / `update_status_checked`), `VersionedTask` domain type, `A2AError::VersionConflict`, implemented in both `InMemoryTaskStorage` and `SqlxTaskStorage` (migration `003_task_version.sql`). Every mutation — versioned or not — bumps the counter so the views never drift.
+- ~~**`CallInterceptor` before/after middleware (client + server)**~~ — done: `port::interceptor` (`CallInterceptor`/`CallContext`/`CallSide` + `run_before`/`run_after`), wired into `JsonRpcClient` and `JsonRpcAdapter` (covers JSON-RPC unary, REST, and the streaming open), plus a built-in `LoggingInterceptor`.
+- ~~**Richer typed error details**~~ — done: `domain::error_details` (`ErrorDetail`/`ErrorInfo`/`FieldViolation`), `A2AError::error_details()` + `reason_code()`, surfaced in the JSON-RPC `error.data` array (Google-RPC `BadRequest` for validation, an `ErrorInfo` reason on every error) and reconstructed by `jsonrpc_to_a2a`.
+
+Still deferred:
+
+- **Multi-tenancy** — thread a `tenant` through requests/storage (§4.4/§7). Currently only placeholder fields exist (`TaskPushNotificationConfig.tenant`, the proto `/{tenant}/…` routes). **Deferred to a focused 0.4.x** (decision 2026-06-01): it reshapes the storage/port/transport surface, so it warrants its own pass. Two viable shapes when picked up: **(a) edge tenant-routing** — a `TenantRouter` that holds per-tenant storage and resolves the tenant from the `/{tenant}/` path at the transport edge, keeping the domain/ports tenant-free (smallest blast radius, most hexagonal); **(b) per-request `tenant` param** threaded through every port method + transport extraction + storage scoping, matching the official SDK exactly (largest diff, touches every call site across all 6 crates).
 
 ## Agent Payments Protocol (AP2) Integration
 - Expand `a2a-ap2` crate to fully support AP2 primitives (Payment Request, Payment Receipt).
@@ -40,12 +66,39 @@ Round out the transport/interop story the rest of 0.4 already tells.
 - Add robust tests and error handling for AP2 flows.
 
 ## Complex Agent Example
-- Create a comprehensive "kitchen-sink" example showcasing all components:
-  - LLM Provider integration (OpenAI/Gemini).
-  - MCP tool bridging (`AgentToMcpBridge` & `McpToA2ABridge`).
-  - Streaming interactions to a Web Client (`a2a-client`).
-  - Declarative TOML configuration.
-  - A2A native tasks and progress tracking.
+
+**Landed (2026-06-02):** `a2a-agents/examples/complex_agent.rs` (+ `complex_agent.toml`),
+a "Research Assistant" kitchen-sink behind `--features mcp-server`. Builds
+clean, clippy-clean, boots and serves its agent card. It wires:
+  - ~~LLM Provider integration (OpenAI/Gemini)~~ — optional via `LlmProvider`
+    (`from_env`), with a deterministic rule-based fallback so it runs keyless.
+  - ~~MCP tool bridging (`McpToA2ABridge`)~~ — an in-process MCP tool server
+    (`add`/`multiply`/`word_count`) over `tokio::io::duplex`; the agent discovers
+    tools (`get_llm_tools`) and executes them (`execute_llm_tool_call`), and the
+    LLM path drives tool selection.
+  - ~~Streaming to a web client~~ — the handler broadcasts progress artifacts
+    through the `TaskStatusBroadcast` mixin and a shared `InMemoryStreamingHandler`.
+    **This exposed and fixed a real framework gap:** `AgentRuntime`'s transport
+    was built with `ConnectRpcAdapter::new(...)`, which defaults to a *no-op*
+    streaming handler — so handler broadcasts never reached `tasks/subscribe`
+    SSE clients. Fixed by adding `AgentBuilder::with_streaming` / `AgentRuntime::
+    with_streaming` (threaded into `ConnectRpcAdapter::with_streaming_handler`)
+    plus a blanket `impl AsyncStreamingHandler for Arc<dyn AsyncStreamingHandler>`
+    so a shared backend can be injected type-erased. The builder log now prints
+    "📡 Streaming backend wired into transport" when active.
+  - ~~Declarative TOML configuration~~ — identity, skills, transport, storage,
+    and the `streaming` flag all come from `complex_agent.toml`.
+  - ~~A2A native tasks and progress tracking~~ — every request advances a task
+    `Working` → `Completed`/`Failed` via the mixin.
+
+Remaining / optional follow-ups:
+  - `AgentToMcpBridge` (re-expose the agent *as* MCP tools) is **not** in this
+    example — it's already covered by `a2a-mcp/examples/bidirectional_demo.rs`.
+    Fold it in only if a single end-to-end bidirectional showcase is wanted.
+  - Wire MCP-native progress (`McpToA2ABridge::with_streaming` +
+    `ProgressClientHandler`) so downstream tool progress also streams; the tool
+    server would need to emit `notify_progress`. Currently progress is
+    handler-driven (analyze → call tool → done), which is enough for the demo.
 
 ## Streaming Improvements
 - Add support for partial/incremental tool call streaming (instead of waiting for the full JSON string to parse) to allow UIs to show function call progress in real time.
@@ -53,6 +106,7 @@ Round out the transport/interop story the rest of 0.4 already tells.
 - Expand streaming integrations natively into the `a2a-client` framework.
 
 ## General
+- **Audit all doc comments for self-containment.** Sweep `///` / `//!` docs across the workspace so each one describes the *actual architecture and behavior* on its own terms — what the type/port/adapter does and how it fits the hexagonal layering — rather than referencing design rationale, migration history, or internal planning docs (`REFACTORING_PLAN.md`, `OFFICIAL_SDK_COMPARISON.md`, `JSONRPC_ADAPTER_PLAN.md`, "the 0.5 backlog", "Phase 4", etc.) that will be deleted. Docs must still read correctly once those files are gone.
 - Refine existing Rustdoc examples and ensure they are all compile-checked.
 - Resolve any remaining compilation warnings across the workspace. *(Clean under `clippy --workspace --all-features --all-targets -D warnings` **and** `cargo check -p a2a-rs --no-default-features` as of the 0.4 struct-split work — the earlier `--no-default-features` warnings in `adapter/storage/task_storage.rs` went away with the streaming/broadcast code removed from storage.)*
 

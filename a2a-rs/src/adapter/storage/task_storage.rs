@@ -18,14 +18,16 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
     A2AError, ContextId, Message, Task, TaskPushNotificationConfig, TaskId, TaskState,
+    VersionedTask,
 };
 use crate::port::{
     AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle, AsyncTaskQuery,
+    AsyncTaskVersioning,
 };
 
 /// Simple in-memory task storage for testing and example purposes.
 ///
-/// Persistence-only since the Phase 4 struct-split: streaming fan-out lives in
+/// Persistence-only: streaming fan-out lives in
 /// [`InMemoryStreamingHandler`](crate::adapter::InMemoryStreamingHandler) and
 /// push-webhook delivery behind the [`AsyncPushNotifier`] port (this struct hands
 /// out its registry via [`push_notifier`](Self::push_notifier)). The store still
@@ -34,6 +36,12 @@ use crate::port::{
 pub struct InMemoryTaskStorage {
     /// Tasks stored by ID
     pub(crate) tasks: Arc<Mutex<HashMap<String, Task>>>,
+    /// Per-task optimistic-concurrency version, bumped on every mutation.
+    ///
+    /// A separate map keyed by the same task id. Mutators always lock `tasks`
+    /// first and `versions` second, so the two stay consistent and never
+    /// deadlock (see [`AsyncTaskVersioning`]).
+    pub(crate) versions: Arc<Mutex<HashMap<String, u64>>>,
     /// Push notification registry (config store + delivery backend)
     pub(crate) push_notification_registry: Arc<PushNotificationRegistry>,
 }
@@ -51,6 +59,7 @@ impl InMemoryTaskStorage {
 
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            versions: Arc::new(Mutex::new(HashMap::new())),
             push_notification_registry: Arc::new(push_registry),
         }
     }
@@ -61,8 +70,19 @@ impl InMemoryTaskStorage {
 
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
+            versions: Arc::new(Mutex::new(HashMap::new())),
             push_notification_registry: Arc::new(push_registry),
         }
+    }
+
+    /// Bump (or initialize) the stored version for a task, returning the new
+    /// value. Callers already hold the `tasks` lock; this acquires `versions`
+    /// second, preserving the global lock order.
+    async fn bump_version(&self, task_id: &str) -> u64 {
+        let mut versions = self.versions.lock().await;
+        let v = versions.entry(task_id.to_string()).or_insert(0);
+        *v += 1;
+        *v
     }
 
     /// Hand out this store's push-notification registry as an
@@ -98,6 +118,7 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
 
         let task = Task::new(task_id.to_string(), context_id.to_string());
         tasks_guard.insert(task_id.to_string(), task.clone());
+        self.bump_version(task_id).await; // version 0 -> 1
 
         Ok(task)
     }
@@ -117,11 +138,13 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
 
         // Update the task status with the optional message
         task.update_status(state, message);
+        let updated = task.clone();
+        self.bump_version(task_id).await;
 
         // Persistence only: announcing the change to streaming subscribers is
-        // the orchestration layer's job (see `TaskStatusBroadcast` and
-        // `REFACTORING_PLAN.md` §4.0.2), not a side effect of the mutator.
-        Ok(task.clone())
+        // the orchestration layer's job (see `TaskStatusBroadcast`), not a side
+        // effect of the mutator.
+        Ok(updated)
     }
 
     async fn exists(&self, id: &TaskId) -> Result<bool, A2AError> {
@@ -178,10 +201,69 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
         // Update the status with the cancellation message to track in history
         updated_task.update_status(TaskState::Canceled, Some(cancel_message));
         tasks_guard.insert(task_id.to_string(), updated_task.clone());
+        self.bump_version(task_id).await;
 
         // Persistence only: the orchestration layer announces the cancellation
-        // to streaming subscribers (see `REFACTORING_PLAN.md` §4.0.2).
+        // to streaming subscribers (see `TaskStatusBroadcast`).
         Ok(updated_task)
+    }
+}
+
+#[async_trait]
+impl AsyncTaskVersioning for InMemoryTaskStorage {
+    async fn version(&self, id: &TaskId) -> Result<u64, A2AError> {
+        let task_id = id.as_str();
+        let tasks_guard = self.tasks.lock().await;
+        if !tasks_guard.contains_key(task_id) {
+            return Err(A2AError::TaskNotFound(task_id.to_string()));
+        }
+        let versions = self.versions.lock().await;
+        Ok(versions.get(task_id).copied().unwrap_or(0))
+    }
+
+    async fn get_versioned(
+        &self,
+        id: &TaskId,
+        history_length: Option<u32>,
+    ) -> Result<VersionedTask, A2AError> {
+        let task_id = id.as_str();
+        let tasks_guard = self.tasks.lock().await;
+        let Some(task) = tasks_guard.get(task_id) else {
+            return Err(A2AError::TaskNotFound(task_id.to_string()));
+        };
+        let task = task.with_limited_history(history_length);
+        let versions = self.versions.lock().await;
+        let version = versions.get(task_id).copied().unwrap_or(0);
+        Ok(VersionedTask::new(task, version))
+    }
+
+    async fn update_status_checked(
+        &self,
+        id: &TaskId,
+        expected: u64,
+        state: TaskState,
+        message: Option<Message>,
+    ) -> Result<VersionedTask, A2AError> {
+        let task_id = id.as_str();
+        // Lock order: tasks, then versions — the compare-and-swap holds both so
+        // the check and the bump are atomic against every other mutator.
+        let mut tasks_guard = self.tasks.lock().await;
+        let task = tasks_guard
+            .get_mut(task_id)
+            .ok_or_else(|| A2AError::TaskNotFound(task_id.to_string()))?;
+        let mut versions = self.versions.lock().await;
+        let current = versions.get(task_id).copied().unwrap_or(0);
+        if current != expected {
+            return Err(A2AError::VersionConflict {
+                id: task_id.to_string(),
+                expected,
+                actual: current,
+            });
+        }
+        task.update_status(state, message);
+        let new_version = current + 1;
+        versions.insert(task_id.to_string(), new_version);
+        Ok(VersionedTask::new(task.clone(), new_version))
     }
 }
 
@@ -359,7 +441,58 @@ impl Clone for InMemoryTaskStorage {
     fn clone(&self) -> Self {
         Self {
             tasks: self.tasks.clone(),
+            versions: self.versions.clone(),
             push_notification_registry: self.push_notification_registry.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::ContextId;
+
+    fn tid(s: &str) -> TaskId {
+        s.parse().unwrap()
+    }
+    fn cid(s: &str) -> ContextId {
+        s.parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn versioning_tracks_and_guards_mutations() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        assert_eq!(store.version(&tid("t1")).await.unwrap(), 1);
+
+        // Unversioned mutations bump the version, keeping the two views in sync.
+        store
+            .update_status(&tid("t1"), TaskState::Working, None)
+            .await
+            .unwrap();
+        let snap = store.get_versioned(&tid("t1"), None).await.unwrap();
+        assert_eq!(snap.version, 2);
+
+        // Stale conditional update is rejected and leaves the task unchanged.
+        let err = store
+            .update_status_checked(&tid("t1"), 1, TaskState::Completed, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            A2AError::VersionConflict { expected: 1, actual: 2, .. }
+        ));
+        assert_eq!(
+            store.get(&tid("t1"), None).await.unwrap().status.state,
+            TaskState::Working
+        );
+
+        // Current-version conditional update succeeds and bumps.
+        let ok = store
+            .update_status_checked(&tid("t1"), 2, TaskState::Completed, None)
+            .await
+            .unwrap();
+        assert_eq!(ok.version, 3);
+        assert_eq!(ok.task.status.state, TaskState::Completed);
     }
 }

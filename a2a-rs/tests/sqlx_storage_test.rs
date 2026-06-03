@@ -6,6 +6,7 @@ mod sqlx_tests {
     use a2a_rs::domain::TaskState;
     use a2a_rs::port::{
         AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery,
+        AsyncTaskVersioning,
     };
     use a2a_rs::{A2AError, TaskPushNotificationConfig};
     use std::sync::Arc;
@@ -254,9 +255,9 @@ mod sqlx_tests {
         Ok(())
     }
 
-    /// Subscriber management is no longer a storage responsibility (Phase 4
-    /// struct-split): it lives in `InMemoryStreamingHandler`. This pins the same
-    /// registry semantics on that adapter.
+    /// Subscriber management is not a storage responsibility: it lives in
+    /// `InMemoryStreamingHandler`. This pins the registry semantics on that
+    /// adapter.
     #[tokio::test]
     async fn test_streaming_subscribers() -> Result<(), Box<dyn std::error::Error>> {
         use a2a_rs::InMemoryStreamingHandler;
@@ -519,6 +520,56 @@ mod sqlx_tests {
         };
         let configs = storage.list_configs(&list_params).await?;
         assert_eq!(configs.len(), 2, "Should have 2 configs");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_optimistic_concurrency_versioning() -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+        let task_id = Uuid::new_v4().to_string();
+
+        // A freshly created task starts at version 1.
+        storage.create(&tid(&task_id), &cid("ctx")).await?;
+        assert_eq!(storage.version(&tid(&task_id)).await?, 1);
+
+        // Every unversioned mutation bumps the version too.
+        storage
+            .update_status(&tid(&task_id), TaskState::Working, None)
+            .await?;
+        let snapshot = storage.get_versioned(&tid(&task_id), None).await?;
+        assert_eq!(snapshot.version, 2);
+        assert_eq!(snapshot.task.status.state, TaskState::Working);
+
+        // A conditional update with the stale version is rejected, untouched.
+        let stale = storage
+            .update_status_checked(&tid(&task_id), 1, TaskState::Completed, None)
+            .await;
+        match stale {
+            Err(A2AError::VersionConflict { expected, actual, .. }) => {
+                assert_eq!(expected, 1);
+                assert_eq!(actual, 2);
+            }
+            other => panic!("expected VersionConflict, got {other:?}"),
+        }
+        // State is unchanged after the rejected update.
+        assert_eq!(
+            storage.get(&tid(&task_id), None).await?.status.state,
+            TaskState::Working
+        );
+
+        // A conditional update with the current version succeeds and bumps.
+        let updated = storage
+            .update_status_checked(&tid(&task_id), 2, TaskState::Completed, None)
+            .await?;
+        assert_eq!(updated.version, 3);
+        assert_eq!(updated.task.status.state, TaskState::Completed);
+
+        // Versioning ops on a missing task report TaskNotFound.
+        assert!(matches!(
+            storage.version(&tid("ghost")).await,
+            Err(A2AError::TaskNotFound(_))
+        ));
 
         Ok(())
     }

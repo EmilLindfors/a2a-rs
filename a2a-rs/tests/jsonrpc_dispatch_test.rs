@@ -122,3 +122,89 @@ async fn list_tasks_returns_response_envelope() {
     assert!(value.get("error").is_none(), "unexpected error: {value:?}");
     assert!(value["result"]["tasks"].is_array());
 }
+
+// ---------------------------------------------------------------------------
+// Server-side CallInterceptor chain
+// ---------------------------------------------------------------------------
+
+mod interceptors {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use a2a_rs::domain::A2AError;
+    use a2a_rs::port::{CallContext, CallInterceptor, CallSide};
+    use async_trait::async_trait;
+    use serde_json::json;
+
+    use super::{adapter, methods, request};
+
+    /// Records how often each hook fired and whether `after` saw an error.
+    #[derive(Clone, Default)]
+    struct Counting {
+        before: Arc<AtomicUsize>,
+        after_ok: Arc<AtomicUsize>,
+        after_err: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl CallInterceptor for Counting {
+        async fn before(&self, ctx: &CallContext) -> Result<(), A2AError> {
+            assert_eq!(ctx.side, CallSide::Server);
+            self.before.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+        async fn after(&self, _ctx: &CallContext, outcome: Result<(), &A2AError>) {
+            match outcome {
+                Ok(()) => self.after_ok.fetch_add(1, Ordering::SeqCst),
+                Err(_) => self.after_err.fetch_add(1, Ordering::SeqCst),
+            };
+        }
+    }
+
+    /// A `before` that always short-circuits the call.
+    struct Rejecting;
+
+    #[async_trait]
+    impl CallInterceptor for Rejecting {
+        async fn before(&self, _ctx: &CallContext) -> Result<(), A2AError> {
+            Err(A2AError::UnsupportedOperation("rejected by interceptor".to_string()))
+        }
+    }
+
+    #[tokio::test]
+    async fn before_and_after_wrap_each_dispatch() {
+        let counter = Counting::default();
+        let a = adapter().with_interceptor(counter.clone());
+
+        // A successful call: after observes Ok.
+        a.handle_unary(request(methods::SEND_MESSAGE, super::send_message_params("ti-1")))
+            .await;
+        // A failing call (missing task): after observes Err.
+        let resp = a.handle_unary(request(methods::GET_TASK, json!({ "id": "ghost" }))).await;
+        let value = serde_json::to_value(&resp).unwrap();
+        assert!(value.get("error").is_some(), "expected an error: {value:?}");
+
+        assert_eq!(counter.before.load(Ordering::SeqCst), 2);
+        assert_eq!(counter.after_ok.load(Ordering::SeqCst), 1);
+        assert_eq!(counter.after_err.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn rejecting_before_short_circuits_dispatch() {
+        // Rejecting runs first; the real method never executes.
+        let a = adapter()
+            .with_interceptor(Rejecting)
+            .with_interceptor(Counting::default());
+
+        let resp = a
+            .handle_unary(request(methods::GET_TASK, json!({ "id": "task-x" })))
+            .await;
+        let value = serde_json::to_value(&resp).unwrap();
+        // The short-circuit error surfaces as the JSON-RPC error, not a task.
+        assert_eq!(
+            value["error"]["message"],
+            "Unsupported operation: rejected by interceptor"
+        );
+        assert!(value.get("result").is_none() || value["result"].is_null());
+    }
+}

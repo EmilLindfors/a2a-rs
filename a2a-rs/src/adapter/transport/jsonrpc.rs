@@ -61,7 +61,7 @@ use crate::{
     },
     port::{
         AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-        AsyncTaskQuery,
+        AsyncTaskQuery, CallContext, CallInterceptor, CallSide, run_after, run_before,
     },
     services::server::AgentInfoProvider,
 };
@@ -88,6 +88,8 @@ type StreamResponseStream = Pin<Box<dyn Stream<Item = Result<StreamResponse, A2A
 #[derive(Clone)]
 pub struct JsonRpcAdapter {
     service: TaskService,
+    /// Server-side interceptor chain wrapping every unary/streaming dispatch.
+    interceptors: Vec<Arc<dyn CallInterceptor>>,
 }
 
 impl JsonRpcAdapter {
@@ -110,6 +112,7 @@ impl JsonRpcAdapter {
                 NoopStreamingHandler,
                 crate::port::NoopPushNotifier,
             ),
+            interceptors: Vec::new(),
         }
     }
 
@@ -129,6 +132,7 @@ impl JsonRpcAdapter {
                 NoopStreamingHandler,
                 crate::port::NoopPushNotifier,
             ),
+            interceptors: Vec::new(),
         }
     }
 
@@ -139,6 +143,7 @@ impl JsonRpcAdapter {
     ) -> Self {
         Self {
             service: self.service.with_streaming_handler(streaming_handler),
+            interceptors: self.interceptors,
         }
     }
 
@@ -149,7 +154,18 @@ impl JsonRpcAdapter {
     ) -> Self {
         Self {
             service: self.service.with_push_notifier(push_notifier),
+            interceptors: self.interceptors,
         }
+    }
+
+    /// Append a server-side [`CallInterceptor`] to the chain.
+    ///
+    /// Interceptors wrap every unary and streaming dispatch: `before` hooks run
+    /// in registration order, then the method runs, then `after` hooks run in
+    /// reverse. Chainable, so callers can register several.
+    pub fn with_interceptor(mut self, interceptor: impl CallInterceptor + 'static) -> Self {
+        self.interceptors.push(Arc::new(interceptor));
+        self
     }
 }
 
@@ -163,11 +179,33 @@ impl JsonRpcAdapter {
     /// must not reach here.
     pub async fn handle_unary(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
-        let result = self.dispatch_unary(&req.method, req.params).await;
+        let result = self.dispatch_intercepted(&req.method, req.params).await;
         match result {
             Ok(value) => JsonRpcResponse::ok(id, value),
             Err(e) => JsonRpcResponse::err(id, a2a_to_jsonrpc(&e)),
         }
+    }
+
+    /// Run the server interceptor chain around a unary [`dispatch_unary`], so
+    /// both the JSON-RPC and REST entry points share one interception point.
+    ///
+    /// [`dispatch_unary`]: Self::dispatch_unary
+    async fn dispatch_intercepted(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<Value, A2AError> {
+        if self.interceptors.is_empty() {
+            return self.dispatch_unary(method, params).await;
+        }
+        let ctx = CallContext::new(method, CallSide::Server);
+        if let Err(e) = run_before(&self.interceptors, &ctx).await {
+            run_after(&self.interceptors, &ctx, Err(&e)).await;
+            return Err(e);
+        }
+        let result = self.dispatch_unary(method, params).await;
+        run_after(&self.interceptors, &ctx, result.as_ref().map(|_| ())).await;
+        result
     }
 
     /// Route a unary method name + `params` to the service and return the wire
@@ -284,9 +322,30 @@ impl JsonRpcAdapter {
 
     // -- streaming --------------------------------------------------------
 
+    /// Open the SSE stream for a streaming method, running the server
+    /// interceptor chain around the open (per-frame interception is out of
+    /// scope — `after` observes whether the stream opened, not each event).
+    async fn open_stream(
+        &self,
+        method: &str,
+        params: Option<Value>,
+    ) -> Result<StreamResponseStream, A2AError> {
+        if self.interceptors.is_empty() {
+            return self.open_stream_inner(method, params).await;
+        }
+        let ctx = CallContext::new(method, CallSide::Server);
+        if let Err(e) = run_before(&self.interceptors, &ctx).await {
+            run_after(&self.interceptors, &ctx, Err(&e)).await;
+            return Err(e);
+        }
+        let result = self.open_stream_inner(method, params).await;
+        run_after(&self.interceptors, &ctx, result.as_ref().map(|_| ())).await;
+        result
+    }
+
     /// Open the SSE stream for a streaming method, returning a unified stream of
     /// wire [`StreamResponse`]s (initial task snapshot first, then updates).
-    async fn open_stream(
+    async fn open_stream_inner(
         &self,
         method: &str,
         params: Option<Value>,
@@ -437,14 +496,17 @@ fn a2a_to_http(err: &A2AError) -> Response {
 }
 
 async fn rest_send_message(State(a): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
-    rest_result(a.send_message(parse_body(&body)).await)
+    rest_result(a.dispatch_intercepted(methods::SEND_MESSAGE, parse_body(&body)).await)
 }
 
 async fn rest_list_tasks(
     State(a): State<Arc<JsonRpcAdapter>>,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
-    rest_result(a.list_tasks(Some(query_to_list_request(&q))).await)
+    rest_result(
+        a.dispatch_intercepted(methods::LIST_TASKS, Some(query_to_list_request(&q)))
+            .await,
+    )
 }
 
 async fn rest_get_task(
@@ -456,11 +518,14 @@ async fn rest_get_task(
     if let Some(h) = q.get("historyLength").and_then(|s| s.parse::<i64>().ok()) {
         req["historyLength"] = h.into();
     }
-    rest_result(a.get_task(Some(req)).await)
+    rest_result(a.dispatch_intercepted(methods::GET_TASK, Some(req)).await)
 }
 
 async fn rest_cancel_task(State(a): State<Arc<JsonRpcAdapter>>, Path(id): Path<String>) -> Response {
-    rest_result(a.cancel_task(Some(serde_json::json!({ "id": id }))).await)
+    rest_result(
+        a.dispatch_intercepted(methods::CANCEL_TASK, Some(serde_json::json!({ "id": id })))
+            .await,
+    )
 }
 
 async fn rest_create_push_config(
@@ -471,32 +536,50 @@ async fn rest_create_push_config(
     // The path task id is authoritative for the config's parent.
     let mut config = parse_body(&body).unwrap_or_else(|| serde_json::json!({}));
     config["taskId"] = id.into();
-    rest_result(a.create_push_config(Some(config)).await)
+    rest_result(a.dispatch_intercepted(methods::CREATE_PUSH_CONFIG, Some(config)).await)
 }
 
 async fn rest_list_push_configs(
     State(a): State<Arc<JsonRpcAdapter>>,
     Path(id): Path<String>,
 ) -> Response {
-    rest_result(a.list_push_configs(Some(serde_json::json!({ "taskId": id }))).await)
+    rest_result(
+        a.dispatch_intercepted(
+            methods::LIST_PUSH_CONFIGS,
+            Some(serde_json::json!({ "taskId": id })),
+        )
+        .await,
+    )
 }
 
 async fn rest_get_push_config(
     State(a): State<Arc<JsonRpcAdapter>>,
     Path((id, cfg)): Path<(String, String)>,
 ) -> Response {
-    rest_result(a.get_push_config(Some(serde_json::json!({ "taskId": id, "id": cfg }))).await)
+    rest_result(
+        a.dispatch_intercepted(
+            methods::GET_PUSH_CONFIG,
+            Some(serde_json::json!({ "taskId": id, "id": cfg })),
+        )
+        .await,
+    )
 }
 
 async fn rest_delete_push_config(
     State(a): State<Arc<JsonRpcAdapter>>,
     Path((id, cfg)): Path<(String, String)>,
 ) -> Response {
-    rest_result(a.delete_push_config(Some(serde_json::json!({ "taskId": id, "id": cfg }))).await)
+    rest_result(
+        a.dispatch_intercepted(
+            methods::DELETE_PUSH_CONFIG,
+            Some(serde_json::json!({ "taskId": id, "id": cfg })),
+        )
+        .await,
+    )
 }
 
 async fn rest_extended_card(State(a): State<Arc<JsonRpcAdapter>>) -> Response {
-    rest_result(a.extended_card().await)
+    rest_result(a.dispatch_intercepted(methods::GET_EXTENDED_AGENT_CARD, None).await)
 }
 
 async fn rest_stream_message(State(a): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
