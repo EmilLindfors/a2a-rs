@@ -16,7 +16,7 @@ a2a-agents-common = { path = "../a2a-agents-common", version = "0.3" }
 a2a-ap2 = { path = "../a2a-ap2", version = "0.3", optional = true }
 a2a-client = { package = "a2a-web-client", path = "../a2a-client", version = "0.3" }
 a2a-mcp = { path = "../a2a-mcp", version = "0.3", optional = true }
-rmcp = { version = "1.7", features = ["server", "client", "transport-io", "transport-child-process"], optional = true }
+rmcp = { version = "1.7", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server"], optional = true }
 
 # Core dependencies
 serde = { version = "1.0", features = ["derive"] }
@@ -120,6 +120,11 @@ required-features = ["ap2"]
 [[example]]
 name = "mcp_server_agent"
 path = "examples/mcp_server_agent.rs"
+required-features = ["mcp-server"]
+
+[[example]]
+name = "mcp_http_agent"
+path = "examples/mcp_http_agent.rs"
 required-features = ["mcp-server"]
 
 # Kitchen-sink example: TOML config + optional LLM tool-calling + MCP tool

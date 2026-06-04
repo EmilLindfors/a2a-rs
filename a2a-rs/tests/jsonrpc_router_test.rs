@@ -30,7 +30,7 @@ use a2a_rs::adapter::{
 };
 use a2a_rs::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 use a2a_rs::port::AsyncStreamingHandler;
-use a2a_rs::port::streaming_handler::{Subscriber, UpdateEvent};
+use a2a_rs::port::streaming_handler::{SeqEvent, Subscriber};
 
 /// A streaming handler whose pull-streams are empty but valid.
 ///
@@ -45,7 +45,7 @@ struct EmptyStreamHandler;
 
 type StatusStream = Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>;
 type ArtifactStream = Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>;
-type CombinedStream = Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>;
+type CombinedStream = Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>;
 
 #[async_trait]
 impl AsyncStreamingHandler for EmptyStreamHandler {
@@ -101,8 +101,12 @@ impl AsyncStreamingHandler for EmptyStreamHandler {
         Ok(Box::pin(stream::empty::<Result<TaskArtifactUpdateEvent, A2AError>>()))
     }
 
-    async fn combined_update_stream(&self, _task_id: &str) -> Result<CombinedStream, A2AError> {
-        Ok(Box::pin(stream::empty::<Result<UpdateEvent, A2AError>>()))
+    async fn combined_update_stream(
+        &self,
+        _task_id: &str,
+        _from_event_id: Option<u64>,
+    ) -> Result<CombinedStream, A2AError> {
+        Ok(Box::pin(stream::empty::<Result<SeqEvent, A2AError>>()))
     }
 }
 

@@ -5,6 +5,9 @@ use serde_json::Value;
 
 pub mod gemini;
 pub mod openai;
+pub mod tool_call;
+
+pub use tool_call::{PartialToolCall, ToolCallAccumulator};
 
 /// Represents an error returned by an LLM provider.
 #[derive(Debug, thiserror::Error)]

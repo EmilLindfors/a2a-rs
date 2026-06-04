@@ -24,10 +24,10 @@ use futures::{Stream, StreamExt, stream};
 use a2a_rs::adapter::{InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router};
 use a2a_rs::domain::{
     A2AError, AgentCard, AgentInterface, Message, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
-    TaskStatusUpdateEvent,
+    TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 use a2a_rs::port::AsyncStreamingHandler;
-use a2a_rs::port::streaming_handler::{Subscriber, UpdateEvent};
+use a2a_rs::port::streaming_handler::{SeqEvent, Subscriber};
 use a2a_rs::{JsonRpcClient, StreamItem, Transport, connect, default_registry};
 
 // ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ use a2a_rs::{JsonRpcClient, StreamItem, Transport, connect, default_registry};
 
 type StatusStream = Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>;
 type ArtifactStream = Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>;
-type CombinedStream = Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>;
+type CombinedStream = Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>;
 
 #[derive(Clone)]
 struct EmptyStreamHandler;
@@ -89,7 +89,11 @@ impl AsyncStreamingHandler for EmptyStreamHandler {
     async fn artifact_update_stream(&self, _task_id: &str) -> Result<ArtifactStream, A2AError> {
         Ok(Box::pin(stream::empty()))
     }
-    async fn combined_update_stream(&self, _task_id: &str) -> Result<CombinedStream, A2AError> {
+    async fn combined_update_stream(
+        &self,
+        _task_id: &str,
+        _from_event_id: Option<u64>,
+    ) -> Result<CombinedStream, A2AError> {
         Ok(Box::pin(stream::empty()))
     }
 }
@@ -137,6 +141,115 @@ async fn spawn_server() -> String {
 
 fn message() -> Message {
     Message::user_text("hello".to_string(), "m1".to_string())
+}
+
+/// Spawn a server whose streaming backend is a real (shared) in-memory handler,
+/// returning the base URL and a handle to broadcast through the same backend.
+async fn spawn_server_streaming() -> (String, TestBusinessHandler) {
+    let handler = TestBusinessHandler::with_storage(InMemoryTaskStorage::new());
+    let agent_info = SimpleAgentInfo::new("interop".to_string(), "http://localhost".to_string());
+    let adapter = Arc::new(
+        JsonRpcAdapter::with_handler(handler.clone(), agent_info)
+            .with_streaming_handler(handler.clone()),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let app: Router = jsonrpc_router(adapter);
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    (base, handler)
+}
+
+fn status_update(task_id: &str, state: TaskState) -> TaskStatusUpdateEvent {
+    TaskStatusUpdateEvent {
+        task_id: task_id.to_string(),
+        context_id: "ctx".to_string(),
+        kind: "status-update".to_string(),
+        status: TaskStatus::new(state, None),
+        metadata: None,
+    }
+}
+
+/// End-to-end Last-Event-ID resumption: the server emits SSE `id:` fields, the
+/// client parses them, and reconnecting with `Last-Event-ID` replays only the
+/// buffered events after that id (preceded by the initial task snapshot).
+#[tokio::test]
+async fn subscribe_resumes_from_last_event_id() {
+    let (base, handler) = spawn_server_streaming().await;
+    let client = JsonRpcClient::new(base);
+
+    // Create the task so subscribe emits an initial snapshot.
+    client
+        .send_task_message("task-resume", &message(), None, None)
+        .await
+        .unwrap();
+
+    // Two updates broadcast before any subscriber — buffered as event ids 1 and 2.
+    handler
+        .broadcast_status_update("task-resume", status_update("task-resume", TaskState::Working))
+        .await
+        .unwrap();
+    handler
+        .broadcast_status_update("task-resume", status_update("task-resume", TaskState::Completed))
+        .await
+        .unwrap();
+
+    // First subscription replays everything (id > 0); discover the id the server
+    // assigned to the Completed event (the message handler may emit its own
+    // events too, so we don't assume absolute ids).
+    let mut all = client
+        .subscribe_to_task("task-resume", None, Some("0"))
+        .await
+        .unwrap();
+    let mut completed_id = None;
+    for _ in 0..16 {
+        match tokio::time::timeout(Duration::from_secs(2), all.next()).await {
+            Ok(Some(Ok(ev))) => {
+                if let StreamItem::StatusUpdate(e) = &ev.item {
+                    if e.status.state == ::buffa::EnumValue::from(TaskState::Completed) {
+                        completed_id = ev.event_id;
+                        break;
+                    }
+                }
+            }
+            _ => break,
+        }
+    }
+    let completed_id = completed_id.expect("should observe the Completed event with an id");
+    drop(all);
+
+    // Resume from just before Completed: only that event replays, after the snapshot.
+    let mut stream = client
+        .subscribe_to_task("task-resume", None, Some(&(completed_id - 1).to_string()))
+        .await
+        .unwrap();
+
+    let mut got = Vec::new();
+    while got.len() < 2 {
+        let ev = tokio::time::timeout(Duration::from_secs(5), stream.next())
+            .await
+            .expect("event within 5s")
+            .expect("stream not empty")
+            .expect("ok event");
+        got.push(ev);
+    }
+
+    // First: initial task snapshot (no id). Second: the replayed Completed event.
+    assert!(matches!(got[0].item, StreamItem::Task(_)), "first must be the snapshot");
+    assert_eq!(got[0].event_id, None);
+    assert_eq!(
+        got[1].event_id,
+        Some(completed_id),
+        "only the Completed event should replay after Last-Event-ID = completed-1"
+    );
+    match &got[1].item {
+        StreamItem::StatusUpdate(e) => {
+            assert_eq!(e.status.state, ::buffa::EnumValue::from(TaskState::Completed))
+        }
+        other => panic!("expected StatusUpdate, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +326,7 @@ async fn subscribe_yields_initial_task_over_sse() {
         .unwrap();
     let id = task.id.clone();
 
-    let mut stream = client.subscribe_to_task(&id, None).await.unwrap();
+    let mut stream = client.subscribe_to_task(&id, None, None).await.unwrap();
 
     // First SSE event must be the initial task snapshot — proving the client's
     // SSE reassembly + JSON-RPC frame + StreamResponse union decode all work.
@@ -223,7 +336,7 @@ async fn subscribe_yields_initial_task_over_sse() {
         .expect("subscribe stream should not be empty")
         .expect("first event should be Ok");
 
-    match first {
+    match first.item {
         StreamItem::Task(t) => assert_eq!(t.id, id),
         other => panic!("expected initial Task snapshot, got {other:?}"),
     }

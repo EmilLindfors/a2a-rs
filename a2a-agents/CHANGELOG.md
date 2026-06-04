@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **MCP server over Streamable HTTP** — `run_mcp_server` can now serve a
+  TOML-configured agent over MCP's Streamable HTTP transport (rmcp's
+  `StreamableHttpService` on an `axum` router) in addition to stdio. Configure it
+  via a new `[features.mcp_server.http]` section (`McpHttpConfig`: `enabled`,
+  `host`, `port`, `path`); when `http.enabled` it takes precedence over stdio.
+  DNS-rebinding protection defaults to loopback-only and is tunable via
+  `allowed_hosts` / `allowed_origins` (empty `allowed_hosts` disables `Host`
+  validation for proxy-fronted public binds). Enables the
+  `transport-streamable-http-server` rmcp feature. New `mcp_http_agent` example
+  (`examples/mcp_http_agent.{rs,toml}`) plus an end-to-end `initialize`-handshake
+  and `Host`-allow-list integration test (`tests/mcp_http_test.rs`).
 - **`AgentBuilder::with_streaming` / `AgentRuntime::with_streaming`** — attach a
   shared streaming backend so `tasks/subscribe` SSE streams observe the
   broadcasts a handler emits (e.g. via the `TaskStatusBroadcast` mixin). Pass the

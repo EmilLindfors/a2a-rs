@@ -36,7 +36,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{
         IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
@@ -75,7 +75,11 @@ pub use super::jsonrpc_wire::{
 
 /// A stream of wire [`StreamResponse`]s — the unified output of both streaming
 /// methods, before it is framed as SSE (enveloped for JSON-RPC, bare for REST).
-type StreamResponseStream = Pin<Box<dyn Stream<Item = Result<StreamResponse, A2AError>> + Send>>;
+/// A stream of wire responses, each tagged with an optional per-task event id.
+/// The id (when present) is emitted as the SSE `id:` field so a client can
+/// resume via `Last-Event-ID`. The initial task snapshot carries `None`.
+type StreamResponseStream =
+    Pin<Box<dyn Stream<Item = Result<(Option<u64>, StreamResponse), A2AError>> + Send>>;
 
 // ---------------------------------------------------------------------------
 // Adapter
@@ -329,26 +333,32 @@ impl JsonRpcAdapter {
         &self,
         method: &str,
         params: Option<Value>,
+        from_event_id: Option<u64>,
     ) -> Result<StreamResponseStream, A2AError> {
         if self.interceptors.is_empty() {
-            return self.open_stream_inner(method, params).await;
+            return self.open_stream_inner(method, params, from_event_id).await;
         }
         let ctx = CallContext::new(method, CallSide::Server);
         if let Err(e) = run_before(&self.interceptors, &ctx).await {
             run_after(&self.interceptors, &ctx, Err(&e)).await;
             return Err(e);
         }
-        let result = self.open_stream_inner(method, params).await;
+        let result = self.open_stream_inner(method, params, from_event_id).await;
         run_after(&self.interceptors, &ctx, result.as_ref().map(|_| ())).await;
         result
     }
 
     /// Open the SSE stream for a streaming method, returning a unified stream of
     /// wire [`StreamResponse`]s (initial task snapshot first, then updates).
+    ///
+    /// `from_event_id` carries the client's `Last-Event-ID` for resumption; it
+    /// applies to `tasks/subscribe` (a fresh `message/stream` always starts from
+    /// the beginning).
     async fn open_stream_inner(
         &self,
         method: &str,
         params: Option<Value>,
+        from_event_id: Option<u64>,
     ) -> Result<StreamResponseStream, A2AError> {
         match method {
             methods::SEND_STREAMING_MESSAGE => {
@@ -368,7 +378,7 @@ impl JsonRpcAdapter {
             }
             methods::SUBSCRIBE_TO_TASK => {
                 let req: SubscribeToTaskRequest = parse_params(params)?;
-                let (initial, updates) = self.service.subscribe(&req.id).await?;
+                let (initial, updates) = self.service.subscribe(&req.id, from_event_id).await?;
                 Ok(chain_initial_task(initial, updates))
             }
             unknown => Err(A2AError::MethodNotFound(unknown.to_string())),
@@ -390,7 +400,11 @@ pub fn jsonrpc_router(adapter: Arc<JsonRpcAdapter>) -> Router {
         .with_state(adapter)
 }
 
-async fn jsonrpc_handler(State(adapter): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
+async fn jsonrpc_handler(
+    State(adapter): State<Arc<JsonRpcAdapter>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let req: JsonRpcRequest = match serde_json::from_slice(&body) {
         Ok(r) => r,
         Err(e) => {
@@ -416,7 +430,8 @@ async fn jsonrpc_handler(State(adapter): State<Arc<JsonRpcAdapter>>, body: Bytes
 
     if methods::is_streaming(&req.method) {
         let id = req.id.clone();
-        match adapter.open_stream(&req.method, req.params).await {
+        let from_event_id = parse_last_event_id(&headers);
+        match adapter.open_stream(&req.method, req.params, from_event_id).await {
             Ok(stream) => jsonrpc_sse(id, stream).into_response(),
             Err(e) => Json(JsonRpcResponse::err(id, a2a_to_jsonrpc(&e))).into_response(),
         }
@@ -432,11 +447,18 @@ fn jsonrpc_sse(
     stream: StreamResponseStream,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let events = stream.map(move |item| {
-        let resp = match item {
-            Ok(sr) => JsonRpcResponse::ok(id.clone(), serde_json::to_value(&sr).unwrap_or(Value::Null)),
-            Err(e) => JsonRpcResponse::err(id.clone(), a2a_to_jsonrpc(&e)),
+        let (seq_id, resp) = match item {
+            Ok((seq_id, sr)) => (
+                seq_id,
+                JsonRpcResponse::ok(id.clone(), serde_json::to_value(&sr).unwrap_or(Value::Null)),
+            ),
+            Err(e) => (None, JsonRpcResponse::err(id.clone(), a2a_to_jsonrpc(&e))),
         };
-        Ok(Event::default().data(serde_json::to_string(&resp).unwrap_or_default()))
+        let event = Event::default().data(serde_json::to_string(&resp).unwrap_or_default());
+        Ok(match seq_id {
+            Some(n) => event.id(n.to_string()),
+            None => event,
+        })
     });
     Sse::new(events).keep_alive(KeepAlive::default())
 }
@@ -582,16 +604,14 @@ async fn rest_extended_card(State(a): State<Arc<JsonRpcAdapter>>) -> Response {
     rest_result(a.dispatch_intercepted(methods::GET_EXTENDED_AGENT_CARD, None).await)
 }
 
-async fn rest_stream_message(State(a): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
-    match a.open_stream(methods::SEND_STREAMING_MESSAGE, parse_body(&body)).await {
-        Ok(stream) => rest_sse(stream).into_response(),
-        Err(e) => a2a_to_http(&e),
-    }
-}
-
-async fn rest_subscribe(State(a): State<Arc<JsonRpcAdapter>>, Path(id): Path<String>) -> Response {
+async fn rest_stream_message(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let from_event_id = parse_last_event_id(&headers);
     match a
-        .open_stream(methods::SUBSCRIBE_TO_TASK, Some(serde_json::json!({ "id": id })))
+        .open_stream(methods::SEND_STREAMING_MESSAGE, parse_body(&body), from_event_id)
         .await
     {
         Ok(stream) => rest_sse(stream).into_response(),
@@ -599,14 +619,51 @@ async fn rest_subscribe(State(a): State<Arc<JsonRpcAdapter>>, Path(id): Path<Str
     }
 }
 
+async fn rest_subscribe(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Response {
+    let from_event_id = parse_last_event_id(&headers);
+    match a
+        .open_stream(
+            methods::SUBSCRIBE_TO_TASK,
+            Some(serde_json::json!({ "id": id })),
+            from_event_id,
+        )
+        .await
+    {
+        Ok(stream) => rest_sse(stream).into_response(),
+        Err(e) => a2a_to_http(&e),
+    }
+}
+
+/// Parse the SSE `Last-Event-ID` header into a per-task event id for resumption.
+///
+/// This is the server half of the a2a-rs resumption enhancement (not an A2A v1.0
+/// spec feature). Spec-compliant clients never send the header, so they always
+/// get a fresh stream from current state — the `SubscribeToTask` behavior the
+/// spec defines. The complementary SSE `id:` field is emitted by [`jsonrpc_sse`]
+/// / [`rest_sse`] and is inert for clients that don't use it.
+fn parse_last_event_id(headers: &HeaderMap) -> Option<u64> {
+    headers
+        .get("last-event-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.trim().parse::<u64>().ok())
+}
+
 /// Frame a [`StreamResponseStream`] as bare-ProtoJSON SSE (REST has no envelope).
 fn rest_sse(stream: StreamResponseStream) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let events = stream.map(|item| {
-        let data = match item {
-            Ok(sr) => serde_json::to_string(&sr).unwrap_or_default(),
-            Err(e) => serde_json::to_string(&a2a_to_jsonrpc(&e)).unwrap_or_default(),
+        let (seq_id, data) = match item {
+            Ok((seq_id, sr)) => (seq_id, serde_json::to_string(&sr).unwrap_or_default()),
+            Err(e) => (None, serde_json::to_string(&a2a_to_jsonrpc(&e)).unwrap_or_default()),
         };
-        Ok(Event::default().data(data))
+        let event = Event::default().data(data);
+        Ok(match seq_id {
+            Some(n) => event.id(n.to_string()),
+            None => event,
+        })
     });
     Sse::new(events).keep_alive(KeepAlive::default())
 }
@@ -658,14 +715,15 @@ fn chain_initial_task(
     initial: Option<crate::domain::Task>,
     updates: crate::application::UpdateStream,
 ) -> StreamResponseStream {
-    let mapped = updates.map(|item| item.map(map_update_event));
+    let mapped =
+        updates.map(|item| item.map(|seq| (Some(seq.id), map_update_event(seq.event))));
     match initial {
         Some(task) => {
             let head = StreamResponse {
                 payload: Some(stream_response::Payload::Task(Box::new(task))),
                 ..Default::default()
             };
-            Box::pin(futures::stream::once(async move { Ok(head) }).chain(mapped))
+            Box::pin(futures::stream::once(async move { Ok((None, head)) }).chain(mapped))
         }
         None => Box::pin(mapped),
     }

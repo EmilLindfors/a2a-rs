@@ -17,6 +17,9 @@ pub mod jsonrpc_client;
 /// Client-side transport negotiation from an agent card.
 #[cfg(feature = "client")]
 pub mod negotiation;
+/// Resilient streaming: reconnect-with-backoff over the `Transport` port.
+#[cfg(feature = "client")]
+pub mod retry;
 /// Shared JSON-RPC 2.0 wire vocabulary (method names, error codes, envelopes,
 /// error maps) — the byte-for-byte contract between the JSON-RPC server and
 /// client adapters.
@@ -31,3 +34,5 @@ pub use jsonrpc::{JsonRpcAdapter, jsonrpc_router, rest_router};
 pub use jsonrpc_client::JsonRpcClient;
 #[cfg(feature = "client")]
 pub use negotiation::{TransportFactory, TransportNegotiator, default_registry};
+#[cfg(feature = "client")]
+pub use retry::{RetryingTransport, subscribe_resilient};

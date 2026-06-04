@@ -24,7 +24,7 @@ use crate::{
         },
     },
     adapter::transport::codec::stream_response_to_item,
-    port::{StreamItem, Transport},
+    port::{StreamEvent, Transport},
 };
 
 fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
@@ -446,7 +446,10 @@ impl Transport for HttpClient {
         &self,
         task_id: &str,
         _history_length: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
+        // ConnectRPC streaming has no SSE `Last-Event-ID`; resumption is not
+        // supported on this transport, so the hint is ignored.
+        _last_event_id: Option<&str>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, A2AError>> + Send>>, A2AError> {
         let request = SubscribeToTaskRequest {
             id: task_id.to_string(),
             ..Default::default()
@@ -462,7 +465,7 @@ impl Transport for HttpClient {
                 Ok(Some(view)) => {
                     let resp = view.to_owned_message();
                     if let Some(item) = stream_response_to_item(resp) {
-                        Some((Ok(item), s))
+                        Some((Ok(StreamEvent::untagged(item)), s))
                     } else {
                         Some((
                             Err(A2AError::Internal(

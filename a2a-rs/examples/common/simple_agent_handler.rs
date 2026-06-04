@@ -244,16 +244,19 @@ impl AsyncStreamingHandler for SimpleAgentHandler {
     async fn combined_update_stream(
         &self,
         task_id: &str,
+        from_event_id: Option<u64>,
     ) -> Result<
         std::pin::Pin<
             Box<
                 dyn futures::Stream<
-                        Item = Result<a2a_rs::port::streaming_handler::UpdateEvent, A2AError>,
+                        Item = Result<a2a_rs::port::streaming_handler::SeqEvent, A2AError>,
                     > + Send,
             >,
         >,
         A2AError,
     > {
-        self.streaming.combined_update_stream(task_id).await
+        self.streaming
+            .combined_update_stream(task_id, from_event_id)
+            .await
     }
 }

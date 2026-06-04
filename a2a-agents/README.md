@@ -85,7 +85,7 @@ The original hexagonal architecture approach with manual wiring:
 
 ## 🔌 Model Context Protocol (MCP) Integration
 
-You can expose any declarative A2A Agent as a Model Context Protocol (MCP) server over `stdio` transport. This allows MCP-compatible clients (like Claude Desktop) to invoke the agent's skills as local tools.
+You can expose any declarative A2A Agent as a Model Context Protocol (MCP) server over `stdio` (for local clients like Claude Desktop) or **Streamable HTTP** (for networked clients) transport. Either way, MCP-compatible clients can invoke the agent's skills as tools.
 
 The bridge dispatches tool calls to the agent's message handler **in-process**, which means:
 - No backing HTTP server is required (you can set `http_port = 0` for a pure-stdio server).
@@ -142,6 +142,47 @@ To connect Claude Desktop to your agent, add the following to your Claude Deskto
   }
 }
 ```
+
+### 4. Streamable HTTP transport
+
+For networked MCP clients, serve the agent over MCP's Streamable HTTP transport
+instead of stdio. Add a `[features.mcp_server.http]` section — when `enabled`,
+it takes precedence over stdio:
+
+```toml
+[features.mcp_server]
+enabled = true
+stdio = false
+
+[features.mcp_server.http]
+enabled = true
+host = "127.0.0.1"   # default
+port = 8000          # default
+path = "/mcp"        # default mount path
+```
+
+```bash
+cargo run -p a2a-agents --features mcp-server --example mcp_http_agent
+```
+
+The server then accepts MCP requests at `http://127.0.0.1:8000/mcp`.
+
+**DNS-rebinding protection.** By default the transport only accepts inbound
+`Host` headers for loopback (`localhost`, `127.0.0.1`, `::1`). For a public
+bind, list the hostnames you serve under — and optionally restrict browser
+origins:
+
+```toml
+[features.mcp_server.http]
+enabled = true
+host = "0.0.0.0"
+port = 8000
+allowed_hosts = ["mcp.example.com", "mcp.example.com:8000"]
+allowed_origins = ["https://app.example.com"]   # omit to disable Origin checks
+```
+
+Setting `allowed_hosts = []` disables `Host` validation entirely (accepts any
+host) — only do this behind a trusted reverse proxy.
 
 ## Architecture
 

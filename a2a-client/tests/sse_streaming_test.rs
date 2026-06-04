@@ -124,7 +124,7 @@ async fn test_sse_stream_success() {
     // Check if subscribe_to_task works natively
     let mut native_stream = client
         .transport
-        .subscribe_to_task("test-task-1", None)
+        .subscribe_to_task("test-task-1", None, None)
         .await
         .unwrap();
     if let Some(item) = native_stream.next().await {

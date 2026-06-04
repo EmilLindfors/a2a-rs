@@ -11,7 +11,7 @@ use a2a_rs::domain::{
     TaskStatusUpdateEvent,
 };
 use a2a_rs::port::streaming_handler::Subscriber;
-use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, UpdateEvent};
+use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, SeqEvent};
 use async_trait::async_trait;
 use rmcp::{
     handler::client::progress::ProgressDispatcher, model::*, service::RequestContext,
@@ -331,10 +331,11 @@ impl AsyncStreamingHandler for TestStreamingHandler {
     async fn combined_update_stream(
         &self,
         _task_id: &str,
+        _from_event_id: Option<u64>,
     ) -> Result<
         Pin<
             Box<
-                dyn futures::Stream<Item = Result<UpdateEvent, a2a_rs::domain::error::A2AError>>
+                dyn futures::Stream<Item = Result<SeqEvent, a2a_rs::domain::error::A2AError>>
                     + Send,
             >,
         >,

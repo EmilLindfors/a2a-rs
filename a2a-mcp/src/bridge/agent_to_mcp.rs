@@ -174,9 +174,9 @@ where
         A2AError,
     > {
         if let Some(ref sh) = self.streaming_handler {
-            let stream = sh.combined_update_stream(task_id).await?;
+            let stream = sh.combined_update_stream(task_id, None).await?;
             let mapped = stream.map(|res| {
-                res.map(|event| match event {
+                res.map(|seq| match seq.event {
                     a2a_rs::port::UpdateEvent::StatusUpdate(status) => {
                         a2a_rs::StreamItem::StatusUpdate(status)
                     }

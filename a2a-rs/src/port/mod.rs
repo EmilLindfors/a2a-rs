@@ -25,14 +25,14 @@ pub mod task_manager;
 pub use authenticator::{
     AuthContext, AuthContextExtractor, AuthPrincipal, Authenticator, CompositeAuthenticator,
 };
-pub use client::{StreamItem, Transport};
+pub use client::{StreamEvent, StreamItem, Transport};
 pub use interceptor::{CallContext, CallInterceptor, CallSide, run_after, run_before};
 pub use message_handler::AsyncMessageHandler;
 pub use notification_manager::{
     AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier, NoopPushNotifier,
 };
 pub use streaming_handler::{
-    AsyncStreamingHandler, Subscriber as StreamingSubscriber, UpdateEvent,
+    AsyncStreamingHandler, SeqEvent, Subscriber as StreamingSubscriber, UpdateEvent,
 };
 pub use task_manager::{
     AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery, AsyncTaskVersioning,

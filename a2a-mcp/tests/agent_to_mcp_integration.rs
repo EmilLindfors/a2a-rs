@@ -17,7 +17,7 @@ use a2a_rs::domain::{
     TaskStatusUpdateEvent,
 };
 use a2a_rs::port::streaming_handler::Subscriber;
-use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, UpdateEvent};
+use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, SeqEvent, UpdateEvent};
 use async_trait::async_trait;
 use rmcp::service::{NotificationContext, RequestContext};
 use rmcp::{model::*, ClientHandler, ErrorData as McpError, RoleClient, ServerHandler, ServiceExt};
@@ -467,11 +467,12 @@ impl AsyncStreamingHandler for MockStreamingHandler {
     async fn combined_update_stream(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError>
+        _from_event_id: Option<u64>,
+    ) -> Result<Pin<Box<dyn futures::Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError>
     {
         let task_id = task_id.to_string();
         let events = vec![
-            Ok(UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            Ok(SeqEvent::new(1, UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
                 task_id: task_id.clone(),
                 context_id: "ctx-1".to_string(),
                 kind: "status-update".to_string(),
@@ -486,8 +487,8 @@ impl AsyncStreamingHandler for MockStreamingHandler {
                     ),
                 ),
                 metadata: None,
-            })),
-            Ok(UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            }))),
+            Ok(SeqEvent::new(2, UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
                 task_id: task_id.clone(),
                 context_id: "ctx-1".to_string(),
                 kind: "status-update".to_string(),
@@ -502,7 +503,7 @@ impl AsyncStreamingHandler for MockStreamingHandler {
                     ),
                 ),
                 metadata: None,
-            })),
+            }))),
         ];
 
         Ok(Box::pin(futures::stream::iter(events)))

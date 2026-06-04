@@ -110,7 +110,12 @@ pub mod utils;
 // Re-export commonly used types
 pub use error::{ClientError, Result};
 
-use a2a_rs::{HttpClient, Transport};
+use std::pin::Pin;
+use std::sync::Arc;
+
+use a2a_rs::domain::A2AError;
+use a2a_rs::{HttpClient, RetryPolicy, StreamEvent, Transport, subscribe_resilient};
+use futures::Stream;
 
 /// Web-friendly A2A client that wraps both HTTP and WebSocket clients.
 ///
@@ -150,9 +155,10 @@ use a2a_rs::{HttpClient, Transport};
 pub struct WebA2AClient {
     /// The negotiated transport for A2A requests and streaming.
     ///
-    /// Boxed behind the [`Transport`] port so the client is agnostic to the
-    /// underlying wire protocol (ConnectRPC, JSON-RPC 2.0, …).
-    pub transport: Box<dyn Transport>,
+    /// Held behind an `Arc<dyn Transport>` so the client is agnostic to the
+    /// underlying wire protocol (ConnectRPC, JSON-RPC 2.0, …) and can share the
+    /// transport with a reconnecting subscription stream.
+    pub transport: Arc<dyn Transport>,
 }
 
 impl WebA2AClient {
@@ -186,7 +192,7 @@ impl WebA2AClient {
     /// ```
     pub fn new_http(base_url: String) -> Self {
         Self {
-            transport: Box::new(HttpClient::new(base_url)),
+            transport: Arc::new(HttpClient::new(base_url)),
         }
     }
 
@@ -221,10 +227,50 @@ impl WebA2AClient {
         })?;
 
         match a2a_rs::connect(base_url, &a2a_rs::default_registry()).await {
-            Ok(transport) => Ok(Self { transport }),
+            Ok(transport) => Ok(Self {
+                transport: Arc::from(transport),
+            }),
             // Card fetch / negotiation failed — fall back to a direct ConnectRPC client.
             Err(_) => Ok(Self::new_http(base_url.to_string())),
         }
+    }
+
+    /// Subscribe to a task's updates as a protocol-neutral stream of
+    /// [`StreamEvent`]s.
+    ///
+    /// This is the **spec-compliant** path: a single A2A `SubscribeToTask` round
+    /// trip with no reconnection and no `Last-Event-ID` — what any A2A agent
+    /// expects. For automatic reconnection (and gap-free resume against an
+    /// a2a-rs server) use
+    /// [`subscribe_resilient`](WebA2AClient::subscribe_resilient).
+    pub async fn subscribe(
+        &self,
+        task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, A2AError>> + Send>>> {
+        self.transport
+            .subscribe_to_task(task_id, None, None)
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Subscribe to a task's updates with automatic reconnect + exponential
+    /// backoff. The stream ends when the task reaches a terminal state (or
+    /// retries are exhausted).
+    ///
+    /// Reconnection itself is spec-compliant (it re-issues `SubscribeToTask`).
+    /// Resuming *without gaps* via `Last-Event-ID` is an **a2a-rs enhancement**
+    /// beyond the A2A v1.0 spec: it works against an a2a-rs server and degrades
+    /// gracefully (reconnect-from-current-state) against any spec-compliant one.
+    ///
+    /// This is the reusable core that [`create_sse_stream`](components::create_sse_stream)
+    /// builds on; framework-agnostic, so non-Axum frontends can consume it
+    /// directly.
+    pub fn subscribe_resilient(
+        &self,
+        task_id: &str,
+        policy: RetryPolicy,
+    ) -> Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, A2AError>> + Send>> {
+        subscribe_resilient(self.transport.clone(), task_id.to_string(), None, None, policy)
     }
 }
 /// Application state for Axum web applications.

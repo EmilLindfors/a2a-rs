@@ -13,10 +13,22 @@ use a2a_rs::domain::{A2AError, ContextId, Message, Part, Role, Task, TaskId, Tas
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
 use super::types::*;
-use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest};
+use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest, ToolCallAccumulator};
 
 // NOTE: Task storage is handled by ConnectRpcAdapter + SQLx/InMemory storage
 // This handler is stateless and only processes messages
+
+/// Build the typed metadata that marks an artifact as a (possibly partial)
+/// tool-call delta, so a UI can distinguish it from a text chunk and reassemble
+/// the call's arguments by `call_id`.
+fn tool_call_metadata(call_id: &str, tool_name: &str, partial: bool) -> Map<String, Value> {
+    let mut m = Map::new();
+    m.insert("type".to_string(), json!("tool-call"));
+    m.insert("call_id".to_string(), json!(call_id));
+    m.insert("tool_name".to_string(), json!(tool_name));
+    m.insert("partial".to_string(), json!(partial));
+    m
+}
 
 /// Metrics for tracking handler performance
 #[derive(Debug, Default, Clone)]
@@ -424,6 +436,7 @@ Example response when asking for info:
 
         let mut ai_response = String::new();
         let artifact_id = uuid::Uuid::new_v4().to_string();
+        let mut tool_calls = ToolCallAccumulator::new();
 
         use futures::StreamExt;
 
@@ -459,19 +472,20 @@ Example response when asking for info:
                         .await;
                 }
                 Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCallChunk {
-                    arguments,
+                    id,
                     name,
-                    ..
+                    arguments,
                 }) => {
-                    // Similar to above, but for tool calls
+                    // Stream the tool-call delta as a typed, structured artifact so
+                    // a UI can distinguish it from text and reassemble arguments by
+                    // call id (see the `tool-call` metadata marker).
                     ai_response.push_str(&arguments);
+                    let partial = tool_calls.push(&id, name.as_deref(), &arguments);
+                    let tool_name = partial.name.clone().unwrap_or_else(|| "unknown".to_string());
 
                     let artifact = Artifact {
                         artifact_id: artifact_id.clone(),
-                        name: format!(
-                            "Tool Call: {}",
-                            name.unwrap_or_else(|| "Unknown".to_string())
-                        ),
+                        name: format!("Tool Call: {tool_name}"),
                         description: String::new(),
                         parts: vec![Part::text(arguments)],
                         metadata: buffa::MessageField::none(),
@@ -486,7 +500,7 @@ Example response when asking for info:
                         artifact,
                         append: Some(true),
                         last_chunk: Some(false),
-                        metadata: None,
+                        metadata: Some(tool_call_metadata(&id, &tool_name, true)),
                     };
 
                     let _ = self
@@ -494,8 +508,36 @@ Example response when asking for info:
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
-                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCall(_)) => {
-                    // Ignore final tool call structure for now
+                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCall(call)) => {
+                    // Reconcile the authoritative final call and emit a terminal,
+                    // non-partial artifact carrying the complete arguments.
+                    let metadata = tool_call_metadata(&call.id, &call.name, false);
+                    let artifact = Artifact {
+                        artifact_id: artifact_id.clone(),
+                        name: format!("Tool Call: {}", call.name),
+                        description: String::new(),
+                        parts: vec![Part::text(call.arguments.clone())],
+                        metadata: buffa::MessageField::none(),
+                        extensions: Vec::new(),
+                        ..Default::default()
+                    };
+
+                    let update_event = a2a_rs::domain::TaskArtifactUpdateEvent {
+                        task_id: task_id.to_string(),
+                        context_id: current_message.context_id.clone(),
+                        kind: "artifact-update".to_string(),
+                        artifact,
+                        append: Some(false),
+                        last_chunk: Some(true),
+                        metadata: Some(metadata),
+                    };
+
+                    tool_calls.finalize(call);
+
+                    let _ = self
+                        .streaming
+                        .broadcast_artifact_update(task_id, update_event)
+                        .await;
                 }
                 Err(e) => {
                     tracing::error!("LLM Stream error: {}", e);

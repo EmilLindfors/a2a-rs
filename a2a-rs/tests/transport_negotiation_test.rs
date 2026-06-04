@@ -17,7 +17,7 @@ use a2a_rs::domain::{
     A2AError, AgentCard, AgentInterface, ListTasksParams, ListTasksResult, Message, Task,
     TaskPushNotificationConfig,
 };
-use a2a_rs::{StreamItem, Transport, TransportFactory, TransportNegotiator};
+use a2a_rs::{StreamEvent, Transport, TransportFactory, TransportNegotiator};
 
 /// A no-op transport that only reports its protocol — its RPC methods are never
 /// called in negotiation tests.
@@ -80,7 +80,8 @@ impl Transport for DummyTransport {
         &self,
         _: &str,
         _: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
+        _: Option<&str>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, A2AError>> + Send>>, A2AError> {
         unimplemented!()
     }
 }

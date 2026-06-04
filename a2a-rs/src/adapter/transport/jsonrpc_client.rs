@@ -41,7 +41,8 @@ use crate::{
         },
     },
     port::{
-        CallContext, CallInterceptor, CallSide, StreamItem, Transport, run_after, run_before,
+        CallContext, CallInterceptor, CallSide, StreamEvent, StreamItem, Transport, run_after,
+        run_before,
     },
 };
 
@@ -212,11 +213,14 @@ impl JsonRpcClient {
             .map_err(|e| A2AError::Internal(format!("failed to decode result: {e}")))
     }
 
-    /// The un-intercepted streaming subscribe (SSE round-trip).
+    /// The un-intercepted streaming subscribe (SSE round-trip). `last_event_id`,
+    /// when set, is sent as the `Last-Event-ID` header so the server replays
+    /// events after that id before streaming live updates.
     async fn subscribe_inner(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
+        last_event_id: Option<&str>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, A2AError>> + Send>>, A2AError> {
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             id: JsonRpcId::Num(1),
@@ -230,11 +234,15 @@ impl JsonRpcClient {
             ),
         };
 
-        let response = self
+        let mut builder = self
             .client
             .post(&self.base_url)
             .headers(self.headers()?)
-            .header(reqwest::header::ACCEPT, "text/event-stream")
+            .header(reqwest::header::ACCEPT, "text/event-stream");
+        if let Some(id) = last_event_id {
+            builder = builder.header("last-event-id", id);
+        }
+        let response = builder
             .json(&request)
             .send()
             .await
@@ -401,13 +409,14 @@ impl Transport for JsonRpcClient {
         &self,
         task_id: &str,
         _history_length: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
+        last_event_id: Option<&str>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, A2AError>> + Send>>, A2AError> {
         if self.interceptors.is_empty() {
-            return self.subscribe_inner(task_id).await;
+            return self.subscribe_inner(task_id, last_event_id).await;
         }
         let ctx = CallContext::new(methods::SUBSCRIBE_TO_TASK, CallSide::Client);
         run_before(&self.interceptors, &ctx).await?;
-        let result = self.subscribe_inner(task_id).await;
+        let result = self.subscribe_inner(task_id, last_event_id).await;
         run_after(&self.interceptors, &ctx, result.as_ref().map(|_| ())).await;
         result
     }
@@ -417,18 +426,20 @@ impl Transport for JsonRpcClient {
 // SSE consumption
 // ---------------------------------------------------------------------------
 
-/// Reassemble an `text/event-stream` body into a stream of [`StreamItem`]s.
+/// Reassemble an `text/event-stream` body into a stream of [`StreamEvent`]s.
 ///
 /// Each SSE event is a `data:` payload carrying a [`JsonRpcResponse`] whose
 /// `result` is a [`StreamResponse`] union (this is exactly what
-/// [`JsonRpcAdapter`](super::jsonrpc::JsonRpcAdapter)'s SSE path emits). Chunks
-/// from the socket may split mid-event or mid-UTF-8-sequence, so we buffer and
-/// only emit on a complete event boundary (`\n\n`).
-fn sse_stream(response: reqwest::Response) -> impl Stream<Item = Result<StreamItem, A2AError>> + Send {
+/// [`JsonRpcAdapter`](super::jsonrpc::JsonRpcAdapter)'s SSE path emits), plus an
+/// optional `id:` line carrying the server's per-task event id (surfaced on the
+/// [`StreamEvent`] for `Last-Event-ID` resumption). Chunks from the socket may
+/// split mid-event or mid-UTF-8-sequence, so we buffer and only emit on a
+/// complete event boundary (`\n\n`).
+fn sse_stream(response: reqwest::Response) -> impl Stream<Item = Result<StreamEvent, A2AError>> + Send {
     struct State {
         response: reqwest::Response,
         buf: String,
-        pending: VecDeque<Result<StreamItem, A2AError>>,
+        pending: VecDeque<Result<StreamEvent, A2AError>>,
         done: bool,
     }
 
@@ -466,12 +477,12 @@ fn sse_stream(response: reqwest::Response) -> impl Stream<Item = Result<StreamIt
     })
 }
 
-/// Extract complete SSE events from `buf`, pushing each decoded item to `out`.
+/// Extract complete SSE events from `buf`, pushing each decoded event to `out`.
 /// When `flush` is true, a trailing event with no terminating blank line is also
 /// processed (end of stream).
 fn drain_sse_events(
     buf: &mut String,
-    out: &mut VecDeque<Result<StreamItem, A2AError>>,
+    out: &mut VecDeque<Result<StreamEvent, A2AError>>,
     flush: bool,
 ) {
     loop {
@@ -496,8 +507,13 @@ fn drain_sse_events(
             .collect::<Vec<_>>()
             .join("\n");
 
+        let event_id = event
+            .lines()
+            .find_map(|line| line.strip_prefix("id:").map(str::trim_start))
+            .and_then(|s| s.parse::<u64>().ok());
+
         if !data.is_empty() {
-            out.push_back(parse_sse_frame(&data));
+            out.push_back(parse_sse_frame(&data).map(|item| StreamEvent::new(event_id, item)));
         }
 
         if flush && buf.is_empty() {

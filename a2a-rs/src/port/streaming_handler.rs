@@ -88,11 +88,17 @@ pub trait AsyncStreamingHandler: Send + Sync {
         A2AError,
     >;
 
-    /// Create a combined stream of all updates for a task
+    /// Create a combined stream of all updates for a task.
+    ///
+    /// Each yielded [`SeqEvent`] carries a per-task monotonic id so a client can
+    /// resume after a disconnect. When `from_event_id` is `Some(n)`, the handler
+    /// first replays any buffered events with id `> n` (best-effort, bounded by
+    /// the handler's replay buffer) before streaming live updates.
     async fn combined_update_stream(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError>;
+        from_event_id: Option<u64>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError>;
 
     /// Validate streaming parameters
     async fn validate_streaming_params(&self, task_id: &str) -> Result<(), A2AError> {
@@ -105,13 +111,19 @@ pub trait AsyncStreamingHandler: Send + Sync {
         Ok(())
     }
 
-    /// Start streaming for a task with automatic cleanup
+    /// Start streaming for a task with automatic cleanup.
+    ///
+    /// `from_event_id` is forwarded to [`combined_update_stream`] for
+    /// Last-Event-ID resumption.
+    ///
+    /// [`combined_update_stream`]: AsyncStreamingHandler::combined_update_stream
     async fn start_task_streaming(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError> {
+        from_event_id: Option<u64>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError> {
         self.validate_streaming_params(task_id).await?;
-        self.combined_update_stream(task_id).await
+        self.combined_update_stream(task_id, from_event_id).await
     }
 
     /// Stop all streaming for a task
@@ -193,8 +205,38 @@ impl AsyncStreamingHandler for std::sync::Arc<dyn AsyncStreamingHandler> {
     async fn combined_update_stream(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError> {
-        (**self).combined_update_stream(task_id).await
+        from_event_id: Option<u64>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError> {
+        (**self).combined_update_stream(task_id, from_event_id).await
+    }
+}
+
+/// A streamed [`UpdateEvent`] tagged with a per-task monotonic id.
+///
+/// The id is assigned by the streaming handler when the event is broadcast and
+/// is surfaced to clients as the SSE `id:` field. On reconnect a client echoes
+/// the last id it saw via `Last-Event-ID`, and the handler replays buffered
+/// events with a greater id (see
+/// [`combined_update_stream`](AsyncStreamingHandler::combined_update_stream)).
+///
+/// This id/`Last-Event-ID` resumption is an a2a-rs enhancement on top of the
+/// W3C SSE standard, **not** part of the A2A v1.0 spec. Emitting the `id:` field
+/// is inert for spec clients (they read only the event payload), so it does not
+/// affect interop.
+#[derive(Debug, Clone)]
+pub struct SeqEvent {
+    /// Per-task monotonic event id (starts at 1; `0` is reserved for the
+    /// initial task snapshot, which carries no replayable id).
+    pub id: u64,
+    /// The update payload.
+    pub event: UpdateEvent,
+}
+
+impl SeqEvent {
+    /// Construct a sequenced event.
+    #[inline]
+    pub fn new(id: u64, event: UpdateEvent) -> Self {
+        Self { id, event }
     }
 }
 

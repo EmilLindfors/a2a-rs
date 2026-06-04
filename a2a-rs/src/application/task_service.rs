@@ -30,13 +30,14 @@ use crate::domain::{
 };
 use crate::port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier,
-    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery, UpdateEvent,
+    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery, SeqEvent,
 };
 use crate::services::server::AgentInfoProvider;
 
-/// A stream of domain update events for a task. The transport adapter maps each
-/// [`UpdateEvent`] onto its wire representation.
-pub type UpdateStream = Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>;
+/// A stream of sequenced update events for a task. Each [`SeqEvent`] carries a
+/// per-task monotonic id (surfaced as the SSE `id:` field); the transport
+/// adapter maps the inner update onto its wire representation.
+pub type UpdateStream = Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>;
 
 /// Use-case orchestration over the A2A ports.
 ///
@@ -165,7 +166,10 @@ impl TaskService {
         }
 
         // Start updates stream first so we don't miss early updates.
-        let update_stream = self.streaming_handler.start_task_streaming(task_id).await?;
+        let update_stream = self
+            .streaming_handler
+            .start_task_streaming(task_id, None)
+            .await?;
 
         let mut task = self
             .message_handler
@@ -201,9 +205,14 @@ impl TaskService {
 
     /// Subscribe to a task's update stream, returning the current task (if it
     /// exists) and the stream of subsequent updates.
+    ///
+    /// `from_event_id` carries a client's `Last-Event-ID` for resumption: when
+    /// set, the handler replays buffered events with a greater id before
+    /// streaming live updates.
     pub async fn subscribe(
         &self,
         task_id: &str,
+        from_event_id: Option<u64>,
     ) -> Result<(Option<Task>, UpdateStream), A2AError> {
         let id: TaskId = task_id.parse()?;
 
@@ -213,7 +222,10 @@ impl TaskService {
             Err(e) => return Err(e),
         };
 
-        let update_stream = self.streaming_handler.start_task_streaming(task_id).await?;
+        let update_stream = self
+            .streaming_handler
+            .start_task_streaming(task_id, from_event_id)
+            .await?;
 
         Ok((initial_task, update_stream))
     }

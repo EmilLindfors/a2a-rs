@@ -34,7 +34,7 @@ use crate::{
     },
     port::{
         AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-        AsyncTaskQuery, UpdateEvent, streaming_handler::Subscriber,
+        AsyncTaskQuery, SeqEvent, UpdateEvent, streaming_handler::Subscriber,
     },
     services::server::AgentInfoProvider,
 };
@@ -286,8 +286,8 @@ impl A2aService for ConnectRpcAdapter {
             ..Default::default()
         };
 
-        let mapped_stream =
-            update_stream.map(|item| item.map(map_update_event).map_err(map_err));
+        let mapped_stream = update_stream
+            .map(|item| item.map(|seq| map_update_event(seq.event)).map_err(map_err));
 
         let chained_stream =
             futures::stream::once(async { Ok(initial_response) }).chain(mapped_stream);
@@ -363,12 +363,12 @@ impl A2aService for ConnectRpcAdapter {
         let req = request.to_owned_message();
 
         let (initial_task, update_stream) =
-            self.service.subscribe(&req.id).await.map_err(map_err)?;
+            self.service.subscribe(&req.id, None).await.map_err(map_err)?;
 
         use futures::StreamExt;
 
-        let mapped_stream =
-            update_stream.map(|item| item.map(map_update_event).map_err(map_err));
+        let mapped_stream = update_stream
+            .map(|item| item.map(|seq| map_update_event(seq.event)).map_err(map_err));
 
         if let Some(task) = initial_task {
             let initial_response = StreamResponse {
@@ -613,8 +613,9 @@ impl AsyncStreamingHandler for NoopStreamingHandler {
     async fn combined_update_stream(
         &self,
         _task_id: &str,
+        _from_event_id: Option<u64>,
     ) -> Result<
-        Pin<Box<dyn ::futures::Stream<Item = Result<UpdateEvent, A2AError>> + Send>>,
+        Pin<Box<dyn ::futures::Stream<Item = Result<SeqEvent, A2AError>> + Send>>,
         A2AError,
     > {
         Err(A2AError::UnsupportedOperation(

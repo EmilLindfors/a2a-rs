@@ -1,44 +1,5 @@
 # A2A-RS Follow-Ups and Future Work
 
-> **Status (2026-06-01).** The `0.4` branch **completed the full port-layer
-> refactor**: capability-split ports (`AsyncTaskLifecycle`/`AsyncTaskQuery`,
-> push-config reconciled into `AsyncNotificationManager`), `Arc<dyn …>` dispatch
-> (no viral generics), newtype IDs (`TaskId`/`ContextId`/`PushConfigId`), `*Ext`
-> validation traits, the `TaskStatusBroadcast` cross-port mixin, the
-> `TaskService`/transport split, and the **storage/streaming/push struct-split**
-> (storage is persistence-only; streaming lives in
-> `adapter::streaming::InMemoryStreamingHandler`; webhook delivery sits behind the
-> `AsyncPushNotifier` port). It also landed the wire-interop transport arc: the
-> JSON-RPC 2.0 + HTTP+JSON **server** adapter (`JsonRpcAdapter`), the client-side
-> **`Transport` port** (`port::client`), a wire-compatible **`JsonRpcClient`**
-> (`jsonrpc-client` feature), and **card-driven transport negotiation**
-> (`TransportFactory` / `TransportNegotiator` / `connect`).
->
-> The refactor is done bar one idiomatic-modernization straggler (the `Result<T>`
-> alias, item 4 below). The roadmap sections track what's left for 0.4 and what's
-> deferred to 0.5; the older backlog further down is unchanged and still open.
->
-> **Update (0.4, cherry-picked from the 0.5 backlog).** Three of the four 0.5
-> "cheap wins" from `OFFICIAL_SDK_COMPARISON.md` §4.4 landed in 0.4 and are green
-> under `clippy --workspace --all-features --all-targets -D warnings`,
-> `--no-default-features`, and the full test suite:
-> **typed error details** (`ErrorInfo`/`FieldViolation`/`BadRequest` in the
-> JSON-RPC `error.data` array, round-tripped by the client), **`TaskStore`
-> optimistic-concurrency versioning** (the `AsyncTaskVersioning` port + `u64`
-> versions in both the in-memory and sqlx adapters, with a `VersionConflict`
-> error), and the **`CallInterceptor` before/after chain** on both the JSON-RPC
-> client and server (plus a built-in `LoggingInterceptor`). Multi-tenancy stays
-> deferred — see the 0.5 section.
->
-> **Update (2026-06-02).** The **Complex Agent Example** ("kitchen-sink") landed:
-> `a2a-agents/examples/complex_agent.rs` (TOML + optional LLM tool-calling +
-> `McpToA2ABridge` + live SSE streaming + native tasks). Building it surfaced and
-> fixed a real framework gap — the `AgentBuilder`/`AgentRuntime` path defaulted
-> the transport to a **no-op streaming handler**, so handler broadcasts never
-> reached `tasks/subscribe` SSE clients. New `with_streaming` builder/runtime
-> hooks (backed by a blanket `impl AsyncStreamingHandler for Arc<dyn …>`) close
-> it. See the Complex Agent Example section below.
-
 ## 0.4 — remaining to finish the release
 
 Round out the transport/interop story the rest of 0.4 already tells.
@@ -46,17 +7,9 @@ Round out the transport/interop story the rest of 0.4 already tells.
 1. **CLI (`a2acli`-equivalent).** The single most natural follow-on — `OFFICIAL_SDK_COMPARISON.md` #1 ("verify interop empirically") + #4. A small bin/crate that drives the new client `Transport`: `card`, `send`, `stream`, `get`, `cancel`. Self-contained, zero blast radius; doubles as the manual interop harness.
 2. **Empirical cross-SDK interop check.** Point the official `a2aproject/a2acli` at our `examples/jsonrpc_server.rs` agent, and/or our `JsonRpcClient` at a stock A2A agent. (`tests/jsonrpc_client_interop_test.rs` already proves *our*-client ↔ *our*-server byte-compat; this validates against the canonical SDKs.)
 3. **Runnable `jsonrpc_client` / `auto_connect` example** mirroring `examples/jsonrpc_server.rs`. Also satisfies the General item on compile-checked rustdoc examples.
-4. **`pub type Result<T> = std::result::Result<T, A2AError>`** in the domain module (re-exported from the crate root) — the last idiomatic-modernization item from the now-completed port-layer refactor (the standard `std::io`/`serde_json`/`sqlx` one-liner). Add the alias, then trim `Result<X, A2AError>` signatures down to `Result<X>` while touching them. Natural to land before tagging 0.4.
+4. **`pub type Result<T> = std::result::Result<T, A2AError>`** in the domain module (re-exported from the crate root) — the last idiomatic-modernization item from the port-layer refactor (the standard `std::io`/`serde_json`/`sqlx` one-liner). Add the alias, then trim `Result<X, A2AError>` signatures down to `Result<X>` while touching them. Natural to land before tagging 0.4.
 
-## 0.5 — deferred (by weight)
-
-Landed early in 0.4 (struck through; see the status note at the top):
-
-- ~~**`TaskStore` versioning (`u64` optimistic concurrency)**~~ — done: `AsyncTaskVersioning` port (`version` / `get_versioned` / `update_status_checked`), `VersionedTask` domain type, `A2AError::VersionConflict`, implemented in both `InMemoryTaskStorage` and `SqlxTaskStorage` (migration `003_task_version.sql`). Every mutation — versioned or not — bumps the counter so the views never drift.
-- ~~**`CallInterceptor` before/after middleware (client + server)**~~ — done: `port::interceptor` (`CallInterceptor`/`CallContext`/`CallSide` + `run_before`/`run_after`), wired into `JsonRpcClient` and `JsonRpcAdapter` (covers JSON-RPC unary, REST, and the streaming open), plus a built-in `LoggingInterceptor`.
-- ~~**Richer typed error details**~~ — done: `domain::error_details` (`ErrorDetail`/`ErrorInfo`/`FieldViolation`), `A2AError::error_details()` + `reason_code()`, surfaced in the JSON-RPC `error.data` array (Google-RPC `BadRequest` for validation, an `ErrorInfo` reason on every error) and reconstructed by `jsonrpc_to_a2a`.
-
-Still deferred:
+## 0.5 — deferred
 
 - **Multi-tenancy** — thread a `tenant` through requests/storage (§4.4/§7). Currently only placeholder fields exist (`TaskPushNotificationConfig.tenant`, the proto `/{tenant}/…` routes). **Deferred to a focused 0.4.x** (decision 2026-06-01): it reshapes the storage/port/transport surface, so it warrants its own pass. Two viable shapes when picked up: **(a) edge tenant-routing** — a `TenantRouter` that holds per-tenant storage and resolves the tenant from the `/{tenant}/` path at the transport edge, keeping the domain/ports tenant-free (smallest blast radius, most hexagonal); **(b) per-request `tenant` param** threaded through every port method + transport extraction + storage scoping, matching the official SDK exactly (largest diff, touches every call site across all 6 crates).
 
@@ -67,31 +20,8 @@ Still deferred:
 
 ## Complex Agent Example
 
-**Landed (2026-06-02):** `a2a-agents/examples/complex_agent.rs` (+ `complex_agent.toml`),
-a "Research Assistant" kitchen-sink behind `--features mcp-server`. Builds
-clean, clippy-clean, boots and serves its agent card. It wires:
-  - ~~LLM Provider integration (OpenAI/Gemini)~~ — optional via `LlmProvider`
-    (`from_env`), with a deterministic rule-based fallback so it runs keyless.
-  - ~~MCP tool bridging (`McpToA2ABridge`)~~ — an in-process MCP tool server
-    (`add`/`multiply`/`word_count`) over `tokio::io::duplex`; the agent discovers
-    tools (`get_llm_tools`) and executes them (`execute_llm_tool_call`), and the
-    LLM path drives tool selection.
-  - ~~Streaming to a web client~~ — the handler broadcasts progress artifacts
-    through the `TaskStatusBroadcast` mixin and a shared `InMemoryStreamingHandler`.
-    **This exposed and fixed a real framework gap:** `AgentRuntime`'s transport
-    was built with `ConnectRpcAdapter::new(...)`, which defaults to a *no-op*
-    streaming handler — so handler broadcasts never reached `tasks/subscribe`
-    SSE clients. Fixed by adding `AgentBuilder::with_streaming` / `AgentRuntime::
-    with_streaming` (threaded into `ConnectRpcAdapter::with_streaming_handler`)
-    plus a blanket `impl AsyncStreamingHandler for Arc<dyn AsyncStreamingHandler>`
-    so a shared backend can be injected type-erased. The builder log now prints
-    "📡 Streaming backend wired into transport" when active.
-  - ~~Declarative TOML configuration~~ — identity, skills, transport, storage,
-    and the `streaming` flag all come from `complex_agent.toml`.
-  - ~~A2A native tasks and progress tracking~~ — every request advances a task
-    `Working` → `Completed`/`Failed` via the mixin.
-
-Remaining / optional follow-ups:
+The kitchen-sink example (`a2a-agents/examples/complex_agent.rs`) has landed;
+remaining / optional follow-ups:
   - `AgentToMcpBridge` (re-expose the agent *as* MCP tools) is **not** in this
     example — it's already covered by `a2a-mcp/examples/bidirectional_demo.rs`.
     Fold it in only if a single end-to-end bidirectional showcase is wanted.
@@ -101,14 +31,22 @@ Remaining / optional follow-ups:
     handler-driven (analyze → call tool → done), which is enough for the demo.
 
 ## Streaming Improvements
-- Add support for partial/incremental tool call streaming (instead of waiting for the full JSON string to parse) to allow UIs to show function call progress in real time.
-- Implement robust retry mechanisms and exponential backoff for SSE stream interruptions.
-- Expand streaming integrations natively into the `a2a-client` framework.
+
+The three streaming items (resilient retry/backoff, native `a2a-client`
+streaming, incremental tool-call streaming) have landed; remaining / optional
+follow-ups:
+  - Durable (cross-restart) resumption: the replay buffer is in-memory and
+    bounded (256 events/task); beyond it, resume falls back to the initial
+    snapshot. A sqlx-backed event log would make resumption survive restarts.
+  - A handler-level integration test asserting the tool-call `metadata` reaches
+    SSE subscribers end-to-end (the accumulator and metadata builder are unit-
+    tested; the broadcast wiring is covered only by compilation today).
+  - ConnectRPC transport has no SSE `Last-Event-ID`, so `RetryingTransport` over
+    it reconnects from scratch rather than resuming.
 
 ## General
 - **Audit all doc comments for self-containment.** Sweep `///` / `//!` docs across the workspace so each one describes the *actual architecture and behavior* on its own terms — what the type/port/adapter does and how it fits the hexagonal layering — rather than referencing design rationale, migration history, or internal planning docs (`REFACTORING_PLAN.md`, `OFFICIAL_SDK_COMPARISON.md`, `JSONRPC_ADAPTER_PLAN.md`, "the 0.5 backlog", "Phase 4", etc.) that will be deleted. Docs must still read correctly once those files are gone.
 - Refine existing Rustdoc examples and ensure they are all compile-checked.
-- Resolve any remaining compilation warnings across the workspace. *(Clean under `clippy --workspace --all-features --all-targets -D warnings` **and** `cargo check -p a2a-rs --no-default-features` as of the 0.4 struct-split work — the earlier `--no-default-features` warnings in `adapter/storage/task_storage.rs` went away with the streaming/broadcast code removed from storage.)*
 
 ---
 
@@ -121,13 +59,24 @@ arc — fold into 0.4 or a 0.4.x as convenient. Ordered roughly by impact.
 
 ## Technical debt
 
-### 1. MCP HTTP transport
-`a2a-agents/src/core/mcp.rs:71` currently logs *"Only stdio transport is currently supported for MCP server"*. `rmcp` 1.7 already ships `streamable_http_server`, `sse`, and `ws` transports (see `rmcp-1.7.0/src/transport/`).
+### 1. MCP HTTP transport ✅ (landed 2026-06-04)
+`a2a-agents/src/core/mcp.rs` now serves the agent over MCP's Streamable HTTP
+transport in addition to stdio.
 
-Scope:
-- Extend `McpServerConfig` (`a2a-agents/src/core/config.rs`) with an `http` (or `streamable_http`) section: `enabled`, `host`, `port`.
-- Branch on it in `a2a-agents/src/core/mcp.rs`; enable the matching `rmcp` feature in `a2a-agents/Cargo.toml`.
-- Add an `mcp_http_agent.toml` example next to `mcp_server_agent.toml`.
+Done:
+- `McpServerConfig` gained an `http` section (`McpHttpConfig`: `enabled`, `host`,
+  `port`, `path`, plus `allowed_hosts` / `allowed_origins` DNS-rebinding knobs)
+  in `a2a-agents/src/core/config.rs`.
+- `run_mcp_server` branches on `http.enabled` (takes precedence over stdio) and
+  serves `rmcp`'s `StreamableHttpService` on an `axum` router via the new
+  `run_streamable_http`; the `transport-streamable-http-server` `rmcp` feature
+  is enabled in `a2a-agents/Cargo.toml`.
+- `examples/mcp_http_agent.{toml,rs}` + integration tests (`tests/mcp_http_test.rs`):
+  an end-to-end `initialize` handshake and `Host`-allow-list reject/allow checks,
+  plus config-parse unit tests.
+
+Not done (out of scope): the `sse` and `ws` rmcp transports — Streamable HTTP is
+the current MCP-spec networked transport and supersedes the older SSE one.
 
 ### 2. Finish `mcp-client` framework integration
 `a2a-agents/Cargo.toml:76-80` documents the feature as a work-in-progress: only the low-level `McpClientManager` is usable, framework-level integration is incomplete. Either finish it or mark the feature as preview/unstable in the README so downstream users don't trip on it.
@@ -182,4 +131,6 @@ The 0.3.0 a2a-rs CHANGELOG says: *"Deleted legacy WebSocket transport infrastruc
 
 ## Recommended slice
 
-If picking just three from this backlog: **1 (MCP HTTP transport)**, **5 (`release-plz.toml`)**, **4 (proto-drift fix)** — highest payoff per unit of effort, and the pipeline ones (5) make the 0.4 tag come out clean.
+With **1 (MCP HTTP transport)** now landed, the next-highest payoff per unit of
+effort are **5 (`release-plz.toml`)** and **4 (proto-drift fix)** — and the
+pipeline one (5) makes the 0.4 tag come out clean.
