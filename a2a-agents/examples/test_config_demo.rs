@@ -12,7 +12,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config1 = ServerConfig {
         host: "127.0.0.1".to_string(),
         http_port: 8080,
-        ws_port: 8081,
         storage: StorageConfig::InMemory,
         auth: AuthConfig::None,
     };
@@ -25,7 +24,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config2 = ServerConfig {
         host: "127.0.0.1".to_string(),
         http_port: 8080,
-        ws_port: 8081,
         storage: StorageConfig::Sqlx {
             url: "sqlite://reimbursement.db".to_string(),
             max_connections: 10,
@@ -41,7 +39,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config3 = ServerConfig {
         host: "127.0.0.1".to_string(),
         http_port: 8080,
-        ws_port: 8081,
         storage: StorageConfig::InMemory,
         auth: AuthConfig::BearerToken {
             tokens: vec![
@@ -59,7 +56,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config4 = ServerConfig {
         host: "0.0.0.0".to_string(),
         http_port: 8080,
-        ws_port: 8081,
         storage: StorageConfig::Sqlx {
             url: "postgres://user:password@localhost/reimbursement_prod".to_string(),
             max_connections: 50,

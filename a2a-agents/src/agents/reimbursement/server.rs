@@ -26,7 +26,6 @@ impl ReimbursementServer {
         let config = ServerConfig {
             host,
             http_port: port,
-            ws_port: port + 1,
             storage: StorageConfig::default(),
             auth: AuthConfig::default(),
         };

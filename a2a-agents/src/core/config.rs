@@ -79,13 +79,9 @@ impl AgentConfig {
             ));
         }
 
-        if !self.features.mcp_server.enabled
-            && self.server.http_port == 0
-            && self.server.ws_port == 0
-        {
+        if !self.features.mcp_server.enabled && self.server.http_port == 0 {
             return Err(ConfigError::ValidationError(
-                "At least one server port must be configured when MCP server is disabled"
-                    .to_string(),
+                "The HTTP server port must be configured when MCP server is disabled".to_string(),
             ));
         }
 
@@ -153,10 +149,6 @@ pub struct ServerConfig {
     #[serde(default = "default_http_port")]
     pub http_port: u16,
 
-    /// WebSocket server port (0 to disable)
-    #[serde(default = "default_ws_port")]
-    pub ws_port: u16,
-
     /// Storage configuration
     #[serde(default)]
     pub storage: StorageConfig,
@@ -171,7 +163,6 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             http_port: default_http_port(),
-            ws_port: default_ws_port(),
             storage: StorageConfig::default(),
             auth: AuthConfig::default(),
         }
@@ -540,13 +531,6 @@ fn default_http_port() -> u16 {
         .unwrap_or(8080)
 }
 
-fn default_ws_port() -> u16 {
-    std::env::var("WS_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8081)
-}
-
 fn default_max_connections() -> u32 {
     10
 }
@@ -625,7 +609,6 @@ mod tests {
             [server]
             host = "0.0.0.0"
             http_port = 3000
-            ws_port = 3001
 
             [server.storage]
             type = "sqlx"
@@ -817,6 +800,9 @@ mod tests {
             [server]
             http_port = 0
 
+            [features.mcp_server]
+            enabled = true
+
             [features.mcp_server.http]
             enabled = true
             allowed_hosts = ["mcp.example.com", "mcp.example.com:8000"]
@@ -845,6 +831,9 @@ mod tests {
 
             [server]
             http_port = 0
+
+            [features.mcp_server]
+            enabled = true
 
             [features.mcp_server.http]
             enabled = true

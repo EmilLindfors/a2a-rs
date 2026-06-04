@@ -339,7 +339,6 @@ fn load_agent_config(args: &Args) -> anyhow::Result<ServerConfig> {
     // Override config with command-line arguments
     config.host = args.host.clone();
     config.http_port = args.agent_http_port;
-    config.ws_port = args.agent_ws_port;
 
     Ok(config)
 }
@@ -347,7 +346,6 @@ fn load_agent_config(args: &Args) -> anyhow::Result<ServerConfig> {
 fn print_agent_info(config: &ServerConfig, args: &Args) {
     println!("   📍 Host: {}", config.host);
     println!("   🔌 HTTP Port: {}", config.http_port);
-    println!("   📡 WebSocket Port: {}", config.ws_port);
     println!("   ⚙️  Transport: {}", args.transport);
 
     match &config.storage {

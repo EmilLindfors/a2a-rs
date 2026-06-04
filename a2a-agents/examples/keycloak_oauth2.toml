@@ -9,7 +9,6 @@ version = "1.0.0"
 [server]
 host = "127.0.0.1"
 http_port = 8080
-ws_port = 8081
 
 # In-memory storage for this example
 [server.storage]

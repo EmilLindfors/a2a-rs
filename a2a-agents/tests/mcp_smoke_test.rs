@@ -54,7 +54,6 @@ mod tests {
             [server]
             host = "127.0.0.1"
             http_port = 0
-            ws_port = 0
             auth = { type = "bearer", tokens = ["secret-token-123"] }
 
             [features.mcp_server]

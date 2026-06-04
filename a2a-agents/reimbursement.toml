@@ -14,7 +14,6 @@ url = "https://example.org"
 [server]
 host = "127.0.0.1"
 http_port = 8080
-ws_port = 8081
 
 # Storage backend
 [server.storage]

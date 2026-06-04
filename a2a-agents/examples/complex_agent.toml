@@ -16,7 +16,6 @@ url = "https://github.com/emillindfors/a2a-rs"
 [server]
 host = "127.0.0.1"
 http_port = 8080
-ws_port = 0
 
 # In-memory storage keeps the example self-contained (no DB needed).
 # Swap for `type = "sqlx"` + a `url` to persist tasks across restarts.

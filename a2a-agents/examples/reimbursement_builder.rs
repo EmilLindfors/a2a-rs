@@ -53,11 +53,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     config.server.http_port = port_num;
                 }
             }
-            if let Ok(port) = env::var("WS_PORT") {
-                if let Ok(port_num) = port.parse() {
-                    config.server.ws_port = port_num;
-                }
-            }
         })
         .with_handler(handler)
         .with_storage(storage)
