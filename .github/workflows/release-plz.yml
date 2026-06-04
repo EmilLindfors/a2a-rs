@@ -6,20 +6,29 @@ permissions:
 
 on:
   push:
-    tags:
-      - "v*"
+    branches:
+      - master
   workflow_dispatch:
 
+env:
+  # Force Node 20-pinned JavaScript actions onto Node 24 (silences the
+  # deprecation annotation until the actions update).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+# Standard release-plz flow with per-crate tags (see release-plz.toml):
+#  - `release-plz-pr` keeps an open "release" PR with the pending version bumps
+#    and changelog. Merging it lands the new versions on master.
+#  - `release-plz-release` then publishes each crate whose version is ahead of
+#    crates.io and pushes its `{package}-v{version}` tag.
 jobs:
-  release-plz:
-    name: Release-plz
+  release-plz-release:
+    name: Release-plz release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          ref: master
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -27,10 +36,36 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Run release-plz
+      - name: Run release-plz (release)
         uses: release-plz/action@v0.5
         with:
           command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run release-plz (release-pr)
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
