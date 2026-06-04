@@ -3,8 +3,6 @@
 //! The runtime handles starting HTTP/WebSocket servers, wiring components,
 //! and managing the agent lifecycle based on configuration.
 
-#[cfg(feature = "mcp-client")]
-use crate::core::McpClientManager;
 use crate::core::config::{AgentConfig, AuthConfig, StorageConfig};
 use a2a_rs::adapter::{
     BearerTokenAuthenticator, ConnectRpcAdapter, HttpServer, SimpleAgentInfo,
@@ -33,8 +31,6 @@ pub struct AgentRuntime<H, S> {
     /// emits (e.g. via the `TaskStatusBroadcast` mixin). Without it, the adapter
     /// defaults to a no-op streaming handler and updates never reach clients.
     streaming: Option<Arc<dyn AsyncStreamingHandler>>,
-    #[cfg(feature = "mcp-client")]
-    mcp_client: Option<McpClientManager>,
 }
 
 impl<H, S> AgentRuntime<H, S>
@@ -55,25 +51,6 @@ where
             handler,
             storage,
             streaming: None,
-            #[cfg(feature = "mcp-client")]
-            mcp_client: None,
-        }
-    }
-
-    /// Create a new runtime with MCP client
-    #[cfg(feature = "mcp-client")]
-    pub fn with_mcp_client(
-        config: AgentConfig,
-        handler: Arc<H>,
-        storage: Arc<S>,
-        mcp_client: McpClientManager,
-    ) -> Self {
-        Self {
-            config,
-            handler,
-            storage,
-            streaming: None,
-            mcp_client: Some(mcp_client),
         }
     }
 
@@ -86,12 +63,6 @@ where
     pub fn with_streaming(mut self, streaming: Arc<dyn AsyncStreamingHandler>) -> Self {
         self.streaming = Some(streaming);
         self
-    }
-
-    /// Get the MCP client manager (if enabled)
-    #[cfg(feature = "mcp-client")]
-    pub fn mcp_client(&self) -> Option<&McpClientManager> {
-        self.mcp_client.as_ref()
     }
 
     /// Build agent info from configuration

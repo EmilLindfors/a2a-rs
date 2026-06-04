@@ -1006,12 +1006,12 @@ impl ServerHandler for AgentToMcpBridge {
         let mut extensions = ExtensionCapabilities::new();
         for scheme in self.agent_card.security_schemes.values() {
             if let Some(a2a_rs::domain::generated::security_scheme::Scheme::Oauth2SecurityScheme(
-                ref oauth2_scheme,
+                oauth2_scheme,
             )) = &scheme.scheme
             {
                 if let Some(flows) = oauth2_scheme.flows.as_option() {
                     if let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(
-                        ref cc,
+                        cc,
                     )) = &flows.flow
                     {
                         let mut cc_settings = serde_json::Map::new();

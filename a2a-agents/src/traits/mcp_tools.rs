@@ -1,37 +1,47 @@
 //! Traits and helpers for using MCP tools in message handlers
 
 #[cfg(feature = "mcp-client")]
-use crate::core::McpClientManager;
+use crate::core::{McpClientError, McpClientManager};
 #[cfg(feature = "mcp-client")]
 use rmcp::model::CallToolResult;
 #[cfg(feature = "mcp-client")]
 use serde_json::Value;
 
-/// Extension trait for message handlers to easily call MCP tools
+/// Extension trait giving any handler that holds an [`McpClientManager`]
+/// ergonomic access to its MCP tools.
+///
+/// Implement it by returning a reference to the manager your handler owns; the
+/// default methods then forward to it:
+///
+/// ```rust,ignore
+/// impl McpToolsExt for MyHandler {
+///     fn mcp_client(&self) -> &McpClientManager { &self.mcp }
+/// }
+/// ```
 #[cfg(feature = "mcp-client")]
 #[allow(async_fn_in_trait)]
 pub trait McpToolsExt {
-    /// Get the MCP client manager
+    /// The MCP client manager this handler calls tools through.
     fn mcp_client(&self) -> &McpClientManager;
 
-    /// Call an MCP tool with JSON arguments
+    /// Call an MCP tool with JSON arguments.
     async fn call_mcp_tool(
         &self,
         server_name: &str,
         tool_name: &str,
         arguments: Option<Value>,
-    ) -> Result<CallToolResult, Box<dyn std::error::Error>> {
+    ) -> Result<CallToolResult, McpClientError> {
         self.mcp_client()
             .call_tool(server_name, tool_name, arguments)
             .await
     }
 
-    /// Call an MCP tool with no arguments
+    /// Call an MCP tool with no arguments.
     async fn call_mcp_tool_simple(
         &self,
         server_name: &str,
         tool_name: &str,
-    ) -> Result<CallToolResult, Box<dyn std::error::Error>> {
+    ) -> Result<CallToolResult, McpClientError> {
         self.call_mcp_tool(server_name, tool_name, None).await
     }
 

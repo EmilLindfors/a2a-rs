@@ -78,17 +78,33 @@ Done:
 Not done (out of scope): the `sse` and `ws` rmcp transports — Streamable HTTP is
 the current MCP-spec networked transport and supersedes the older SSE one.
 
-### 2. Finish `mcp-client` framework integration
-`a2a-agents/Cargo.toml:76-80` documents the feature as a work-in-progress: only the low-level `McpClientManager` is usable, framework-level integration is incomplete. Either finish it or mark the feature as preview/unstable in the README so downstream users don't trip on it.
+### 2. Finish `mcp-client` framework integration ✅ (landed 2026-06-04)
+The previous wiring was dead code: `build_with_auto_storage` connected to the
+`[features.mcp_client]` servers and stashed the `McpClientManager` in the
+`AgentRuntime`, but nothing ever read it — the handler (the actual tool
+consumer) never saw it. Closed the loop with a handler-owns-the-client design:
 
-### 3. Bump `a2a-mcp` to `edition = "2024"`
-Everything else in the workspace is on 2024. The bump is blocked by a `ref` binding pattern in `a2a-mcp/src/bridge/agent_to_mcp.rs:1014`:
-```rust
-if let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(
-    ref cc,
-)) = &flows.flow
-```
-Drop the `ref` — match ergonomics handles it. After that, edition 2024 builds clean.
+- `McpClientManager::connect(&McpClientConfig)` is the one-call constructor
+  (connect + tool discovery); lenient per-server, errors only on total failure.
+  Returns a typed `McpClientError` instead of `Box<dyn Error>`.
+- The handler owns the connected manager and implements `McpToolsExt`
+  (`fn mcp_client(&self) -> &McpClientManager`); `McpToolsExt` now returns the
+  typed error too.
+- Removed the dead auto-init from the builder and the unused
+  `mcp_client`/`with_mcp_client`/`mcp_client()` on `AgentRuntime`. The
+  `McpClientManager`/`McpClientError` re-exports are now `mcp-client`-gated (no
+  more no-feature stub).
+- `bin/mcp_echo_server.rs` (fixture MCP stdio server) +
+  `examples/mcp_client_agent.{rs,toml}` + `tests/mcp_client_test.rs` (spawns the
+  fixture, asserts discovery + `echo`/`add` calls + `NotConnected`). README §5
+  documents the flow.
+
+### 3. Bump `a2a-mcp` to `edition = "2024"` ✅ (landed 2026-06-04)
+The whole workspace is now on edition 2024. The blocker was two `ref` bindings
+in a reference-matched `if let` in `a2a-mcp/src/bridge/agent_to_mcp.rs`
+(`ref oauth2_scheme` and `ref cc`, matched against `&scheme.scheme` / `&flows.flow`)
+— redundant under match ergonomics and an error in edition 2024. Dropped both;
+builds, clippy, and tests are clean.
 
 ### 4. Proto drift between `spec/` and `a2a-rs/proto/`
 For 0.3.0 we vendored the protos that `a2a-rs/build.rs` reads into `a2a-rs/proto/` so `cargo publish` would package them. That now duplicates `spec/a2a.proto` and the relevant `spec/google/api/*.proto` files, and they can drift silently. Pick one:

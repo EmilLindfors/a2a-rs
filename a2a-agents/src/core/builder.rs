@@ -3,8 +3,6 @@
 //! Provides a fluent API for building agents from configuration files
 //! or programmatically with minimal boilerplate.
 
-#[cfg(feature = "mcp-client")]
-use crate::core::McpClientManager;
 use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
 use crate::core::runtime::AgentRuntime;
 use a2a_rs::domain::{
@@ -18,8 +16,6 @@ use a2a_rs::{HttpPushNotificationSender, InMemoryTaskStorage};
 use async_trait::async_trait;
 use std::path::Path;
 use std::sync::Arc;
-#[cfg(feature = "mcp-client")]
-use tracing::info;
 
 #[cfg(feature = "sqlx")]
 use a2a_rs::adapter::storage::SqlxTaskStorage;
@@ -361,35 +357,6 @@ where
             }
         };
 
-        // Initialize MCP client if configured
-        #[cfg(feature = "mcp-client")]
-        if self.config.features.mcp_client.enabled {
-            info!("Initializing MCP client...");
-            let mcp_client = McpClientManager::new();
-
-            // Initialize connections to configured servers
-            if let Err(e) = mcp_client
-                .initialize(&self.config.features.mcp_client)
-                .await
-            {
-                return Err(BuildError::RuntimeError(format!(
-                    "Failed to initialize MCP client: {}",
-                    e
-                )));
-            }
-
-            let mut runtime = AgentRuntime::with_mcp_client(
-                self.config,
-                Arc::new(handler),
-                Arc::new(storage),
-                mcp_client,
-            );
-            if let Some(streaming) = streaming {
-                runtime = runtime.with_streaming(streaming);
-            }
-            return Ok(runtime);
-        }
-
         let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
         if let Some(streaming) = streaming {
             runtime = runtime.with_streaming(streaming);
@@ -436,35 +403,6 @@ where
                 AutoStorage::Sqlx(storage)
             }
         };
-
-        // Initialize MCP client if configured
-        #[cfg(feature = "mcp-client")]
-        if self.config.features.mcp_client.enabled {
-            info!("Initializing MCP client...");
-            let mcp_client = McpClientManager::new();
-
-            // Initialize connections to configured servers
-            if let Err(e) = mcp_client
-                .initialize(&self.config.features.mcp_client)
-                .await
-            {
-                return Err(BuildError::RuntimeError(format!(
-                    "Failed to initialize MCP client: {}",
-                    e
-                )));
-            }
-
-            let mut runtime = AgentRuntime::with_mcp_client(
-                self.config,
-                Arc::new(handler),
-                Arc::new(storage),
-                mcp_client,
-            );
-            if let Some(streaming) = streaming {
-                runtime = runtime.with_streaming(streaming);
-            }
-            return Ok(runtime);
-        }
 
         let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
         if let Some(streaming) = streaming {
