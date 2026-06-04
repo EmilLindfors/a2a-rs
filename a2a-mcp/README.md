@@ -56,4 +56,4 @@ flowchart TD
 
 ## Development Status
 
-See [TODO.md](TODO.md) for current implementation status and next steps.
+See the workspace [ROADMAP.md](../ROADMAP.md) for deferred themes and next steps.

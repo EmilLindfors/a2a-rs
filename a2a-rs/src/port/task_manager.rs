@@ -60,14 +60,25 @@ pub trait AsyncTaskQuery: Send + Sync {
 ///
 /// The classic read-modify-write loop:
 ///
-/// ```ignore
+/// ```
+/// # use a2a_rs::{AsyncTaskVersioning, VersionedTask};
+/// # use a2a_rs::domain::{A2AError, Message, TaskId, TaskState};
+/// # async fn read_modify_write(
+/// #     store: &impl AsyncTaskVersioning,
+/// #     id: TaskId,
+/// #     next_state: TaskState,
+/// #     msg: Option<Message>,
+/// # ) -> Result<(), A2AError> {
 /// let VersionedTask { task, version } = store.get_versioned(&id, None).await?;
 /// // … decide the next state from `task` …
+/// let _ = &task;
 /// match store.update_status_checked(&id, version, next_state, msg).await {
 ///     Ok(updated) => { /* committed at updated.version */ }
 ///     Err(A2AError::VersionConflict { .. }) => { /* re-read and retry */ }
 ///     Err(e) => return Err(e),
 /// }
+/// # Ok(())
+/// # }
 /// ```
 #[async_trait]
 pub trait AsyncTaskVersioning: Send + Sync {

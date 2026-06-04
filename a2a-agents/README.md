@@ -383,13 +383,8 @@ This example implementation demonstrates the framework architecture but has simp
 
 ## Future Enhancements
 
-See [TODO.md](./TODO.md) for the comprehensive modernization roadmap including:
-
-1. **Phase 2**: Production features (SQLx storage, authentication)
-2. **Phase 3**: AI/LLM integration for natural language processing
-3. **Phase 4**: Additional agent examples (document analysis, research assistant)
-4. **Phase 5**: Comprehensive testing and documentation
-5. **Phase 6**: Docker support and production deployment
+See the workspace [ROADMAP.md](../ROADMAP.md) for deferred themes and planned
+work.
 
 ## Framework Features Demonstrated
 
