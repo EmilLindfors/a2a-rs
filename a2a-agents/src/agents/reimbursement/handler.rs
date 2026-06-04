@@ -1736,3 +1736,128 @@ impl AsyncMessageHandler for ReimbursementHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tool_call_streaming_tests {
+    use super::*;
+    use a2a_agents_common::llm::{
+        LlmError, LlmProvider, LlmResponse, LlmStreamEvent, ToolCall as LlmToolCall,
+    };
+    use a2a_rs::adapter::{InMemoryStreamingHandler, InMemoryTaskStorage};
+    use a2a_rs::port::{AsyncStreamingHandler, NoopPushNotifier, UpdateEvent};
+    use futures::StreamExt;
+    use futures::stream::{self, BoxStream};
+
+    /// A fake provider that streams a tool call as a partial chunk followed by the
+    /// finalized call — the exact shape the handler turns into `tool-call`
+    /// metadata on broadcast artifact updates.
+    struct ToolCallProvider;
+
+    #[async_trait]
+    impl LlmProvider for ToolCallProvider {
+        async fn chat_completion(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProviderError("unused in this test".to_string()))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<BoxStream<'static, Result<LlmStreamEvent, LlmError>>, LlmError> {
+            let events = vec![
+                Ok(LlmStreamEvent::ToolCallChunk {
+                    id: "call_1".to_string(),
+                    name: Some("create_reimbursement".to_string()),
+                    arguments: "{\"amount\":".to_string(),
+                }),
+                Ok(LlmStreamEvent::ToolCall(LlmToolCall {
+                    id: "call_1".to_string(),
+                    name: "create_reimbursement".to_string(),
+                    arguments: "{\"amount\":50}".to_string(),
+                })),
+            ];
+            Ok(stream::iter(events).boxed())
+        }
+    }
+
+    /// End-to-end: a tool call streamed by the provider becomes broadcast artifact
+    /// updates whose `tool-call` metadata reaches a `combined_update_stream`
+    /// subscriber — the same stream the SSE transport serializes to clients. The
+    /// accumulator and `tool_call_metadata` builder are unit-tested in isolation;
+    /// this covers the broadcast wiring between them, previously only
+    /// compile-checked.
+    #[tokio::test]
+    async fn tool_call_metadata_reaches_stream_subscribers() {
+        let streaming = InMemoryStreamingHandler::new();
+        let handler = ReimbursementHandler::with_llm(
+            InMemoryTaskStorage::new(),
+            streaming.clone(),
+            NoopPushNotifier,
+            Some(Arc::new(ToolCallProvider) as Arc<dyn LlmProvider>),
+        );
+
+        let task_id = "task-tc";
+        let message = Message::user_text("reimburse me".to_string(), "m1".to_string());
+
+        // Drive the AI streaming path directly. The final JSON parse may fail (tool
+        // arguments aren't a ReimbursementResponse), but the artifact broadcasts —
+        // the wiring under test — happen during the stream, before that parse.
+        let _ = handler
+            .process_with_ai(task_id, "reimburse me", None, &message)
+            .await;
+
+        // Replay everything buffered for the task (id > 0): the SSE source.
+        let mut updates = streaming
+            .combined_update_stream(task_id, Some(0))
+            .await
+            .unwrap();
+
+        let mut tool_call_updates = Vec::new();
+        while let Ok(Some(Ok(seq))) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), updates.next()).await
+        {
+            if let UpdateEvent::ArtifactUpdate(ev) = seq.event {
+                let is_tool_call = ev
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("tool-call");
+                if is_tool_call {
+                    tool_call_updates.push(ev);
+                }
+            }
+        }
+
+        // Both the partial chunk and the finalized call surfaced as tool-call
+        // metadata, carrying the call id and tool name end-to-end.
+        assert_eq!(
+            tool_call_updates.len(),
+            2,
+            "expected partial + final tool-call artifact updates"
+        );
+        for ev in &tool_call_updates {
+            let meta = ev.metadata.as_ref().unwrap();
+            assert_eq!(meta.get("call_id").and_then(Value::as_str), Some("call_1"));
+            assert_eq!(
+                meta.get("tool_name").and_then(Value::as_str),
+                Some("create_reimbursement")
+            );
+        }
+        let partials: Vec<bool> = tool_call_updates
+            .iter()
+            .map(|ev| {
+                ev.metadata
+                    .as_ref()
+                    .unwrap()
+                    .get("partial")
+                    .and_then(Value::as_bool)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            partials,
+            vec![true, false],
+            "partial streamed chunk, then the finalized non-partial call"
+        );
+    }
+}
