@@ -13,14 +13,14 @@ categories = ["api-bindings", "network-programming"]
 
 [dependencies]
 # Core dependencies
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-chrono = { version = "0.4", features = ["serde"] }
-thiserror = "1.0"
-uuid = { version = "1.4", features = ["v4", "serde"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
 base64 = "0.21"
 url = { version = "2.4", features = ["serde"] }
-bon = "2.3"
+bon = { workspace = true }
 
 # Database - optional
 sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "chrono", "uuid", "json"], optional = true }
@@ -29,12 +29,12 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "chrono", "uuid", 
 # async-trait and futures are non-optional: the port layer (e.g. the always-on
 # Authenticator trait) uses them unconditionally, so domain + port must compile
 # with zero features. tokio stays optional — only adapters need a runtime.
-tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"], optional = true }
-async-trait = "0.1"
-futures = "0.3"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"], optional = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
 
 # HTTP client - optional
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false, optional = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"], optional = true }
 
 
 # HTTP server - optional
@@ -46,8 +46,8 @@ oauth2 = { version = "5.0", optional = true }
 openidconnect = { version = "4.0", optional = true }
 
 # Logging - optional
-tracing = { version = "0.1", optional = true }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"], optional = true }
+tracing = { workspace = true, optional = true }
+tracing-subscriber = { workspace = true, optional = true }
 connectrpc = { version = "0.3.2", features = ["tls", "axum"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 webpki-roots = "0.26"
@@ -104,6 +104,11 @@ required-features = ["http-server", "http-client"]
 name = "jsonrpc_server"
 path = "examples/jsonrpc_server.rs"
 required-features = ["jsonrpc-server"]
+
+[[example]]
+name = "jsonrpc_client"
+path = "examples/jsonrpc_client.rs"
+required-features = ["jsonrpc-client"]
 
 
 [[example]]
