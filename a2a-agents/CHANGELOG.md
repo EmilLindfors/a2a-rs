@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-v0.3.0...a2a-agents-v0.4.0) - 2026-06-05
+
+### Added
+
+- *(0.4)* Finish mcp-client framework integration + a2a-mcp edition 2024
+- *(a2a-agents)* MCP server over Streamable HTTP transport
+- *(0.4)* Typed error details, task versioning, call interceptors, streaming wiring + doc audit
+
+### Changed
+
+- *(a2a-agents)* Drop the stale ws_port config field
+
+### Documentation
+
+- Doc-comment audit, add ROADMAP, retire stale planning docs
+
+### Feat
+
+- *(a2a-rs)* Client Transport port + JSON-RPC 2.0 client + card negotiation
+
+### Refactor
+
+- *(a2a-rs)* Split streaming & push out of storage adapters (Phase 4 final)
+
 ### Added
 
 - **MCP server over Streamable HTTP** — `run_mcp_server` can now serve a
