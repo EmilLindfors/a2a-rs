@@ -13,6 +13,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # Force Node 20-pinned JavaScript actions onto Node 24 (silences the
+  # deprecation annotation until the actions update).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   upload-assets:
     name: Build and upload binaries
@@ -37,7 +42,7 @@ jobs:
             use_cross: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ inputs.tag || github.ref }}
 

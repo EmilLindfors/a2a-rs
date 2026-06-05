@@ -13,6 +13,7 @@ use tracing::{debug, instrument};
 
 use crate::{
     adapter::error::HttpClientError,
+    adapter::transport::codec::stream_response_to_item,
     domain::{
         A2AError, AgentCard, ListTasksParams, ListTasksResult, Message, Task,
         TaskPushNotificationConfig,
@@ -21,10 +22,9 @@ use crate::{
             GetExtendedAgentCardRequest, GetTaskPushNotificationConfigRequest, GetTaskRequest,
             ListTaskPushNotificationConfigsRequest, ListTasksRequest, SendMessageConfiguration,
             SendMessageRequest, SubscribeToTaskRequest, TaskState, send_message_response,
-            stream_response,
         },
     },
-    services::client::{AsyncA2AClient, StreamItem},
+    port::{StreamEvent, Transport},
 };
 
 fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
@@ -49,19 +49,6 @@ fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
         code,
         message: err.message.clone().unwrap_or_default(),
         data: None,
-    }
-}
-
-fn map_stream_response(resp: crate::domain::generated::StreamResponse) -> Option<StreamItem> {
-    match resp.payload {
-        Some(stream_response::Payload::Task(task)) => Some(StreamItem::Task(*task)),
-        Some(stream_response::Payload::StatusUpdate(update)) => {
-            Some(StreamItem::StatusUpdate((*update).into()))
-        }
-        Some(stream_response::Payload::ArtifactUpdate(update)) => {
-            Some(StreamItem::ArtifactUpdate((*update).into()))
-        }
-        _ => None,
     }
 }
 
@@ -248,7 +235,11 @@ impl HttpClient {
 }
 
 #[async_trait]
-impl AsyncA2AClient for HttpClient {
+impl Transport for HttpClient {
+    fn protocol(&self) -> &str {
+        "CONNECTRPC"
+    }
+
     #[cfg_attr(
         feature = "tracing",
         instrument(skip(self, message), fields(task_id, session_id, history_length))
@@ -455,7 +446,10 @@ impl AsyncA2AClient for HttpClient {
         &self,
         task_id: &str,
         _history_length: Option<u32>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamItem, A2AError>> + Send>>, A2AError> {
+        // ConnectRPC streaming has no SSE `Last-Event-ID`; resumption is not
+        // supported on this transport, so the hint is ignored.
+        _last_event_id: Option<&str>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, A2AError>> + Send>>, A2AError> {
         let request = SubscribeToTaskRequest {
             id: task_id.to_string(),
             ..Default::default()
@@ -470,8 +464,8 @@ impl AsyncA2AClient for HttpClient {
             match s.message().await {
                 Ok(Some(view)) => {
                     let resp = view.to_owned_message();
-                    if let Some(item) = map_stream_response(resp) {
-                        Some((Ok(item), s))
+                    if let Some(item) = stream_response_to_item(resp) {
+                        Some((Ok(StreamEvent::untagged(item)), s))
                     } else {
                         Some((
                             Err(A2AError::Internal(

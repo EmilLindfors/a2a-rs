@@ -1,14 +1,13 @@
 use a2a_agents::{AgentPlugin, SkillDefinition};
 use a2a_client::WebA2AClient;
-use a2a_rs::adapter::{DefaultRequestProcessor, HttpServer, InMemoryTaskStorage, SimpleAgentInfo};
-use a2a_rs::domain::{A2AError, Message, Task, TaskState};
+use a2a_rs::adapter::{ConnectRpcAdapter, HttpServer, InMemoryTaskStorage, SimpleAgentInfo};
+use a2a_rs::domain::{A2AError, ContextId, Message, Task, TaskId, TaskState};
 use a2a_rs::port::AsyncMessageHandler;
-use a2a_rs::services::AsyncA2AClient;
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::sync::oneshot;
 
-use a2a_rs::port::AsyncTaskManager;
+use a2a_rs::port::AsyncTaskLifecycle;
 
 /// Simple mock agent for E2E tests
 #[derive(Clone)]
@@ -54,16 +53,18 @@ impl AsyncMessageHandler for EchoAgent {
         };
 
         // Create or get the task using storage
-        let task = if !self.storage.task_exists(task_id).await? {
-            self.storage.create_task(task_id, "context-1").await?
+        let id: TaskId = task_id.parse()?;
+        let task = if !self.storage.exists(&id).await? {
+            let context_id: ContextId = "context-1".parse()?;
+            self.storage.create(&id, &context_id).await?
         } else {
-            self.storage.get_task(task_id, None).await?
+            self.storage.get(&id, None).await?
         };
 
         let reply_msg = Message::agent_text(reply_text, "msg-res-1".to_string());
 
         self.storage
-            .update_task_status(task_id, TaskState::Completed, Some(reply_msg.clone()))
+            .update_status(&id, TaskState::Completed, Some(reply_msg.clone()))
             .await?;
 
         let mut t = task;
@@ -81,7 +82,7 @@ async fn test_framework_lifecycle_e2e() {
     );
     let storage = InMemoryTaskStorage::new();
 
-    let processor = DefaultRequestProcessor::new(
+    let processor = ConnectRpcAdapter::new(
         EchoAgent {
             storage: storage.clone(),
         },
@@ -109,7 +110,7 @@ async fn test_framework_lifecycle_e2e() {
     let message = Message::user_text("Hello Framework!".to_string(), "msg-1".to_string());
 
     let task = client
-        .http
+        .transport
         .send_task_message(&task_id, &message, None, None)
         .await
         .expect("Failed to send task");
@@ -122,7 +123,7 @@ async fn test_framework_lifecycle_e2e() {
 
     // 4. Client fetches final result
     let final_task = client
-        .http
+        .transport
         .get_task(&task_id, None)
         .await
         .expect("Failed to fetch task");

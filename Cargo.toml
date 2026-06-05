@@ -2,3 +2,22 @@
 resolver = "2"
 members = ["a2a-rs", "a2a-agents", "a2a-client", "a2a-ap2", "a2a-agents-common", "a2a-mcp"]
 exclude = ["a2a-mcp/rust-sdk"]
+
+# Common dependencies shared across workspace members. Members reference these
+# with `dep.workspace = true`, adding `features`/`optional`/`default-features`
+# locally as needed (those compose; the version is pinned here once). Keeps the
+# versions from drifting (the previous `thiserror = "1.0"` vs `"2"` split).
+[workspace.dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2"
+anyhow = "1.0"
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.4", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+async-trait = "0.1"
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false }
+bon = "2.3"
+tokio = "1.32"

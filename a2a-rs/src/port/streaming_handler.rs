@@ -1,6 +1,5 @@
 //! Streaming and real-time update handling port definitions
 
-#[cfg(feature = "server")]
 use async_trait::async_trait;
 use futures::Stream;
 use std::pin::Pin;
@@ -9,7 +8,6 @@ use crate::domain::core::task::TaskStateExt;
 use crate::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 
 /// A trait for subscribing to real-time updates
-#[cfg(feature = "server")]
 #[async_trait]
 pub trait Subscriber<T>: Send + Sync {
     /// Handle an update
@@ -29,39 +27,6 @@ pub trait Subscriber<T>: Send + Sync {
     }
 }
 
-/// A trait for managing streaming connections and real-time updates
-pub trait StreamingHandler {
-    /// Add a status update subscriber for a task
-    fn add_status_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError>; // Returns subscription ID
-
-    /// Add an artifact update subscriber for a task
-    fn add_artifact_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError>; // Returns subscription ID
-
-    /// Remove a specific subscription
-    fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError>;
-
-    /// Remove all subscribers for a task
-    fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError>;
-
-    /// Get the number of active subscribers for a task
-    fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError>;
-
-    /// Check if a task has any active subscribers
-    fn has_subscribers(&self, task_id: &str) -> Result<bool, A2AError> {
-        let count = self.get_subscriber_count(task_id)?;
-        Ok(count > 0)
-    }
-}
-
-#[cfg(feature = "server")]
 #[async_trait]
 /// An async trait for managing streaming connections and real-time updates
 pub trait AsyncStreamingHandler: Send + Sync {
@@ -123,11 +88,17 @@ pub trait AsyncStreamingHandler: Send + Sync {
         A2AError,
     >;
 
-    /// Create a combined stream of all updates for a task
+    /// Create a combined stream of all updates for a task.
+    ///
+    /// Each yielded [`SeqEvent`] carries a per-task monotonic id so a client can
+    /// resume after a disconnect. When `from_event_id` is `Some(n)`, the handler
+    /// first replays any buffered events with id `> n` (best-effort, bounded by
+    /// the handler's replay buffer) before streaming live updates.
     async fn combined_update_stream(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError>;
+        from_event_id: Option<u64>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError>;
 
     /// Validate streaming parameters
     async fn validate_streaming_params(&self, task_id: &str) -> Result<(), A2AError> {
@@ -140,18 +111,134 @@ pub trait AsyncStreamingHandler: Send + Sync {
         Ok(())
     }
 
-    /// Start streaming for a task with automatic cleanup
+    /// Start streaming for a task with automatic cleanup.
+    ///
+    /// `from_event_id` is forwarded to [`combined_update_stream`] for
+    /// Last-Event-ID resumption.
+    ///
+    /// [`combined_update_stream`]: AsyncStreamingHandler::combined_update_stream
     async fn start_task_streaming(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError> {
+        from_event_id: Option<u64>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError> {
         self.validate_streaming_params(task_id).await?;
-        self.combined_update_stream(task_id).await
+        self.combined_update_stream(task_id, from_event_id).await
     }
 
     /// Stop all streaming for a task
     async fn stop_task_streaming(&self, task_id: &str) -> Result<(), A2AError> {
         self.remove_task_subscribers(task_id).await
+    }
+}
+
+/// Forwarding impl so a type-erased `Arc<dyn AsyncStreamingHandler>` can itself
+/// be passed wherever an `impl AsyncStreamingHandler` is expected (e.g.
+/// `TaskService::with_streaming_handler`). This lets a single shared streaming
+/// backend be injected into both a message handler and a transport adapter
+/// without naming its concrete type. Only the required methods are forwarded;
+/// the trait's default methods ride along on top of them.
+#[async_trait]
+impl AsyncStreamingHandler for std::sync::Arc<dyn AsyncStreamingHandler> {
+    async fn add_status_subscriber(
+        &self,
+        task_id: &str,
+        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
+    ) -> Result<String, A2AError> {
+        (**self).add_status_subscriber(task_id, subscriber).await
+    }
+
+    async fn add_artifact_subscriber(
+        &self,
+        task_id: &str,
+        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
+    ) -> Result<String, A2AError> {
+        (**self).add_artifact_subscriber(task_id, subscriber).await
+    }
+
+    async fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError> {
+        (**self).remove_subscription(subscription_id).await
+    }
+
+    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
+        (**self).remove_task_subscribers(task_id).await
+    }
+
+    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
+        (**self).get_subscriber_count(task_id).await
+    }
+
+    async fn broadcast_status_update(
+        &self,
+        task_id: &str,
+        update: TaskStatusUpdateEvent,
+    ) -> Result<(), A2AError> {
+        (**self).broadcast_status_update(task_id, update).await
+    }
+
+    async fn broadcast_artifact_update(
+        &self,
+        task_id: &str,
+        update: TaskArtifactUpdateEvent,
+    ) -> Result<(), A2AError> {
+        (**self).broadcast_artifact_update(task_id, update).await
+    }
+
+    async fn status_update_stream(
+        &self,
+        task_id: &str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError>
+    {
+        (**self).status_update_stream(task_id).await
+    }
+
+    async fn artifact_update_stream(
+        &self,
+        task_id: &str,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>,
+        A2AError,
+    > {
+        (**self).artifact_update_stream(task_id).await
+    }
+
+    async fn combined_update_stream(
+        &self,
+        task_id: &str,
+        from_event_id: Option<u64>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError> {
+        (**self)
+            .combined_update_stream(task_id, from_event_id)
+            .await
+    }
+}
+
+/// A streamed [`UpdateEvent`] tagged with a per-task monotonic id.
+///
+/// The id is assigned by the streaming handler when the event is broadcast and
+/// is surfaced to clients as the SSE `id:` field. On reconnect a client echoes
+/// the last id it saw via `Last-Event-ID`, and the handler replays buffered
+/// events with a greater id (see
+/// [`combined_update_stream`](AsyncStreamingHandler::combined_update_stream)).
+///
+/// This id/`Last-Event-ID` resumption is an a2a-rs enhancement on top of the
+/// W3C SSE standard, **not** part of the A2A v1.0 spec. Emitting the `id:` field
+/// is inert for spec clients (they read only the event payload), so it does not
+/// affect interop.
+#[derive(Debug, Clone)]
+pub struct SeqEvent {
+    /// Per-task monotonic event id (starts at 1; `0` is reserved for the
+    /// initial task snapshot, which carries no replayable id).
+    pub id: u64,
+    /// The update payload.
+    pub event: UpdateEvent,
+}
+
+impl SeqEvent {
+    /// Construct a sequenced event.
+    #[inline]
+    pub fn new(id: u64, event: UpdateEvent) -> Self {
+        Self { id, event }
     }
 }
 

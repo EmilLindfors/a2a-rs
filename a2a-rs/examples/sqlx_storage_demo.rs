@@ -21,7 +21,16 @@ use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
 #[cfg(feature = "sqlx-storage")]
 use a2a_rs::domain::TaskState;
 #[cfg(feature = "sqlx-storage")]
-use a2a_rs::port::AsyncTaskManager;
+use a2a_rs::port::AsyncTaskLifecycle;
+
+#[cfg(feature = "sqlx-storage")]
+fn tid(s: &str) -> a2a_rs::domain::TaskId {
+    s.parse().unwrap()
+}
+#[cfg(feature = "sqlx-storage")]
+fn cid(s: &str) -> a2a_rs::domain::ContextId {
+    s.parse().unwrap()
+}
 
 #[cfg(feature = "sqlx-storage")]
 #[tokio::main]
@@ -65,7 +74,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let task_ids = vec!["demo-task-1", "demo-task-2", "demo-task-3"];
 
     for task_id in &task_ids {
-        let task = storage.create_task(task_id, "demo-context").await?;
+        let task = storage.create(&tid(task_id), &cid("demo-context")).await?;
         println!(
             "  ✓ Created task: {} (status: {:?})",
             task.id, task.status.state
@@ -76,27 +85,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Demo: Update task statuses
     println!("🔄 Updating task statuses...");
     storage
-        .update_task_status("demo-task-1", TaskState::Working, None)
+        .update_status(&tid("demo-task-1"), TaskState::Working, None)
         .await?;
     println!("  ✓ Updated demo-task-1 to Working");
 
     storage
-        .update_task_status("demo-task-2", TaskState::Working, None)
+        .update_status(&tid("demo-task-2"), TaskState::Working, None)
         .await?;
     storage
-        .update_task_status("demo-task-2", TaskState::Completed, None)
+        .update_status(&tid("demo-task-2"), TaskState::Completed, None)
         .await?;
     println!("  ✓ Updated demo-task-2 to Working, then Completed");
 
     storage
-        .update_task_status("demo-task-3", TaskState::Working, None)
+        .update_status(&tid("demo-task-3"), TaskState::Working, None)
         .await?;
     println!("  ✓ Updated demo-task-3 to Working");
     println!();
 
     // Demo: Cancel a task
     println!("❌ Canceling a task...");
-    let canceled_task = storage.cancel_task("demo-task-3").await?;
+    let canceled_task = storage.cancel(&tid("demo-task-3")).await?;
     println!(
         "  ✓ Canceled task: {} (status: {:?})",
         canceled_task.id, canceled_task.status.state
@@ -106,7 +115,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Demo: Retrieve tasks and show history
     println!("📖 Retrieving tasks with history...");
     for task_id in &task_ids {
-        let task = storage.get_task(task_id, Some(10)).await?;
+        let task = storage.get(&tid(task_id), Some(10)).await?;
         println!("  📋 Task: {} (status: {:?})", task.id, task.status.state);
 
         let history = &task.history;
@@ -125,11 +134,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Demo: Task existence checks
     println!("🔍 Checking task existence...");
     for task_id in &task_ids {
-        let exists = storage.task_exists(task_id).await?;
+        let exists = storage.exists(&tid(task_id)).await?;
         println!("  {} exists: {}", task_id, exists);
     }
 
-    let exists = storage.task_exists("non-existent-task").await?;
+    let exists = storage.exists(&tid("non-existent-task")).await?;
     println!("  non-existent-task exists: {}", exists);
     println!();
 

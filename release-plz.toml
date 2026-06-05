@@ -1,0 +1,65 @@
+# release-plz configuration — https://release-plz.dev/docs/config
+#
+# Tag convention: per-crate `{package}-v{version}` (release-plz's default, made
+# explicit here). Each crate tags and releases itself; there is no umbrella `v*`
+# tag. The `release` job (see .github/workflows/release-plz.yml) runs on push to
+# master and publishes only the crates whose Cargo.toml version is ahead of
+# crates.io, tagging each one. A released `a2a-agents-v*` tag drives the binary
+# build in release-binaries.yml.
+#
+# Why this file exists: 0.3.0 produced wrong changelog compare-links because the
+# repo carried both per-crate tags and a manual umbrella `v0.3.0` tag, so the
+# links pointed at inconsistent refs. Standardizing on per-crate tags + the
+# release-plz `release_link` variable (which derives the compare URL from the
+# tag template below) keeps them correct.
+
+[workspace]
+# Per-crate tag + GitHub release names.
+git_tag_name = "{{ package }}-v{{ version }}"
+git_release_name = "{{ package }} v{{ version }}"
+# All crates publish together; keep the changelog/PR per-crate.
+git_release_body = "{{ changelog }}"
+
+[changelog]
+header = """
+# Changelog
+
+All notable changes to this project will be documented in this file.
+"""
+
+# `release_link` is supplied by release-plz and resolves to the correct
+# `compare/{prev}...{curr}` URL for the per-crate tag template above — this is
+# what fixes the 0.3.0 broken compare-links.
+body = """
+## [{{ version | trim_start_matches(pat="v") }}]\
+{% if release_link %}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{{ commit.message | upper_first }}\
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+
+# Conventional-commit routing. Noise types (ci, build, style, chore) and any
+# "fmt"/"clippy"/"fixed CI" cleanup commits are skipped from the user-facing
+# changelog; the substance (feat/fix/perf/refactor/docs) is grouped.
+commit_parsers = [
+  { message = "(?i)^(chore\\(release\\)|release v|prepare release)", skip = true },
+  { message = "(?i)(rustfmt|cargo fmt|^fmt\\b| fmt\\b|clippy|fixed ci|fix ci|ci:|^ci\\b)", skip = true },
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs?", group = "Documentation" },
+  { message = "^test", skip = true },
+  { message = "^build", skip = true },
+  { message = "^style", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^chore", skip = true },
+  { message = ".*", group = "Other" },
+]
+# Drop merge commits.
+filter_commits = false
+protect_breaking_commits = true

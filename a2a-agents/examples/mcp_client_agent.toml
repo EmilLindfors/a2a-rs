@@ -1,0 +1,29 @@
+# Agent that acts as an MCP *client*: it connects to the bundled mcp_echo_server
+# and exposes its `echo` tool as an A2A skill.
+#
+# The [[features.mcp_client.servers]] entry below spawns the server as a child
+# process. It uses `cargo run` so the example works straight from the repo with
+# no prior build step; point `command`/`args` at any MCP stdio server (an npx
+# server, a compiled binary, …) to talk to something real.
+
+[agent]
+name = "MCP Echo Client Agent"
+description = "An A2A agent that forwards messages to an MCP echo tool"
+version = "0.1.0"
+
+[server]
+http_port = 8080
+
+[[skills]]
+id = "echo"
+name = "Echo"
+description = "Echoes your text back via a downstream MCP tool"
+examples = ["Say hello"]
+
+[features.mcp_client]
+enabled = true
+
+[[features.mcp_client.servers]]
+name = "echo"
+command = "cargo"
+args = ["run", "-q", "-p", "a2a-agents", "--features", "mcp-client", "--bin", "mcp_echo_server"]

@@ -8,12 +8,12 @@ A Rust implementation of the Agent-to-Agent (A2A) Protocol v1.0.0, providing a t
 
 ## Features
 
-- 🚀 **A2A Protocol v1.0.0** - Full support for the latest A2A specification including:
+- 🚀 **A2A Protocol v1.0.0** - Implements the A2A specification (see [Spec compliance](#spec-compliance) for the small, documented divergences), including:
   - Enhanced push notification management with listing and deletion
   - Task listing with comprehensive filtering and pagination
   - Authenticated extended card support
   - Protocol extensions framework
-  - Multi-transport support (GRPC, HTTP+JSON)
+  - Multi-transport support: spec-compliant JSON-RPC 2.0 and HTTP+JSON, plus ConnectRPC (see [Spec compliance](#spec-compliance))
 - 🔄 **Multiple Transport Options** - HTTP support
 - 📡 **Streaming Updates** - Real-time task and artifact updates
 - 🔐 **Authentication & Security** - JWT, OAuth2, OpenID Connect support with agent card signatures
@@ -44,7 +44,7 @@ a2a-rs = { version = "0.1.0", features = ["full"] }
 
 ```rust
 use a2a_rs::{HttpClient, Message};
-use a2a_rs::services::AsyncA2AClient;
+use a2a_rs::Transport;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -99,6 +99,36 @@ This library follows a hexagonal architecture pattern:
 - **Domain**: Core business logic and types
 - **Ports**: Trait definitions for external dependencies
 - **Adapters**: Concrete implementations for different transports and storage
+
+## Spec compliance
+
+`a2a-rs` targets **A2A Protocol v1.0.0** and is wire-compatible with the
+specification: the domain types, transports, and `StreamResponse`/JSON-RPC
+payloads follow the spec, so off-the-shelf A2A clients and servers interoperate.
+There are a couple of small, deliberate divergences, all backward-compatible:
+
+- **`Last-Event-ID` stream resumption is an opt-in enhancement, not a spec
+  feature.** The A2A spec reconnects a dropped stream by re-issuing the subscribe
+  call (resuming from the task's *current* state). On top of that, `a2a-rs` adds
+  gap-free resumption using the **W3C SSE-standard** `id:` field and
+  `Last-Event-ID` header (`RetryingTransport` / `WebA2AClient::subscribe_resilient`
+  on the client; buffered replay on the server). This is fully interoperable —
+  spec clients ignore the `id:` field and never send the header, getting standard
+  reconnect-from-current-state behavior — but **gap-free resume only works
+  a2a-rs ↔ a2a-rs**, not against third-party agents. For strictly spec-shaped
+  streaming, use `WebA2AClient::subscribe` (or `subscribe_to_task` with
+  `last_event_id = None`).
+- **ConnectRPC is offered as an additional transport.** The spec names three
+  transport bindings — `JSONRPC`, `GRPC`, and `HTTP+JSON`. `a2a-rs` adds
+  **ConnectRPC** as the in-tree default (advertised in the agent card under the
+  non-spec `CONNECTRPC` binding), alongside a spec-compliant **JSON-RPC 2.0**
+  transport and HTTP+JSON/REST. For interop with third-party A2A agents use the
+  JSON-RPC transport (`JsonRpcClient` / `jsonrpc_router`); ConnectRPC is the
+  preferred path a2a-rs ↔ a2a-rs.
+- **JSON-RPC method names follow the proto RPC names** (`SubscribeToTask`,
+  `SendStreamingMessage`, …) rather than the canonical JSON-RPC strings
+  (`tasks/resubscribe`, `message/stream`); the request/response bodies are
+  spec-shaped ProtoJSON.
 
 ## Feature Flags
 

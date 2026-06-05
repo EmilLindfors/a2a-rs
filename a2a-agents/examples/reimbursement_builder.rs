@@ -36,8 +36,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("Failed to create storage: {}", e))?;
 
-    // Create the handler
-    let handler = ReimbursementHandler::new(storage.clone());
+    // Create the handler with a dedicated streaming handler and the store's
+    // push notifier (streaming and push are separate ports from storage).
+    let streaming = a2a_rs::InMemoryStreamingHandler::new();
+    let push = storage.push_notifier();
+    let handler = ReimbursementHandler::new(storage.clone(), streaming, push);
 
     // Build and run the agent - this is where the magic happens!
     // The configuration file defines all the metadata, skills, and features
@@ -48,11 +51,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             if let Ok(port) = env::var("HTTP_PORT") {
                 if let Ok(port_num) = port.parse() {
                     config.server.http_port = port_num;
-                }
-            }
-            if let Ok(port) = env::var("WS_PORT") {
-                if let Ok(port_num) = port.parse() {
-                    config.server.ws_port = port_num;
                 }
             }
         })

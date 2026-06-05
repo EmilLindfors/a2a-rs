@@ -1,0 +1,36 @@
+# MCP server agent example — Streamable HTTP transport
+# Flip features.mcp_server.enabled = true and features.mcp_server.http.enabled =
+# true and the runtime serves this agent over MCP's Streamable HTTP transport
+# (using in-process handler dispatch, no backing A2A HTTP server required).
+
+[agent]
+name = "Echo Agent (MCP/HTTP)"
+description = "An echo agent exposed as MCP tools over Streamable HTTP"
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 0
+
+[features.mcp_server]
+enabled = true
+# When http.enabled is true the HTTP transport takes precedence over stdio.
+stdio = false
+
+[features.mcp_server.http]
+enabled = true
+host = "127.0.0.1"
+port = 8000
+path = "/mcp"
+# DNS-rebinding protection defaults to loopback-only. For a public bind, list
+# the hostnames you serve under (and optionally restrict browser origins):
+#   allowed_hosts = ["mcp.example.com"]
+#   allowed_origins = ["https://app.example.com"]
+# allowed_hosts = [] disables Host validation entirely (proxy-only).
+
+[[skills]]
+id = "echo"
+name = "Echo"
+description = "Echoes back whatever you send"
+keywords = ["echo", "repeat", "test"]
+examples = ["Echo this message"]

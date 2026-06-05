@@ -31,21 +31,22 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use a2a_mcp::{create_tool_call_message, AgentToMcpBridge, McpToA2ABridge};
+use a2a_mcp::{AgentToMcpBridge, McpToA2ABridge, create_tool_call_message};
 use a2a_rs::{
     adapter::{
-        business::{DefaultMessageHandler, DefaultRequestProcessor},
-        storage::InMemoryTaskStorage,
-        transport::http::HttpClient,
         HttpServer, SimpleAgentInfo,
+        business::ResponderMessageHandler,
+        storage::InMemoryTaskStorage,
+        streaming::InMemoryStreamingHandler,
+        transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
     },
-    domain::{error::A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
+    domain::{Message, Part, Role, Task, TaskState, TaskStatus, error::A2AError},
     port::AsyncMessageHandler,
     services::AgentInfoProvider,
 };
 use async_trait::async_trait;
 use rmcp::{
-    model::*, service::RequestContext, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext,
 };
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -145,6 +146,7 @@ impl ServerHandler for CalcServer {
 #[derive(Clone)]
 struct EchoHandler {
     storage: Arc<InMemoryTaskStorage>,
+    streaming: InMemoryStreamingHandler,
 }
 
 #[async_trait]
@@ -155,7 +157,11 @@ impl AsyncMessageHandler for EchoHandler {
         message: &Message,
         session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
-        let inner = DefaultMessageHandler::new((*self.storage).clone());
+        let inner = ResponderMessageHandler::echo(
+            (*self.storage).clone(),
+            self.streaming.clone(),
+            self.storage.push_notifier(),
+        );
         let mut task = inner.process_message(task_id, message, session_id).await?;
 
         let echoed = extract_text(message);
@@ -253,6 +259,7 @@ async fn main() -> anyhow::Result<()> {
     let storage = Arc::new(InMemoryTaskStorage::new());
     let echo = EchoHandler {
         storage: storage.clone(),
+        streaming: InMemoryStreamingHandler::new(),
     };
     let mcp_to_a2a = Arc::new(McpToA2ABridge::new(calc_peer, echo).await?);
     let math_handler = MathHandler { bridge: mcp_to_a2a };
@@ -269,7 +276,7 @@ async fn main() -> anyhow::Result<()> {
             ),
         );
 
-    let processor = DefaultRequestProcessor::new(
+    let processor = ConnectRpcAdapter::new(
         math_handler,
         (*storage).clone(),
         (*storage).clone(),

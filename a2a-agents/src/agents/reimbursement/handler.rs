@@ -8,14 +8,27 @@ use std::sync::{Arc, Mutex};
 use tracing::{debug, error, info, instrument, warn};
 use uuid::Uuid;
 
-use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState, part};
+use a2a_rs::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
+use a2a_rs::domain::{A2AError, ContextId, Message, Part, Role, Task, TaskId, TaskState, part};
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
 use super::types::*;
-use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest};
+use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest, ToolCallAccumulator};
 
-// NOTE: Task storage is handled by DefaultRequestProcessor + SQLx/InMemory storage
+// NOTE: Task storage is handled by ConnectRpcAdapter + SQLx/InMemory storage
 // This handler is stateless and only processes messages
+
+/// Build the typed metadata that marks an artifact as a (possibly partial)
+/// tool-call delta, so a UI can distinguish it from a text chunk and reassemble
+/// the call's arguments by `call_id`.
+fn tool_call_metadata(call_id: &str, tool_name: &str, partial: bool) -> Map<String, Value> {
+    let mut m = Map::new();
+    m.insert("type".to_string(), json!("tool-call"));
+    m.insert("call_id".to_string(), json!(call_id));
+    m.insert("tool_name".to_string(), json!(tool_name));
+    m.insert("partial".to_string(), json!(partial));
+    m
+}
 
 /// Metrics for tracking handler performance
 #[derive(Debug, Default, Clone)]
@@ -80,16 +93,13 @@ impl HandlerMetrics {
 /// Reimbursement message handler with proper JSON parsing and validation
 /// Reimbursement handler that manages task history through a task manager
 #[derive(Clone)]
-pub struct ReimbursementHandler<T>
-where
-    T: a2a_rs::port::AsyncTaskManager
-        + a2a_rs::port::AsyncStreamingHandler
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
-    task_manager: T,
+pub struct ReimbursementHandler {
+    /// Per-task lifecycle port (create/get/update_status)
+    task_lifecycle: Arc<dyn a2a_rs::port::AsyncTaskLifecycle>,
+    /// Streaming port for broadcasting artifact updates
+    streaming: Arc<dyn a2a_rs::port::AsyncStreamingHandler>,
+    /// Push-notifier port for out-of-band webhook delivery on each transition
+    push_notifier: Arc<dyn a2a_rs::port::AsyncPushNotifier>,
     validation_rules: ValidationRules,
     #[allow(dead_code)]
     file_metadata_store: Arc<Mutex<HashMap<String, Map<String, Value>>>>,
@@ -97,17 +107,38 @@ where
     llm_provider: Option<Arc<dyn LlmProvider>>,
 }
 
+// The handler holds both the lifecycle and streaming ports, so it hosts the
+// `TaskStatusBroadcast` mixin (see `.claude/rules/hexagonal_architecture.md`
+// §9): every status transition it drives goes through `update_and_broadcast`,
+// announcing the change to streaming subscribers. Storage is persistence-only
+// and does not self-broadcast on mutation, so without these accessors the
+// agent's updates — including the background worker's final state — would
+// silently stop reaching subscribers and push notifications.
+impl HasTaskLifecycle for ReimbursementHandler {
+    fn lifecycle(&self) -> &dyn a2a_rs::port::AsyncTaskLifecycle {
+        self.task_lifecycle.as_ref()
+    }
+}
+
+impl HasStreaming for ReimbursementHandler {
+    fn streaming(&self) -> &dyn a2a_rs::port::AsyncStreamingHandler {
+        self.streaming.as_ref()
+    }
+}
+
+impl HasPushNotifier for ReimbursementHandler {
+    fn push_notifier(&self) -> &dyn a2a_rs::port::AsyncPushNotifier {
+        self.push_notifier.as_ref()
+    }
+}
+
 #[allow(dead_code)]
-impl<T> ReimbursementHandler<T>
-where
-    T: a2a_rs::port::AsyncTaskManager
-        + a2a_rs::port::AsyncStreamingHandler
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
-    pub fn new(task_manager: T) -> Self {
+impl ReimbursementHandler {
+    pub fn new(
+        task_lifecycle: impl a2a_rs::port::AsyncTaskLifecycle + 'static,
+        streaming: impl a2a_rs::port::AsyncStreamingHandler + 'static,
+        push_notifier: impl a2a_rs::port::AsyncPushNotifier + 'static,
+    ) -> Self {
         // Try to initialize AI client from environment
         let llm_provider: Option<Arc<dyn LlmProvider>> = if let Ok(gemini) =
             a2a_agents_common::llm::gemini::GeminiProvider::from_env()
@@ -122,12 +153,19 @@ where
             None
         };
 
-        Self::with_llm(task_manager, llm_provider)
+        Self::with_llm(task_lifecycle, streaming, push_notifier, llm_provider)
     }
 
-    pub fn with_llm(task_manager: T, llm_provider: Option<Arc<dyn LlmProvider>>) -> Self {
+    pub fn with_llm(
+        task_lifecycle: impl a2a_rs::port::AsyncTaskLifecycle + 'static,
+        streaming: impl a2a_rs::port::AsyncStreamingHandler + 'static,
+        push_notifier: impl a2a_rs::port::AsyncPushNotifier + 'static,
+        llm_provider: Option<Arc<dyn LlmProvider>>,
+    ) -> Self {
         Self {
-            task_manager,
+            task_lifecycle: Arc::new(task_lifecycle),
+            streaming: Arc::new(streaming),
+            push_notifier: Arc::new(push_notifier),
             validation_rules: ValidationRules::default(),
             file_metadata_store: Arc::new(Mutex::new(HashMap::new())),
             metrics: Arc::new(Mutex::new(HandlerMetrics::default())),
@@ -398,6 +436,7 @@ Example response when asking for info:
 
         let mut ai_response = String::new();
         let artifact_id = uuid::Uuid::new_v4().to_string();
+        let mut tool_calls = ToolCallAccumulator::new();
 
         use futures::StreamExt;
 
@@ -428,24 +467,28 @@ Example response when asking for info:
                     };
 
                     let _ = self
-                        .task_manager
+                        .streaming
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
                 Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCallChunk {
-                    arguments,
+                    id,
                     name,
-                    ..
+                    arguments,
                 }) => {
-                    // Similar to above, but for tool calls
+                    // Stream the tool-call delta as a typed, structured artifact so
+                    // a UI can distinguish it from text and reassemble arguments by
+                    // call id (see the `tool-call` metadata marker).
                     ai_response.push_str(&arguments);
+                    let partial = tool_calls.push(&id, name.as_deref(), &arguments);
+                    let tool_name = partial
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
 
                     let artifact = Artifact {
                         artifact_id: artifact_id.clone(),
-                        name: format!(
-                            "Tool Call: {}",
-                            name.unwrap_or_else(|| "Unknown".to_string())
-                        ),
+                        name: format!("Tool Call: {tool_name}"),
                         description: String::new(),
                         parts: vec![Part::text(arguments)],
                         metadata: buffa::MessageField::none(),
@@ -460,16 +503,44 @@ Example response when asking for info:
                         artifact,
                         append: Some(true),
                         last_chunk: Some(false),
-                        metadata: None,
+                        metadata: Some(tool_call_metadata(&id, &tool_name, true)),
                     };
 
                     let _ = self
-                        .task_manager
+                        .streaming
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
-                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCall(_)) => {
-                    // Ignore final tool call structure for now
+                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCall(call)) => {
+                    // Reconcile the authoritative final call and emit a terminal,
+                    // non-partial artifact carrying the complete arguments.
+                    let metadata = tool_call_metadata(&call.id, &call.name, false);
+                    let artifact = Artifact {
+                        artifact_id: artifact_id.clone(),
+                        name: format!("Tool Call: {}", call.name),
+                        description: String::new(),
+                        parts: vec![Part::text(call.arguments.clone())],
+                        metadata: buffa::MessageField::none(),
+                        extensions: Vec::new(),
+                        ..Default::default()
+                    };
+
+                    let update_event = a2a_rs::domain::TaskArtifactUpdateEvent {
+                        task_id: task_id.to_string(),
+                        context_id: current_message.context_id.clone(),
+                        kind: "artifact-update".to_string(),
+                        artifact,
+                        append: Some(false),
+                        last_chunk: Some(true),
+                        metadata: Some(metadata),
+                    };
+
+                    tool_calls.finalize(call);
+
+                    let _ = self
+                        .streaming
+                        .broadcast_artifact_update(task_id, update_event)
+                        .await;
                 }
                 Err(e) => {
                     tracing::error!("LLM Stream error: {}", e);
@@ -1151,7 +1222,7 @@ Example response when asking for info:
                     ProcessingStatus::Pending
                 };
 
-                // NOTE: Task storage is handled by DefaultRequestProcessor
+                // NOTE: Task storage is handled by ConnectRpcAdapter
                 // We just process the message and return a response
                 // (receipts metadata is still tracked in file_metadata_store if needed)
 
@@ -1177,7 +1248,7 @@ Example response when asking for info:
                 })
             }
             ReimbursementRequest::StatusQuery { request_id } => {
-                // NOTE: Actual task status is managed by DefaultRequestProcessor/SQLx
+                // NOTE: Actual task status is managed by ConnectRpcAdapter/SQLx
                 // This handler doesn't have access to task storage directly
                 // The client should use tasks/get instead for real status
                 {
@@ -1366,15 +1437,7 @@ Example response when asking for info:
 }
 
 #[async_trait]
-impl<T> AsyncMessageHandler for ReimbursementHandler<T>
-where
-    T: a2a_rs::port::AsyncTaskManager
-        + a2a_rs::port::AsyncStreamingHandler
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
+impl AsyncMessageHandler for ReimbursementHandler {
     #[instrument(skip(self, message), fields(
         task_id = %task_id,
         message_id = %message.message_id,
@@ -1393,9 +1456,11 @@ where
         );
         info!("Processing reimbursement request");
 
+        let id: TaskId = task_id.parse()?;
+
         // Check if task exists and get its current state
-        let existing_task = if self.task_manager.task_exists(task_id).await? {
-            Some(self.task_manager.get_task(task_id, Some(50)).await?)
+        let existing_task = if self.task_lifecycle.exists(&id).await? {
+            Some(self.task_lifecycle.get(&id, Some(50)).await?)
         } else {
             None
         };
@@ -1407,7 +1472,8 @@ where
             } else {
                 message.context_id.clone()
             };
-            self.task_manager.create_task(task_id, &context_id).await?;
+            let context_id: ContextId = context_id.parse()?;
+            self.task_lifecycle.create(&id, &context_id).await?;
         }
 
         // Check if this task already has a completed/approved expense
@@ -1416,8 +1482,7 @@ where
             if task.status.state == TaskState::Completed {
                 // This is a follow-up to a completed task
                 // Add user message to history
-                self.task_manager
-                    .update_task_status(task_id, TaskState::Working, Some(message.clone()))
+                self.update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
                     .await?;
 
                 // Send a simple acknowledgment
@@ -1430,8 +1495,7 @@ where
 
                 // Add agent response and return
                 let final_task = self
-                    .task_manager
-                    .update_task_status(task_id, TaskState::Completed, Some(response_message))
+                    .update_and_broadcast(&id, TaskState::Completed, Some(response_message))
                     .await?;
 
                 return Ok(final_task);
@@ -1439,8 +1503,7 @@ where
         }
 
         // Add the user's message to history first
-        self.task_manager
-            .update_task_status(task_id, TaskState::Working, Some(message.clone()))
+        self.update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
             .await?;
 
         // Send immediate acknowledgment
@@ -1451,13 +1514,13 @@ where
             .context_id(message.context_id.clone())
             .build();
 
-        self.task_manager
-            .update_task_status(task_id, TaskState::Working, Some(ack_message))
+        self.update_and_broadcast(&id, TaskState::Working, Some(ack_message))
             .await?;
 
         // Clone what we need for the background task
         let handler = self.clone();
         let task_id_owned = task_id.to_string();
+        let id_owned = id.clone();
         let message_owned = message.clone();
         let context_id = message.context_id.clone();
 
@@ -1472,11 +1535,7 @@ where
             let text_content = handler.extract_text_from_message(&message_owned);
 
             // Get current task for context
-            let current_task = match handler
-                .task_manager
-                .get_task(&task_id_owned, Some(50))
-                .await
-            {
+            let current_task = match handler.task_lifecycle.get(&id_owned, Some(50)).await {
                 Ok(task) => {
                     info!(task_id = %task_id_owned, history_count = task.history.len(), "Retrieved task for AI processing");
                     Some(task)
@@ -1551,8 +1610,7 @@ where
             // Update task with AI response
             info!(task_id = %task_id_owned, new_state = ?task_state, "Updating task with AI response");
             match handler
-                .task_manager
-                .update_task_status(&task_id_owned, task_state, Some(response_message))
+                .update_and_broadcast(&id_owned, task_state, Some(response_message))
                 .await
             {
                 Ok(updated_task) => {
@@ -1578,7 +1636,7 @@ where
         info!(task_id = %task_id, "Returning immediate acknowledgment, AI processing in background");
 
         // Get the updated task with the acknowledgment message
-        let final_task = self.task_manager.get_task(task_id, Some(50)).await?;
+        let final_task = self.task_lifecycle.get(&id, Some(50)).await?;
         Ok(final_task)
     }
 
@@ -1675,5 +1733,130 @@ where
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tool_call_streaming_tests {
+    use super::*;
+    use a2a_agents_common::llm::{
+        LlmError, LlmProvider, LlmResponse, LlmStreamEvent, ToolCall as LlmToolCall,
+    };
+    use a2a_rs::adapter::{InMemoryStreamingHandler, InMemoryTaskStorage};
+    use a2a_rs::port::{AsyncStreamingHandler, NoopPushNotifier, UpdateEvent};
+    use futures::StreamExt;
+    use futures::stream::{self, BoxStream};
+
+    /// A fake provider that streams a tool call as a partial chunk followed by the
+    /// finalized call — the exact shape the handler turns into `tool-call`
+    /// metadata on broadcast artifact updates.
+    struct ToolCallProvider;
+
+    #[async_trait]
+    impl LlmProvider for ToolCallProvider {
+        async fn chat_completion(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            Err(LlmError::ProviderError("unused in this test".to_string()))
+        }
+
+        async fn chat_completion_stream(
+            &self,
+            _request: LlmRequest,
+        ) -> Result<BoxStream<'static, Result<LlmStreamEvent, LlmError>>, LlmError> {
+            let events = vec![
+                Ok(LlmStreamEvent::ToolCallChunk {
+                    id: "call_1".to_string(),
+                    name: Some("create_reimbursement".to_string()),
+                    arguments: "{\"amount\":".to_string(),
+                }),
+                Ok(LlmStreamEvent::ToolCall(LlmToolCall {
+                    id: "call_1".to_string(),
+                    name: "create_reimbursement".to_string(),
+                    arguments: "{\"amount\":50}".to_string(),
+                })),
+            ];
+            Ok(stream::iter(events).boxed())
+        }
+    }
+
+    /// End-to-end: a tool call streamed by the provider becomes broadcast artifact
+    /// updates whose `tool-call` metadata reaches a `combined_update_stream`
+    /// subscriber — the same stream the SSE transport serializes to clients. The
+    /// accumulator and `tool_call_metadata` builder are unit-tested in isolation;
+    /// this covers the broadcast wiring between them, previously only
+    /// compile-checked.
+    #[tokio::test]
+    async fn tool_call_metadata_reaches_stream_subscribers() {
+        let streaming = InMemoryStreamingHandler::new();
+        let handler = ReimbursementHandler::with_llm(
+            InMemoryTaskStorage::new(),
+            streaming.clone(),
+            NoopPushNotifier,
+            Some(Arc::new(ToolCallProvider) as Arc<dyn LlmProvider>),
+        );
+
+        let task_id = "task-tc";
+        let message = Message::user_text("reimburse me".to_string(), "m1".to_string());
+
+        // Drive the AI streaming path directly. The final JSON parse may fail (tool
+        // arguments aren't a ReimbursementResponse), but the artifact broadcasts —
+        // the wiring under test — happen during the stream, before that parse.
+        let _ = handler
+            .process_with_ai(task_id, "reimburse me", None, &message)
+            .await;
+
+        // Replay everything buffered for the task (id > 0): the SSE source.
+        let mut updates = streaming
+            .combined_update_stream(task_id, Some(0))
+            .await
+            .unwrap();
+
+        let mut tool_call_updates = Vec::new();
+        while let Ok(Some(Ok(seq))) =
+            tokio::time::timeout(std::time::Duration::from_secs(2), updates.next()).await
+        {
+            if let UpdateEvent::ArtifactUpdate(ev) = seq.event {
+                let is_tool_call = ev
+                    .metadata
+                    .as_ref()
+                    .and_then(|m| m.get("type"))
+                    .and_then(Value::as_str)
+                    == Some("tool-call");
+                if is_tool_call {
+                    tool_call_updates.push(ev);
+                }
+            }
+        }
+
+        // Both the partial chunk and the finalized call surfaced as tool-call
+        // metadata, carrying the call id and tool name end-to-end.
+        assert_eq!(
+            tool_call_updates.len(),
+            2,
+            "expected partial + final tool-call artifact updates"
+        );
+        for ev in &tool_call_updates {
+            let meta = ev.metadata.as_ref().unwrap();
+            assert_eq!(meta.get("call_id").and_then(Value::as_str), Some("call_1"));
+            assert_eq!(
+                meta.get("tool_name").and_then(Value::as_str),
+                Some("create_reimbursement")
+            );
+        }
+        let partials: Vec<bool> = tool_call_updates
+            .iter()
+            .map(|ev| {
+                ev.metadata
+                    .as_ref()
+                    .unwrap()
+                    .get("partial")
+                    .and_then(Value::as_bool)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(
+            partials,
+            vec![true, false],
+            "partial streamed chunk, then the finalized non-partial call"
+        );
     }
 }

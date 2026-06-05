@@ -85,11 +85,13 @@ async fn test_error_handling_bidirectional() {
         .id("task-failed".to_string())
         .context_id("ctx-failed".to_string())
         .status(TaskStatus::new(TaskState::Failed, None))
-        .history(vec![Message::builder()
-            .role(Role::Agent)
-            .parts(vec![Part::text("Error: Something went wrong".to_string())])
-            .message_id("msg-error".to_string())
-            .build()])
+        .history(vec![
+            Message::builder()
+                .role(Role::Agent)
+                .parts(vec![Part::text("Error: Something went wrong".to_string())])
+                .message_id("msg-error".to_string())
+                .build(),
+        ])
         .build();
 
     // Convert to MCP result
@@ -116,15 +118,17 @@ async fn test_skill_tool_bidirectional_metadata() {
         .capabilities(Default::default())
         .default_input_modes(vec!["text".to_string()])
         .default_output_modes(vec!["text".to_string()])
-        .skills(vec![AgentSkill::new(
-            "test_skill".to_string(),
-            "Test Skill".to_string(),
-            "A skill for testing metadata preservation".to_string(),
-            vec!["test".to_string(), "metadata".to_string()],
-        )
-        .with_examples(vec!["Example usage".to_string()])
-        .with_input_modes(vec!["text".to_string()])
-        .with_output_modes(vec!["text".to_string()])])
+        .skills(vec![
+            AgentSkill::new(
+                "test_skill".to_string(),
+                "Test Skill".to_string(),
+                "A skill for testing metadata preservation".to_string(),
+                vec!["test".to_string(), "metadata".to_string()],
+            )
+            .with_examples(vec!["Example usage".to_string()])
+            .with_input_modes(vec!["text".to_string()])
+            .with_output_modes(vec!["text".to_string()]),
+        ])
         .build();
 
     let client = HttpClient::new("https://example.com/agent".to_string());

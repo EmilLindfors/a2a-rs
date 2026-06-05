@@ -10,14 +10,14 @@
 
 use std::sync::Arc;
 
-use a2a_mcp::{create_tool_call_message, McpToA2ABridge};
+use a2a_mcp::{McpToA2ABridge, create_tool_call_message};
 use a2a_rs::{
-    domain::{error::A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
+    domain::{Message, Part, Role, Task, TaskState, TaskStatus, error::A2AError},
     port::AsyncMessageHandler,
 };
 use async_trait::async_trait;
 use rmcp::{
-    model::*, service::RequestContext, ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext,
 };
 use serde_json::json;
 use tracing_subscriber::EnvFilter;

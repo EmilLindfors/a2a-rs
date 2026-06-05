@@ -85,7 +85,7 @@ The original hexagonal architecture approach with manual wiring:
 
 ## 🔌 Model Context Protocol (MCP) Integration
 
-You can expose any declarative A2A Agent as a Model Context Protocol (MCP) server over `stdio` transport. This allows MCP-compatible clients (like Claude Desktop) to invoke the agent's skills as local tools.
+You can expose any declarative A2A Agent as a Model Context Protocol (MCP) server over `stdio` (for local clients like Claude Desktop) or **Streamable HTTP** (for networked clients) transport. Either way, MCP-compatible clients can invoke the agent's skills as tools.
 
 The bridge dispatches tool calls to the agent's message handler **in-process**, which means:
 - No backing HTTP server is required (you can set `http_port = 0` for a pure-stdio server).
@@ -142,6 +142,105 @@ To connect Claude Desktop to your agent, add the following to your Claude Deskto
   }
 }
 ```
+
+### 4. Streamable HTTP transport
+
+For networked MCP clients, serve the agent over MCP's Streamable HTTP transport
+instead of stdio. Add a `[features.mcp_server.http]` section — when `enabled`,
+it takes precedence over stdio:
+
+```toml
+[features.mcp_server]
+enabled = true
+stdio = false
+
+[features.mcp_server.http]
+enabled = true
+host = "127.0.0.1"   # default
+port = 8000          # default
+path = "/mcp"        # default mount path
+```
+
+```bash
+cargo run -p a2a-agents --features mcp-server --example mcp_http_agent
+```
+
+The server then accepts MCP requests at `http://127.0.0.1:8000/mcp`.
+
+**DNS-rebinding protection.** By default the transport only accepts inbound
+`Host` headers for loopback (`localhost`, `127.0.0.1`, `::1`). For a public
+bind, list the hostnames you serve under — and optionally restrict browser
+origins:
+
+```toml
+[features.mcp_server.http]
+enabled = true
+host = "0.0.0.0"
+port = 8000
+allowed_hosts = ["mcp.example.com", "mcp.example.com:8000"]
+allowed_origins = ["https://app.example.com"]   # omit to disable Origin checks
+```
+
+Setting `allowed_hosts = []` disables `Host` validation entirely (accepts any
+host) — only do this behind a trusted reverse proxy.
+
+### 5. MCP client (consume external MCP tools)
+
+The other direction: let your agent **call out** to MCP servers and use their
+tools while it serves A2A requests. Enable the `mcp-client` Cargo feature and
+declare the servers to connect to under `[features.mcp_client]`. Each server is
+spawned as a child process:
+
+```toml
+[features.mcp_client]
+enabled = true
+
+[[features.mcp_client.servers]]
+name = "echo"
+command = "cargo"
+args = ["run", "-q", "-p", "a2a-agents", "--features", "mcp-client", "--bin", "mcp_echo_server"]
+# `env = { KEY = "value" }` and `cwd = "…"` are also supported.
+```
+
+In code, connect the config-declared servers into an `McpClientManager` and
+hand it to the handler that will use the tools. The handler owns the manager and
+reaches tools through the `McpToolsExt` trait:
+
+```rust
+use a2a_agents::core::{AgentBuilder, AgentConfig, McpClientManager};
+use a2a_agents::traits::{McpToolsExt, extract_tool_result_text};
+
+#[derive(Clone)]
+struct MyHandler { mcp: McpClientManager }
+
+impl McpToolsExt for MyHandler {
+    fn mcp_client(&self) -> &McpClientManager { &self.mcp }
+}
+
+// inside process_message:
+//   let result = self.call_mcp_tool("echo", "echo", Some(json!({ "text": text }))).await?;
+//   let reply  = extract_tool_result_text(&result);
+
+let config = AgentConfig::from_file("agent.toml")?;
+let mcp = McpClientManager::connect(&config.features.mcp_client).await?; // connects + discovers tools
+AgentBuilder::new(config)
+    .with_handler(MyHandler { mcp })
+    .with_storage(a2a_rs::InMemoryTaskStorage::new())
+    .build()?
+    .run()
+    .await?;
+```
+
+Connection is lenient — a server that fails to start is logged and skipped, and
+`connect` only errors if servers were configured but none could be reached.
+
+```bash
+cargo run -p a2a-agents --features mcp-client --example mcp_client_agent
+```
+
+The example connects to the bundled `mcp_echo_server`, so it runs with no
+external setup; point `command`/`args` at any MCP stdio server to talk to
+something real.
 
 ## Architecture
 
@@ -284,13 +383,8 @@ This example implementation demonstrates the framework architecture but has simp
 
 ## Future Enhancements
 
-See [TODO.md](./TODO.md) for the comprehensive modernization roadmap including:
-
-1. **Phase 2**: Production features (SQLx storage, authentication)
-2. **Phase 3**: AI/LLM integration for natural language processing
-3. **Phase 4**: Additional agent examples (document analysis, research assistant)
-4. **Phase 5**: Comprehensive testing and documentation
-5. **Phase 6**: Docker support and production deployment
+See the workspace [ROADMAP.md](../ROADMAP.md) for deferred themes and planned
+work.
 
 ## Framework Features Demonstrated
 

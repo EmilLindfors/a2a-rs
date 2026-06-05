@@ -1,40 +1,9 @@
 //! Message handling port definitions
 
-#[cfg(feature = "server")]
 use async_trait::async_trait;
 
 use crate::domain::{A2AError, Message, Task};
 
-/// A trait for handling message processing operations
-pub trait MessageHandler {
-    /// Process a message for a specific task
-    fn process_message(
-        &self,
-        task_id: &str,
-        message: &Message,
-        session_id: Option<&str>,
-    ) -> Result<Task, A2AError>;
-
-    /// Validate a message before processing
-    fn validate_message(&self, message: &Message) -> Result<(), A2AError> {
-        // Default implementation - can be overridden
-        if message.parts.is_empty() {
-            return Err(A2AError::ValidationError {
-                field: "message.parts".to_string(),
-                message: "Message must contain at least one part".to_string(),
-            });
-        }
-        Ok(())
-    }
-
-    /// Transform a message before processing (e.g., for content filtering)
-    fn transform_message(&self, message: Message) -> Result<Message, A2AError> {
-        // Default implementation - pass through unchanged
-        Ok(message)
-    }
-}
-
-#[cfg(feature = "server")]
 #[async_trait]
 /// An async trait for handling message processing operations
 pub trait AsyncMessageHandler: Send + Sync {

@@ -22,7 +22,6 @@
 
 use a2a_client::{WebA2AClient, components::create_sse_stream};
 use a2a_rs::domain::{Message, Part, Role};
-use a2a_rs::services::AsyncA2AClient;
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -99,7 +98,7 @@ async fn send_message_handler(
     let task_id = uuid::Uuid::new_v4().to_string();
 
     match client
-        .http
+        .transport
         .send_task_message(&task_id, &message, None, None)
         .await
     {

@@ -3,14 +3,11 @@
 //! The runtime handles starting HTTP/WebSocket servers, wiring components,
 //! and managing the agent lifecycle based on configuration.
 
-#[cfg(feature = "mcp-client")]
-use crate::core::McpClientManager;
 use crate::core::config::{AgentConfig, AuthConfig, StorageConfig};
-use a2a_rs::adapter::{
-    BearerTokenAuthenticator, DefaultRequestProcessor, HttpServer, SimpleAgentInfo,
-};
+use a2a_rs::adapter::{BearerTokenAuthenticator, ConnectRpcAdapter, HttpServer, SimpleAgentInfo};
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
+    AsyncTaskQuery,
 };
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -27,14 +24,23 @@ pub struct AgentRuntime<H, S> {
     config: AgentConfig,
     handler: Arc<H>,
     storage: Arc<S>,
-    #[cfg(feature = "mcp-client")]
-    mcp_client: Option<McpClientManager>,
+    /// Optional shared streaming backend. When set, it is injected into the
+    /// transport adapter so SSE subscribers see the same broadcasts the handler
+    /// emits (e.g. via the `TaskStatusBroadcast` mixin). Without it, the adapter
+    /// defaults to a no-op streaming handler and updates never reach clients.
+    streaming: Option<Arc<dyn AsyncStreamingHandler>>,
 }
 
 impl<H, S> AgentRuntime<H, S>
 where
     H: AsyncMessageHandler + Clone + Send + Sync + 'static,
-    S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+    S: AsyncTaskLifecycle
+        + AsyncTaskQuery
+        + AsyncNotificationManager
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     /// Create a new runtime
     pub fn new(config: AgentConfig, handler: Arc<H>, storage: Arc<S>) -> Self {
@@ -42,31 +48,19 @@ where
             config,
             handler,
             storage,
-            #[cfg(feature = "mcp-client")]
-            mcp_client: None,
+            streaming: None,
         }
     }
 
-    /// Create a new runtime with MCP client
-    #[cfg(feature = "mcp-client")]
-    pub fn with_mcp_client(
-        config: AgentConfig,
-        handler: Arc<H>,
-        storage: Arc<S>,
-        mcp_client: McpClientManager,
-    ) -> Self {
-        Self {
-            config,
-            handler,
-            storage,
-            mcp_client: Some(mcp_client),
-        }
-    }
-
-    /// Get the MCP client manager (if enabled)
-    #[cfg(feature = "mcp-client")]
-    pub fn mcp_client(&self) -> Option<&McpClientManager> {
-        self.mcp_client.as_ref()
+    /// Attach a shared streaming backend.
+    ///
+    /// Pass the *same* [`AsyncStreamingHandler`] instance the message handler
+    /// broadcasts to (clones of an `InMemoryStreamingHandler` share their
+    /// subscriber registry). The runtime injects it into the transport adapter
+    /// so `tasks/subscribe` SSE streams observe those broadcasts.
+    pub fn with_streaming(mut self, streaming: Arc<dyn AsyncStreamingHandler>) -> Self {
+        self.streaming = Some(streaming);
+        self
     }
 
     /// Build agent info from configuration
@@ -252,12 +246,20 @@ where
         );
         let agent_info = self.build_agent_info(base_url);
 
-        let processor = DefaultRequestProcessor::new(
+        let mut processor = ConnectRpcAdapter::new(
             (*self.handler).clone(),
             (*self.storage).clone(),
             (*self.storage).clone(),
             agent_info.clone(),
         );
+
+        // Share the handler's streaming backend with the transport so SSE
+        // subscribers observe the same broadcasts. Without this the adapter
+        // keeps its default no-op streaming handler and updates never surface.
+        if let Some(streaming) = &self.streaming {
+            processor = processor.with_streaming_handler(streaming.clone());
+            info!("📡 Streaming backend wired into transport (SSE subscribers live)");
+        }
 
         let bind_address = format!(
             "{}:{}",
@@ -427,10 +429,7 @@ where
     }
 
     /// Start the appropriate server(s) based on configuration
-    pub async fn run(self) -> Result<(), RuntimeError>
-    where
-        S: AsyncStreamingHandler,
-    {
+    pub async fn run(self) -> Result<(), RuntimeError> {
         // Check if MCP server mode is enabled
         if self.config.features.mcp_server.enabled {
             return self.run_as_mcp_server().await;

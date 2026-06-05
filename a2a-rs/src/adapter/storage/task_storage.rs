@@ -17,39 +17,32 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
-    A2AError, Artifact, Message, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
-    TaskState, TaskStatus, TaskStatusUpdateEvent,
+    A2AError, ContextId, Message, Task, TaskId, TaskPushNotificationConfig, TaskState,
+    VersionedTask,
 };
 use crate::port::{
-    AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
-    streaming_handler::Subscriber,
+    AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle, AsyncTaskQuery,
+    AsyncTaskVersioning,
 };
 
-type StatusSubscribers = Vec<Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>>;
-type ArtifactSubscribers = Vec<Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>>;
-
-/// Structure to hold subscribers for a task
-pub(crate) struct TaskSubscribers {
-    status: StatusSubscribers,
-    artifacts: ArtifactSubscribers,
-}
-
-impl TaskSubscribers {
-    fn new() -> Self {
-        Self {
-            status: Vec::new(),
-            artifacts: Vec::new(),
-        }
-    }
-}
-
-/// Simple in-memory task storage for testing and example purposes
+/// Simple in-memory task storage for testing and example purposes.
+///
+/// Persistence-only: streaming fan-out lives in
+/// [`InMemoryStreamingHandler`](crate::adapter::InMemoryStreamingHandler) and
+/// push-webhook delivery behind the [`AsyncPushNotifier`] port (this struct hands
+/// out its registry via [`push_notifier`](Self::push_notifier)). The store still
+/// owns push-config CRUD ([`AsyncNotificationManager`]) because that is config
+/// *persistence*.
 pub struct InMemoryTaskStorage {
     /// Tasks stored by ID
     pub(crate) tasks: Arc<Mutex<HashMap<String, Task>>>,
-    /// Subscribers for task updates
-    pub(crate) subscribers: Arc<Mutex<HashMap<String, TaskSubscribers>>>,
-    /// Push notification registry
+    /// Per-task optimistic-concurrency version, bumped on every mutation.
+    ///
+    /// A separate map keyed by the same task id. Mutators always lock `tasks`
+    /// first and `versions` second, so the two stay consistent and never
+    /// deadlock (see [`AsyncTaskVersioning`]).
+    pub(crate) versions: Arc<Mutex<HashMap<String, u64>>>,
+    /// Push notification registry (config store + delivery backend)
     pub(crate) push_notification_registry: Arc<PushNotificationRegistry>,
 }
 
@@ -66,7 +59,7 @@ impl InMemoryTaskStorage {
 
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
-            subscribers: Arc::new(Mutex::new(HashMap::new())),
+            versions: Arc::new(Mutex::new(HashMap::new())),
             push_notification_registry: Arc::new(push_registry),
         }
     }
@@ -77,31 +70,29 @@ impl InMemoryTaskStorage {
 
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
-            subscribers: Arc::new(Mutex::new(HashMap::new())),
+            versions: Arc::new(Mutex::new(HashMap::new())),
             push_notification_registry: Arc::new(push_registry),
         }
     }
 
-    /// Add a status update subscriber for streaming (convenience method)
-    pub async fn add_status_subscriber_legacy(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<(), A2AError> {
-        self.add_status_subscriber(task_id, subscriber)
-            .await
-            .map(|_| ())
+    /// Bump (or initialize) the stored version for a task, returning the new
+    /// value. Callers already hold the `tasks` lock; this acquires `versions`
+    /// second, preserving the global lock order.
+    async fn bump_version(&self, task_id: &str) -> u64 {
+        let mut versions = self.versions.lock().await;
+        let v = versions.entry(task_id.to_string()).or_insert(0);
+        *v += 1;
+        *v
     }
 
-    /// Add an artifact update subscriber for streaming (convenience method)
-    pub async fn add_artifact_subscriber_legacy(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<(), A2AError> {
-        self.add_artifact_subscriber(task_id, subscriber)
-            .await
-            .map(|_| ())
+    /// Hand out this store's push-notification registry as an
+    /// [`AsyncPushNotifier`].
+    ///
+    /// The returned notifier shares the same config registry the store writes to
+    /// via [`AsyncNotificationManager::set_config`], so a config registered on
+    /// the store is immediately visible to the notifier at the composition edge.
+    pub fn push_notifier(&self) -> Arc<dyn AsyncPushNotifier> {
+        self.push_notification_registry.clone()
     }
 }
 
@@ -111,158 +102,11 @@ impl Default for InMemoryTaskStorage {
     }
 }
 
-impl InMemoryTaskStorage {
-    /// Look up the context_id for a task
-    async fn get_task_context_id(&self, task_id: &str) -> String {
-        let tasks_guard = self.tasks.lock().await;
-        tasks_guard
-            .get(task_id)
-            .map(|t| t.context_id.clone())
-            .unwrap_or_else(|| "default".to_string())
-    }
-
-    /// Send a status update to all subscribers for a task
-    pub(crate) async fn broadcast_status_update(
-        &self,
-        task_id: &str,
-        status: TaskStatus,
-    ) -> Result<(), A2AError> {
-        let context_id = self.get_task_context_id(task_id).await;
-
-        // Create the update event
-        let event = TaskStatusUpdateEvent {
-            task_id: task_id.to_string(),
-            context_id,
-            kind: "status-update".to_string(),
-            status: status.clone(),
-            metadata: None,
-        };
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            task_id = %task_id,
-            state = ?status.state,
-            "📡 Broadcasting status update to subscribers"
-        );
-
-        // Get all subscribers for this task and notify them
-        let subscriber_count = {
-            let subscribers_guard = self.subscribers.lock().await;
-
-            if let Some(task_subscribers) = subscribers_guard.get(task_id) {
-                let count = task_subscribers.status.len();
-                #[cfg(feature = "tracing")]
-                tracing::info!(
-                    task_id = %task_id,
-                    subscriber_count = count,
-                    state = ?status.state,
-                    "📡 Notifying WebSocket subscribers of status update"
-                );
-
-                // Clone the subscribers so we don't hold the lock during notification
-                for (i, subscriber) in task_subscribers.status.iter().enumerate() {
-                    if let Err(e) = subscriber.on_update(event.clone()).await {
-                        #[cfg(feature = "tracing")]
-                        tracing::error!(
-                            task_id = %task_id,
-                            subscriber_index = i,
-                            error = %e,
-                            "❌ Failed to notify subscriber"
-                        );
-                        eprintln!("Failed to notify subscriber: {}", e);
-                    } else {
-                        #[cfg(feature = "tracing")]
-                        tracing::debug!(
-                            task_id = %task_id,
-                            subscriber_index = i,
-                            "✅ Successfully notified subscriber"
-                        );
-                    }
-                }
-                count
-            } else {
-                // No subscribers is the steady-state for tasks created via
-                // message/send (no streaming requested). Only worth tracing
-                // at DEBUG — WARN here floods logs in normal operation.
-                #[cfg(feature = "tracing")]
-                tracing::debug!(
-                    task_id = %task_id,
-                    "no WebSocket subscribers for task; status broadcast skipped"
-                );
-                0
-            }
-        }; // Lock is dropped here
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!(
-            task_id = %task_id,
-            notified_count = subscriber_count,
-            "📡 Finished broadcasting to WebSocket subscribers"
-        );
-
-        // Send push notification if configured
-        if let Err(e) = self
-            .push_notification_registry
-            .send_status_update(task_id, &event)
-            .await
-        {
-            eprintln!("Failed to send push notification: {}", e);
-        }
-
-        Ok(())
-    }
-
-    /// Send an artifact update to all subscribers for a task
-    pub(crate) async fn broadcast_artifact_update(
-        &self,
-        task_id: &str,
-        artifact: Artifact,
-        _index: Option<u32>,
-        _final: bool,
-    ) -> Result<(), A2AError> {
-        let context_id = self.get_task_context_id(task_id).await;
-
-        // Create the update event
-        let event = TaskArtifactUpdateEvent {
-            task_id: task_id.to_string(),
-            context_id,
-            kind: "artifact-update".to_string(),
-            artifact,
-            append: None,
-            last_chunk: None,
-            metadata: None,
-        };
-
-        // Get all subscribers for this task
-        {
-            let subscribers_guard = self.subscribers.lock().await;
-
-            if let Some(task_subscribers) = subscribers_guard.get(task_id) {
-                // Clone the subscribers so we don't hold the lock during notification
-                for subscriber in task_subscribers.artifacts.iter() {
-                    if let Err(e) = subscriber.on_update(event.clone()).await {
-                        eprintln!("Failed to notify subscriber: {}", e);
-                    }
-                }
-            }
-        }; // Lock is dropped here
-
-        // Send push notification if configured
-        if let Err(e) = self
-            .push_notification_registry
-            .send_artifact_update(task_id, &event)
-            .await
-        {
-            eprintln!("Failed to send push notification: {}", e);
-        }
-
-        Ok(())
-    }
-}
-
 #[async_trait]
-impl AsyncTaskManager for InMemoryTaskStorage {
-    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
+impl AsyncTaskLifecycle for InMemoryTaskStorage {
+    async fn create(&self, id: &TaskId, context_id: &ContextId) -> Result<Task, A2AError> {
+        let task_id = id.as_str();
+        let context_id = context_id.as_str();
         let mut tasks_guard = self.tasks.lock().await;
 
         if tasks_guard.contains_key(task_id) {
@@ -274,16 +118,18 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 
         let task = Task::new(task_id.to_string(), context_id.to_string());
         tasks_guard.insert(task_id.to_string(), task.clone());
+        self.bump_version(task_id).await; // version 0 -> 1
 
         Ok(task)
     }
 
-    async fn update_task_status(
+    async fn update_status(
         &self,
-        task_id: &str,
+        id: &TaskId,
         state: TaskState,
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
+        let task_id = id.as_str();
         let mut tasks_guard = self.tasks.lock().await;
 
         let task = tasks_guard
@@ -292,27 +138,23 @@ impl AsyncTaskManager for InMemoryTaskStorage {
 
         // Update the task status with the optional message
         task.update_status(state, message);
+        let updated = task.clone();
+        self.bump_version(task_id).await;
 
-        // Clone status before cloning the entire task to avoid double clone
-        let status_for_broadcast = task.status.clone().into_option().unwrap_or_default();
-        let updated_task = task.clone();
-
-        // Release the lock before broadcasting
-        drop(tasks_guard);
-
-        // Broadcast status update
-        self.broadcast_status_update(task_id, status_for_broadcast)
-            .await?;
-
-        Ok(updated_task)
+        // Persistence only: announcing the change to streaming subscribers is
+        // the orchestration layer's job (see `TaskStatusBroadcast`), not a side
+        // effect of the mutator.
+        Ok(updated)
     }
 
-    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError> {
+    async fn exists(&self, id: &TaskId) -> Result<bool, A2AError> {
+        let task_id = id.as_str();
         let tasks_guard = self.tasks.lock().await;
         Ok(tasks_guard.contains_key(task_id))
     }
 
-    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
+    async fn get(&self, id: &TaskId, history_length: Option<u32>) -> Result<Task, A2AError> {
+        let task_id = id.as_str();
         // Get the task
         let task = {
             let tasks_guard = self.tasks.lock().await;
@@ -328,64 +170,109 @@ impl AsyncTaskManager for InMemoryTaskStorage {
         Ok(task)
     }
 
-    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
-        // Get and update the task
-        let (task, status_for_broadcast) = {
-            let mut tasks_guard = self.tasks.lock().await;
+    async fn cancel(&self, id: &TaskId) -> Result<Task, A2AError> {
+        let task_id = id.as_str();
+        let mut tasks_guard = self.tasks.lock().await;
 
-            let Some(task) = tasks_guard.get(task_id) else {
-                return Err(A2AError::TaskNotFound(task_id.to_string()));
-            };
+        let Some(task) = tasks_guard.get(task_id) else {
+            return Err(A2AError::TaskNotFound(task_id.to_string()));
+        };
 
-            let mut updated_task = task.clone();
+        let mut updated_task = task.clone();
 
-            // Only working tasks can be canceled
-            if updated_task.status.state != TaskState::Working {
-                return Err(A2AError::TaskNotCancelable(format!(
-                    "Task {} is in state {:?} and cannot be canceled",
-                    task_id, updated_task.status.state
-                )));
-            }
+        // Only working tasks can be canceled
+        if updated_task.status.state != TaskState::Working {
+            return Err(A2AError::TaskNotCancelable(format!(
+                "Task {} is in state {:?} and cannot be canceled",
+                task_id, updated_task.status.state
+            )));
+        }
 
-            // Create a cancellation message to add to history
-            let cancel_message = Message {
-                role: ::buffa::EnumValue::from(crate::domain::Role::Agent),
-                parts: vec![crate::domain::Part::text(format!(
-                    "Task {} canceled.",
-                    task_id
-                ))],
-                message_id: uuid::Uuid::new_v4().to_string(),
-                task_id: task_id.to_string(),
-                context_id: updated_task.context_id.clone(),
-                ..Default::default()
-            };
+        // Create a cancellation message to add to history
+        let cancel_message = Message {
+            role: ::buffa::EnumValue::from(crate::domain::Role::Agent),
+            parts: vec![crate::domain::Part::text(format!(
+                "Task {} canceled.",
+                task_id
+            ))],
+            message_id: uuid::Uuid::new_v4().to_string(),
+            task_id: task_id.to_string(),
+            context_id: updated_task.context_id.clone(),
+            ..Default::default()
+        };
 
-            // Update the status with the cancellation message to track in history
-            updated_task.update_status(TaskState::Canceled, Some(cancel_message));
+        // Update the status with the cancellation message to track in history
+        updated_task.update_status(TaskState::Canceled, Some(cancel_message));
+        tasks_guard.insert(task_id.to_string(), updated_task.clone());
+        self.bump_version(task_id).await;
 
-            // Clone status before updating storage to avoid cloning task twice
-            let status_for_broadcast = updated_task
-                .status
-                .clone()
-                .into_option()
-                .unwrap_or_default();
-            tasks_guard.insert(task_id.to_string(), updated_task.clone());
+        // Persistence only: the orchestration layer announces the cancellation
+        // to streaming subscribers (see `TaskStatusBroadcast`).
+        Ok(updated_task)
+    }
+}
 
-            // Drop guard early and return status for use after broadcasting
-            drop(tasks_guard);
-            (updated_task, status_for_broadcast)
-        }; // Lock is dropped here
-
-        // Broadcast status update (with final flag set to true)
-        self.broadcast_status_update(task_id, status_for_broadcast)
-            .await?;
-
-        Ok(task)
+#[async_trait]
+impl AsyncTaskVersioning for InMemoryTaskStorage {
+    async fn version(&self, id: &TaskId) -> Result<u64, A2AError> {
+        let task_id = id.as_str();
+        let tasks_guard = self.tasks.lock().await;
+        if !tasks_guard.contains_key(task_id) {
+            return Err(A2AError::TaskNotFound(task_id.to_string()));
+        }
+        let versions = self.versions.lock().await;
+        Ok(versions.get(task_id).copied().unwrap_or(0))
     }
 
-    // ===== v1.0.0 New Methods =====
+    async fn get_versioned(
+        &self,
+        id: &TaskId,
+        history_length: Option<u32>,
+    ) -> Result<VersionedTask, A2AError> {
+        let task_id = id.as_str();
+        let tasks_guard = self.tasks.lock().await;
+        let Some(task) = tasks_guard.get(task_id) else {
+            return Err(A2AError::TaskNotFound(task_id.to_string()));
+        };
+        let task = task.with_limited_history(history_length);
+        let versions = self.versions.lock().await;
+        let version = versions.get(task_id).copied().unwrap_or(0);
+        Ok(VersionedTask::new(task, version))
+    }
 
-    async fn list_tasks_v3(
+    async fn update_status_checked(
+        &self,
+        id: &TaskId,
+        expected: u64,
+        state: TaskState,
+        message: Option<Message>,
+    ) -> Result<VersionedTask, A2AError> {
+        let task_id = id.as_str();
+        // Lock order: tasks, then versions — the compare-and-swap holds both so
+        // the check and the bump are atomic against every other mutator.
+        let mut tasks_guard = self.tasks.lock().await;
+        let task = tasks_guard
+            .get_mut(task_id)
+            .ok_or_else(|| A2AError::TaskNotFound(task_id.to_string()))?;
+        let mut versions = self.versions.lock().await;
+        let current = versions.get(task_id).copied().unwrap_or(0);
+        if current != expected {
+            return Err(A2AError::VersionConflict {
+                id: task_id.to_string(),
+                expected,
+                actual: current,
+            });
+        }
+        task.update_status(state, message);
+        let new_version = current + 1;
+        versions.insert(task_id.to_string(), new_version);
+        Ok(VersionedTask::new(task.clone(), new_version))
+    }
+}
+
+#[async_trait]
+impl AsyncTaskQuery for InMemoryTaskStorage {
+    async fn list(
         &self,
         params: &crate::domain::ListTasksParams,
     ) -> Result<crate::domain::ListTasksResult, A2AError> {
@@ -487,46 +374,15 @@ impl AsyncTaskManager for InMemoryTaskStorage {
             next_page_token,
         })
     }
-
-    async fn get_push_notification_config(
-        &self,
-        params: &crate::domain::GetTaskPushNotificationConfigParams,
-    ) -> Result<crate::domain::TaskPushNotificationConfig, A2AError> {
-        // For in-memory storage, we don't support multiple configs per task yet
-        // Just use the existing get_task_notification method
-        self.get_task_notification(&params.id).await
-    }
-
-    async fn list_push_notification_configs(
-        &self,
-        params: &crate::domain::ListTaskPushNotificationConfigsParams,
-    ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
-        // For in-memory storage, we only support one config per task
-        // Return it as a single-item vec
-        match self
-            .push_notification_registry
-            .get_config(&params.id)
-            .await?
-        {
-            Some(config) => Ok(vec![config]),
-            None => Ok(vec![]),
-        }
-    }
-
-    async fn delete_push_notification_config(
-        &self,
-        params: &crate::domain::DeleteTaskPushNotificationConfigParams,
-    ) -> Result<(), A2AError> {
-        // For in-memory storage, just remove the single config
-        // In a full implementation, would need to handle config_id
-        self.remove_task_notification(&params.id).await
-    }
 }
 
-// AsyncNotificationManager implementation
+// AsyncNotificationManager implementation.
+//
+// In-memory storage keeps a single config per task in the push-notification
+// registry, so the multi-config CRUD surface is expressed in those terms.
 #[async_trait]
 impl AsyncNotificationManager for InMemoryTaskStorage {
-    async fn set_task_notification(
+    async fn set_config(
         &self,
         config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
@@ -551,190 +407,46 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
         Ok(config.clone())
     }
 
-    async fn get_task_notification(
+    async fn get_config(
         &self,
-        task_id: &str,
+        params: &crate::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
-        // Get the push notification config from the registry
-        match self.push_notification_registry.get_config(task_id).await? {
+        match self
+            .push_notification_registry
+            .get_config(&params.id)
+            .await?
+        {
             Some(config) => Ok(config),
             None => Err(A2AError::PushNotificationNotSupported),
         }
     }
 
-    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError> {
-        self.push_notification_registry.unregister(task_id).await?;
-        Ok(())
-    }
-}
-
-// AsyncStreamingHandler implementation
-#[async_trait]
-impl AsyncStreamingHandler for InMemoryTaskStorage {
-    async fn add_status_subscriber(
+    async fn list_configs(
         &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
-        #[cfg(feature = "tracing")]
-        tracing::info!(
-            task_id = %task_id,
-            "✅ Adding WebSocket subscriber for status updates"
-        );
-
-        // Add the subscriber
+        params: &crate::domain::ListTaskPushNotificationConfigsParams,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
+        // In-memory storage supports one config per task; return it as a
+        // single-item vec (or empty if none registered).
+        match self
+            .push_notification_registry
+            .get_config(&params.id)
+            .await?
         {
-            let mut subscribers_guard = self.subscribers.lock().await;
-
-            let task_subscribers = subscribers_guard
-                .entry(task_id.to_string())
-                .or_insert_with(TaskSubscribers::new);
-
-            task_subscribers.status.push(subscriber);
-
-            #[cfg(feature = "tracing")]
-            tracing::info!(
-                task_id = %task_id,
-                subscriber_count = task_subscribers.status.len(),
-                "✅ WebSocket subscriber added successfully"
-            );
-        } // Lock is dropped here
-
-        // Try to get the current status to send as an initial update
-        // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
-        if let Ok(task) = self.get_task(task_id, None).await {
-            let _ = self
-                .broadcast_status_update(
-                    task_id,
-                    task.status.clone().into_option().unwrap_or_default(),
-                )
-                .await;
-        }
-
-        Ok(format!("status-{}-{}", task_id, uuid::Uuid::new_v4()))
-    }
-
-    async fn add_artifact_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
-        // Add the subscriber
-        {
-            let mut subscribers_guard = self.subscribers.lock().await;
-
-            let task_subscribers = subscribers_guard
-                .entry(task_id.to_string())
-                .or_insert_with(TaskSubscribers::new);
-
-            task_subscribers.artifacts.push(subscriber);
-        } // Lock is dropped here
-
-        // If there are existing artifacts, broadcast them
-        // But don't fail if the task doesn't exist yet - the subscriber will get updates when it's created
-        if let Ok(task) = self.get_task(task_id, None).await {
-            for artifact in &task.artifacts {
-                let _ = self
-                    .broadcast_artifact_update(task_id, artifact.clone(), None, false)
-                    .await;
-            }
-        }
-
-        Ok(format!("artifact-{}-{}", task_id, uuid::Uuid::new_v4()))
-    }
-
-    async fn remove_subscription(&self, _subscription_id: &str) -> Result<(), A2AError> {
-        Err(A2AError::UnsupportedOperation(
-            "Subscription removal by ID requires storage layer refactoring".to_string(),
-        ))
-    }
-
-    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
-        // Remove all subscribers
-        {
-            let mut subscribers_guard = self.subscribers.lock().await;
-            subscribers_guard.remove(task_id);
-        } // Lock is dropped here
-
-        Ok(())
-    }
-
-    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
-        let subscribers_guard = self.subscribers.lock().await;
-
-        if let Some(task_subscribers) = subscribers_guard.get(task_id) {
-            Ok(task_subscribers.status.len() + task_subscribers.artifacts.len())
-        } else {
-            Ok(0)
+            Some(config) => Ok(vec![config]),
+            None => Ok(vec![]),
         }
     }
 
-    async fn broadcast_status_update(
+    async fn delete_config(
         &self,
-        task_id: &str,
-        update: TaskStatusUpdateEvent,
+        params: &crate::domain::DeleteTaskPushNotificationConfigParams,
     ) -> Result<(), A2AError> {
-        self.broadcast_status_update(task_id, update.status).await
-    }
-
-    async fn broadcast_artifact_update(
-        &self,
-        task_id: &str,
-        update: TaskArtifactUpdateEvent,
-    ) -> Result<(), A2AError> {
-        self.broadcast_artifact_update(
-            task_id,
-            update.artifact,
-            None,
-            update.last_chunk.unwrap_or(false),
-        )
-        .await
-    }
-
-    async fn status_update_stream(
-        &self,
-        _task_id: &str,
-    ) -> Result<
-        std::pin::Pin<
-            Box<dyn futures::Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>,
-        >,
-        A2AError,
-    > {
-        Err(A2AError::UnsupportedOperation(
-            "Status update stream requires storage layer refactoring".to_string(),
-        ))
-    }
-
-    async fn artifact_update_stream(
-        &self,
-        _task_id: &str,
-    ) -> Result<
-        std::pin::Pin<
-            Box<dyn futures::Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>,
-        >,
-        A2AError,
-    > {
-        Err(A2AError::UnsupportedOperation(
-            "Artifact update stream requires storage layer refactoring".to_string(),
-        ))
-    }
-
-    async fn combined_update_stream(
-        &self,
-        _task_id: &str,
-    ) -> Result<
-        std::pin::Pin<
-            Box<
-                dyn futures::Stream<
-                        Item = Result<crate::port::streaming_handler::UpdateEvent, A2AError>,
-                    > + Send,
-            >,
-        >,
-        A2AError,
-    > {
-        Err(A2AError::UnsupportedOperation(
-            "Combined update stream requires storage layer refactoring".to_string(),
-        ))
+        // In-memory storage keeps a single config per task, so config_id is
+        // not used for lookup. Idempotent per the v1.0.0 spec.
+        self.push_notification_registry
+            .unregister(&params.id)
+            .await?;
+        Ok(())
     }
 }
 
@@ -742,8 +454,62 @@ impl Clone for InMemoryTaskStorage {
     fn clone(&self) -> Self {
         Self {
             tasks: self.tasks.clone(),
-            subscribers: self.subscribers.clone(),
+            versions: self.versions.clone(),
             push_notification_registry: self.push_notification_registry.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::ContextId;
+
+    fn tid(s: &str) -> TaskId {
+        s.parse().unwrap()
+    }
+    fn cid(s: &str) -> ContextId {
+        s.parse().unwrap()
+    }
+
+    #[tokio::test]
+    async fn versioning_tracks_and_guards_mutations() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        assert_eq!(store.version(&tid("t1")).await.unwrap(), 1);
+
+        // Unversioned mutations bump the version, keeping the two views in sync.
+        store
+            .update_status(&tid("t1"), TaskState::Working, None)
+            .await
+            .unwrap();
+        let snap = store.get_versioned(&tid("t1"), None).await.unwrap();
+        assert_eq!(snap.version, 2);
+
+        // Stale conditional update is rejected and leaves the task unchanged.
+        let err = store
+            .update_status_checked(&tid("t1"), 1, TaskState::Completed, None)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            A2AError::VersionConflict {
+                expected: 1,
+                actual: 2,
+                ..
+            }
+        ));
+        assert_eq!(
+            store.get(&tid("t1"), None).await.unwrap().status.state,
+            TaskState::Working
+        );
+
+        // Current-version conditional update succeeds and bumps.
+        let ok = store
+            .update_status_checked(&tid("t1"), 2, TaskState::Completed, None)
+            .await
+            .unwrap();
+        assert_eq!(ok.version, 3);
+        assert_eq!(ok.task.status.state, TaskState::Completed);
     }
 }

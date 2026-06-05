@@ -99,7 +99,6 @@ url = "https://example.com"
 [server]
 host = "127.0.0.1"
 http_port = 8080       # Set to 0 to disable HTTP
-ws_port = 8081         # Set to 0 to disable WebSocket
 
 [server.storage]
 type = "sqlx"
@@ -170,7 +169,6 @@ Server configuration:
 
 - `host` (default: `127.0.0.1`): Host to bind to
 - `http_port` (default: `8080`): HTTP server port (0 to disable)
-- `ws_port` (default: `8081`): WebSocket server port (0 to disable)
 
 #### `[server.storage]` - Optional (defaults to in-memory)
 

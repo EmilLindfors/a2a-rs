@@ -3,26 +3,17 @@
 //! Provides a fluent API for building agents from configuration files
 //! or programmatically with minimal boilerplate.
 
-#[cfg(feature = "mcp-client")]
-use crate::core::McpClientManager;
 use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
 use crate::core::runtime::AgentRuntime;
-use a2a_rs::domain::{
-    A2AError, Task, TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskState,
-    TaskStatusUpdateEvent,
-};
+use a2a_rs::domain::{A2AError, ContextId, Task, TaskId, TaskPushNotificationConfig, TaskState};
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
-    StreamingSubscriber, UpdateEvent,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
+    AsyncTaskQuery,
 };
 use a2a_rs::{HttpPushNotificationSender, InMemoryTaskStorage};
 use async_trait::async_trait;
-use futures::Stream;
 use std::path::Path;
-use std::pin::Pin;
 use std::sync::Arc;
-#[cfg(feature = "mcp-client")]
-use tracing::info;
 
 #[cfg(feature = "sqlx")]
 use a2a_rs::adapter::storage::SqlxTaskStorage;
@@ -37,82 +28,110 @@ pub enum AutoStorage {
 }
 
 #[async_trait]
-impl AsyncTaskManager for AutoStorage {
-    async fn create_task(&self, task_id: &str, context_id: &str) -> Result<Task, A2AError> {
+impl AsyncTaskLifecycle for AutoStorage {
+    async fn create(&self, id: &TaskId, context_id: &ContextId) -> Result<Task, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.create_task(task_id, context_id).await,
+            AutoStorage::InMemory(s) => s.create(id, context_id).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.create_task(task_id, context_id).await,
+            AutoStorage::Sqlx(s) => s.create(id, context_id).await,
         }
     }
 
-    async fn get_task(&self, task_id: &str, history_length: Option<u32>) -> Result<Task, A2AError> {
+    async fn get(&self, id: &TaskId, history_length: Option<u32>) -> Result<Task, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.get_task(task_id, history_length).await,
+            AutoStorage::InMemory(s) => s.get(id, history_length).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.get_task(task_id, history_length).await,
+            AutoStorage::Sqlx(s) => s.get(id, history_length).await,
         }
     }
 
-    async fn update_task_status(
+    async fn update_status(
         &self,
-        task_id: &str,
+        id: &TaskId,
         state: TaskState,
         message: Option<a2a_rs::domain::Message>,
     ) -> Result<Task, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.update_task_status(task_id, state, message).await,
+            AutoStorage::InMemory(s) => s.update_status(id, state, message).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.update_task_status(task_id, state, message).await,
+            AutoStorage::Sqlx(s) => s.update_status(id, state, message).await,
         }
     }
 
-    async fn cancel_task(&self, task_id: &str) -> Result<Task, A2AError> {
+    async fn cancel(&self, id: &TaskId) -> Result<Task, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.cancel_task(task_id).await,
+            AutoStorage::InMemory(s) => s.cancel(id).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.cancel_task(task_id).await,
+            AutoStorage::Sqlx(s) => s.cancel(id).await,
         }
     }
 
-    async fn task_exists(&self, task_id: &str) -> Result<bool, A2AError> {
+    async fn exists(&self, id: &TaskId) -> Result<bool, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.task_exists(task_id).await,
+            AutoStorage::InMemory(s) => s.exists(id).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.task_exists(task_id).await,
+            AutoStorage::Sqlx(s) => s.exists(id).await,
+        }
+    }
+}
+
+#[async_trait]
+impl AsyncTaskQuery for AutoStorage {
+    async fn list(
+        &self,
+        params: &a2a_rs::domain::ListTasksParams,
+    ) -> Result<a2a_rs::domain::ListTasksResult, A2AError> {
+        match self {
+            AutoStorage::InMemory(s) => s.list(params).await,
+            #[cfg(feature = "sqlx")]
+            AutoStorage::Sqlx(s) => s.list(params).await,
         }
     }
 }
 
 #[async_trait]
 impl AsyncNotificationManager for AutoStorage {
-    async fn set_task_notification(
+    async fn set_config(
         &self,
         config: &TaskPushNotificationConfig,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.set_task_notification(config).await,
+            AutoStorage::InMemory(s) => s.set_config(config).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.set_task_notification(config).await,
+            AutoStorage::Sqlx(s) => s.set_config(config).await,
         }
     }
 
-    async fn get_task_notification(
+    async fn get_config(
         &self,
-        task_id: &str,
+        params: &a2a_rs::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.get_task_notification(task_id).await,
+            AutoStorage::InMemory(s) => s.get_config(params).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.get_task_notification(task_id).await,
+            AutoStorage::Sqlx(s) => s.get_config(params).await,
         }
     }
 
-    async fn remove_task_notification(&self, task_id: &str) -> Result<(), A2AError> {
+    async fn list_configs(
+        &self,
+        params: &a2a_rs::domain::ListTaskPushNotificationConfigsParams,
+    ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
         match self {
-            AutoStorage::InMemory(s) => s.remove_task_notification(task_id).await,
+            AutoStorage::InMemory(s) => s.list_configs(params).await,
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.remove_task_notification(task_id).await,
+            AutoStorage::Sqlx(s) => s.list_configs(params).await,
+        }
+    }
+
+    async fn delete_config(
+        &self,
+        params: &a2a_rs::domain::DeleteTaskPushNotificationConfigParams,
+    ) -> Result<(), A2AError> {
+        match self {
+            AutoStorage::InMemory(s) => s.delete_config(params).await,
+            #[cfg(feature = "sqlx")]
+            AutoStorage::Sqlx(s) => s.delete_config(params).await,
         }
     }
 }
@@ -152,116 +171,13 @@ impl AutoStorage {
             )),
         }
     }
-}
 
-#[async_trait]
-impl AsyncStreamingHandler for AutoStorage {
-    async fn add_status_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn StreamingSubscriber<TaskStatusUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
+    /// Hand out the inner store's push notifier (shares its config registry).
+    pub fn push_notifier(&self) -> Arc<dyn a2a_rs::port::AsyncPushNotifier> {
         match self {
-            AutoStorage::InMemory(s) => s.add_status_subscriber(task_id, subscriber).await,
+            AutoStorage::InMemory(s) => s.push_notifier(),
             #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.add_status_subscriber(task_id, subscriber).await,
-        }
-    }
-
-    async fn add_artifact_subscriber(
-        &self,
-        task_id: &str,
-        subscriber: Box<dyn StreamingSubscriber<TaskArtifactUpdateEvent> + Send + Sync>,
-    ) -> Result<String, A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.add_artifact_subscriber(task_id, subscriber).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.add_artifact_subscriber(task_id, subscriber).await,
-        }
-    }
-
-    async fn remove_subscription(&self, subscription_id: &str) -> Result<(), A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.remove_subscription(subscription_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.remove_subscription(subscription_id).await,
-        }
-    }
-
-    async fn remove_task_subscribers(&self, task_id: &str) -> Result<(), A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.remove_task_subscribers(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.remove_task_subscribers(task_id).await,
-        }
-    }
-
-    async fn get_subscriber_count(&self, task_id: &str) -> Result<usize, A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.get_subscriber_count(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.get_subscriber_count(task_id).await,
-        }
-    }
-
-    async fn broadcast_status_update(
-        &self,
-        task_id: &str,
-        update: TaskStatusUpdateEvent,
-    ) -> Result<(), A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.broadcast_status_update(task_id, update).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.broadcast_status_update(task_id, update).await,
-        }
-    }
-
-    async fn broadcast_artifact_update(
-        &self,
-        task_id: &str,
-        update: TaskArtifactUpdateEvent,
-    ) -> Result<(), A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.broadcast_artifact_update(task_id, update).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.broadcast_artifact_update(task_id, update).await,
-        }
-    }
-
-    async fn status_update_stream(
-        &self,
-        task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<TaskStatusUpdateEvent, A2AError>> + Send>>, A2AError>
-    {
-        match self {
-            AutoStorage::InMemory(s) => s.status_update_stream(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.status_update_stream(task_id).await,
-        }
-    }
-
-    async fn artifact_update_stream(
-        &self,
-        task_id: &str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<TaskArtifactUpdateEvent, A2AError>> + Send>>,
-        A2AError,
-    > {
-        match self {
-            AutoStorage::InMemory(s) => s.artifact_update_stream(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.artifact_update_stream(task_id).await,
-        }
-    }
-
-    async fn combined_update_stream(
-        &self,
-        task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<UpdateEvent, A2AError>> + Send>>, A2AError> {
-        match self {
-            AutoStorage::InMemory(s) => s.combined_update_stream(task_id).await,
-            #[cfg(feature = "sqlx")]
-            AutoStorage::Sqlx(s) => s.combined_update_stream(task_id).await,
+            AutoStorage::Sqlx(s) => s.push_notifier(),
         }
     }
 }
@@ -271,6 +187,7 @@ pub struct AgentBuilder<H = (), S = ()> {
     config: AgentConfig,
     handler: Option<H>,
     storage: Option<S>,
+    streaming: Option<Arc<dyn AsyncStreamingHandler>>,
 }
 
 impl AgentBuilder<(), ()> {
@@ -281,6 +198,7 @@ impl AgentBuilder<(), ()> {
             config,
             handler: None,
             storage: None,
+            streaming: None,
         })
     }
 
@@ -291,6 +209,7 @@ impl AgentBuilder<(), ()> {
             config,
             handler: None,
             storage: None,
+            streaming: None,
         })
     }
 
@@ -300,6 +219,7 @@ impl AgentBuilder<(), ()> {
             config,
             handler: None,
             storage: None,
+            streaming: None,
         }
     }
 }
@@ -314,19 +234,40 @@ impl<H, S> AgentBuilder<H, S> {
             config: self.config,
             handler: Some(handler),
             storage: self.storage,
+            streaming: self.streaming,
         }
     }
 
     /// Set custom storage for this agent
     pub fn with_storage<NewS>(self, storage: NewS) -> AgentBuilder<H, NewS>
     where
-        NewS: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+        NewS: AsyncTaskLifecycle
+            + AsyncTaskQuery
+            + AsyncNotificationManager
+            + Clone
+            + Send
+            + Sync
+            + 'static,
     {
         AgentBuilder {
             config: self.config,
             handler: self.handler,
             storage: Some(storage),
+            streaming: self.streaming,
         }
+    }
+
+    /// Attach a shared streaming backend for real-time updates.
+    ///
+    /// Pass the *same* [`AsyncStreamingHandler`] instance your handler
+    /// broadcasts to (clones of an `InMemoryStreamingHandler` share their
+    /// subscriber registry). The built [`AgentRuntime`] injects it into the
+    /// transport so `tasks/subscribe` SSE streams observe those broadcasts —
+    /// without it, the transport defaults to a no-op and updates never reach
+    /// clients.
+    pub fn with_streaming(mut self, streaming: impl AsyncStreamingHandler + 'static) -> Self {
+        self.streaming = Some(Arc::new(streaming));
+        self
     }
 
     /// Access the configuration
@@ -347,18 +288,24 @@ impl<H, S> AgentBuilder<H, S> {
 impl<H, S> AgentBuilder<H, S>
 where
     H: AsyncMessageHandler + Clone + Send + Sync + 'static,
-    S: AsyncTaskManager + AsyncNotificationManager + Clone + Send + Sync + 'static,
+    S: AsyncTaskLifecycle
+        + AsyncTaskQuery
+        + AsyncNotificationManager
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     /// Build the agent runtime
     pub fn build(self) -> Result<AgentRuntime<H, S>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
         let storage = self.storage.ok_or(BuildError::MissingStorage)?;
 
-        Ok(AgentRuntime::new(
-            self.config,
-            Arc::new(handler),
-            Arc::new(storage),
-        ))
+        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        if let Some(streaming) = self.streaming {
+            runtime = runtime.with_streaming(streaming);
+        }
+        Ok(runtime)
     }
 }
 
@@ -371,6 +318,7 @@ where
     /// based on what's configured in the TOML file
     pub async fn build_with_auto_storage(self) -> Result<AgentRuntime<H, AutoStorage>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
+        let streaming = self.streaming;
 
         let storage = match &self.config.server.storage {
             StorageConfig::InMemory => {
@@ -404,36 +352,11 @@ where
             }
         };
 
-        // Initialize MCP client if configured
-        #[cfg(feature = "mcp-client")]
-        if self.config.features.mcp_client.enabled {
-            info!("Initializing MCP client...");
-            let mcp_client = McpClientManager::new();
-
-            // Initialize connections to configured servers
-            if let Err(e) = mcp_client
-                .initialize(&self.config.features.mcp_client)
-                .await
-            {
-                return Err(BuildError::RuntimeError(format!(
-                    "Failed to initialize MCP client: {}",
-                    e
-                )));
-            }
-
-            return Ok(AgentRuntime::with_mcp_client(
-                self.config,
-                Arc::new(handler),
-                Arc::new(storage),
-                mcp_client,
-            ));
+        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        if let Some(streaming) = streaming {
+            runtime = runtime.with_streaming(streaming);
         }
-
-        Ok(AgentRuntime::new(
-            self.config,
-            Arc::new(handler),
-            Arc::new(storage),
-        ))
+        Ok(runtime)
     }
 
     /// Create storage from configuration with custom migrations
@@ -444,6 +367,7 @@ where
         migrations: &'static [&'static str],
     ) -> Result<AgentRuntime<H, AutoStorage>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
+        let streaming = self.streaming;
 
         let storage = match &self.config.server.storage {
             StorageConfig::InMemory => {
@@ -475,36 +399,11 @@ where
             }
         };
 
-        // Initialize MCP client if configured
-        #[cfg(feature = "mcp-client")]
-        if self.config.features.mcp_client.enabled {
-            info!("Initializing MCP client...");
-            let mcp_client = McpClientManager::new();
-
-            // Initialize connections to configured servers
-            if let Err(e) = mcp_client
-                .initialize(&self.config.features.mcp_client)
-                .await
-            {
-                return Err(BuildError::RuntimeError(format!(
-                    "Failed to initialize MCP client: {}",
-                    e
-                )));
-            }
-
-            return Ok(AgentRuntime::with_mcp_client(
-                self.config,
-                Arc::new(handler),
-                Arc::new(storage),
-                mcp_client,
-            ));
+        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        if let Some(streaming) = streaming {
+            runtime = runtime.with_streaming(streaming);
         }
-
-        Ok(AgentRuntime::new(
-            self.config,
-            Arc::new(handler),
-            Arc::new(storage),
-        ))
+        Ok(runtime)
     }
 }
 

@@ -1,7 +1,7 @@
 //! Bridge that provides MCP tools as capabilities to A2A agents
 
 use crate::{
-    converters::{llm_tool::LlmToolConverter, MessageConverter},
+    converters::{MessageConverter, llm_tool::LlmToolConverter},
     error::{A2aMcpError, Result},
 };
 use a2a_agents_common::llm::{ToolCall, ToolDefinition};
@@ -11,10 +11,10 @@ use a2a_rs::{
 };
 use async_trait::async_trait;
 use rmcp::{
+    Peer, RoleClient,
     handler::client::progress::ProgressDispatcher,
     model::*,
     service::{NotificationContext, PeerRequestOptions},
-    Peer, RoleClient,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -71,7 +71,10 @@ impl Drop for RequestCancelGuard {
             let peer = self.peer.clone();
             let request_id = self.request_id.clone();
             tokio::spawn(async move {
-                debug!("RequestCancelGuard triggered: notifying server of cancellation for request: {:?}", request_id);
+                debug!(
+                    "RequestCancelGuard triggered: notifying server of cancellation for request: {:?}",
+                    request_id
+                );
                 let _ = peer
                     .notify_cancelled(CancelledNotificationParam {
                         request_id,
@@ -408,7 +411,7 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
             Ok(_) => {
                 return Err(A2aMcpError::McpServer(
                     "Unexpected response from MCP server".to_string(),
-                ))
+                ));
             }
             Err(e) => return Err(e.into()),
         };
@@ -468,7 +471,7 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
             Ok(_) => {
                 return Err(A2aMcpError::McpServer(
                     "Unexpected response from MCP server".to_string(),
-                ))
+                ));
             }
             Err(e) => return Err(e.into()),
         };

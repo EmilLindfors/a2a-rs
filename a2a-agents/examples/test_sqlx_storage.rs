@@ -14,7 +14,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = ServerConfig {
         host: "127.0.0.1".to_string(),
         http_port: 8080,
-        ws_port: 8081,
         storage: StorageConfig::Sqlx {
             url: "sqlite://reimbursement_test.db".to_string(),
             max_connections: 5,

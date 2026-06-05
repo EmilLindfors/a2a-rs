@@ -18,7 +18,6 @@
 
 use a2a_client::WebA2AClient;
 use a2a_rs::domain::{Message, Part};
-use a2a_rs::services::AsyncA2AClient;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -47,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
     let task_id = uuid::Uuid::new_v4().to_string();
 
     match client
-        .http
+        .transport
         .send_task_message(&task_id, &message, None, None)
         .await
     {
@@ -59,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
 
             // Retrieve the task to see the agent's response
             println!("Retrieving task to see agent response...");
-            match client.http.get_task(&task.id, None).await {
+            match client.transport.get_task(&task.id, None).await {
                 Ok(updated_task) => {
                     println!("✓ Retrieved task successfully!");
                     let history = &updated_task.history;

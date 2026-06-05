@@ -1,8 +1,12 @@
+use std::sync::Arc;
+
 use a2a_rs::adapter::{
-    BearerTokenAuthenticator, DefaultRequestProcessor, HttpPushNotificationSender, HttpServer,
-    InMemoryTaskStorage, SimpleAgentInfo,
+    BearerTokenAuthenticator, ConnectRpcAdapter, HttpPushNotificationSender, HttpServer,
+    InMemoryStreamingHandler, InMemoryTaskStorage, SimpleAgentInfo,
 };
-use a2a_rs::port::{AsyncNotificationManager, AsyncTaskManager};
+use a2a_rs::port::{
+    AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle, AsyncTaskQuery,
+};
 
 // SQLx storage support (feature-gated)
 #[cfg(feature = "sqlx")]
@@ -22,7 +26,6 @@ impl ReimbursementServer {
         let config = ServerConfig {
             host,
             http_port: port,
-            ws_port: port + 1,
             storage: StorageConfig::default(),
             auth: AuthConfig::default(),
         };
@@ -76,7 +79,8 @@ impl ReimbursementServer {
         match &self.config.storage {
             StorageConfig::InMemory => {
                 let storage = self.create_in_memory_storage();
-                self.start(storage).await
+                let push = storage.push_notifier();
+                self.start(storage, push).await
             }
             #[cfg(feature = "sqlx")]
             StorageConfig::Sqlx {
@@ -87,7 +91,8 @@ impl ReimbursementServer {
                 let storage = self
                     .create_sqlx_storage(url, *max_connections, *enable_logging)
                     .await?;
-                self.start(storage).await
+                let push = storage.push_notifier();
+                self.start(storage, push).await
             }
             #[cfg(not(feature = "sqlx"))]
             StorageConfig::Sqlx { .. } => {
@@ -96,20 +101,33 @@ impl ReimbursementServer {
         }
     }
 
-    /// Start HTTP server
-    pub async fn start<S>(&self, storage: S) -> Result<(), Box<dyn std::error::Error>>
+    /// Start HTTP server.
+    ///
+    /// Streaming fan-out lives in a dedicated [`InMemoryStreamingHandler`] shared
+    /// between the message handler (which broadcasts) and the transport processor
+    /// (which registers subscribers), so a streaming client sees the handler's
+    /// transitions. Push delivery uses the store's own notifier so configs set
+    /// via the notification API are honored.
+    pub async fn start<S>(
+        &self,
+        storage: S,
+        push: Arc<dyn AsyncPushNotifier>,
+    ) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncTaskManager
+        S: AsyncTaskLifecycle
+            + AsyncTaskQuery
             + AsyncNotificationManager
-            + a2a_rs::port::AsyncStreamingHandler
             + Clone
             + Send
             + Sync
             + 'static,
     {
-        // Create message handler with storage for history management
-        let message_handler = ReimbursementHandler::new(storage.clone());
-        self.start_with_handler(message_handler, storage).await
+        let streaming = InMemoryStreamingHandler::new();
+        // Create message handler sharing the streaming + push ports.
+        let message_handler =
+            ReimbursementHandler::new(storage.clone(), streaming.clone(), push.clone());
+        self.start_with_handler(message_handler, storage, streaming, push)
+            .await
     }
 
     /// Start HTTP server with specific handler
@@ -117,11 +135,13 @@ impl ReimbursementServer {
         &self,
         message_handler: H,
         storage: S,
+        streaming: InMemoryStreamingHandler,
+        push: Arc<dyn AsyncPushNotifier>,
     ) -> Result<(), Box<dyn std::error::Error>>
     where
-        S: AsyncTaskManager
+        S: AsyncTaskLifecycle
+            + AsyncTaskQuery
             + AsyncNotificationManager
-            + a2a_rs::port::AsyncStreamingHandler
             + Clone
             + Send
             + Sync
@@ -162,13 +182,16 @@ impl ReimbursementServer {
             Some(vec!["text".to_string(), "data".to_string()]),
         );
 
-        // Create processor with separate handlers and agent info
-        let processor = DefaultRequestProcessor::new(
+        // Create processor with separate handlers and agent info, sharing the
+        // streaming handler with the message handler and the store's push notifier.
+        let processor = ConnectRpcAdapter::new(
             message_handler,
-            storage.clone(), // storage implements AsyncTaskManager
+            storage.clone(), // storage implements AsyncTaskLifecycle + AsyncTaskQuery
             storage,         // storage also implements AsyncNotificationManager
             agent_info.clone(),
-        );
+        )
+        .with_streaming_handler(streaming)
+        .with_push_notifier(push);
 
         // Create HTTP server
         let bind_address = format!("{}:{}", self.config.host, self.config.http_port);

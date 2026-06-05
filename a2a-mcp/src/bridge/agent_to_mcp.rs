@@ -6,13 +6,13 @@ use crate::{
 };
 use a2a_rs::{
     adapter::transport::http::HttpClient,
-    domain::{error::A2AError, AgentCard, Message, Part, Role, Task},
+    domain::{AgentCard, Message, Part, Role, Task, error::A2AError},
     port::AsyncMessageHandler,
-    services::client::AsyncA2AClient,
+    port::client::Transport,
 };
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use rmcp::{model::*, service::RequestContext, ErrorData as McpError, RoleServer, ServerHandler};
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, model::*, service::RequestContext};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -41,12 +41,7 @@ pub trait BridgeBackend: Send + Sync {
         _task_id: &str,
     ) -> std::result::Result<
         Option<
-            Pin<
-                Box<
-                    dyn Stream<Item = std::result::Result<a2a_rs::services::StreamItem, A2AError>>
-                        + Send,
-                >,
-            >,
+            Pin<Box<dyn Stream<Item = std::result::Result<a2a_rs::StreamItem, A2AError>> + Send>>,
         >,
         A2AError,
     > {
@@ -164,24 +159,19 @@ where
         task_id: &str,
     ) -> std::result::Result<
         Option<
-            Pin<
-                Box<
-                    dyn Stream<Item = std::result::Result<a2a_rs::services::StreamItem, A2AError>>
-                        + Send,
-                >,
-            >,
+            Pin<Box<dyn Stream<Item = std::result::Result<a2a_rs::StreamItem, A2AError>> + Send>>,
         >,
         A2AError,
     > {
         if let Some(ref sh) = self.streaming_handler {
-            let stream = sh.combined_update_stream(task_id).await?;
+            let stream = sh.combined_update_stream(task_id, None).await?;
             let mapped = stream.map(|res| {
-                res.map(|event| match event {
+                res.map(|seq| match seq.event {
                     a2a_rs::port::UpdateEvent::StatusUpdate(status) => {
-                        a2a_rs::services::StreamItem::StatusUpdate(status)
+                        a2a_rs::StreamItem::StatusUpdate(status)
                     }
                     a2a_rs::port::UpdateEvent::ArtifactUpdate(artifact) => {
-                        a2a_rs::services::StreamItem::ArtifactUpdate(artifact)
+                        a2a_rs::StreamItem::ArtifactUpdate(artifact)
                     }
                 })
             });
@@ -523,7 +513,7 @@ impl AgentToMcpBridge {
                     let item =
                         item_res.map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
                     match item {
-                        a2a_rs::services::StreamItem::Task(t) => {
+                        a2a_rs::StreamItem::Task(t) => {
                             debug!("Stream initial task for {}: {:?}", t.id, t.status.state);
                             task = t;
                             self.tasks_cache
@@ -588,7 +578,10 @@ impl AgentToMcpBridge {
                                 let sampling_res = match sampling_res_result {
                                     Ok(res) => res,
                                     Err(e) => {
-                                        debug!("Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.", task.id);
+                                        debug!(
+                                            "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
+                                            task.id
+                                        );
                                         break;
                                     }
                                 };
@@ -634,7 +627,7 @@ impl AgentToMcpBridge {
                                 break;
                             }
                         }
-                        a2a_rs::services::StreamItem::StatusUpdate(event) => {
+                        a2a_rs::StreamItem::StatusUpdate(event) => {
                             debug!(
                                 "Stream status update for {}: {:?}",
                                 task.id, event.status.state
@@ -703,7 +696,10 @@ impl AgentToMcpBridge {
                                 let sampling_res = match sampling_res_result {
                                     Ok(res) => res,
                                     Err(e) => {
-                                        debug!("Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.", task.id);
+                                        debug!(
+                                            "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
+                                            task.id
+                                        );
                                         break;
                                     }
                                 };
@@ -749,7 +745,7 @@ impl AgentToMcpBridge {
                                 break;
                             }
                         }
-                        a2a_rs::services::StreamItem::ArtifactUpdate(event) => {
+                        a2a_rs::StreamItem::ArtifactUpdate(event) => {
                             debug!(
                                 "Stream artifact update for {}: {}",
                                 task.id, event.artifact.artifact_id
@@ -832,7 +828,10 @@ impl AgentToMcpBridge {
                             let sampling_res = match sampling_res_result {
                                 Ok(res) => res,
                                 Err(e) => {
-                                    debug!("Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.", task.id);
+                                    debug!(
+                                        "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
+                                        task.id
+                                    );
                                     break;
                                 }
                             };
@@ -1006,12 +1005,12 @@ impl ServerHandler for AgentToMcpBridge {
         let mut extensions = ExtensionCapabilities::new();
         for scheme in self.agent_card.security_schemes.values() {
             if let Some(a2a_rs::domain::generated::security_scheme::Scheme::Oauth2SecurityScheme(
-                ref oauth2_scheme,
+                oauth2_scheme,
             )) = &scheme.scheme
             {
                 if let Some(flows) = oauth2_scheme.flows.as_option() {
                     if let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(
-                        ref cc,
+                        cc,
                     )) = &flows.flow
                     {
                         let mut cc_settings = serde_json::Map::new();
@@ -1448,7 +1447,7 @@ impl ServerHandler for AgentToMcpBridge {
                                 return Err(McpError::internal_error(
                                     format!("Failed to serialize data: {}", e),
                                     None,
-                                ))
+                                ));
                             }
                         };
                         contents.push(ResourceContents::TextResourceContents {

@@ -16,37 +16,37 @@ a2a-agents-common = { path = "../a2a-agents-common", version = "0.3" }
 a2a-ap2 = { path = "../a2a-ap2", version = "0.3", optional = true }
 a2a-client = { package = "a2a-web-client", path = "../a2a-client", version = "0.3" }
 a2a-mcp = { path = "../a2a-mcp", version = "0.3", optional = true }
-rmcp = { version = "1.7", features = ["server", "client", "transport-io", "transport-child-process"], optional = true }
+rmcp = { version = "1.7", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server"], optional = true }
 
 # Core dependencies
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 buffa = { version = "0.3.0", features = ["json"] }
 buffa-types = { version = "0.3.0", features = ["json"] }
 toml = "0.8"
-chrono = { version = "0.4", features = ["serde"] }
-thiserror = "1.0"
-uuid = { version = "1.4", features = ["v4", "serde"] }
-bon = "2.3"
+chrono = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["v4", "serde"] }
+bon = { workspace = true }
 dotenvy = "0.15.7"
 shellexpand = "3.1"
 
 # Async foundation
-tokio = { version = "1.32", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
-async-trait = "0.1"
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+async-trait = { workspace = true }
 
 # Command line interface
 clap = { version = "4.4", features = ["derive"] }
 
 # Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 # Required dependencies
 regex = "1.10"  # Used for text parsing and config env var expansion
 
 # AI integration (OpenAI-compatible API)
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { workspace = true, features = ["json", "rustls-tls"] }
 
 # OAuth2 support (optional, for auth feature)
 oauth2 = { version = "5.0", optional = true }
@@ -57,8 +57,8 @@ askama = "0.12"
 askama_axum = "0.4"
 tower-http = { version = "0.6", features = ["fs", "cors"] }
 base64 = "0.22"
-futures = "0.3"
-anyhow = "1.0"
+futures = { workspace = true }
+anyhow = { workspace = true }
 
 [package.metadata.docs.rs]
 features = ["reimbursement-agent", "sqlx", "ap2", "auth"]
@@ -73,10 +73,11 @@ auth = ["a2a-rs/auth", "dep:oauth2"]
 # MCP server: expose any TOML-configured agent as an MCP stdio server via
 # `a2a-mcp::AgentToMcpBridge`. Pulls in `a2a-mcp` and the matching `rmcp` build.
 mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
-# MCP client: lets agents call out to external MCP servers (e.g. spawned as
-# child processes). The framework-level integration is still a work in progress
-# — see a2a-mcp/TODO.md — but the low-level `McpClientManager` compiles and is
-# usable directly.
+# MCP client: lets an agent call out to external MCP servers (spawned as child
+# processes), discover their tools, and invoke them while serving A2A requests.
+# Build an `McpClientManager` from `[features.mcp_client]` config with
+# `McpClientManager::connect`, hand it to your handler, and reach tools through
+# the `McpToolsExt` trait. See `examples/mcp_client_agent.rs`.
 mcp-client = ["dep:rmcp"]
 
 [[bin]]
@@ -88,6 +89,13 @@ required-features = ["reimbursement-agent", "mcp-server"]
 name = "reimbursement_demo"
 path = "bin/reimbursement_demo.rs"
 required-features = ["reimbursement-agent"]
+
+# Minimal MCP stdio server (echo + add) — fixture for the mcp-client example and
+# integration test, so they can spawn a real MCP server with no external deps.
+[[bin]]
+name = "mcp_echo_server"
+path = "bin/mcp_echo_server.rs"
+required-features = ["mcp-client"]
 
 [[example]]
 name = "test_handler"
@@ -120,6 +128,25 @@ required-features = ["ap2"]
 [[example]]
 name = "mcp_server_agent"
 path = "examples/mcp_server_agent.rs"
+required-features = ["mcp-server"]
+
+[[example]]
+name = "mcp_http_agent"
+path = "examples/mcp_http_agent.rs"
+required-features = ["mcp-server"]
+
+# Agent that acts as an MCP *client*: connects to an MCP server (the bundled
+# mcp_echo_server) from TOML config and calls its tools while serving A2A.
+[[example]]
+name = "mcp_client_agent"
+path = "examples/mcp_client_agent.rs"
+required-features = ["mcp-client"]
+
+# Kitchen-sink example: TOML config + optional LLM tool-calling + MCP tool
+# consumption (McpToA2ABridge) + live SSE streaming + native task lifecycle.
+[[example]]
+name = "complex_agent"
+path = "examples/complex_agent.rs"
 required-features = ["mcp-server"]
 
 

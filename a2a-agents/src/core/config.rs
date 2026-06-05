@@ -79,13 +79,9 @@ impl AgentConfig {
             ));
         }
 
-        if !self.features.mcp_server.enabled
-            && self.server.http_port == 0
-            && self.server.ws_port == 0
-        {
+        if !self.features.mcp_server.enabled && self.server.http_port == 0 {
             return Err(ConfigError::ValidationError(
-                "At least one server port must be configured when MCP server is disabled"
-                    .to_string(),
+                "The HTTP server port must be configured when MCP server is disabled".to_string(),
             ));
         }
 
@@ -153,10 +149,6 @@ pub struct ServerConfig {
     #[serde(default = "default_http_port")]
     pub http_port: u16,
 
-    /// WebSocket server port (0 to disable)
-    #[serde(default = "default_ws_port")]
-    pub ws_port: u16,
-
     /// Storage configuration
     #[serde(default)]
     pub storage: StorageConfig,
@@ -171,7 +163,6 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             http_port: default_http_port(),
-            ws_port: default_ws_port(),
             storage: StorageConfig::default(),
             auth: AuthConfig::default(),
         }
@@ -387,9 +378,17 @@ pub struct McpServerConfig {
     #[serde(default)]
     pub enabled: bool,
 
-    /// Use stdio transport (for Claude Desktop integration)
+    /// Use stdio transport (for Claude Desktop integration).
+    ///
+    /// Ignored when [`http.enabled`](McpHttpConfig::enabled) is set — the HTTP
+    /// (Streamable HTTP) transport takes precedence, since a single process
+    /// cannot own stdin/stdout for stdio and bind a socket at the same time.
     #[serde(default = "default_true")]
     pub stdio: bool,
+
+    /// Streamable HTTP transport (for networked MCP clients).
+    #[serde(default)]
+    pub http: McpHttpConfig,
 
     /// Server name (defaults to agent name)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -405,14 +404,84 @@ impl Default for McpServerConfig {
         Self {
             enabled: false,
             stdio: true,
+            http: McpHttpConfig::default(),
             name: None,
             version: None,
         }
     }
 }
 
+/// Streamable HTTP transport configuration for the MCP server.
+///
+/// When [`enabled`](Self::enabled), the agent is served over MCP's Streamable
+/// HTTP transport (`rmcp`'s `StreamableHttpService`) instead of stdio, mounted
+/// at [`path`](Self::path) on `host:port`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpHttpConfig {
+    /// Serve the MCP server over Streamable HTTP rather than stdio.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Host/interface to bind to.
+    #[serde(default = "default_mcp_http_host")]
+    pub host: String,
+
+    /// TCP port to bind to.
+    #[serde(default = "default_mcp_http_port")]
+    pub port: u16,
+
+    /// URL path the Streamable HTTP endpoint is mounted at.
+    #[serde(default = "default_mcp_http_path")]
+    pub path: String,
+
+    /// Hostnames / `host:port` authorities accepted in the inbound `Host`
+    /// header (DNS-rebinding protection).
+    ///
+    /// * Omitted → the secure default: loopback only (`localhost`, `127.0.0.1`,
+    ///   `::1`).
+    /// * `[]` → disable `Host` validation entirely (allow any host — required
+    ///   for public binds, but **not recommended** without an upstream proxy).
+    /// * Non-empty → only the listed authorities are accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_hosts: Option<Vec<String>>,
+
+    /// Browser `Origin` values accepted on inbound requests.
+    ///
+    /// * Omitted (or `[]`) → `Origin` validation disabled (the rmcp default).
+    /// * Non-empty → requests carrying an `Origin` must match one of these per
+    ///   RFC 6454 `(scheme, host, port)`; entries must include a scheme (e.g.
+    ///   `https://app.example.com`). Requests without an `Origin` still pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowed_origins: Option<Vec<String>>,
+}
+
+impl Default for McpHttpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            host: default_mcp_http_host(),
+            port: default_mcp_http_port(),
+            path: default_mcp_http_path(),
+            allowed_hosts: None,
+            allowed_origins: None,
+        }
+    }
+}
+
 fn default_true() -> bool {
     true
+}
+
+fn default_mcp_http_host() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_mcp_http_port() -> u16 {
+    8000
+}
+
+fn default_mcp_http_path() -> String {
+    "/mcp".to_string()
 }
 
 /// MCP client configuration
@@ -460,13 +529,6 @@ fn default_http_port() -> u16 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(8080)
-}
-
-fn default_ws_port() -> u16 {
-    std::env::var("WS_PORT")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(8081)
 }
 
 fn default_max_connections() -> u32 {
@@ -547,7 +609,6 @@ mod tests {
             [server]
             host = "0.0.0.0"
             http_port = 3000
-            ws_port = 3001
 
             [server.storage]
             type = "sqlx"
@@ -697,6 +758,122 @@ mod tests {
         let ap2 = config.features.extensions.ap2.unwrap();
         assert_eq!(ap2.roles, vec!["merchant", "payment-processor"]);
         assert!(ap2.required);
+    }
+
+    #[test]
+    fn test_mcp_http_config() {
+        let toml = r#"
+            [agent]
+            name = "HTTP MCP Agent"
+
+            [server]
+            http_port = 0
+
+            [features.mcp_server]
+            enabled = true
+            stdio = false
+
+            [features.mcp_server.http]
+            enabled = true
+            host = "0.0.0.0"
+            port = 9000
+            path = "/rpc"
+        "#;
+
+        let config = AgentConfig::from_toml(toml).unwrap();
+        let http = &config.features.mcp_server.http;
+        assert!(http.enabled);
+        assert_eq!(http.host, "0.0.0.0");
+        assert_eq!(http.port, 9000);
+        assert_eq!(http.path, "/rpc");
+        // Security knobs omitted → None (keep rmcp's loopback-only default).
+        assert!(http.allowed_hosts.is_none());
+        assert!(http.allowed_origins.is_none());
+    }
+
+    #[test]
+    fn test_mcp_http_security_knobs() {
+        let toml = r#"
+            [agent]
+            name = "Public MCP Agent"
+
+            [server]
+            http_port = 0
+
+            [features.mcp_server]
+            enabled = true
+
+            [features.mcp_server.http]
+            enabled = true
+            allowed_hosts = ["mcp.example.com", "mcp.example.com:8000"]
+            allowed_origins = ["https://app.example.com"]
+        "#;
+
+        let config = AgentConfig::from_toml(toml).unwrap();
+        let http = &config.features.mcp_server.http;
+        assert_eq!(
+            http.allowed_hosts.as_deref(),
+            Some(
+                [
+                    "mcp.example.com".to_string(),
+                    "mcp.example.com:8000".to_string()
+                ]
+                .as_slice()
+            )
+        );
+        assert_eq!(
+            http.allowed_origins.as_deref(),
+            Some(["https://app.example.com".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn test_mcp_http_disable_host_validation() {
+        // An explicit empty list parses as Some([]) — distinct from omission —
+        // and disables Host validation at the transport layer.
+        let toml = r#"
+            [agent]
+            name = "Open MCP Agent"
+
+            [server]
+            http_port = 0
+
+            [features.mcp_server]
+            enabled = true
+
+            [features.mcp_server.http]
+            enabled = true
+            allowed_hosts = []
+        "#;
+
+        let config = AgentConfig::from_toml(toml).unwrap();
+        assert_eq!(
+            config.features.mcp_server.http.allowed_hosts.as_deref(),
+            Some([].as_slice())
+        );
+    }
+
+    #[test]
+    fn test_mcp_http_config_defaults() {
+        // Omitting [features.mcp_server.http] leaves HTTP disabled with sane defaults.
+        let toml = r#"
+            [agent]
+            name = "Stdio MCP Agent"
+
+            [server]
+            http_port = 0
+
+            [features.mcp_server]
+            enabled = true
+        "#;
+
+        let config = AgentConfig::from_toml(toml).unwrap();
+        let mcp = &config.features.mcp_server;
+        assert!(mcp.stdio);
+        assert!(!mcp.http.enabled);
+        assert_eq!(mcp.http.host, "127.0.0.1");
+        assert_eq!(mcp.http.port, 8000);
+        assert_eq!(mcp.http.path, "/mcp");
     }
 
     #[test]

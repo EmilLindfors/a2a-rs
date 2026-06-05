@@ -12,6 +12,7 @@ use a2a_agents_common::llm::gemini::{GeminiConfig, GeminiProvider};
 use a2a_agents_common::llm::openai::{OpenAiConfig, OpenAiProvider};
 
 use a2a_rs::{
+    InMemoryStreamingHandler,
     domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
     port::AsyncMessageHandler,
 };
@@ -172,7 +173,14 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
 
-                    let handler = ReimbursementHandler::with_llm(storage.clone(), llm_provider);
+                    let streaming = InMemoryStreamingHandler::new();
+                    let push = storage.push_notifier();
+                    let handler = ReimbursementHandler::with_llm(
+                        storage.clone(),
+                        streaming,
+                        push,
+                        llm_provider,
+                    );
 
                     // We use build() instead of build_with_auto_storage() since we created storage manually
                     // Note: If mcp-client is enabled, we'd need to manually initialize it here,

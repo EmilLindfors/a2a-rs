@@ -55,9 +55,6 @@ pub struct ServerConfig {
     /// Port for HTTP server
     #[serde(default = "default_http_port")]
     pub http_port: u16,
-    /// Port for WebSocket server
-    #[serde(default = "default_ws_port")]
-    pub ws_port: u16,
     /// Storage backend configuration
     #[serde(default)]
     pub storage: StorageConfig,
@@ -71,7 +68,6 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             http_port: default_http_port(),
-            ws_port: default_ws_port(),
             storage: StorageConfig::default(),
             auth: AuthConfig::default(),
         }
@@ -87,10 +83,6 @@ impl ServerConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or_else(default_http_port),
-            ws_port: env::var("WS_PORT")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or_else(default_ws_port),
             storage: StorageConfig::from_env(),
             auth: AuthConfig::from_env(),
         }
@@ -116,10 +108,6 @@ fn default_host() -> String {
 
 fn default_http_port() -> u16 {
     8080
-}
-
-fn default_ws_port() -> u16 {
-    8081
 }
 
 /// Authentication configuration

@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **MCP server over Streamable HTTP** — `run_mcp_server` can now serve a
+  TOML-configured agent over MCP's Streamable HTTP transport (rmcp's
+  `StreamableHttpService` on an `axum` router) in addition to stdio. Configure it
+  via a new `[features.mcp_server.http]` section (`McpHttpConfig`: `enabled`,
+  `host`, `port`, `path`); when `http.enabled` it takes precedence over stdio.
+  DNS-rebinding protection defaults to loopback-only and is tunable via
+  `allowed_hosts` / `allowed_origins` (empty `allowed_hosts` disables `Host`
+  validation for proxy-fronted public binds). Enables the
+  `transport-streamable-http-server` rmcp feature. New `mcp_http_agent` example
+  (`examples/mcp_http_agent.{rs,toml}`) plus an end-to-end `initialize`-handshake
+  and `Host`-allow-list integration test (`tests/mcp_http_test.rs`).
+- **`AgentBuilder::with_streaming` / `AgentRuntime::with_streaming`** — attach a
+  shared streaming backend so `tasks/subscribe` SSE streams observe the
+  broadcasts a handler emits (e.g. via the `TaskStatusBroadcast` mixin). Pass the
+  *same* `InMemoryStreamingHandler` your handler broadcasts to (clones share
+  their subscriber registry); the runtime injects it into the transport via
+  `ConnectRpcAdapter::with_streaming_handler` and logs "📡 Streaming backend
+  wired into transport" when active.
+- **`complex_agent` example** (`examples/complex_agent.rs` +
+  `examples/complex_agent.toml`, behind `--features mcp-server`) — a kitchen-sink
+  "Research Assistant" that wires declarative TOML config, optional LLM
+  tool-calling (with a keyless, deterministic rule-based fallback), MCP tool
+  consumption via `McpToA2ABridge` (against an in-process tool server over
+  `tokio::io::duplex`), live SSE streaming of progress artifacts, and native A2A
+  task lifecycle through the broadcast mixin.
+
+### Fixed
+
+- **Streaming through the builder reached a no-op.** `AgentRuntime::start_http`
+  built its transport with `ConnectRpcAdapter::new(...)`, which defaults to a
+  `NoopStreamingHandler` — so broadcasts from a builder-constructed handler never
+  reached `tasks/subscribe` SSE clients. They now do when the streaming backend
+  is supplied via `with_streaming` (see Added).
+
 ## [0.3.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-v0.2.0...a2a-agents-v0.3.0) - 2026-05-27
 
 ### Fixed

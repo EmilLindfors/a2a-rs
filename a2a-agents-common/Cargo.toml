@@ -14,29 +14,29 @@ categories = ["api-bindings", "text-processing"]
 # No circular dependency with a2a-agents allowed
 
 # Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 # Text processing and regex
 regex = "1.10"
 
 # Date and time utilities
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { workspace = true }
 
 # LLM support
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
-tracing = "0.1"
-uuid = { version = "1.0", features = ["v4"] }
-futures = "0.3"
+reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+futures = { workspace = true }
 eventsource-stream = "0.2"
 async-stream = "0.3"
 
 # Async support
-tokio = { version = "1.32", features = ["sync", "time"], optional = true }
-async-trait = "0.1"
+tokio = { workspace = true, features = ["sync", "time"], optional = true }
+async-trait = { workspace = true }
 
 # Error handling
-thiserror = "1.0"
+thiserror = { workspace = true }
 
 # Caching (optional)
 moka = { version = "0.12", features = ["future"], optional = true }
@@ -46,8 +46,7 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dev-dependencies]
-tokio = { version = "1.32", features = ["rt", "macros", "test-util"] }
-a2a-agents = { path = "../a2a-agents" }
+tokio = { workspace = true, features = ["rt", "macros", "test-util"] }
 
 [[test]]
 name = "integration_test"

@@ -67,7 +67,7 @@ The core library uses Cargo feature flags so you only compile what you need:
 
 ```rust
 use a2a_rs::{HttpClient, Message};
-use a2a_rs::port::AsyncA2AClient;
+use a2a_rs::Transport;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -153,7 +153,9 @@ Port traits define the contracts between layers. Implement `AsyncMessageHandler`
 
 ## Protocol coverage
 
-Implements the full A2A v1.0.0 specification:
+Implements the A2A v1.0.0 protocol surface — wire-compatible with the spec, with
+a couple of small, documented and backward-compatible divergences (see
+[`a2a-rs` → Spec compliance](a2a-rs/README.md#spec-compliance)):
 
 - `message/send` and `message/stream` (blocking and streaming message exchange)
 - `tasks/get`, `tasks/list`, `tasks/cancel`, `tasks/resubscribe`
@@ -161,6 +163,16 @@ Implements the full A2A v1.0.0 specification:
 - `agent/getAuthenticatedExtendedCard`
 - Security schemes: HTTP bearer, API key, OAuth2, OpenID Connect, mTLS
 - Task states: submitted, working, input-required, completed, canceled, failed, rejected, auth-required
+
+Notable enhancements beyond the spec (both opt-in / backward-compatible):
+
+- **ConnectRPC transport.** The spec names `JSONRPC`, `GRPC`, and `HTTP+JSON`;
+  a2a-rs adds **ConnectRPC** as the in-tree default (advertised under the
+  non-spec `CONNECTRPC` binding) alongside a spec-compliant JSON-RPC 2.0
+  transport. Use the JSON-RPC transport for third-party interop.
+- **Gap-free SSE stream resumption via `Last-Event-ID`** (W3C SSE standard, not
+  an A2A spec feature). Interoperable — spec clients fall back to standard
+  reconnect-from-current-state — but gap-free resume only applies a2a-rs ↔ a2a-rs.
 
 ## Testing
 

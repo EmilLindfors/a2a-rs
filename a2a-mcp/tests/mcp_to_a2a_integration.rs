@@ -3,7 +3,7 @@
 //! This test verifies that MCP tools and prompts can be successfully exposed as A2A agent skills
 
 use a2a_mcp::bridge::mcp_to_a2a::{
-    create_prompt_call_message, create_tool_call_message, McpToA2ABridge, ProgressClientHandler,
+    McpToA2ABridge, ProgressClientHandler, create_prompt_call_message, create_tool_call_message,
 };
 use a2a_rs::domain::core::agent::AgentCard;
 use a2a_rs::domain::{
@@ -11,11 +11,11 @@ use a2a_rs::domain::{
     TaskStatusUpdateEvent,
 };
 use a2a_rs::port::streaming_handler::Subscriber;
-use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, UpdateEvent};
+use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, SeqEvent};
 use async_trait::async_trait;
 use rmcp::{
-    handler::client::progress::ProgressDispatcher, model::*, service::RequestContext,
     ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    handler::client::progress::ProgressDispatcher, model::*, service::RequestContext,
 };
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -331,10 +331,11 @@ impl AsyncStreamingHandler for TestStreamingHandler {
     async fn combined_update_stream(
         &self,
         _task_id: &str,
+        _from_event_id: Option<u64>,
     ) -> Result<
         Pin<
             Box<
-                dyn futures::Stream<Item = Result<UpdateEvent, a2a_rs::domain::error::A2AError>>
+                dyn futures::Stream<Item = Result<SeqEvent, a2a_rs::domain::error::A2AError>>
                     + Send,
             >,
         >,

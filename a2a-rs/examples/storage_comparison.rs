@@ -16,10 +16,17 @@ use std::time::Duration;
 
 use a2a_rs::adapter::storage::InMemoryTaskStorage;
 use a2a_rs::domain::TaskState;
-use a2a_rs::port::AsyncTaskManager;
+use a2a_rs::port::AsyncTaskLifecycle;
 
 #[cfg(feature = "sqlx-storage")]
 use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
+
+fn tid(s: &str) -> a2a_rs::domain::TaskId {
+    s.parse().unwrap()
+}
+fn cid(s: &str) -> a2a_rs::domain::ContextId {
+    s.parse().unwrap()
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,26 +124,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn run_storage_tests<T: AsyncTaskManager>(
+async fn run_storage_tests<T: AsyncTaskLifecycle>(
     storage: &T,
     storage_name: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let task_id = format!("test-task-{}", storage_name.to_lowercase());
 
     // Test 1: Create task
-    let task = storage.create_task(&task_id, "test-context").await?;
+    let task = storage.create(&tid(&task_id), &cid("test-context")).await?;
     println!(
         "  ✓ Created task: {} (status: {:?})",
         task.id, task.status.state
     );
 
     // Test 2: Check existence
-    let exists = storage.task_exists(&task_id).await?;
+    let exists = storage.exists(&tid(&task_id)).await?;
     println!("  ✓ Task exists: {}", exists);
 
     // Test 3: Update status
     let updated_task = storage
-        .update_task_status(&task_id, TaskState::Working, None)
+        .update_status(&tid(&task_id), TaskState::Working, None)
         .await?;
     println!(
         "  ✓ Updated to Working (status: {:?})",
@@ -144,13 +151,13 @@ async fn run_storage_tests<T: AsyncTaskManager>(
     );
 
     // Test 4: Get task with history
-    let task_with_history = storage.get_task(&task_id, Some(10)).await?;
+    let task_with_history = storage.get(&tid(&task_id), Some(10)).await?;
     let history_count = task_with_history.history.len();
     println!("  ✓ Retrieved task with {} history entries", history_count);
 
     // Test 5: Complete the task
     let completed_task = storage
-        .update_task_status(&task_id, TaskState::Completed, None)
+        .update_status(&tid(&task_id), TaskState::Completed, None)
         .await?;
     println!(
         "  ✓ Completed task (status: {:?})",
@@ -158,18 +165,20 @@ async fn run_storage_tests<T: AsyncTaskManager>(
     );
 
     // Test 6: Try to cancel completed task (should fail)
-    match storage.cancel_task(&task_id).await {
+    match storage.cancel(&tid(&task_id)).await {
         Ok(_) => println!("  ❌ Unexpected: was able to cancel completed task"),
         Err(_) => println!("  ✓ Correctly prevented canceling completed task"),
     }
 
     // Test 7: Create and cancel a working task
     let cancel_task_id = format!("cancel-test-{}", storage_name.to_lowercase());
-    storage.create_task(&cancel_task_id, "test-context").await?;
     storage
-        .update_task_status(&cancel_task_id, TaskState::Working, None)
+        .create(&tid(&cancel_task_id), &cid("test-context"))
         .await?;
-    let canceled_task = storage.cancel_task(&cancel_task_id).await?;
+    storage
+        .update_status(&tid(&cancel_task_id), TaskState::Working, None)
+        .await?;
+    let canceled_task = storage.cancel(&tid(&cancel_task_id)).await?;
     println!(
         "  ✓ Canceled working task (status: {:?})",
         canceled_task.status.state
@@ -178,7 +187,7 @@ async fn run_storage_tests<T: AsyncTaskManager>(
     Ok(())
 }
 
-async fn measure_performance<T: AsyncTaskManager>(
+async fn measure_performance<T: AsyncTaskLifecycle>(
     storage: &T,
 ) -> Result<Duration, Box<dyn std::error::Error>> {
     let start = std::time::Instant::now();
@@ -187,14 +196,14 @@ async fn measure_performance<T: AsyncTaskManager>(
         let task_id = format!("perf-task-{}", i);
 
         // Create, update, and retrieve task
-        storage.create_task(&task_id, "perf-context").await?;
+        storage.create(&tid(&task_id), &cid("perf-context")).await?;
         storage
-            .update_task_status(&task_id, TaskState::Working, None)
+            .update_status(&tid(&task_id), TaskState::Working, None)
             .await?;
         storage
-            .update_task_status(&task_id, TaskState::Completed, None)
+            .update_status(&tid(&task_id), TaskState::Completed, None)
             .await?;
-        storage.get_task(&task_id, Some(5)).await?;
+        storage.get(&tid(&task_id), Some(5)).await?;
     }
 
     Ok(start.elapsed())

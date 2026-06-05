@@ -10,15 +10,7 @@ use super::handler::ReimbursementHandler;
 
 /// Implement AgentPlugin for ReimbursementHandler with InMemoryTaskStorage
 #[async_trait]
-impl<T> AgentPlugin for ReimbursementHandler<T>
-where
-    T: a2a_rs::port::AsyncTaskManager
-        + a2a_rs::port::AsyncStreamingHandler
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-{
+impl AgentPlugin for ReimbursementHandler {
     fn name(&self) -> &str {
         "Reimbursement Agent"
     }

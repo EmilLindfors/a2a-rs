@@ -392,9 +392,9 @@ impl Task {
         tracing::debug!("Validating task");
 
         let mut message_ids = std::collections::HashSet::new();
-        for (index, message) in self.history.iter().enumerate() {
+        for (_index, message) in self.history.iter().enumerate() {
             #[cfg(feature = "tracing")]
-            tracing::trace!("Validating message {} in history", index);
+            tracing::trace!("Validating message {} in history", _index);
 
             if !message_ids.insert(&message.message_id) {
                 #[cfg(feature = "tracing")]
@@ -418,5 +418,29 @@ impl Task {
         #[cfg(feature = "tracing")]
         tracing::debug!("Task validation successful");
         Ok(())
+    }
+}
+
+/// A task paired with its storage version — the optimistic-concurrency token.
+///
+/// The version is a monotonic counter the storage adapter bumps on every
+/// successful mutation of the task. A caller reads a task and its version, then
+/// passes that version back on a conditional update
+/// ([`AsyncTaskVersioning::update_status_checked`](crate::port::AsyncTaskVersioning::update_status_checked));
+/// if another writer advanced the task in between, the update fails with
+/// [`A2AError::VersionConflict`](crate::domain::A2AError::VersionConflict) instead
+/// of silently clobbering it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VersionedTask {
+    /// The task at this version.
+    pub task: Task,
+    /// The storage version this snapshot was read or written at.
+    pub version: u64,
+}
+
+impl VersionedTask {
+    /// Pair a task with a version.
+    pub fn new(task: Task, version: u64) -> Self {
+        Self { task, version }
     }
 }

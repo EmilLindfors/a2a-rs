@@ -20,7 +20,7 @@
 //! # #[cfg(feature = "http-client")]
 //! # {
 //! use a2a_rs::{HttpClient, Message};
-//! use a2a_rs::services::AsyncA2AClient;
+//! use a2a_rs::Transport;
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,7 +40,7 @@
 //! ## Creating a server
 //!
 //! ```rust,ignore
-//! use a2a_rs::{HttpServer, SimpleAgentInfo, DefaultRequestProcessor};
+//! use a2a_rs::{HttpServer, SimpleAgentInfo, ConnectRpcAdapter};
 //! use my_app::{MyMessageHandler, MyTaskManager, MyNotificationManager};
 //!
 //! #[tokio::main]
@@ -51,8 +51,8 @@
 //!     let notification_manager = MyNotificationManager::new();
 //!     let agent_info = SimpleAgentInfo::new("my-agent".to_string(), "https://api.example.com".to_string());
 //!
-//!     // Create a request processor with your handlers
-//!     let processor = DefaultRequestProcessor::new(
+//!     // Wrap your handlers in the ConnectRPC transport adapter
+//!     let adapter = ConnectRpcAdapter::new(
 //!         message_handler,
 //!         task_manager,
 //!         notification_manager,
@@ -61,7 +61,7 @@
 //!
 //!     // Create and start the server
 //!     let server = HttpServer::new(
-//!         processor,
+//!         adapter,
 //!         agent_info,
 //!         "127.0.0.1:8080".to_string(),
 //!     );
@@ -84,31 +84,45 @@ pub mod observability;
 pub use domain::{
     A2AError, AgentCapabilities, AgentCard, AgentCardSignature, AgentExtension, AgentInterface,
     AgentProvider, AgentSkill, Artifact, AuthorizationCodeOAuthFlow, ClientCredentialsOAuthFlow,
-    DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow,
-    GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams, ListTasksParams,
-    ListTasksResult, Message, MessageSendConfiguration, MessageSendParams, OAuthFlows, Part,
-    PushNotificationAuthenticationInfo, Role, SecurityScheme, Task, TaskArtifactUpdateEvent,
-    TaskIdParams, TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState,
-    TaskStatus, TaskStatusUpdateEvent,
+    ContextId, DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow, ErrorDetail, ErrorInfo,
+    FieldViolation, GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams,
+    ListTasksParams, ListTasksResult, Message, MessageSendConfiguration, MessageSendParams,
+    OAuthFlows, Part, PushConfigId, PushNotificationAuthenticationInfo, Result, RetryPolicy, Role,
+    SecurityScheme, Task, TaskArtifactUpdateEvent, TaskId, TaskIdParams,
+    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStatus,
+    TaskStatusUpdateEvent, VersionedTask,
 };
 
 // Port traits for better separation of concerns
 pub use port::{
-    AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskManager,
-    MessageHandler, NotificationManager, StreamingHandler, StreamingSubscriber, TaskManager,
-    UpdateEvent,
+    AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier,
+    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery,
+    AsyncTaskVersioning, CallContext, CallInterceptor, CallSide, NoopPushNotifier, SeqEvent,
+    StreamEvent, StreamItem, StreamingSubscriber, Transport, UpdateEvent,
 };
 
 #[cfg(feature = "http-client")]
 pub use adapter::HttpClient;
+
+#[cfg(feature = "jsonrpc-client")]
+pub use adapter::JsonRpcClient;
+
+#[cfg(feature = "client")]
+pub use adapter::{TransportFactory, TransportNegotiator, default_registry};
+
+#[cfg(feature = "client")]
+pub use adapter::{RetryingTransport, subscribe_resilient};
+
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+pub use adapter::{connect, fetch_agent_card};
 
 #[cfg(feature = "http-server")]
 pub use adapter::HttpServer;
 
 #[cfg(feature = "server")]
 pub use adapter::{
-    DefaultRequestProcessor, InMemoryTaskStorage, NoopPushNotificationSender,
-    PushNotificationRegistry, PushNotificationSender, SimpleAgentInfo,
+    ConnectRpcAdapter, InMemoryStreamingHandler, InMemoryTaskStorage, NoopPushNotificationSender,
+    NoopStreamingHandler, PushNotificationRegistry, PushNotificationSender, SimpleAgentInfo,
 };
 
 #[cfg(all(feature = "server", feature = "http-client"))]
@@ -120,3 +134,6 @@ pub use adapter::{ApiKeyAuthenticator, BearerTokenAuthenticator, NoopAuthenticat
 pub use adapter::{JwtAuthenticator, OAuth2Authenticator, OpenIdConnectAuthenticator};
 #[cfg(feature = "http-server")]
 pub use port::Authenticator;
+
+#[cfg(feature = "tracing")]
+pub use adapter::LoggingInterceptor;

@@ -1,0 +1,45 @@
+# Kitchen-sink "Research Assistant" agent.
+#
+# Drives examples/complex_agent.rs. Everything the agent advertises — identity,
+# skills, transport, storage, streaming — is declared here; the Rust side only
+# wires the handler, the MCP tool server, and (optionally) an LLM.
+
+[agent]
+name = "Research Assistant (Kitchen Sink)"
+description = "Answers math and text questions using MCP tools, with optional LLM-driven tool selection and live streaming progress."
+version = "0.1.0"
+
+[agent.provider]
+name = "a2a-rs examples"
+url = "https://github.com/emillindfors/a2a-rs"
+
+[server]
+host = "127.0.0.1"
+http_port = 8080
+
+# In-memory storage keeps the example self-contained (no DB needed).
+# Swap for `type = "sqlx"` + a `url` to persist tasks across restarts.
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "compute"
+name = "Compute & analyze"
+description = "Add or multiply numbers and count words via MCP tools. With an LLM key set, it answers in natural language and picks tools itself."
+keywords = ["math", "add", "multiply", "word count", "tools", "mcp"]
+examples = [
+    "add 21 21",
+    "multiply 6 7",
+    "count words: the quick brown fox jumps over the lazy dog",
+    "What is 19 times 3?",
+]
+input_formats = ["text"]
+output_formats = ["text", "data"]
+
+[features]
+# Streaming is the headline of this example: the handler broadcasts progress
+# artifacts that reach `tasks/subscribe` SSE clients because the runtime now
+# shares the handler's streaming backend with the transport.
+streaming = true
+push_notifications = false
+state_history = true

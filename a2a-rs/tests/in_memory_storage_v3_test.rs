@@ -7,9 +7,17 @@ use a2a_rs::{
         DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
         ListTaskPushNotificationConfigsParams, ListTasksParams, TaskState,
     },
-    port::{AsyncNotificationManager, AsyncTaskManager},
+    port::{AsyncNotificationManager, AsyncTaskLifecycle, AsyncTaskQuery},
 };
 use std::time::Duration;
+
+fn tid(s: &str) -> a2a_rs::domain::TaskId {
+    s.parse().unwrap()
+}
+
+fn cid(s: &str) -> a2a_rs::domain::ContextId {
+    s.parse().unwrap()
+}
 
 /// Helper to create tasks with different states and contexts
 async fn create_test_tasks(
@@ -21,7 +29,7 @@ async fn create_test_tasks(
     for i in 0..count {
         let task_id = format!("test-task-{}-{}", context_id, i);
         storage
-            .create_task(&task_id, context_id)
+            .create(&tid(&task_id), &cid(context_id))
             .await
             .expect("Failed to create task");
         task_ids.push(task_id);
@@ -40,10 +48,7 @@ async fn test_list_tasks_v3_basic() {
 
     // List all tasks with default parameters
     let params = ListTasksParams::default();
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 5, "Should have 5 tasks");
     assert_eq!(result.tasks.len(), 5, "Should return 5 tasks");
@@ -78,10 +83,7 @@ async fn test_list_tasks_v3_filter_by_context() {
         context_id: Some("context-a".to_string()),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 3, "Should have 3 tasks in context A");
     assert_eq!(result.tasks.len(), 3);
@@ -95,10 +97,7 @@ async fn test_list_tasks_v3_filter_by_context() {
         context_id: Some("context-b".to_string()),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 2, "Should have 2 tasks in context B");
     for task in &result.tasks {
@@ -116,23 +115,23 @@ async fn test_list_tasks_v3_filter_by_status() {
 
     // Update tasks to different states
     storage
-        .update_task_status(&task_ids[0], TaskState::Working, None)
+        .update_status(&tid(&task_ids[0]), TaskState::Working, None)
         .await
         .expect("Failed to update task");
     storage
-        .update_task_status(&task_ids[1], TaskState::Working, None)
+        .update_status(&tid(&task_ids[1]), TaskState::Working, None)
         .await
         .expect("Failed to update task");
     storage
-        .update_task_status(&task_ids[2], TaskState::Completed, None)
+        .update_status(&tid(&task_ids[2]), TaskState::Completed, None)
         .await
         .expect("Failed to update task");
     storage
-        .update_task_status(&task_ids[3], TaskState::Completed, None)
+        .update_status(&tid(&task_ids[3]), TaskState::Completed, None)
         .await
         .expect("Failed to update task");
     storage
-        .update_task_status(&task_ids[4], TaskState::Failed, None)
+        .update_status(&tid(&task_ids[4]), TaskState::Failed, None)
         .await
         .expect("Failed to update task");
     // task_ids[5] remains in Submitted state
@@ -142,10 +141,7 @@ async fn test_list_tasks_v3_filter_by_status() {
         status: Some(TaskState::Working),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 2, "Should have 2 working tasks");
     for task in &result.tasks {
@@ -157,10 +153,7 @@ async fn test_list_tasks_v3_filter_by_status() {
         status: Some(TaskState::Completed),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 2, "Should have 2 completed tasks");
     for task in &result.tasks {
@@ -172,10 +165,7 @@ async fn test_list_tasks_v3_filter_by_status() {
         status: Some(TaskState::Failed),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 1, "Should have 1 failed task");
     assert_eq!(result.tasks[0].status.state, TaskState::Failed);
@@ -185,10 +175,7 @@ async fn test_list_tasks_v3_filter_by_status() {
         status: Some(TaskState::Submitted),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 1, "Should have 1 submitted task");
     assert_eq!(result.tasks[0].status.state, TaskState::Submitted);
@@ -203,7 +190,7 @@ async fn test_list_tasks_v3_filter_by_last_updated_after() {
 
     // Get the timestamp of the 3rd task (index 2)
     let middle_task = storage
-        .get_task(&task_ids[2], None)
+        .get(&tid(&task_ids[2]), None)
         .await
         .expect("Failed to get task");
     let middle_timestamp = middle_task
@@ -224,10 +211,7 @@ async fn test_list_tasks_v3_filter_by_last_updated_after() {
         status_timestamp_after: Some(middle_rfc),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     // Should get tasks 3 and 4 (created after task 2)
     assert_eq!(
@@ -258,19 +242,19 @@ async fn test_list_tasks_v3_combined_filters() {
 
     // Set different states for context A tasks
     storage
-        .update_task_status(&context_a_ids[0], TaskState::Working, None)
+        .update_status(&tid(&context_a_ids[0]), TaskState::Working, None)
         .await
         .expect("Failed to update task");
     storage
-        .update_task_status(&context_a_ids[1], TaskState::Working, None)
+        .update_status(&tid(&context_a_ids[1]), TaskState::Working, None)
         .await
         .expect("Failed to update task");
     storage
-        .update_task_status(&context_a_ids[2], TaskState::Completed, None)
+        .update_status(&tid(&context_a_ids[2]), TaskState::Completed, None)
         .await
         .expect("Failed to update task");
     storage
-        .update_task_status(&context_a_ids[3], TaskState::Completed, None)
+        .update_status(&tid(&context_a_ids[3]), TaskState::Completed, None)
         .await
         .expect("Failed to update task");
     // context_a_ids[4] remains Submitted
@@ -281,10 +265,7 @@ async fn test_list_tasks_v3_combined_filters() {
         status: Some(TaskState::Working),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(
         result.total_size, 2,
@@ -301,10 +282,7 @@ async fn test_list_tasks_v3_combined_filters() {
         status: Some(TaskState::Completed),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(
         result.total_size, 2,
@@ -328,10 +306,7 @@ async fn test_list_tasks_v3_pagination_basic() {
         page_size: Some(3),
         ..Default::default()
     };
-    let page1 = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let page1 = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(page1.total_size, 10, "Total size should be 10");
     assert_eq!(page1.page_size, 3, "Page size should be 3");
@@ -344,10 +319,7 @@ async fn test_list_tasks_v3_pagination_basic() {
         page_token: Some(page1.next_page_token.clone()),
         ..Default::default()
     };
-    let page2 = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let page2 = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(page2.total_size, 10);
     assert_eq!(page2.page_size, 3);
@@ -377,10 +349,7 @@ async fn test_list_tasks_v3_pagination_last_page() {
         page_size: Some(3),
         ..Default::default()
     };
-    let page1 = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let page1 = storage.list(&params).await.expect("Failed to list tasks");
 
     // Get second page (3 tasks)
     let params = ListTasksParams {
@@ -388,10 +357,7 @@ async fn test_list_tasks_v3_pagination_last_page() {
         page_token: Some(page1.next_page_token.clone()),
         ..Default::default()
     };
-    let page2 = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let page2 = storage.list(&params).await.expect("Failed to list tasks");
 
     // Get last page (1 task)
     let params = ListTasksParams {
@@ -399,10 +365,7 @@ async fn test_list_tasks_v3_pagination_last_page() {
         page_token: Some(page2.next_page_token.clone()),
         ..Default::default()
     };
-    let page3 = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let page3 = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(page3.tasks.len(), 1, "Last page should have 1 task");
     assert!(
@@ -423,10 +386,7 @@ async fn test_list_tasks_v3_page_size_clamping() {
         page_size: Some(200),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.page_size, 100, "Page size should be clamped to 100");
 
@@ -435,10 +395,7 @@ async fn test_list_tasks_v3_page_size_clamping() {
         page_size: Some(0),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.page_size, 1, "Page size should be clamped to 1");
     assert_eq!(result.tasks.len(), 1, "Should return 1 task");
@@ -453,10 +410,7 @@ async fn test_list_tasks_v3_large_dataset() {
 
     // Get first page with default page size (50)
     let params = ListTasksParams::default();
-    let page1 = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let page1 = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(page1.total_size, 150);
     assert_eq!(page1.page_size, 50);
@@ -468,10 +422,7 @@ async fn test_list_tasks_v3_large_dataset() {
         page_token: Some(page1.next_page_token.clone()),
         ..Default::default()
     };
-    let page2 = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let page2 = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(page2.tasks.len(), 50);
     assert!(!page2.next_page_token.is_empty());
@@ -481,10 +432,7 @@ async fn test_list_tasks_v3_large_dataset() {
         page_token: Some(page2.next_page_token.clone()),
         ..Default::default()
     };
-    let page3 = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let page3 = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(page3.tasks.len(), 50);
     assert!(
@@ -510,14 +458,14 @@ async fn test_list_tasks_v3_history_length() {
     // Create a task
     let task_id = "history-task";
     storage
-        .create_task(task_id, "test-context")
+        .create(&tid(task_id), &cid("test-context"))
         .await
         .expect("Failed to create task");
 
     // Make several state transitions to create history
     storage
-        .update_task_status(
-            task_id,
+        .update_status(
+            &tid(task_id),
             TaskState::Working,
             Some(a2a_rs::Message::user_text(
                 "working 1".to_string(),
@@ -527,8 +475,8 @@ async fn test_list_tasks_v3_history_length() {
         .await
         .expect("Failed to update");
     storage
-        .update_task_status(
-            task_id,
+        .update_status(
+            &tid(task_id),
             TaskState::InputRequired,
             Some(a2a_rs::Message::user_text(
                 "input required".to_string(),
@@ -538,8 +486,8 @@ async fn test_list_tasks_v3_history_length() {
         .await
         .expect("Failed to update");
     storage
-        .update_task_status(
-            task_id,
+        .update_status(
+            &tid(task_id),
             TaskState::Working,
             Some(a2a_rs::Message::user_text(
                 "working 2".to_string(),
@@ -549,8 +497,8 @@ async fn test_list_tasks_v3_history_length() {
         .await
         .expect("Failed to update");
     storage
-        .update_task_status(
-            task_id,
+        .update_status(
+            &tid(task_id),
             TaskState::Completed,
             Some(a2a_rs::Message::user_text(
                 "completed".to_string(),
@@ -565,10 +513,7 @@ async fn test_list_tasks_v3_history_length() {
         history_length: Some(2),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     let task = &result.tasks[0];
     assert_eq!(task.history.len(), 2, "History should be limited to 2");
@@ -578,10 +523,7 @@ async fn test_list_tasks_v3_history_length() {
         history_length: Some(0),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     let task = &result.tasks[0];
     assert!(
@@ -596,7 +538,7 @@ async fn test_list_tasks_v3_include_artifacts() {
 
     let task_id = "artifact-task";
     let mut task = storage
-        .create_task(task_id, "test-context")
+        .create(&tid(task_id), &cid("test-context"))
         .await
         .expect("Failed to create task");
 
@@ -613,7 +555,7 @@ async fn test_list_tasks_v3_include_artifacts() {
 
     // Update task in storage (through status update to trigger save)
     storage
-        .update_task_status(task_id, TaskState::Working, None)
+        .update_status(&tid(task_id), TaskState::Working, None)
         .await
         .expect("Failed to update task");
 
@@ -622,10 +564,7 @@ async fn test_list_tasks_v3_include_artifacts() {
         include_artifacts: Some(false),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     let task = &result.tasks[0];
     assert!(
@@ -638,10 +577,7 @@ async fn test_list_tasks_v3_include_artifacts() {
         include_artifacts: Some(true),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     let _task = &result.tasks[0];
     // Note: Current implementation may not persist artifacts properly
@@ -654,10 +590,7 @@ async fn test_list_tasks_v3_empty_results() {
 
     // List tasks when storage is empty
     let params = ListTasksParams::default();
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 0);
     assert_eq!(result.tasks.len(), 0);
@@ -671,10 +604,7 @@ async fn test_list_tasks_v3_empty_results() {
         context_id: Some("non-existent-context".to_string()),
         ..Default::default()
     };
-    let result = storage
-        .list_tasks_v3(&params)
-        .await
-        .expect("Failed to list tasks");
+    let result = storage.list(&params).await.expect("Failed to list tasks");
 
     assert_eq!(result.total_size, 0);
     assert_eq!(result.tasks.len(), 0);
@@ -687,7 +617,7 @@ async fn test_get_push_notification_config() {
 
     let task_id = "push-config-task";
     storage
-        .create_task(task_id, "test-context")
+        .create(&tid(task_id), &cid("test-context"))
         .await
         .expect("Failed to create task");
 
@@ -703,7 +633,7 @@ async fn test_get_push_notification_config() {
     };
 
     storage
-        .set_task_notification(&config)
+        .set_config(&config)
         .await
         .expect("Failed to set notification");
 
@@ -715,7 +645,7 @@ async fn test_get_push_notification_config() {
     };
 
     let retrieved = storage
-        .get_push_notification_config(&params)
+        .get_config(&params)
         .await
         .expect("Failed to get config");
 
@@ -736,7 +666,7 @@ async fn test_get_push_notification_config_not_found() {
         metadata: None,
     };
 
-    let result = storage.get_push_notification_config(&params).await;
+    let result = storage.get_config(&params).await;
     assert!(
         result.is_err(),
         "Should return error for non-existent config"
@@ -749,7 +679,7 @@ async fn test_list_push_notification_configs() {
 
     let task_id = "list-push-task";
     storage
-        .create_task(task_id, "test-context")
+        .create(&tid(task_id), &cid("test-context"))
         .await
         .expect("Failed to create task");
 
@@ -759,7 +689,7 @@ async fn test_list_push_notification_configs() {
         metadata: None,
     };
     let configs = storage
-        .list_push_notification_configs(&params)
+        .list_configs(&params)
         .await
         .expect("Failed to list configs");
 
@@ -777,13 +707,13 @@ async fn test_list_push_notification_configs() {
     };
 
     storage
-        .set_task_notification(&config)
+        .set_config(&config)
         .await
         .expect("Failed to set notification");
 
     // Now should have 1 config
     let configs = storage
-        .list_push_notification_configs(&params)
+        .list_configs(&params)
         .await
         .expect("Failed to list configs");
 
@@ -798,7 +728,7 @@ async fn test_delete_push_notification_config() {
 
     let task_id = "delete-push-task";
     storage
-        .create_task(task_id, "test-context")
+        .create(&tid(task_id), &cid("test-context"))
         .await
         .expect("Failed to create task");
 
@@ -814,7 +744,7 @@ async fn test_delete_push_notification_config() {
     };
 
     storage
-        .set_task_notification(&config)
+        .set_config(&config)
         .await
         .expect("Failed to set notification");
 
@@ -824,7 +754,7 @@ async fn test_delete_push_notification_config() {
         metadata: None,
     };
     let configs = storage
-        .list_push_notification_configs(&list_params)
+        .list_configs(&list_params)
         .await
         .expect("Failed to list configs");
     assert_eq!(configs.len(), 1);
@@ -837,13 +767,13 @@ async fn test_delete_push_notification_config() {
     };
 
     storage
-        .delete_push_notification_config(&delete_params)
+        .delete_config(&delete_params)
         .await
         .expect("Failed to delete config");
 
     // Verify config is gone
     let configs = storage
-        .list_push_notification_configs(&list_params)
+        .list_configs(&list_params)
         .await
         .expect("Failed to list configs");
     assert_eq!(configs.len(), 0, "Config should be deleted");
@@ -855,7 +785,7 @@ async fn test_delete_push_notification_config_idempotent() {
 
     let task_id = "idempotent-delete-task";
     storage
-        .create_task(task_id, "test-context")
+        .create(&tid(task_id), &cid("test-context"))
         .await
         .expect("Failed to create task");
 
@@ -866,9 +796,7 @@ async fn test_delete_push_notification_config_idempotent() {
         metadata: None,
     };
 
-    let result = storage
-        .delete_push_notification_config(&delete_params)
-        .await;
+    let result = storage.delete_config(&delete_params).await;
     // Should succeed (idempotent behavior)
     assert!(
         result.is_ok(),

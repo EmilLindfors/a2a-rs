@@ -34,5 +34,6 @@ pub use config::{
     AgentConfig, Ap2ExtensionConfig, AuthConfig, ConfigError, ExtensionsConfig, McpClientConfig,
     McpServerConfig, McpServerConnection, ServerConfig, StorageConfig,
 };
-pub use mcp_client::McpClientManager;
+#[cfg(feature = "mcp-client")]
+pub use mcp_client::{McpClientError, McpClientManager};
 pub use runtime::{AgentRuntime, RuntimeError};

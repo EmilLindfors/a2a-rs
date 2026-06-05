@@ -2,10 +2,9 @@ use a2a_agents::core::AgentBuilder;
 use a2a_client::WebA2AClient;
 use a2a_client::components::create_sse_stream;
 use a2a_rs::{
-    InMemoryTaskStorage,
+    InMemoryStreamingHandler, InMemoryTaskStorage,
     domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatusUpdateEvent},
     port::{AsyncMessageHandler, AsyncStreamingHandler},
-    services::client::AsyncA2AClient,
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -15,7 +14,7 @@ use tokio::time::sleep;
 
 #[derive(Clone)]
 struct StreamingHandler {
-    storage: Arc<InMemoryTaskStorage>,
+    streaming: InMemoryStreamingHandler,
 }
 
 #[async_trait]
@@ -41,12 +40,12 @@ impl AsyncMessageHandler for StreamingHandler {
             .build();
 
         // Spawn a background task to simulate a streaming delay
-        let storage = self.storage.clone();
+        let streaming = self.streaming.clone();
         let tid = task_id.to_string();
 
         tokio::spawn(async move {
             sleep(Duration::from_millis(1000)).await;
-            let _ = storage
+            let _ = streaming
                 .broadcast_status_update(
                     &tid,
                     TaskStatusUpdateEvent {
@@ -88,7 +87,7 @@ async fn test_sse_stream_success() {
 
     let storage = Arc::new(InMemoryTaskStorage::new());
     let handler = StreamingHandler {
-        storage: storage.clone(),
+        streaming: InMemoryStreamingHandler::new(),
     };
 
     let runtime = AgentBuilder::from_toml(toml_config)
@@ -116,7 +115,7 @@ async fn test_sse_stream_success() {
         .build();
 
     let task: Task = client
-        .http
+        .transport
         .send_task_message("test-task-1", &message, None, None)
         .await
         .unwrap();
@@ -124,8 +123,8 @@ async fn test_sse_stream_success() {
 
     // Check if subscribe_to_task works natively
     let mut native_stream = client
-        .http
-        .subscribe_to_task("test-task-1", None)
+        .transport
+        .subscribe_to_task("test-task-1", None, None)
         .await
         .unwrap();
     if let Some(item) = native_stream.next().await {
@@ -137,7 +136,7 @@ async fn test_sse_stream_success() {
     // Now test SSE Stream
     // Note: Re-subscribing might only get new events, so we might need another task for SSE testing
     let task2 = client
-        .http
+        .transport
         .send_task_message("test-task-2", &message, None, None)
         .await
         .unwrap();

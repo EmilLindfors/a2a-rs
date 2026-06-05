@@ -14,17 +14,18 @@ use std::time::Duration;
 use a2a_mcp::AgentToMcpBridge;
 use a2a_rs::{
     adapter::{
-        business::{DefaultMessageHandler, DefaultRequestProcessor},
-        storage::InMemoryTaskStorage,
-        transport::http::HttpClient,
         HttpServer, SimpleAgentInfo,
+        business::ResponderMessageHandler,
+        storage::InMemoryTaskStorage,
+        streaming::InMemoryStreamingHandler,
+        transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
     },
-    domain::{error::A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
+    domain::{Message, Part, Role, Task, TaskState, TaskStatus, error::A2AError},
     port::AsyncMessageHandler,
     services::AgentInfoProvider,
 };
 use async_trait::async_trait;
-use rmcp::{model::CallToolRequestParams, ServiceExt};
+use rmcp::{ServiceExt, model::CallToolRequestParams};
 use tracing_subscriber::EnvFilter;
 
 const AGENT_ADDR: &str = "127.0.0.1:18182";
@@ -32,12 +33,13 @@ const AGENT_URL: &str = "http://127.0.0.1:18182";
 
 /// Minimal A2A handler that echoes incoming text.
 ///
-/// Wraps a `DefaultMessageHandler` to satisfy the storage-touching bits
+/// Wraps a `ResponderMessageHandler` to satisfy the storage-touching bits
 /// (task creation, history persistence) and overrides response generation
 /// with a simple echo.
 #[derive(Clone)]
 struct EchoHandler {
     storage: Arc<InMemoryTaskStorage>,
+    streaming: InMemoryStreamingHandler,
 }
 
 #[async_trait]
@@ -48,9 +50,13 @@ impl AsyncMessageHandler for EchoHandler {
         message: &Message,
         session_id: Option<&str>,
     ) -> Result<Task, A2AError> {
-        // Delegate to DefaultMessageHandler for proper storage semantics, then
+        // Delegate to ResponderMessageHandler for proper storage semantics, then
         // synthesize an echo response on top of whatever it returned.
-        let inner = DefaultMessageHandler::new((*self.storage).clone());
+        let inner = ResponderMessageHandler::echo(
+            (*self.storage).clone(),
+            self.streaming.clone(),
+            self.storage.push_notifier(),
+        );
         let mut task = inner.process_message(task_id, message, session_id).await?;
 
         let echoed = message
@@ -84,6 +90,7 @@ async fn main() -> anyhow::Result<()> {
     let storage = Arc::new(InMemoryTaskStorage::new());
     let handler = EchoHandler {
         storage: storage.clone(),
+        streaming: InMemoryStreamingHandler::new(),
     };
 
     let agent_info = SimpleAgentInfo::new("Echo Agent".to_string(), AGENT_URL.to_string())
@@ -94,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
             Some("Repeat the input back".to_string()),
         );
 
-    let processor = DefaultRequestProcessor::new(
+    let processor = ConnectRpcAdapter::new(
         handler,
         (*storage).clone(),
         (*storage).clone(),
