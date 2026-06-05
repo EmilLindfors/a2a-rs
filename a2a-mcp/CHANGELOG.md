@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.3.0...a2a-mcp-v0.4.0) - 2026-06-05
+
+### Added
+
+- *(0.4)* Finish mcp-client framework integration + a2a-mcp edition 2024
+- *(a2a-agents)* MCP server over Streamable HTTP transport
+
+### Documentation
+
+- Doc-comment audit, add ROADMAP, retire stale planning docs
+
+### Feat
+
+- *(a2a-rs)* Client Transport port + JSON-RPC 2.0 client + card negotiation
+
+### Refactor
+
+- *(a2a-rs)* Split streaming & push out of storage adapters (Phase 4 final)
+
 ## [0.3.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.1.0...a2a-mcp-v0.3.0) - 2026-05-27
 
 ### Changed - Breaking
