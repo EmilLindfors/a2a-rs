@@ -1,6 +1,6 @@
 [package]
 name = "a2a-mcp"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Emil Lindfors <emil@lindfors.no>"]
@@ -15,7 +15,7 @@ rmcp = { version = "1.7", features = ["server", "client", "macros", "transport-i
 rmcp-macros = "1.7"
 
 # A2A core library
-a2a-rs = { path = "../a2a-rs", version = "0.3", features = ["http-client", "http-server", "client", "server"], default-features = false }
+a2a-rs = { path = "../a2a-rs", version = "0.4", features = ["http-client", "http-server", "client", "server"], default-features = false }
 a2a-agents-common = { path = "../a2a-agents-common", version = "0.3" }
 connectrpc = { version = "0.3.2" }
 buffa = { version = "0.3.0", features = ["json"] }

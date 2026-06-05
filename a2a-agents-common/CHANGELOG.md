@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-common-v0.3.0...a2a-agents-common-v0.3.1) - 2026-06-05
+
+### Added
+
+- *(a2a-agents)* MCP server over Streamable HTTP transport
+
 ## [0.3.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-common-v0.2.0...a2a-agents-common-v0.3.0) - 2026-05-27
 
 ### Fixed

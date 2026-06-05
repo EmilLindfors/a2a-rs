@@ -1,6 +1,6 @@
 [package]
 name = "a2a-web-client"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Emil Lindfors <emil@lindfors.no>"]
@@ -16,7 +16,7 @@ name = "a2a_client"
 [dependencies]
 # A2A integration
 # Note: We need "server" feature for the port traits even though this is a client library
-a2a-rs = { path = "../a2a-rs", version = "0.3", features = ["http-client", "jsonrpc-client", "server", "tracing"], default-features = false }
+a2a-rs = { path = "../a2a-rs", version = "0.4", features = ["http-client", "jsonrpc-client", "server", "tracing"], default-features = false }
 buffa = { version = "0.3.0", features = ["json"] }
 
 # Async runtime
