@@ -6,13 +6,13 @@ use crate::{
 };
 use a2a_rs::{
     adapter::transport::http::HttpClient,
-    domain::{error::A2AError, AgentCard, Message, Part, Role, Task},
+    domain::{AgentCard, Message, Part, Role, Task, error::A2AError},
     port::AsyncMessageHandler,
     port::client::Transport,
 };
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
-use rmcp::{model::*, service::RequestContext, ErrorData as McpError, RoleServer, ServerHandler};
+use rmcp::{ErrorData as McpError, RoleServer, ServerHandler, model::*, service::RequestContext};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -41,12 +41,7 @@ pub trait BridgeBackend: Send + Sync {
         _task_id: &str,
     ) -> std::result::Result<
         Option<
-            Pin<
-                Box<
-                    dyn Stream<Item = std::result::Result<a2a_rs::StreamItem, A2AError>>
-                        + Send,
-                >,
-            >,
+            Pin<Box<dyn Stream<Item = std::result::Result<a2a_rs::StreamItem, A2AError>> + Send>>,
         >,
         A2AError,
     > {
@@ -164,12 +159,7 @@ where
         task_id: &str,
     ) -> std::result::Result<
         Option<
-            Pin<
-                Box<
-                    dyn Stream<Item = std::result::Result<a2a_rs::StreamItem, A2AError>>
-                        + Send,
-                >,
-            >,
+            Pin<Box<dyn Stream<Item = std::result::Result<a2a_rs::StreamItem, A2AError>> + Send>>,
         >,
         A2AError,
     > {
@@ -588,7 +578,10 @@ impl AgentToMcpBridge {
                                 let sampling_res = match sampling_res_result {
                                     Ok(res) => res,
                                     Err(e) => {
-                                        debug!("Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.", task.id);
+                                        debug!(
+                                            "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
+                                            task.id
+                                        );
                                         break;
                                     }
                                 };
@@ -703,7 +696,10 @@ impl AgentToMcpBridge {
                                 let sampling_res = match sampling_res_result {
                                     Ok(res) => res,
                                     Err(e) => {
-                                        debug!("Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.", task.id);
+                                        debug!(
+                                            "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
+                                            task.id
+                                        );
                                         break;
                                     }
                                 };
@@ -832,7 +828,10 @@ impl AgentToMcpBridge {
                             let sampling_res = match sampling_res_result {
                                 Ok(res) => res,
                                 Err(e) => {
-                                    debug!("Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.", task.id);
+                                    debug!(
+                                        "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
+                                        task.id
+                                    );
                                     break;
                                 }
                             };
@@ -1448,7 +1447,7 @@ impl ServerHandler for AgentToMcpBridge {
                                 return Err(McpError::internal_error(
                                     format!("Failed to serialize data: {}", e),
                                     None,
-                                ))
+                                ));
                             }
                         };
                         contents.push(ResourceContents::TextResourceContents {

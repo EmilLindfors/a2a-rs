@@ -86,11 +86,16 @@ fn metadata_struct_serializes_as_bare_object() {
 #[test]
 fn bytes_part_serializes_as_base64_under_raw() {
     let part = Part {
-        content: Some(a2a_rs::domain::generated::part::Content::Raw(vec![1, 2, 3, 255])),
+        content: Some(a2a_rs::domain::generated::part::Content::Raw(vec![
+            1, 2, 3, 255,
+        ])),
         ..Default::default()
     };
     let json = serde_json::to_value(&part).unwrap();
-    assert_eq!(canonical(json), canonical(serde_json::json!({ "raw": "AQID/w==" })));
+    assert_eq!(
+        canonical(json),
+        canonical(serde_json::json!({ "raw": "AQID/w==" }))
+    );
 }
 
 #[test]
@@ -132,9 +137,15 @@ fn task_serializes_as_protojson() {
     let json = serde_json::to_value(&task).unwrap();
     assert_eq!(json["id"], serde_json::json!("task-1"));
     assert_eq!(json["contextId"], serde_json::json!("ctx-1"));
-    assert_eq!(json["status"]["state"], serde_json::json!("TASK_STATE_COMPLETED"));
+    assert_eq!(
+        json["status"]["state"],
+        serde_json::json!("TASK_STATE_COMPLETED")
+    );
     // proto3 default fields (empty artifacts/history) must be omitted.
-    assert!(json.get("artifacts").is_none(), "empty artifacts should be omitted");
+    assert!(
+        json.get("artifacts").is_none(),
+        "empty artifacts should be omitted"
+    );
 }
 
 #[test]
@@ -167,7 +178,10 @@ fn generated_response_types_are_field_presence_unions() {
 
     let s = StreamResponse {
         payload: Some(stream_response::Payload::StatusUpdate(Box::new(
-            TaskStatusUpdateEvent { task_id: "t1".into(), ..Default::default() },
+            TaskStatusUpdateEvent {
+                task_id: "t1".into(),
+                ..Default::default()
+            },
         ))),
         ..Default::default()
     };

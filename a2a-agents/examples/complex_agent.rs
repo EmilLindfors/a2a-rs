@@ -57,8 +57,7 @@ use a2a_rs::port::{
 use a2a_rs::{InMemoryStreamingHandler, InMemoryTaskStorage};
 use async_trait::async_trait;
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*,
-    service::RequestContext,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext,
 };
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -142,7 +141,9 @@ impl ServerHandler for ToolServer {
 
     fn call_tool(
         &self,
-        CallToolRequestParams { name, arguments, .. }: CallToolRequestParams,
+        CallToolRequestParams {
+            name, arguments, ..
+        }: CallToolRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
@@ -161,7 +162,10 @@ impl ServerHandler for ToolServer {
                     text.split_whitespace().count().to_string()
                 }
                 other => {
-                    return Err(McpError::invalid_params(format!("unknown tool: {other}"), None));
+                    return Err(McpError::invalid_params(
+                        format!("unknown tool: {other}"),
+                        None,
+                    ));
                 }
             };
             Ok(CallToolResult::success(vec![Content::text(result)]))
@@ -169,7 +173,10 @@ impl ServerHandler for ToolServer {
     }
 }
 
-fn number_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> Result<f64, McpError> {
+fn number_arg(
+    args: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<f64, McpError> {
     args.get(key)
         .and_then(|v| v.as_f64())
         .ok_or_else(|| McpError::invalid_params(format!("missing or non-numeric '{key}'"), None))
@@ -267,7 +274,11 @@ impl ResearchAssistantHandler {
             last_chunk: Some(false),
             metadata: None,
         };
-        if let Err(e) = self.streaming.broadcast_artifact_update(task_id, event).await {
+        if let Err(e) = self
+            .streaming
+            .broadcast_artifact_update(task_id, event)
+            .await
+        {
             tracing::warn!("failed to broadcast progress: {e}");
         }
     }
@@ -354,20 +365,21 @@ impl ResearchAssistantHandler {
             arguments: args.to_string(),
         };
 
-        let tool_call = if lower.contains("multipl") || lower.contains("times") || lower.contains('*')
-        {
-            parse_two_numbers(user_text).map(|(a, b)| make("multiply", json!({ "a": a, "b": b })))
-        } else if lower.contains("add") || lower.contains("plus") || lower.contains("sum") {
-            parse_two_numbers(user_text).map(|(a, b)| make("add", json!({ "a": a, "b": b })))
-        } else if lower.contains("word") || lower.contains("count") {
-            let text = user_text
-                .split_once(':')
-                .map(|(_, t)| t.trim().to_string())
-                .unwrap_or_else(|| user_text.to_string());
-            Some(make("word_count", json!({ "text": text })))
-        } else {
-            None
-        };
+        let tool_call =
+            if lower.contains("multipl") || lower.contains("times") || lower.contains('*') {
+                parse_two_numbers(user_text)
+                    .map(|(a, b)| make("multiply", json!({ "a": a, "b": b })))
+            } else if lower.contains("add") || lower.contains("plus") || lower.contains("sum") {
+                parse_two_numbers(user_text).map(|(a, b)| make("add", json!({ "a": a, "b": b })))
+            } else if lower.contains("word") || lower.contains("count") {
+                let text = user_text
+                    .split_once(':')
+                    .map(|(_, t)| t.trim().to_string())
+                    .unwrap_or_else(|| user_text.to_string());
+                Some(make("word_count", json!({ "text": text })))
+            } else {
+                None
+            };
 
         match tool_call {
             Some(call) => {
@@ -389,8 +401,12 @@ impl ResearchAssistantHandler {
                 ))
             }
             None => {
-                let names: Vec<String> =
-                    self.bridge.tools().iter().map(|t| t.name.to_string()).collect();
+                let names: Vec<String> = self
+                    .bridge
+                    .tools()
+                    .iter()
+                    .map(|t| t.name.to_string())
+                    .collect();
                 Ok(format!(
                     "I can do simple math and text stats via MCP tools ({}).\n\
                      Try: `add 21 21`, `multiply 6 7`, or `count words: the quick brown fox`.",
@@ -435,10 +451,7 @@ impl AsyncMessageHandler for ResearchAssistantHandler {
                 self.run_with_llm(llm.as_ref(), task_id, &context_id, &user_text)
                     .await
             }
-            None => {
-                self.run_rule_based(task_id, &context_id, &user_text)
-                    .await
-            }
+            None => self.run_rule_based(task_id, &context_id, &user_text).await,
         };
 
         let (state, reply) = match outcome {
@@ -453,7 +466,9 @@ impl AsyncMessageHandler for ResearchAssistantHandler {
             .context_id(context_id)
             .build();
 
-        let final_task = self.update_and_broadcast(&id, state, Some(response)).await?;
+        let final_task = self
+            .update_and_broadcast(&id, state, Some(response))
+            .await?;
         Ok(final_task)
     }
 
@@ -519,7 +534,9 @@ fn load_llm() -> Option<Arc<dyn LlmProvider>> {
 async fn main() -> anyhow::Result<()> {
     dotenvy::dotenv().ok();
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     // (a) Start the in-process MCP tool server over a duplex pipe.
@@ -537,7 +554,12 @@ async fn main() -> anyhow::Result<()> {
     let bridge = Arc::new(McpToA2ABridge::new(mcp_client.peer().clone(), UnusedInner).await?);
     tracing::info!(
         "🔧 MCP tools available: {}",
-        bridge.tools().iter().map(|t| t.name.to_string()).collect::<Vec<_>>().join(", ")
+        bridge
+            .tools()
+            .iter()
+            .map(|t| t.name.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
     // (c) Shared storage + streaming. The SAME streaming instance goes to the

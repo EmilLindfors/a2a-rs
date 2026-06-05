@@ -218,14 +218,10 @@ mod tests {
         let storage = InMemoryTaskStorage::new();
         let streaming = InMemoryStreamingHandler::new();
         let push = storage.push_notifier();
-        let handler =
-            ResponderMessageHandler::new(storage, streaming, push, FixedResponder);
+        let handler = ResponderMessageHandler::new(storage, streaming, push, FixedResponder);
 
         let message = Message::user_text("anything".to_string(), "m1".to_string());
-        let task = handler
-            .process_message("t1", &message, None)
-            .await
-            .unwrap();
+        let task = handler.process_message("t1", &message, None).await.unwrap();
 
         // The responder chose the terminal state...
         assert_eq!(task.status.state, TaskState::Completed);

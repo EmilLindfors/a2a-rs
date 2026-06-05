@@ -23,8 +23,8 @@ use futures::{Stream, StreamExt, stream};
 
 use a2a_rs::adapter::{InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router};
 use a2a_rs::domain::{
-    A2AError, AgentCard, AgentInterface, Message, TaskArtifactUpdateEvent, TaskPushNotificationConfig,
-    TaskState, TaskStatus, TaskStatusUpdateEvent,
+    A2AError, AgentCard, AgentInterface, Message, TaskArtifactUpdateEvent,
+    TaskPushNotificationConfig, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 use a2a_rs::port::AsyncStreamingHandler;
 use a2a_rs::port::streaming_handler::{SeqEvent, Subscriber};
@@ -108,7 +108,8 @@ async fn spawn_server() -> String {
     let handler = TestBusinessHandler::with_storage(InMemoryTaskStorage::new());
     let agent_info = SimpleAgentInfo::new("interop".to_string(), "http://localhost".to_string());
     let adapter = Arc::new(
-        JsonRpcAdapter::with_handler(handler, agent_info).with_streaming_handler(EmptyStreamHandler),
+        JsonRpcAdapter::with_handler(handler, agent_info)
+            .with_streaming_handler(EmptyStreamHandler),
     );
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -188,11 +189,17 @@ async fn subscribe_resumes_from_last_event_id() {
 
     // Two updates broadcast before any subscriber — buffered as event ids 1 and 2.
     handler
-        .broadcast_status_update("task-resume", status_update("task-resume", TaskState::Working))
+        .broadcast_status_update(
+            "task-resume",
+            status_update("task-resume", TaskState::Working),
+        )
         .await
         .unwrap();
     handler
-        .broadcast_status_update("task-resume", status_update("task-resume", TaskState::Completed))
+        .broadcast_status_update(
+            "task-resume",
+            status_update("task-resume", TaskState::Completed),
+        )
         .await
         .unwrap();
 
@@ -237,7 +244,10 @@ async fn subscribe_resumes_from_last_event_id() {
     }
 
     // First: initial task snapshot (no id). Second: the replayed Completed event.
-    assert!(matches!(got[0].item, StreamItem::Task(_)), "first must be the snapshot");
+    assert!(
+        matches!(got[0].item, StreamItem::Task(_)),
+        "first must be the snapshot"
+    );
     assert_eq!(got[0].event_id, None);
     assert_eq!(
         got[1].event_id,
@@ -246,7 +256,10 @@ async fn subscribe_resumes_from_last_event_id() {
     );
     match &got[1].item {
         StreamItem::StatusUpdate(e) => {
-            assert_eq!(e.status.state, ::buffa::EnumValue::from(TaskState::Completed))
+            assert_eq!(
+                e.status.state,
+                ::buffa::EnumValue::from(TaskState::Completed)
+            )
         }
         other => panic!("expected StatusUpdate, got {other:?}"),
     }
@@ -275,7 +288,10 @@ async fn unary_roundtrip_send_get_list_cancel() {
 
     // list → contains it
     let listed = client.list_tasks(&Default::default()).await.unwrap();
-    assert!(listed.tasks.iter().any(|t| t.id == id), "listed tasks should contain {id}");
+    assert!(
+        listed.tasks.iter().any(|t| t.id == id),
+        "listed tasks should contain {id}"
+    );
 
     // cancel → same task
     let canceled = client.cancel_task(&id).await.unwrap();
@@ -304,9 +320,15 @@ async fn push_config_lifecycle() {
     client.set_task_push_notification(&config).await.unwrap();
 
     let configs = client.list_push_notification_configs(&id).await.unwrap();
-    assert!(!configs.is_empty(), "config list should be non-empty after create");
+    assert!(
+        !configs.is_empty(),
+        "config list should be non-empty after create"
+    );
 
-    let got = client.get_push_notification_config(&id, "cfg-1").await.unwrap();
+    let got = client
+        .get_push_notification_config(&id, "cfg-1")
+        .await
+        .unwrap();
     assert_eq!(got.url, "https://example.com/webhook");
 
     client

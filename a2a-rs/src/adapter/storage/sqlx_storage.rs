@@ -24,7 +24,7 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
-    A2AError, ContextId, Message, Task, TaskPushNotificationConfig, TaskId, TaskState, TaskStatus,
+    A2AError, ContextId, Message, Task, TaskId, TaskPushNotificationConfig, TaskState, TaskStatus,
     VersionedTask,
 };
 #[cfg(feature = "sqlx-storage")]
@@ -182,7 +182,9 @@ impl SqlxTaskStorage {
         {
             let msg = e.to_string();
             if !msg.contains("duplicate column name") {
-                return Err(A2AError::DatabaseError(format!("Migration 003 failed: {msg}")));
+                return Err(A2AError::DatabaseError(format!(
+                    "Migration 003 failed: {msg}"
+                )));
             }
         }
 
@@ -461,12 +463,15 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         };
 
         // Update task in database (bump the optimistic-concurrency version)
-        let result = sqlx::query("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?")
-            .bind(state_str)
-            .bind(task_id)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to update task status: {}", e)))?;
+        let result =
+            sqlx::query("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?")
+                .bind(state_str)
+                .bind(task_id)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to update task status: {}", e))
+                })?;
 
         if result.rows_affected() == 0 {
             return Err(A2AError::TaskNotFound(task_id.to_string()));
@@ -939,9 +944,10 @@ impl AsyncNotificationManager for SqlxTaskStorage {
                 .bind(&params.id)
                 .bind(&params.push_notification_config_id)
         };
-        let _result = query.execute(&self.pool).await.map_err(|e| {
-            A2AError::DatabaseError(format!("Failed to delete push config: {}", e))
-        })?;
+        let _result = query
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to delete push config: {}", e)))?;
 
         // Idempotent - don't error if already deleted (v1.0.0 spec behavior)
         Ok(())

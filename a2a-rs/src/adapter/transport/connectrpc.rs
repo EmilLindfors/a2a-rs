@@ -24,8 +24,7 @@ use crate::{
             GetExtendedAgentCardRequestView, GetTaskPushNotificationConfigRequestView,
             GetTaskRequestView, ListTaskPushNotificationConfigsRequestView,
             ListTaskPushNotificationConfigsResponse, ListTasksRequest, ListTasksRequestView,
-            ListTasksResponse,
-            SendMessageRequestView, SendMessageResponse, StreamResponse,
+            ListTasksResponse, SendMessageRequestView, SendMessageResponse, StreamResponse,
             SubscribeToTaskRequestView, TaskArtifactUpdateEvent as GenTaskArtifactUpdateEvent,
             TaskPushNotificationConfigView, TaskState,
             TaskStatusUpdateEvent as GenTaskStatusUpdateEvent, send_message_response,
@@ -286,8 +285,8 @@ impl A2aService for ConnectRpcAdapter {
             ..Default::default()
         };
 
-        let mapped_stream = update_stream
-            .map(|item| item.map(|seq| map_update_event(seq.event)).map_err(map_err));
+        let mapped_stream =
+            update_stream.map(|item| item.map(|seq| map_update_event(seq.event)).map_err(map_err));
 
         let chained_stream =
             futures::stream::once(async { Ok(initial_response) }).chain(mapped_stream);
@@ -362,13 +361,16 @@ impl A2aService for ConnectRpcAdapter {
     > {
         let req = request.to_owned_message();
 
-        let (initial_task, update_stream) =
-            self.service.subscribe(&req.id, None).await.map_err(map_err)?;
+        let (initial_task, update_stream) = self
+            .service
+            .subscribe(&req.id, None)
+            .await
+            .map_err(map_err)?;
 
         use futures::StreamExt;
 
-        let mapped_stream = update_stream
-            .map(|item| item.map(|seq| map_update_event(seq.event)).map_err(map_err));
+        let mapped_stream =
+            update_stream.map(|item| item.map(|seq| map_update_event(seq.event)).map_err(map_err));
 
         if let Some(task) = initial_task {
             let initial_response = StreamResponse {
@@ -452,11 +454,7 @@ impl A2aService for ConnectRpcAdapter {
         request: ::buffa::view::OwnedView<GetExtendedAgentCardRequestView<'static>>,
     ) -> Result<(AgentCard, ::connectrpc::Context), ::connectrpc::ConnectError> {
         let _req = request.to_owned_message();
-        let card = self
-            .service
-            .extended_agent_card()
-            .await
-            .map_err(map_err)?;
+        let card = self.service.extended_agent_card().await.map_err(map_err)?;
         Ok((card, ctx))
     }
 
@@ -614,10 +612,8 @@ impl AsyncStreamingHandler for NoopStreamingHandler {
         &self,
         _task_id: &str,
         _from_event_id: Option<u64>,
-    ) -> Result<
-        Pin<Box<dyn ::futures::Stream<Item = Result<SeqEvent, A2AError>> + Send>>,
-        A2AError,
-    > {
+    ) -> Result<Pin<Box<dyn ::futures::Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError>
+    {
         Err(A2AError::UnsupportedOperation(
             "Streaming not supported by this processor".to_string(),
         ))

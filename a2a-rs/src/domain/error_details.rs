@@ -30,7 +30,10 @@ pub struct FieldViolation {
 impl FieldViolation {
     /// Construct a field violation from any string-likes.
     pub fn new(field: impl Into<String>, description: impl Into<String>) -> Self {
-        Self { field: field.into(), description: description.into() }
+        Self {
+            field: field.into(),
+            description: description.into(),
+        }
     }
 }
 
@@ -53,7 +56,11 @@ pub struct ErrorInfo {
 impl ErrorInfo {
     /// Construct an `ErrorInfo` in the `a2a-rs` domain with no metadata.
     pub fn new(reason: impl Into<String>) -> Self {
-        Self { reason: reason.into(), domain: DOMAIN.to_string(), metadata: BTreeMap::new() }
+        Self {
+            reason: reason.into(),
+            domain: DOMAIN.to_string(),
+            metadata: BTreeMap::new(),
+        }
     }
 
     /// Attach a metadata key/value pair (builder-style).
@@ -89,7 +96,9 @@ pub enum ErrorDetail {
 impl ErrorDetail {
     /// Convenience constructor for a single-field `BadRequest`.
     pub fn bad_request(field: impl Into<String>, description: impl Into<String>) -> Self {
-        Self::BadRequest { field_violations: vec![FieldViolation::new(field, description)] }
+        Self::BadRequest {
+            field_violations: vec![FieldViolation::new(field, description)],
+        }
     }
 
     /// Convenience constructor for an `ErrorInfo` reason in the `a2a-rs` domain.

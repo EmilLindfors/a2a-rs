@@ -71,10 +71,9 @@ impl TransportFactory for ConnectRpcTransportFactory {
     ) -> Result<Box<dyn Transport>, A2AError> {
         // `HttpClient::new` panics on an unparseable URL; validate first so a bad
         // interface is a recoverable negotiation miss, not a crash.
-        iface
-            .url
-            .parse::<http::Uri>()
-            .map_err(|e| A2AError::InvalidParams(format!("invalid interface url {}: {e}", iface.url)))?;
+        iface.url.parse::<http::Uri>().map_err(|e| {
+            A2AError::InvalidParams(format!("invalid interface url {}: {e}", iface.url))
+        })?;
         Ok(Box::new(super::http::HttpClient::new(iface.url.clone())))
     }
 }
@@ -177,7 +176,11 @@ pub async fn fetch_agent_card(base_url: &str) -> Result<AgentCard, A2AError> {
     let base = base_url.trim_end_matches('/');
     for path in [".well-known/agent-card.json", "agent-card"] {
         let url = format!("{base}/{path}");
-        let resp = client.get(&url).send().await.map_err(HttpClientError::Reqwest)?;
+        let resp = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(HttpClientError::Reqwest)?;
         if resp.status().is_success() {
             return resp
                 .json::<AgentCard>()

@@ -196,9 +196,7 @@ async fn measure_performance<T: AsyncTaskLifecycle>(
         let task_id = format!("perf-task-{}", i);
 
         // Create, update, and retrieve task
-        storage
-            .create(&tid(&task_id), &cid("perf-context"))
-            .await?;
+        storage.create(&tid(&task_id), &cid("perf-context")).await?;
         storage
             .update_status(&tid(&task_id), TaskState::Working, None)
             .await?;

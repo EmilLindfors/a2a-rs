@@ -13,6 +13,7 @@ use tracing::{debug, instrument};
 
 use crate::{
     adapter::error::HttpClientError,
+    adapter::transport::codec::stream_response_to_item,
     domain::{
         A2AError, AgentCard, ListTasksParams, ListTasksResult, Message, Task,
         TaskPushNotificationConfig,
@@ -23,7 +24,6 @@ use crate::{
             SendMessageRequest, SubscribeToTaskRequest, TaskState, send_message_response,
         },
     },
-    adapter::transport::codec::stream_response_to_item,
     port::{StreamEvent, Transport},
 };
 

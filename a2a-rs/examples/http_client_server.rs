@@ -9,9 +9,9 @@ use a2a_rs::adapter::{
 };
 
 mod common;
+use a2a_rs::Transport;
 use a2a_rs::domain::{Message, Part, Role};
 use a2a_rs::observability;
-use a2a_rs::Transport;
 use common::SimpleAgentHandler;
 
 #[tokio::main]

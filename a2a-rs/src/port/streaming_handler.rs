@@ -207,7 +207,9 @@ impl AsyncStreamingHandler for std::sync::Arc<dyn AsyncStreamingHandler> {
         task_id: &str,
         from_event_id: Option<u64>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>, A2AError> {
-        (**self).combined_update_stream(task_id, from_event_id).await
+        (**self)
+            .combined_update_stream(task_id, from_event_id)
+            .await
     }
 }
 

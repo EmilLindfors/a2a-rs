@@ -140,7 +140,10 @@ impl McpClientManager {
                     info!("Connected to MCP server '{}'", server_config.name);
                 }
                 Err(e) => {
-                    error!("Failed to connect to MCP server '{}': {e}", server_config.name);
+                    error!(
+                        "Failed to connect to MCP server '{}': {e}",
+                        server_config.name
+                    );
                     last_err = Some(e);
                 }
             }
@@ -182,14 +185,13 @@ impl McpClientManager {
         let client_info = ClientInfo::new(ClientCapabilities::default(), implementation)
             .with_protocol_version(ProtocolVersion::V_2024_11_05);
 
-        let service =
-            client_info
-                .serve(transport)
-                .await
-                .map_err(|e| McpClientError::Connect {
-                    server: config.name.clone(),
-                    message: e.to_string(),
-                })?;
+        let service = client_info
+            .serve(transport)
+            .await
+            .map_err(|e| McpClientError::Connect {
+                server: config.name.clone(),
+                message: e.to_string(),
+            })?;
         let peer = service.peer().clone();
 
         debug!("Listing tools from MCP server '{}'", config.name);

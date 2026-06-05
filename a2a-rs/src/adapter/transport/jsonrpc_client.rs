@@ -251,7 +251,11 @@ impl JsonRpcClient {
         if !response.status().is_success() {
             let status = response.status().as_u16();
             let body = response.text().await.unwrap_or_default();
-            return Err(HttpClientError::Response { status, message: body }.into());
+            return Err(HttpClientError::Response {
+                status,
+                message: body,
+            }
+            .into());
         }
 
         Ok(Box::pin(sse_stream(response)))
@@ -326,7 +330,9 @@ impl Transport for JsonRpcClient {
         // Mirrors the ConnectRPC client: list configs and take the first.
         let configs = self.list_push_notification_configs(task_id).await?;
         configs.into_iter().next().ok_or_else(|| {
-            A2AError::TaskNotFound(format!("No push notification config found for task {task_id}"))
+            A2AError::TaskNotFound(format!(
+                "No push notification config found for task {task_id}"
+            ))
         })
     }
 
@@ -435,7 +441,9 @@ impl Transport for JsonRpcClient {
 /// [`StreamEvent`] for `Last-Event-ID` resumption). Chunks from the socket may
 /// split mid-event or mid-UTF-8-sequence, so we buffer and only emit on a
 /// complete event boundary (`\n\n`).
-fn sse_stream(response: reqwest::Response) -> impl Stream<Item = Result<StreamEvent, A2AError>> + Send {
+fn sse_stream(
+    response: reqwest::Response,
+) -> impl Stream<Item = Result<StreamEvent, A2AError>> + Send {
     struct State {
         response: reqwest::Response,
         buf: String,

@@ -52,11 +52,11 @@ use crate::{
     domain::{
         A2AError, TaskId, TaskPushNotificationConfig,
         generated::{
-            CancelTaskRequest, DeleteTaskPushNotificationConfigRequest, GetTaskPushNotificationConfigRequest,
-            GetTaskRequest, ListTaskPushNotificationConfigsRequest,
-            ListTaskPushNotificationConfigsResponse, ListTasksRequest, ListTasksResponse,
-            SendMessageRequest, SendMessageResponse, StreamResponse, SubscribeToTaskRequest,
-            send_message_response, stream_response,
+            CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
+            GetTaskPushNotificationConfigRequest, GetTaskRequest,
+            ListTaskPushNotificationConfigsRequest, ListTaskPushNotificationConfigsResponse,
+            ListTasksRequest, ListTasksResponse, SendMessageRequest, SendMessageResponse,
+            StreamResponse, SubscribeToTaskRequest, send_message_response, stream_response,
         },
     },
     port::{
@@ -66,7 +66,9 @@ use crate::{
     services::server::AgentInfoProvider,
 };
 
-use super::connectrpc::{NoopStreamingHandler, decode_send_config, list_request_to_params, map_update_event};
+use super::connectrpc::{
+    NoopStreamingHandler, decode_send_config, list_request_to_params, map_update_event,
+};
 // Re-exported so existing `transport::jsonrpc::{methods, error_code, JsonRpc*}`
 // paths keep working now that these live in the shared wire module.
 pub use super::jsonrpc_wire::{
@@ -214,11 +216,7 @@ impl JsonRpcAdapter {
 
     /// Route a unary method name + `params` to the service and return the wire
     /// `result` value. Reused by both JSON-RPC and REST.
-    async fn dispatch_unary(
-        &self,
-        method: &str,
-        params: Option<Value>,
-    ) -> Result<Value, A2AError> {
+    async fn dispatch_unary(&self, method: &str, params: Option<Value>) -> Result<Value, A2AError> {
         match method {
             methods::GET_TASK => self.get_task(params).await,
             methods::LIST_TASKS => self.list_tasks(params).await,
@@ -239,7 +237,10 @@ impl JsonRpcAdapter {
     async fn get_task(&self, params: Option<Value>) -> Result<Value, A2AError> {
         let req: GetTaskRequest = parse_params(params)?;
         let id: TaskId = req.id.parse()?;
-        let task = self.service.get(&id, req.history_length.map(|l| l as u32)).await?;
+        let task = self
+            .service
+            .get(&id, req.history_length.map(|l| l as u32))
+            .await?;
         to_value(&task)
     }
 
@@ -268,7 +269,13 @@ impl JsonRpcAdapter {
             decode_send_message(parse_params(params)?)?;
         let task = self
             .service
-            .send_message(&task_id, &message, session_id.as_deref(), push_config, history_limit)
+            .send_message(
+                &task_id,
+                &message,
+                session_id.as_deref(),
+                push_config,
+                history_limit,
+            )
             .await?;
         let response = SendMessageResponse {
             payload: Some(send_message_response::Payload::Task(Box::new(task))),
@@ -410,7 +417,11 @@ async fn jsonrpc_handler(
         Err(e) => {
             return Json(JsonRpcResponse::err(
                 JsonRpcId::Null,
-                JsonRpcError { code: error_code::PARSE_ERROR, message: e.to_string(), data: None },
+                JsonRpcError {
+                    code: error_code::PARSE_ERROR,
+                    message: e.to_string(),
+                    data: None,
+                },
             ))
             .into_response();
         }
@@ -431,7 +442,10 @@ async fn jsonrpc_handler(
     if methods::is_streaming(&req.method) {
         let id = req.id.clone();
         let from_event_id = parse_last_event_id(&headers);
-        match adapter.open_stream(&req.method, req.params, from_event_id).await {
+        match adapter
+            .open_stream(&req.method, req.params, from_event_id)
+            .await
+        {
             Ok(stream) => jsonrpc_sse(id, stream).into_response(),
             Err(e) => Json(JsonRpcResponse::err(id, a2a_to_jsonrpc(&e))).into_response(),
         }
@@ -518,7 +532,10 @@ fn a2a_to_http(err: &A2AError) -> Response {
 }
 
 async fn rest_send_message(State(a): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
-    rest_result(a.dispatch_intercepted(methods::SEND_MESSAGE, parse_body(&body)).await)
+    rest_result(
+        a.dispatch_intercepted(methods::SEND_MESSAGE, parse_body(&body))
+            .await,
+    )
 }
 
 async fn rest_list_tasks(
@@ -543,7 +560,10 @@ async fn rest_get_task(
     rest_result(a.dispatch_intercepted(methods::GET_TASK, Some(req)).await)
 }
 
-async fn rest_cancel_task(State(a): State<Arc<JsonRpcAdapter>>, Path(id): Path<String>) -> Response {
+async fn rest_cancel_task(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Path(id): Path<String>,
+) -> Response {
     rest_result(
         a.dispatch_intercepted(methods::CANCEL_TASK, Some(serde_json::json!({ "id": id })))
             .await,
@@ -558,7 +578,10 @@ async fn rest_create_push_config(
     // The path task id is authoritative for the config's parent.
     let mut config = parse_body(&body).unwrap_or_else(|| serde_json::json!({}));
     config["taskId"] = id.into();
-    rest_result(a.dispatch_intercepted(methods::CREATE_PUSH_CONFIG, Some(config)).await)
+    rest_result(
+        a.dispatch_intercepted(methods::CREATE_PUSH_CONFIG, Some(config))
+            .await,
+    )
 }
 
 async fn rest_list_push_configs(
@@ -601,7 +624,10 @@ async fn rest_delete_push_config(
 }
 
 async fn rest_extended_card(State(a): State<Arc<JsonRpcAdapter>>) -> Response {
-    rest_result(a.dispatch_intercepted(methods::GET_EXTENDED_AGENT_CARD, None).await)
+    rest_result(
+        a.dispatch_intercepted(methods::GET_EXTENDED_AGENT_CARD, None)
+            .await,
+    )
 }
 
 async fn rest_stream_message(
@@ -611,7 +637,11 @@ async fn rest_stream_message(
 ) -> Response {
     let from_event_id = parse_last_event_id(&headers);
     match a
-        .open_stream(methods::SEND_STREAMING_MESSAGE, parse_body(&body), from_event_id)
+        .open_stream(
+            methods::SEND_STREAMING_MESSAGE,
+            parse_body(&body),
+            from_event_id,
+        )
         .await
     {
         Ok(stream) => rest_sse(stream).into_response(),
@@ -657,7 +687,10 @@ fn rest_sse(stream: StreamResponseStream) -> Sse<impl Stream<Item = Result<Event
     let events = stream.map(|item| {
         let (seq_id, data) = match item {
             Ok((seq_id, sr)) => (seq_id, serde_json::to_string(&sr).unwrap_or_default()),
-            Err(e) => (None, serde_json::to_string(&a2a_to_jsonrpc(&e)).unwrap_or_default()),
+            Err(e) => (
+                None,
+                serde_json::to_string(&a2a_to_jsonrpc(&e)).unwrap_or_default(),
+            ),
         };
         let event = Event::default().data(data);
         Ok(match seq_id {
@@ -697,7 +730,13 @@ fn to_value<T: Serialize>(value: &T) -> Result<Value, A2AError> {
 
 /// Decode a [`SendMessageRequest`] into the arguments [`TaskService::send_message`]
 /// expects. Mirrors the Connect adapter's `send_message` decode exactly.
-type SendArgs = (String, crate::domain::Message, Option<String>, Option<TaskPushNotificationConfig>, Option<u32>);
+type SendArgs = (
+    String,
+    crate::domain::Message,
+    Option<String>,
+    Option<TaskPushNotificationConfig>,
+    Option<u32>,
+);
 fn decode_send_message(req: SendMessageRequest) -> Result<SendArgs, A2AError> {
     let message = req
         .message
@@ -715,8 +754,7 @@ fn chain_initial_task(
     initial: Option<crate::domain::Task>,
     updates: crate::application::UpdateStream,
 ) -> StreamResponseStream {
-    let mapped =
-        updates.map(|item| item.map(|seq| (Some(seq.id), map_update_event(seq.event))));
+    let mapped = updates.map(|item| item.map(|seq| (Some(seq.id), map_update_event(seq.event))));
     match initial {
         Some(task) => {
             let head = StreamResponse {
@@ -748,7 +786,10 @@ fn query_to_list_request(q: &std::collections::HashMap<String, String>) -> Value
     if let Some(v) = q.get("historyLength").and_then(|s| s.parse::<i64>().ok()) {
         req.insert("historyLength".to_string(), v.into());
     }
-    if let Some(v) = q.get("includeArtifacts").and_then(|s| s.parse::<bool>().ok()) {
+    if let Some(v) = q
+        .get("includeArtifacts")
+        .and_then(|s| s.parse::<bool>().ok())
+    {
         req.insert("includeArtifacts".to_string(), v.into());
     }
     if let Some(v) = q.get("statusTimestampAfter") {

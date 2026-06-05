@@ -80,11 +80,21 @@ pub struct JsonRpcResponse {
 
 impl JsonRpcResponse {
     pub fn ok(id: JsonRpcId, result: Value) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, result: Some(result), error: None }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: Some(result),
+            error: None,
+        }
     }
 
     pub fn err(id: JsonRpcId, error: JsonRpcError) -> Self {
-        Self { jsonrpc: "2.0".to_string(), id, result: None, error: Some(error) }
+        Self {
+            jsonrpc: "2.0".to_string(),
+            id,
+            result: None,
+            error: Some(error),
+        }
     }
 }
 
@@ -142,7 +152,11 @@ pub fn a2a_to_jsonrpc(err: &A2AError) -> JsonRpcError {
     };
     let details = err.error_details();
     let data = (!details.is_empty()).then(|| serde_json::json!(details));
-    JsonRpcError { code: a2a_error_code(err), message, data }
+    JsonRpcError {
+        code: a2a_error_code(err),
+        message,
+        data,
+    }
 }
 
 /// Map a JSON-RPC error object back onto a domain [`A2AError`] — the inverse of
@@ -160,7 +174,11 @@ pub fn jsonrpc_to_a2a(err: &JsonRpcError) -> A2AError {
         EXTENDED_CARD_NOT_CONFIGURED => A2AError::AuthenticatedExtendedCardNotConfigured,
         VERSION_CONFLICT => version_conflict_from_data(err)
             .unwrap_or_else(|| A2AError::Internal(err.message.clone())),
-        code => A2AError::JsonRpc { code, message: err.message.clone(), data: err.data.clone() },
+        code => A2AError::JsonRpc {
+            code,
+            message: err.message.clone(),
+            data: err.data.clone(),
+        },
     }
 }
 
@@ -212,7 +230,11 @@ mod tests {
         let wire = a2a_to_jsonrpc(&err);
         assert_eq!(wire.code, error_code::VERSION_CONFLICT);
         match jsonrpc_to_a2a(&wire) {
-            A2AError::VersionConflict { id, expected, actual } => {
+            A2AError::VersionConflict {
+                id,
+                expected,
+                actual,
+            } => {
                 assert_eq!(id, "task-42");
                 assert_eq!(expected, 3);
                 assert_eq!(actual, 5);

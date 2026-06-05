@@ -91,7 +91,9 @@ impl ServerHandler for EchoServer {
 
     fn call_tool(
         &self,
-        CallToolRequestParams { name, arguments, .. }: CallToolRequestParams,
+        CallToolRequestParams {
+            name, arguments, ..
+        }: CallToolRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
@@ -119,7 +121,10 @@ impl ServerHandler for EchoServer {
     }
 }
 
-fn number_arg(args: &serde_json::Map<String, serde_json::Value>, key: &str) -> Result<f64, McpError> {
+fn number_arg(
+    args: &serde_json::Map<String, serde_json::Value>,
+    key: &str,
+) -> Result<f64, McpError> {
     args.get(key)
         .and_then(|v| v.as_f64())
         .ok_or_else(|| McpError::invalid_params(format!("missing or non-numeric '{key}'"), None))

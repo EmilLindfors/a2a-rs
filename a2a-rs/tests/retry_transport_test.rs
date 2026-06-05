@@ -13,8 +13,8 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 
 use a2a_rs::domain::{
-    A2AError, ListTasksParams, ListTasksResult, Message, RetryPolicy, Task, TaskPushNotificationConfig,
-    TaskState, TaskStatus, TaskStatusUpdateEvent,
+    A2AError, ListTasksParams, ListTasksResult, Message, RetryPolicy, Task,
+    TaskPushNotificationConfig, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 use a2a_rs::port::{StreamEvent, StreamItem, Transport};
 use a2a_rs::subscribe_resilient;
@@ -158,13 +158,7 @@ impl Transport for FakeTransport {
 #[tokio::test]
 async fn retries_then_succeeds() {
     let fake = FakeTransport::with_scripts(vec![None, None, Some(vec![Ok(terminal_task())])]);
-    let mut stream = subscribe_resilient(
-        Arc::new(fake.clone()),
-        "t",
-        None,
-        None,
-        fast_policy(5),
-    );
+    let mut stream = subscribe_resilient(Arc::new(fake.clone()), "t", None, None, fast_policy(5));
 
     let items: Vec<_> = collect(&mut stream).await;
     assert_eq!(items.len(), 1, "one terminal event");
@@ -177,8 +171,7 @@ async fn retries_then_succeeds() {
 #[tokio::test]
 async fn gives_up_after_max_retries() {
     let fake = FakeTransport::with_scripts(vec![None, None, None, None, None]);
-    let mut stream =
-        subscribe_resilient(Arc::new(fake.clone()), "t", None, None, fast_policy(2));
+    let mut stream = subscribe_resilient(Arc::new(fake.clone()), "t", None, None, fast_policy(2));
 
     let mut last = None;
     while let Some(item) = stream.next().await {
@@ -196,8 +189,7 @@ async fn reconnect_threads_last_event_id() {
         Some(vec![Ok(working(5))]), // first connect: one event id 5, then ends
         Some(vec![Ok(terminal_task())]), // reconnect: terminal
     ]);
-    let mut stream =
-        subscribe_resilient(Arc::new(fake.clone()), "t", None, None, fast_policy(5));
+    let mut stream = subscribe_resilient(Arc::new(fake.clone()), "t", None, None, fast_policy(5));
 
     let items = collect(&mut stream).await;
     assert_eq!(items.len(), 2);

@@ -14,18 +14,18 @@ use std::time::Duration;
 use a2a_mcp::AgentToMcpBridge;
 use a2a_rs::{
     adapter::{
+        HttpServer, SimpleAgentInfo,
         business::ResponderMessageHandler,
         storage::InMemoryTaskStorage,
         streaming::InMemoryStreamingHandler,
         transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
-        HttpServer, SimpleAgentInfo,
     },
-    domain::{error::A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
+    domain::{Message, Part, Role, Task, TaskState, TaskStatus, error::A2AError},
     port::AsyncMessageHandler,
     services::AgentInfoProvider,
 };
 use async_trait::async_trait;
-use rmcp::{model::CallToolRequestParams, ServiceExt};
+use rmcp::{ServiceExt, model::CallToolRequestParams};
 use tracing_subscriber::EnvFilter;
 
 const AGENT_ADDR: &str = "127.0.0.1:18182";

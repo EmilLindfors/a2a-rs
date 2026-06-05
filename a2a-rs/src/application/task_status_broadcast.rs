@@ -64,7 +64,9 @@ pub trait HasPushNotifier {
 ///
 /// [`update_and_broadcast`]: TaskStatusBroadcast::update_and_broadcast
 #[async_trait]
-pub trait TaskStatusBroadcast: HasTaskLifecycle + HasStreaming + HasPushNotifier + Send + Sync {
+pub trait TaskStatusBroadcast:
+    HasTaskLifecycle + HasStreaming + HasPushNotifier + Send + Sync
+{
     /// Update a task's status, then broadcast the new status to subscribers.
     ///
     /// The broadcast is best-effort relative to the store: the status is
@@ -148,11 +150,7 @@ pub trait TaskStatusBroadcast: HasTaskLifecycle + HasStreaming + HasPushNotifier
     /// best-effort: a webhook that is down is logged but does not fail the
     /// mutation that triggered it.
     #[doc(hidden)]
-    async fn broadcast_current_status(
-        &self,
-        id: &TaskId,
-        task: &Task,
-    ) -> Result<(), A2AError> {
+    async fn broadcast_current_status(&self, id: &TaskId, task: &Task) -> Result<(), A2AError> {
         let event = TaskStatusUpdateEvent {
             task_id: task.id.clone(),
             context_id: task.context_id.clone(),
@@ -195,8 +193,8 @@ pub trait TaskStatusBroadcast: HasTaskLifecycle + HasStreaming + HasPushNotifier
 
 /// The single blanket impl — the linchpin of the pattern. `?Sized` lets the
 /// mixin attach to a `dyn`-typed host as well as a concrete one.
-impl<T: HasTaskLifecycle + HasStreaming + HasPushNotifier + Send + Sync + ?Sized> TaskStatusBroadcast
-    for T
+impl<T: HasTaskLifecycle + HasStreaming + HasPushNotifier + Send + Sync + ?Sized>
+    TaskStatusBroadcast for T
 {
 }
 
@@ -205,8 +203,8 @@ mod tests {
     use super::*;
     use crate::adapter::storage::InMemoryTaskStorage;
     use crate::adapter::streaming::InMemoryStreamingHandler;
-    use crate::port::streaming_handler::Subscriber;
     use crate::port::NoopPushNotifier;
+    use crate::port::streaming_handler::Subscriber;
     use std::sync::{Arc, Mutex};
 
     /// A "partial platform" test rig: it wires the three ingredients this mixin

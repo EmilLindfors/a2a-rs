@@ -48,7 +48,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 2. Send a message — the server creates (or updates) the task and echoes it.
     let task = transport
-        .send_task_message("demo-task", &Message::user_text("hello".to_string(), "m1".to_string()), None, None)
+        .send_task_message(
+            "demo-task",
+            &Message::user_text("hello".to_string(), "m1".to_string()),
+            None,
+            None,
+        )
         .await?;
     println!("📨 sent message; task id = {}", task.id);
 
@@ -63,7 +68,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     for _ in 0..3 {
         match tokio::time::timeout(Duration::from_secs(5), stream.next()).await {
             Ok(Some(Ok(event))) => match &event.item {
-                StreamItem::Task(t) => println!("   • snapshot: task {} ({:?})", t.id, t.status.state),
+                StreamItem::Task(t) => {
+                    println!("   • snapshot: task {} ({:?})", t.id, t.status.state)
+                }
                 StreamItem::StatusUpdate(u) => println!("   • status: {:?}", u.status.state),
                 StreamItem::ArtifactUpdate(_) => println!("   • artifact update"),
             },

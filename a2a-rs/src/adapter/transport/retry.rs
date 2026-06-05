@@ -166,7 +166,9 @@ fn is_terminal(item: &StreamItem) -> bool {
 fn seed_for(task_id: &str) -> u64 {
     let mut state = 0u64;
     for &b in task_id.as_bytes() {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(b as u64);
+        state = state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(b as u64);
     }
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

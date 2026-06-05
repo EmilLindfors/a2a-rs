@@ -28,10 +28,10 @@ pub use transport::http::HttpClient;
 pub use transport::jsonrpc_client::JsonRpcClient;
 #[cfg(feature = "client")]
 pub use transport::negotiation::{TransportFactory, TransportNegotiator, default_registry};
-#[cfg(feature = "client")]
-pub use transport::retry::{RetryingTransport, subscribe_resilient};
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 pub use transport::negotiation::{connect, fetch_agent_card};
+#[cfg(feature = "client")]
+pub use transport::retry::{RetryingTransport, subscribe_resilient};
 
 // Server re-exports (from various modules)
 #[cfg(feature = "http-server")]
@@ -51,9 +51,9 @@ pub use storage::InMemoryTaskStorage;
 #[cfg(feature = "server")]
 pub use streaming::InMemoryStreamingHandler;
 #[cfg(feature = "server")]
-pub use transport::connectrpc::NoopStreamingHandler;
-#[cfg(feature = "server")]
 pub use transport::connectrpc::ConnectRpcAdapter;
+#[cfg(feature = "server")]
+pub use transport::connectrpc::NoopStreamingHandler;
 #[cfg(feature = "http-server")]
 pub use transport::http::HttpServer;
 #[cfg(feature = "jsonrpc-server")]

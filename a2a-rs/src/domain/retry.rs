@@ -116,7 +116,10 @@ mod tests {
         for seed in 0..1000u64 {
             let d = p.backoff(1, seed).as_millis() as u64;
             // base 100ms + jitter in [0, 200)
-            assert!((100..300).contains(&d), "delay {d} out of range for seed {seed}");
+            assert!(
+                (100..300).contains(&d),
+                "delay {d} out of range for seed {seed}"
+            );
             // deterministic
             assert_eq!(p.backoff(1, seed), p.backoff(1, seed));
         }

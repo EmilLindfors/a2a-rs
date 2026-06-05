@@ -144,7 +144,7 @@ pub mod error;
 
 // Re-export key types
 pub use bridge::mcp_to_a2a::{
-    attach_tool_call, create_tool_call_message, McpToolCall, MCP_TOOL_CALL_METADATA_KEY,
+    MCP_TOOL_CALL_METADATA_KEY, McpToolCall, attach_tool_call, create_tool_call_message,
 };
 pub use bridge::{AgentToMcpBridge, McpToA2ABridge};
 pub use converters::{MessageConverter, SkillToolConverter, TaskResultConverter};

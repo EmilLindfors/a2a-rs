@@ -128,7 +128,10 @@ impl StreamEvent {
     /// A stream event with no id (initial snapshot / id-less transport).
     #[inline]
     pub fn untagged(item: StreamItem) -> Self {
-        Self { event_id: None, item }
+        Self {
+            event_id: None,
+            item,
+        }
     }
 }
 

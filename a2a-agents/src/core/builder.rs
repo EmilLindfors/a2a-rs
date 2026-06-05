@@ -5,9 +5,7 @@
 
 use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
 use crate::core::runtime::AgentRuntime;
-use a2a_rs::domain::{
-    A2AError, ContextId, Task, TaskId, TaskPushNotificationConfig, TaskState,
-};
+use a2a_rs::domain::{A2AError, ContextId, Task, TaskId, TaskPushNotificationConfig, TaskState};
 use a2a_rs::port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
     AsyncTaskQuery,
@@ -267,10 +265,7 @@ impl<H, S> AgentBuilder<H, S> {
     /// transport so `tasks/subscribe` SSE streams observe those broadcasts —
     /// without it, the transport defaults to a no-op and updates never reach
     /// clients.
-    pub fn with_streaming(
-        mut self,
-        streaming: impl AsyncStreamingHandler + 'static,
-    ) -> Self {
+    pub fn with_streaming(mut self, streaming: impl AsyncStreamingHandler + 'static) -> Self {
         self.streaming = Some(Arc::new(streaming));
         self
     }

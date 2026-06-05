@@ -4,9 +4,7 @@
 //! and managing the agent lifecycle based on configuration.
 
 use crate::core::config::{AgentConfig, AuthConfig, StorageConfig};
-use a2a_rs::adapter::{
-    BearerTokenAuthenticator, ConnectRpcAdapter, HttpServer, SimpleAgentInfo,
-};
+use a2a_rs::adapter::{BearerTokenAuthenticator, ConnectRpcAdapter, HttpServer, SimpleAgentInfo};
 use a2a_rs::port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
     AsyncTaskQuery,

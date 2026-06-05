@@ -48,7 +48,9 @@ where
     }
 
     if !config.stdio {
-        info!("No MCP transport enabled (set features.mcp_server.stdio or features.mcp_server.http.enabled)");
+        info!(
+            "No MCP transport enabled (set features.mcp_server.stdio or features.mcp_server.http.enabled)"
+        );
         return Ok(());
     }
 
@@ -124,8 +126,10 @@ where
     let version = config.version.clone();
     let service = StreamableHttpService::new(
         move || {
-            Ok(AgentToMcpBridge::with_handler(handler.clone(), agent_card.clone())
-                .with_mcp_metadata(name.clone(), version.clone()))
+            Ok(
+                AgentToMcpBridge::with_handler(handler.clone(), agent_card.clone())
+                    .with_mcp_metadata(name.clone(), version.clone()),
+            )
         },
         Arc::new(LocalSessionManager::default()),
         server_config,

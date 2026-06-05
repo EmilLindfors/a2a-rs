@@ -481,7 +481,10 @@ Example response when asking for info:
                     // call id (see the `tool-call` metadata marker).
                     ai_response.push_str(&arguments);
                     let partial = tool_calls.push(&id, name.as_deref(), &arguments);
-                    let tool_name = partial.name.clone().unwrap_or_else(|| "unknown".to_string());
+                    let tool_name = partial
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string());
 
                     let artifact = Artifact {
                         artifact_id: artifact_id.clone(),
@@ -1532,11 +1535,7 @@ impl AsyncMessageHandler for ReimbursementHandler {
             let text_content = handler.extract_text_from_message(&message_owned);
 
             // Get current task for context
-            let current_task = match handler
-                .task_lifecycle
-                .get(&id_owned, Some(50))
-                .await
-            {
+            let current_task = match handler.task_lifecycle.get(&id_owned, Some(50)).await {
                 Ok(task) => {
                     info!(task_id = %task_id_owned, history_count = task.history.len(), "Retrieved task for AI processing");
                     Some(task)

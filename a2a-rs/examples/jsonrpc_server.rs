@@ -61,7 +61,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_description("Wire-compatible JSON-RPC 2.0 + HTTP+JSON A2A server".to_string())
             .with_preferred_transport("JSONRPC".to_string())
             .add_interface(base, "HTTP+JSON".to_string())
-            .add_skill("echo".to_string(), "Echo".to_string(), Some("Echoes input".to_string())),
+            .add_skill(
+                "echo".to_string(),
+                "Echo".to_string(),
+                Some("Echoes input".to_string()),
+            ),
     );
 
     // 3. Composition at the edge: both transports + the agent card on one server.

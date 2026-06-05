@@ -31,8 +31,8 @@ use tokio::sync::Mutex;
 use tokio::sync::broadcast;
 
 use crate::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
-use crate::port::streaming_handler::{SeqEvent, Subscriber, UpdateEvent};
 use crate::port::AsyncStreamingHandler;
+use crate::port::streaming_handler::{SeqEvent, Subscriber, UpdateEvent};
 
 type StatusSubscribers = Vec<Box<dyn Subscriber<TaskStatusUpdateEvent> + Send + Sync>>;
 type ArtifactSubscribers = Vec<Box<dyn Subscriber<TaskArtifactUpdateEvent> + Send + Sync>>;
@@ -312,7 +312,10 @@ mod tests {
         let first = stream.next().await.unwrap().unwrap();
         let second = stream.next().await.unwrap().unwrap();
         assert_eq!(first.id, 1);
-        assert_eq!(seq_state(&first), ::buffa::EnumValue::from(TaskState::Working));
+        assert_eq!(
+            seq_state(&first),
+            ::buffa::EnumValue::from(TaskState::Working)
+        );
         assert_eq!(second.id, 2);
         assert_eq!(
             seq_state(&second),

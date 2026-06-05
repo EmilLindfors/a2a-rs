@@ -4,8 +4,8 @@
 
 use std::pin::Pin;
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use a2a_mcp::bridge::agent_to_mcp::AgentToMcpBridge;
@@ -13,14 +13,14 @@ use a2a_mcp::converters::skill_tool::SkillToolConverter;
 use a2a_rs::adapter::transport::http::HttpClient;
 use a2a_rs::domain::core::agent::{AgentCapabilities, AgentCard, AgentSkill};
 use a2a_rs::domain::{
-    error::A2AError, Message, Part, Role, Task, TaskArtifactUpdateEvent, TaskState, TaskStatus,
-    TaskStatusUpdateEvent,
+    Message, Part, Role, Task, TaskArtifactUpdateEvent, TaskState, TaskStatus,
+    TaskStatusUpdateEvent, error::A2AError,
 };
 use a2a_rs::port::streaming_handler::Subscriber;
 use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, SeqEvent, UpdateEvent};
 use async_trait::async_trait;
 use rmcp::service::{NotificationContext, RequestContext};
-use rmcp::{model::*, ClientHandler, ErrorData as McpError, RoleClient, ServerHandler, ServiceExt};
+use rmcp::{ClientHandler, ErrorData as McpError, RoleClient, ServerHandler, ServiceExt, model::*};
 
 #[tokio::test]
 async fn test_agent_skills_as_mcp_tools() {
@@ -472,38 +472,44 @@ impl AsyncStreamingHandler for MockStreamingHandler {
     {
         let task_id = task_id.to_string();
         let events = vec![
-            Ok(SeqEvent::new(1, UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
-                task_id: task_id.clone(),
-                context_id: "ctx-1".to_string(),
-                kind: "status-update".to_string(),
-                status: TaskStatus::new(
-                    TaskState::Working,
-                    Some(
-                        Message::builder()
-                            .role(Role::Agent)
-                            .parts(vec![Part::text("Doing step 1".to_string())])
-                            .message_id("step-1-msg".to_string())
-                            .build(),
+            Ok(SeqEvent::new(
+                1,
+                UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+                    task_id: task_id.clone(),
+                    context_id: "ctx-1".to_string(),
+                    kind: "status-update".to_string(),
+                    status: TaskStatus::new(
+                        TaskState::Working,
+                        Some(
+                            Message::builder()
+                                .role(Role::Agent)
+                                .parts(vec![Part::text("Doing step 1".to_string())])
+                                .message_id("step-1-msg".to_string())
+                                .build(),
+                        ),
                     ),
-                ),
-                metadata: None,
-            }))),
-            Ok(SeqEvent::new(2, UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
-                task_id: task_id.clone(),
-                context_id: "ctx-1".to_string(),
-                kind: "status-update".to_string(),
-                status: TaskStatus::new(
-                    TaskState::InputRequired,
-                    Some(
-                        Message::builder()
-                            .role(Role::Agent)
-                            .parts(vec![Part::text("Please provide input:".to_string())])
-                            .message_id("elicitation-msg".to_string())
-                            .build(),
+                    metadata: None,
+                }),
+            )),
+            Ok(SeqEvent::new(
+                2,
+                UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+                    task_id: task_id.clone(),
+                    context_id: "ctx-1".to_string(),
+                    kind: "status-update".to_string(),
+                    status: TaskStatus::new(
+                        TaskState::InputRequired,
+                        Some(
+                            Message::builder()
+                                .role(Role::Agent)
+                                .parts(vec![Part::text("Please provide input:".to_string())])
+                                .message_id("elicitation-msg".to_string())
+                                .build(),
+                        ),
                     ),
-                ),
-                metadata: None,
-            }))),
+                    metadata: None,
+                }),
+            )),
         ];
 
         Ok(Box::pin(futures::stream::iter(events)))
@@ -752,14 +758,7 @@ impl a2a_mcp::bridge::agent_to_mcp::BridgeBackend for MockPollingBackend {
         &self,
         _task_id: &str,
     ) -> Result<
-        Option<
-            Pin<
-                Box<
-                    dyn futures::Stream<Item = Result<a2a_rs::StreamItem, A2AError>>
-                        + Send,
-                >,
-            >,
-        >,
+        Option<Pin<Box<dyn futures::Stream<Item = Result<a2a_rs::StreamItem, A2AError>> + Send>>>,
         A2AError,
     > {
         // Return Ok(None) to force polling fallback

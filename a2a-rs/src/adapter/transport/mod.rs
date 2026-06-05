@@ -14,17 +14,17 @@ pub mod jsonrpc;
 /// Wire-compatible JSON-RPC 2.0 client adapter (`impl Transport`).
 #[cfg(feature = "jsonrpc-client")]
 pub mod jsonrpc_client;
+/// Shared JSON-RPC 2.0 wire vocabulary (method names, error codes, envelopes,
+/// error maps) — the byte-for-byte contract between the JSON-RPC server and
+/// client adapters.
+#[cfg(any(feature = "jsonrpc-server", feature = "jsonrpc-client"))]
+pub mod jsonrpc_wire;
 /// Client-side transport negotiation from an agent card.
 #[cfg(feature = "client")]
 pub mod negotiation;
 /// Resilient streaming: reconnect-with-backoff over the `Transport` port.
 #[cfg(feature = "client")]
 pub mod retry;
-/// Shared JSON-RPC 2.0 wire vocabulary (method names, error codes, envelopes,
-/// error maps) — the byte-for-byte contract between the JSON-RPC server and
-/// client adapters.
-#[cfg(any(feature = "jsonrpc-server", feature = "jsonrpc-client"))]
-pub mod jsonrpc_wire;
 
 #[cfg(feature = "server")]
 pub use connectrpc::ConnectRpcAdapter;

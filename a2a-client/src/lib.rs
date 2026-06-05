@@ -246,7 +246,8 @@ impl WebA2AClient {
     pub async fn subscribe(
         &self,
         task_id: &str,
-    ) -> Result<Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, A2AError>> + Send>>> {
+    ) -> Result<Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, A2AError>> + Send>>>
+    {
         self.transport
             .subscribe_to_task(task_id, None, None)
             .await
@@ -270,7 +271,13 @@ impl WebA2AClient {
         task_id: &str,
         policy: RetryPolicy,
     ) -> Pin<Box<dyn Stream<Item = std::result::Result<StreamEvent, A2AError>> + Send>> {
-        subscribe_resilient(self.transport.clone(), task_id.to_string(), None, None, policy)
+        subscribe_resilient(
+            self.transport.clone(),
+            task_id.to_string(),
+            None,
+            None,
+            policy,
+        )
     }
 }
 /// Application state for Axum web applications.

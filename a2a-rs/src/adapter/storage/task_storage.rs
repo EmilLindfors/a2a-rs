@@ -17,7 +17,7 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
-    A2AError, ContextId, Message, Task, TaskPushNotificationConfig, TaskId, TaskState,
+    A2AError, ContextId, Message, Task, TaskId, TaskPushNotificationConfig, TaskState,
     VersionedTask,
 };
 use crate::port::{
@@ -191,7 +191,10 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
         // Create a cancellation message to add to history
         let cancel_message = Message {
             role: ::buffa::EnumValue::from(crate::domain::Role::Agent),
-            parts: vec![crate::domain::Part::text(format!("Task {} canceled.", task_id))],
+            parts: vec![crate::domain::Part::text(format!(
+                "Task {} canceled.",
+                task_id
+            ))],
             message_id: uuid::Uuid::new_v4().to_string(),
             task_id: task_id.to_string(),
             context_id: updated_task.context_id.clone(),
@@ -408,7 +411,11 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
         &self,
         params: &crate::domain::GetTaskPushNotificationConfigParams,
     ) -> Result<TaskPushNotificationConfig, A2AError> {
-        match self.push_notification_registry.get_config(&params.id).await? {
+        match self
+            .push_notification_registry
+            .get_config(&params.id)
+            .await?
+        {
             Some(config) => Ok(config),
             None => Err(A2AError::PushNotificationNotSupported),
         }
@@ -420,7 +427,11 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
     ) -> Result<Vec<TaskPushNotificationConfig>, A2AError> {
         // In-memory storage supports one config per task; return it as a
         // single-item vec (or empty if none registered).
-        match self.push_notification_registry.get_config(&params.id).await? {
+        match self
+            .push_notification_registry
+            .get_config(&params.id)
+            .await?
+        {
             Some(config) => Ok(vec![config]),
             None => Ok(vec![]),
         }
@@ -432,7 +443,9 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
     ) -> Result<(), A2AError> {
         // In-memory storage keeps a single config per task, so config_id is
         // not used for lookup. Idempotent per the v1.0.0 spec.
-        self.push_notification_registry.unregister(&params.id).await?;
+        self.push_notification_registry
+            .unregister(&params.id)
+            .await?;
         Ok(())
     }
 }
@@ -480,7 +493,11 @@ mod tests {
             .unwrap_err();
         assert!(matches!(
             err,
-            A2AError::VersionConflict { expected: 1, actual: 2, .. }
+            A2AError::VersionConflict {
+                expected: 1,
+                actual: 2,
+                ..
+            }
         ));
         assert_eq!(
             store.get(&tid("t1"), None).await.unwrap().status.state,

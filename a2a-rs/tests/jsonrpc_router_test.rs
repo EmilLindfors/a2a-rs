@@ -94,11 +94,15 @@ impl AsyncStreamingHandler for EmptyStreamHandler {
     }
 
     async fn status_update_stream(&self, _task_id: &str) -> Result<StatusStream, A2AError> {
-        Ok(Box::pin(stream::empty::<Result<TaskStatusUpdateEvent, A2AError>>()))
+        Ok(Box::pin(stream::empty::<
+            Result<TaskStatusUpdateEvent, A2AError>,
+        >()))
     }
 
     async fn artifact_update_stream(&self, _task_id: &str) -> Result<ArtifactStream, A2AError> {
-        Ok(Box::pin(stream::empty::<Result<TaskArtifactUpdateEvent, A2AError>>()))
+        Ok(Box::pin(stream::empty::<
+            Result<TaskArtifactUpdateEvent, A2AError>,
+        >()))
     }
 
     async fn combined_update_stream(
@@ -113,9 +117,11 @@ impl AsyncStreamingHandler for EmptyStreamHandler {
 /// An adapter wired with a working (empty) streaming backend.
 fn streaming_adapter() -> Arc<JsonRpcAdapter> {
     let handler = TestBusinessHandler::with_storage(InMemoryTaskStorage::new());
-    let agent_info = SimpleAgentInfo::new("router-test".to_string(), "http://localhost".to_string());
+    let agent_info =
+        SimpleAgentInfo::new("router-test".to_string(), "http://localhost".to_string());
     Arc::new(
-        JsonRpcAdapter::with_handler(handler, agent_info).with_streaming_handler(EmptyStreamHandler),
+        JsonRpcAdapter::with_handler(handler, agent_info)
+            .with_streaming_handler(EmptyStreamHandler),
     )
 }
 
@@ -123,7 +129,8 @@ fn streaming_adapter() -> Arc<JsonRpcAdapter> {
 /// methods emit the initial task snapshot.
 fn adapter() -> Arc<JsonRpcAdapter> {
     let handler = TestBusinessHandler::with_storage(InMemoryTaskStorage::new());
-    let agent_info = SimpleAgentInfo::new("router-test".to_string(), "http://localhost".to_string());
+    let agent_info =
+        SimpleAgentInfo::new("router-test".to_string(), "http://localhost".to_string());
     Arc::new(
         JsonRpcAdapter::with_handler(handler.clone(), agent_info).with_streaming_handler(handler),
     )
@@ -150,7 +157,11 @@ fn post(uri: &str, body: &Value) -> Request<Body> {
 }
 
 fn get(uri: &str) -> Request<Body> {
-    Request::builder().method("GET").uri(uri).body(Body::empty()).unwrap()
+    Request::builder()
+        .method("GET")
+        .uri(uri)
+        .body(Body::empty())
+        .unwrap()
 }
 
 /// Drive a request through the REST router and return `(status, json_body)`.
@@ -164,7 +175,10 @@ async fn rest_call(adapter: &Arc<JsonRpcAdapter>, req: Request<Body>) -> (Status
 
 /// Drive a request through the JSON-RPC router and return `(status, json_body)`.
 async fn jsonrpc_call(adapter: &Arc<JsonRpcAdapter>, body: &Value) -> (StatusCode, Value) {
-    let resp = jsonrpc_router(adapter.clone()).oneshot(post("/", body)).await.unwrap();
+    let resp = jsonrpc_router(adapter.clone())
+        .oneshot(post("/", body))
+        .await
+        .unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
@@ -174,9 +188,20 @@ async fn jsonrpc_call(adapter: &Arc<JsonRpcAdapter>, body: &Value) -> (StatusCod
 /// Read the first SSE event's `data:` payload as JSON, with a timeout so a
 /// keep-alive stream that never yields fails the test rather than hanging.
 async fn first_sse_event(resp: axum::response::Response) -> Value {
-    assert_eq!(resp.status(), StatusCode::OK, "SSE endpoint should return 200");
-    let ct = resp.headers().get(CONTENT_TYPE).and_then(|v| v.to_str().ok()).unwrap_or("");
-    assert!(ct.starts_with("text/event-stream"), "expected SSE content-type, got {ct:?}");
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "SSE endpoint should return 200"
+    );
+    let ct = resp
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        ct.starts_with("text/event-stream"),
+        "expected SSE content-type, got {ct:?}"
+    );
 
     let mut stream = resp.into_body().into_data_stream();
     let mut buf = String::new();
@@ -282,7 +307,10 @@ async fn jsonrpc_stream_frames_events_in_envelopes() {
         "method": "SendStreamingMessage",
         "params": send_message_body("s1"),
     });
-    let resp = jsonrpc_router(a.clone()).oneshot(post("/", &body)).await.unwrap();
+    let resp = jsonrpc_router(a.clone())
+        .oneshot(post("/", &body))
+        .await
+        .unwrap();
     let event = first_sse_event(resp).await;
 
     // JSON-RPC SSE: each event is a full response envelope whose `result` is the
@@ -302,6 +330,9 @@ async fn rest_stream_frames_bare_protojson() {
     let event = first_sse_event(resp).await;
 
     // REST SSE has no envelope: the event data IS the bare `StreamResponse`.
-    assert!(event.get("jsonrpc").is_none(), "REST SSE must not carry a JSON-RPC envelope");
+    assert!(
+        event.get("jsonrpc").is_none(),
+        "REST SSE must not carry a JSON-RPC envelope"
+    );
     assert_eq!(event["task"]["id"], "s2");
 }

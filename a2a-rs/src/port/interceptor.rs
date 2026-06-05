@@ -47,7 +47,10 @@ pub struct CallContext {
 impl CallContext {
     /// Construct a context for `method` on the given `side`.
     pub fn new(method: impl Into<String>, side: CallSide) -> Self {
-        Self { method: method.into(), side }
+        Self {
+            method: method.into(),
+            side,
+        }
     }
 }
 

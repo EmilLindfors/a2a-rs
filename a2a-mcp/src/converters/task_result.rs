@@ -156,11 +156,13 @@ mod tests {
             .id("task-1".to_string())
             .context_id("ctx-1".to_string())
             .status(TaskStatus::new(TaskState::TASK_STATE_COMPLETED, None))
-            .history(vec![Message::builder()
-                .role(Role::Agent)
-                .parts(vec![Part::text("Result text".to_string())])
-                .message_id("msg-1".to_string())
-                .build()])
+            .history(vec![
+                Message::builder()
+                    .role(Role::Agent)
+                    .parts(vec![Part::text("Result text".to_string())])
+                    .message_id("msg-1".to_string())
+                    .build(),
+            ])
             .artifacts(vec![Artifact {
                 artifact_id: "art-1".to_string(),
                 name: "Test Artifact".to_string(),
@@ -183,11 +185,13 @@ mod tests {
             .id("task-2".to_string())
             .context_id("ctx-2".to_string())
             .status(TaskStatus::new(TaskState::TASK_STATE_FAILED, None))
-            .history(vec![Message::builder()
-                .role(Role::Agent)
-                .parts(vec![Part::text("Error details".to_string())])
-                .message_id("msg-2".to_string())
-                .build()])
+            .history(vec![
+                Message::builder()
+                    .role(Role::Agent)
+                    .parts(vec![Part::text("Error details".to_string())])
+                    .message_id("msg-2".to_string())
+                    .build(),
+            ])
             .build();
 
         let result = TaskResultConverter::task_to_result(&task).unwrap();

@@ -37,7 +37,10 @@ async fn connect_discovers_tools() {
 
     let tools = mcp.list_server_tools("echo").await.expect("echo tools");
     let names: Vec<&str> = tools.iter().map(|t| t.name.as_ref()).collect();
-    assert!(names.contains(&"echo"), "expected `echo` tool, got {names:?}");
+    assert!(
+        names.contains(&"echo"),
+        "expected `echo` tool, got {names:?}"
+    );
     assert!(names.contains(&"add"), "expected `add` tool, got {names:?}");
 }
 
@@ -90,6 +93,8 @@ async fn disabled_config_yields_empty_manager() {
         enabled: false,
         servers: Vec::new(),
     };
-    let mcp = McpClientManager::connect(&cfg).await.expect("empty manager");
+    let mcp = McpClientManager::connect(&cfg)
+        .await
+        .expect("empty manager");
     assert!(mcp.connected_servers().await.is_empty());
 }

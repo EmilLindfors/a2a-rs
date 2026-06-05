@@ -98,7 +98,11 @@ impl ToolCallAccumulator {
 
     /// Drain every accumulated call as a [`ToolCall`], clearing the accumulator.
     pub fn drain_completed(&mut self) -> Vec<ToolCall> {
-        let out = self.calls.iter().map(PartialToolCall::to_tool_call).collect();
+        let out = self
+            .calls
+            .iter()
+            .map(PartialToolCall::to_tool_call)
+            .collect();
         self.calls.clear();
         out
     }

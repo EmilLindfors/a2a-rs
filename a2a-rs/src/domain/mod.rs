@@ -25,7 +25,7 @@ pub use core::{
 pub use error::{A2AError, Result};
 pub use error_details::{ErrorDetail, ErrorInfo, FieldViolation};
 pub use events::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
+pub use generated::{o_auth_flows, security_scheme};
 pub use ids::{ContextId, PushConfigId, TaskId};
 pub use retry::RetryPolicy;
-pub use generated::{o_auth_flows, security_scheme};
 pub use validation::{Validate, ValidationResult};

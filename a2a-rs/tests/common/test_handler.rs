@@ -193,7 +193,9 @@ impl AsyncStreamingHandler for TestBusinessHandler {
         task_id: &str,
         update: TaskStatusUpdateEvent,
     ) -> Result<(), A2AError> {
-        self.streaming.broadcast_status_update(task_id, update).await
+        self.streaming
+            .broadcast_status_update(task_id, update)
+            .await
     }
 
     async fn broadcast_artifact_update(

@@ -813,7 +813,13 @@ mod tests {
         let http = &config.features.mcp_server.http;
         assert_eq!(
             http.allowed_hosts.as_deref(),
-            Some(["mcp.example.com".to_string(), "mcp.example.com:8000".to_string()].as_slice())
+            Some(
+                [
+                    "mcp.example.com".to_string(),
+                    "mcp.example.com:8000".to_string()
+                ]
+                .as_slice()
+            )
         );
         assert_eq!(
             http.allowed_origins.as_deref(),

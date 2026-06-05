@@ -546,7 +546,9 @@ mod sqlx_tests {
             .update_status_checked(&tid(&task_id), 1, TaskState::Completed, None)
             .await;
         match stale {
-            Err(A2AError::VersionConflict { expected, actual, .. }) => {
+            Err(A2AError::VersionConflict {
+                expected, actual, ..
+            }) => {
                 assert_eq!(expected, 1);
                 assert_eq!(actual, 2);
             }

@@ -131,7 +131,9 @@ impl TaskService {
     ) -> Result<Task, A2AError> {
         if let Some(mut push_config) = push_config {
             push_config.task_id = task_id.to_string();
-            self.notification_manager.set_validated(&push_config).await?;
+            self.notification_manager
+                .set_validated(&push_config)
+                .await?;
         }
 
         let mut task = self
@@ -162,7 +164,9 @@ impl TaskService {
     ) -> Result<(Task, UpdateStream), A2AError> {
         if let Some(mut push_config) = push_config {
             push_config.task_id = task_id.to_string();
-            self.notification_manager.set_validated(&push_config).await?;
+            self.notification_manager
+                .set_validated(&push_config)
+                .await?;
         }
 
         // Start updates stream first so we don't miss early updates.

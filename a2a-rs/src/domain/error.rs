@@ -78,9 +78,7 @@ pub enum A2AError {
     #[error("Validation error in {field}: {message}")]
     ValidationError { field: String, message: String },
 
-    #[error(
-        "Version conflict for task {id}: expected {expected}, found {actual}"
-    )]
+    #[error("Version conflict for task {id}: expected {expected}, found {actual}")]
     VersionConflict {
         id: String,
         expected: u64,
@@ -174,7 +172,11 @@ impl A2AError {
                 },
                 ErrorDetail::reason(self.reason_code()),
             ],
-            A2AError::VersionConflict { id, expected, actual } => {
+            A2AError::VersionConflict {
+                id,
+                expected,
+                actual,
+            } => {
                 let mut info = crate::domain::error_details::ErrorInfo::new(self.reason_code());
                 info = info
                     .with_metadata("task_id", id)

@@ -130,8 +130,14 @@ fn card(interfaces: Vec<AgentInterface>) -> AgentCard {
 #[tokio::test]
 async fn prefers_client_order_over_card_order() {
     let negotiator = TransportNegotiator::new()
-        .with(FakeFactory { proto: "CONNECTRPC", fail: false })
-        .with(FakeFactory { proto: "JSONRPC", fail: false });
+        .with(FakeFactory {
+            proto: "CONNECTRPC",
+            fail: false,
+        })
+        .with(FakeFactory {
+            proto: "JSONRPC",
+            fail: false,
+        });
     // Card lists JSONRPC first, but the client prefers CONNECTRPC.
     let c = card(vec![iface("JSONRPC", "1.0"), iface("CONNECTRPC", "1.0")]);
     let transport = negotiator.negotiate(&c).await.unwrap();
@@ -141,8 +147,14 @@ async fn prefers_client_order_over_card_order() {
 #[tokio::test]
 async fn falls_through_on_create_failure() {
     let negotiator = TransportNegotiator::new()
-        .with(FakeFactory { proto: "CONNECTRPC", fail: true })
-        .with(FakeFactory { proto: "JSONRPC", fail: false });
+        .with(FakeFactory {
+            proto: "CONNECTRPC",
+            fail: true,
+        })
+        .with(FakeFactory {
+            proto: "JSONRPC",
+            fail: false,
+        });
     let c = card(vec![iface("CONNECTRPC", "1.0"), iface("JSONRPC", "1.0")]);
     let transport = negotiator.negotiate(&c).await.unwrap();
     assert_eq!(transport.protocol(), "JSONRPC");
@@ -150,21 +162,32 @@ async fn falls_through_on_create_failure() {
 
 #[tokio::test]
 async fn unknown_protocol_errors() {
-    let negotiator = TransportNegotiator::new().with(FakeFactory { proto: "JSONRPC", fail: false });
+    let negotiator = TransportNegotiator::new().with(FakeFactory {
+        proto: "JSONRPC",
+        fail: false,
+    });
     // `Box<dyn Transport>` isn't `Debug`, so match the Result rather than `unwrap_err`.
-    let result = negotiator.negotiate(&card(vec![iface("GRPC", "1.0")])).await;
+    let result = negotiator
+        .negotiate(&card(vec![iface("GRPC", "1.0")]))
+        .await;
     assert!(matches!(result, Err(A2AError::UnsupportedOperation(_))));
 }
 
 #[tokio::test]
 async fn empty_interfaces_errors() {
-    let negotiator = TransportNegotiator::new().with(FakeFactory { proto: "JSONRPC", fail: false });
+    let negotiator = TransportNegotiator::new().with(FakeFactory {
+        proto: "JSONRPC",
+        fail: false,
+    });
     assert!(negotiator.negotiate(&card(vec![])).await.is_err());
 }
 
 #[tokio::test]
 async fn skips_incompatible_major_version() {
-    let negotiator = TransportNegotiator::new().with(FakeFactory { proto: "JSONRPC", fail: false });
+    let negotiator = TransportNegotiator::new().with(FakeFactory {
+        proto: "JSONRPC",
+        fail: false,
+    });
     // v2.x is not compatible with this client.
     assert!(
         negotiator
@@ -183,8 +206,14 @@ async fn skips_incompatible_major_version() {
 #[test]
 fn supported_lists_protocols_in_preference_order() {
     let negotiator = TransportNegotiator::new()
-        .with(FakeFactory { proto: "CONNECTRPC", fail: false })
-        .with(FakeFactory { proto: "JSONRPC", fail: false });
+        .with(FakeFactory {
+            proto: "CONNECTRPC",
+            fail: false,
+        })
+        .with(FakeFactory {
+            proto: "JSONRPC",
+            fail: false,
+        });
     assert_eq!(
         negotiator.supported().collect::<Vec<_>>(),
         vec!["CONNECTRPC", "JSONRPC"]

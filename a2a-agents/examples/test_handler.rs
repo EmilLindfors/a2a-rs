@@ -15,8 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handler (streaming and push are separate ports).
     let task_storage = InMemoryTaskStorage::new();
     let push = task_storage.push_notifier();
-    let handler =
-        ReimbursementHandler::new(task_storage, InMemoryStreamingHandler::new(), push);
+    let handler = ReimbursementHandler::new(task_storage, InMemoryStreamingHandler::new(), push);
 
     println!("=== Testing Reimbursement Handler ===\n");
 
