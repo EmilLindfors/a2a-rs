@@ -60,6 +60,4 @@ commit_parsers = [
   { message = "^chore", skip = true },
   { message = ".*", group = "Other" },
 ]
-# Drop merge commits.
-filter_commits = false
 protect_breaking_commits = true
