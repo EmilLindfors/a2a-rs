@@ -154,7 +154,6 @@ dependencies = [
  "buffa",
  "futures",
  "futures-util",
- "reqwest",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
@@ -162,6 +161,21 @@ dependencies = [
  "tracing",
  "uuid",
  "wiremock",
+]
+
+[[package]]
+name = "a2acli"
+version = "0.4.0"
+dependencies = [
+ "a2a-rs",
+ "anyhow",
+ "clap",
+ "futures",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]

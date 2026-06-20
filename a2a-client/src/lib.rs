@@ -220,19 +220,13 @@ impl WebA2AClient {
     /// # }
     /// ```
     pub async fn auto_connect(base_url: &str) -> Result<Self> {
-        // Validate URL format up front so a malformed URL is a hard error.
-        let _ = reqwest::Url::parse(base_url).map_err(|e| ClientError::InvalidUrl {
-            url: base_url.to_string(),
-            reason: e.to_string(),
-        })?;
-
-        match a2a_rs::connect(base_url, &a2a_rs::default_registry()).await {
-            Ok(transport) => Ok(Self {
-                transport: Arc::from(transport),
-            }),
-            // Card fetch / negotiation failed — fall back to a direct ConnectRPC client.
-            Err(_) => Ok(Self::new_http(base_url.to_string())),
-        }
+        // Delegates to the shared `a2a_rs::auto_connect` (URL-validate → negotiate
+        // → direct-client fallback); the CLI and this web client are siblings on
+        // that one entry point.
+        let transport = a2a_rs::auto_connect(base_url).await?;
+        Ok(Self {
+            transport: Arc::from(transport),
+        })
     }
 
     /// Subscribe to a task's updates as a protocol-neutral stream of
@@ -432,14 +426,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_auto_connect_invalid_url() {
-        let result = WebA2AClient::auto_connect("invalid-url-no-scheme").await;
-        assert!(result.is_err());
-        match result {
-            Err(ClientError::InvalidUrl { url, reason }) => {
-                assert_eq!(url, "invalid-url-no-scheme");
-                assert!(!reason.is_empty());
+        // URL validation now lives in `a2a_rs::auto_connect`, so a malformed URL
+        // surfaces as an `A2AError::InvalidParams` wrapped in `ClientError::A2AError`.
+        // `WebA2AClient` isn't `Debug`, so discard the Ok value before matching.
+        let err = WebA2AClient::auto_connect("invalid-url-no-scheme")
+            .await
+            .err()
+            .expect("malformed url should error");
+        match err {
+            ClientError::A2AError(A2AError::InvalidParams(msg)) => {
+                assert!(msg.contains("invalid-url-no-scheme"), "got {msg}");
             }
-            _ => panic!("Expected ClientError::InvalidUrl"),
+            other => panic!("Expected ClientError::A2AError(InvalidParams), got {other:?}"),
         }
     }
 }
