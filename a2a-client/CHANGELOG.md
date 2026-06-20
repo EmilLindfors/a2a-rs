@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- *(a2a-web-client)* `WebA2AClient::auto_connect` now delegates to `a2a_rs::auto_connect` (shared entry point); a malformed URL surfaces as `A2AError::InvalidParams`. Dropped the now-unused `reqwest` dependency.
+
 ## [0.4.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.3.0...a2a-web-client-v0.4.0) - 2026-06-05
 
 ### Added
