@@ -167,6 +167,43 @@ pub async fn connect(
     negotiator.negotiate(&card).await
 }
 
+/// Validate `base_url`, negotiate a transport from the agent card, and fall back
+/// to a direct client when the card can't be fetched or none of its interfaces
+/// match a compiled-in transport.
+///
+/// This is the one-call ergonomic entry point shared by the CLI and the web
+/// client: it validates the URL up front (so a malformed URL is a hard error),
+/// tries [`connect`] with the [`default_registry`], and on any negotiation miss
+/// falls back to a direct client on `base_url` so the call still works against a
+/// bare agent URL with no published card. The fallback prefers the in-tree
+/// ConnectRPC transport, using JSON-RPC 2.0 when ConnectRPC isn't compiled in.
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+pub async fn auto_connect(base_url: &str) -> Result<Box<dyn Transport>, A2AError> {
+    // Validate URL format up front so a malformed URL is a hard error rather
+    // than a silent fallback to a client that will fail on first request.
+    reqwest::Url::parse(base_url)
+        .map_err(|e| A2AError::InvalidParams(format!("invalid url {base_url}: {e}")))?;
+
+    match connect(base_url, &default_registry()).await {
+        Ok(transport) => Ok(transport),
+        // Card fetch / negotiation failed — fall back to a direct client.
+        Err(_) => Ok(direct_transport(base_url)),
+    }
+}
+
+/// Build a direct client on `base_url`, preferring ConnectRPC when compiled in.
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+fn direct_transport(base_url: &str) -> Box<dyn Transport> {
+    #[cfg(feature = "http-client")]
+    {
+        Box::new(super::http::HttpClient::new(base_url.to_string()))
+    }
+    #[cfg(all(not(feature = "http-client"), feature = "jsonrpc-client"))]
+    {
+        Box::new(super::jsonrpc_client::JsonRpcClient::new(base_url.to_string()))
+    }
+}
+
 /// Fetch an [`AgentCard`] from the agent's well-known endpoint (plain HTTP GET).
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 pub async fn fetch_agent_card(base_url: &str) -> Result<AgentCard, A2AError> {
@@ -191,4 +228,48 @@ pub async fn fetch_agent_card(base_url: &str) -> Result<AgentCard, A2AError> {
     Err(A2AError::Internal(format!(
         "Agent card not found at {base_url}"
     )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_v2_interface() {
+        assert!(version_compatible("1.0"));
+        assert!(version_compatible("")); // unspecified accepted
+        assert!(!version_compatible("2.0"));
+    }
+
+    #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+    #[tokio::test]
+    async fn auto_connect_rejects_malformed_url() {
+        // `Box<dyn Transport>` isn't `Debug`, so match rather than `unwrap_err`.
+        match auto_connect("not-a-url").await {
+            Err(A2AError::InvalidParams(_)) => {}
+            Err(other) => panic!("wrong error: {other:?}"),
+            Ok(_) => panic!("expected an error for a malformed url"),
+        }
+    }
+
+    // A well-formed URL with no agent published there: card fetch fails, so
+    // `auto_connect` must fall back to a direct client rather than erroring.
+    // Port 1 is reserved/unroutable, so the GET fails fast.
+    #[cfg(feature = "http-client")]
+    #[tokio::test]
+    async fn auto_connect_falls_back_to_direct_connectrpc() {
+        let transport = auto_connect("http://127.0.0.1:1")
+            .await
+            .expect("fallback yields a direct transport");
+        assert_eq!(transport.protocol(), "CONNECTRPC");
+    }
+
+    #[cfg(all(not(feature = "http-client"), feature = "jsonrpc-client"))]
+    #[tokio::test]
+    async fn auto_connect_falls_back_to_direct_jsonrpc() {
+        let transport = auto_connect("http://127.0.0.1:1")
+            .await
+            .expect("fallback yields a direct transport");
+        assert_eq!(transport.protocol(), "JSONRPC");
+    }
 }

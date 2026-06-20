@@ -33,9 +33,6 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 thiserror = { workspace = true }
 
-# Reqwest for URL parsing and handling
-reqwest = { workspace = true }
-
 # Logging
 tracing = { workspace = true }
 
