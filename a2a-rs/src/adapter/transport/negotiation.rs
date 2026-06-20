@@ -200,7 +200,9 @@ fn direct_transport(base_url: &str) -> Box<dyn Transport> {
     }
     #[cfg(all(not(feature = "http-client"), feature = "jsonrpc-client"))]
     {
-        Box::new(super::jsonrpc_client::JsonRpcClient::new(base_url.to_string()))
+        Box::new(super::jsonrpc_client::JsonRpcClient::new(
+            base_url.to_string(),
+        ))
     }
 }
 

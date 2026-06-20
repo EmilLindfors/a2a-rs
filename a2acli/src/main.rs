@@ -30,7 +30,13 @@ struct Cli {
     /// Base URL of the A2A agent (e.g. http://localhost:8137).
     ///
     /// Falls back to the `A2A_URL` environment variable when omitted.
-    #[arg(short, long, env = "A2A_URL", visible_alias = "base-url", global = true)]
+    #[arg(
+        short,
+        long,
+        env = "A2A_URL",
+        visible_alias = "base-url",
+        global = true
+    )]
     url: Option<String>,
 
     /// Bearer token for authenticated agents.
@@ -319,10 +325,7 @@ fn emit_event(json: bool, event: &StreamEvent) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let id = event
-        .event_id
-        .map(|n| format!("#{n} "))
-        .unwrap_or_default();
+    let id = event.event_id.map(|n| format!("#{n} ")).unwrap_or_default();
     match kind {
         "task" => println!(
             "{id}● task {} [{}]",
@@ -344,11 +347,17 @@ fn emit_event(json: bool, event: &StreamEvent) -> anyhow::Result<()> {
 // --- small JSON helpers ------------------------------------------------------
 
 fn str_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
-    value.get(key).and_then(Value::as_str).filter(|s| !s.is_empty())
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
 }
 
 fn array_field<'a>(value: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
-    value.get(key).and_then(Value::as_array).filter(|a| !a.is_empty())
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .filter(|a| !a.is_empty())
 }
 
 /// A task's `status.state`, e.g. `"TASK_STATE_SUBMITTED"`.
