@@ -15,7 +15,7 @@ use std::time::Duration;
 /// use a2a_agents_common::caching::AgentCache;
 /// use std::time::Duration;
 ///
-/// #[tokio::main]
+/// #[tokio::main(flavor = "current_thread")]
 /// async fn main() {
 ///     let cache = AgentCache::<&'static str, &'static str>::new()
 ///         .with_max_capacity(1000)
