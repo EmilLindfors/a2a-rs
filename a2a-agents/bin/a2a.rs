@@ -7,9 +7,7 @@
 use a2a_agents::agents::reimbursement::ReimbursementHandler;
 use a2a_agents::core::AgentBuilder;
 use a2a_agents::core::builder::AutoStorage;
-use a2a_agents_common::llm::LlmProvider;
-use a2a_agents_common::llm::gemini::{GeminiConfig, GeminiProvider};
-use a2a_agents_common::llm::openai::{OpenAiConfig, OpenAiProvider};
+use a2a_agents_common::llm::{LlmProvider, LlmSettings, provider_from_env, provider_from_settings};
 
 use a2a_rs::{
     InMemoryStreamingHandler,
@@ -124,54 +122,27 @@ async fn main() -> anyhow::Result<()> {
                     let storage =
                         AutoStorage::from_config(&builder.config().server.storage).await?;
 
-                    // Initialize LLM from config if provided
-                    let mut llm_provider: Option<Arc<dyn LlmProvider>> = None;
-                    if let Some(llm_config) = &builder.config().llm {
-                        info!(
-                            "Loading LLM configuration from TOML (provider: {})",
-                            llm_config.provider
-                        );
-                        match llm_config.provider.as_str() {
-                            "openai" => {
-                                let openai_config = OpenAiConfig {
-                                    base_url: llm_config
-                                        .base_url
-                                        .clone()
-                                        .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-                                    model: llm_config
-                                        .model
-                                        .clone()
-                                        .unwrap_or_else(|| "gpt-4o-mini".to_string()),
-                                    api_key: llm_config.api_key.clone(),
-                                };
-                                llm_provider = Some(Arc::new(OpenAiProvider::new(openai_config)));
-                            }
-                            "gemini" => {
-                                let gemini_config = GeminiConfig {
-                                    base_url: llm_config.base_url.clone().unwrap_or_else(|| "https://generativelanguage.googleapis.com/v1beta/models".to_string()),
-                                    api_key: llm_config.api_key.clone().unwrap_or_default(),
-                                    model: llm_config.model.clone().unwrap_or_else(|| "gemini-1.5-pro".to_string()),
-                                };
-                                llm_provider = Some(Arc::new(GeminiProvider::new(gemini_config)));
-                            }
-                            other => {
-                                warn!("Unsupported LLM provider in config: {}", other);
-                            }
-                        }
-                    } else {
-                        // Fallback to environment variables if no config is provided
-                        if let Ok(gemini) = GeminiProvider::from_env() {
-                            info!("Gemini client initialized successfully from environment");
-                            llm_provider = Some(Arc::new(gemini));
-                        } else if let Ok(openai) = OpenAiProvider::from_env() {
-                            info!("OpenAI client initialized successfully from environment");
-                            llm_provider = Some(Arc::new(openai));
-                        } else {
-                            warn!(
-                                "Failed to initialize any AI client. Conversational features will be disabled."
+                    // Initialize LLM from config if provided, else from the env.
+                    let llm_provider: Option<Arc<dyn LlmProvider>> = match &builder.config().llm {
+                        Some(llm_config) => {
+                            info!(
+                                "Loading LLM configuration from TOML (provider: {})",
+                                llm_config.provider
                             );
+                            let settings = LlmSettings {
+                                provider: llm_config.provider.clone(),
+                                api_key: llm_config.api_key.clone(),
+                                model: llm_config.model.clone(),
+                                base_url: llm_config.base_url.clone(),
+                                http_referer: llm_config.http_referer.clone(),
+                                x_title: llm_config.x_title.clone(),
+                            };
+                            Some(provider_from_settings(&settings).map_err(|e| {
+                                anyhow::anyhow!("invalid LLM configuration: {e}")
+                            })?)
                         }
-                    }
+                        None => provider_from_env(),
+                    };
 
                     let streaming = InMemoryStreamingHandler::new();
                     let push = storage.push_notifier();
