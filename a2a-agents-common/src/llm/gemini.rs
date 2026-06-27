@@ -358,6 +358,7 @@ impl LlmProvider for GeminiProvider {
         Ok(LlmResponse {
             content: message_content,
             tool_calls,
+            reasoning: None,
         })
     }
 

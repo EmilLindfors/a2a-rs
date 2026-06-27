@@ -5,8 +5,10 @@ use serde_json::Value;
 
 pub mod gemini;
 pub mod openai;
+pub mod provider;
 pub mod tool_call;
 
+pub use provider::{LlmSettings, provider_from_env, provider_from_settings};
 pub use tool_call::{PartialToolCall, ToolCallAccumulator};
 
 /// Represents an error returned by an LLM provider.
@@ -108,6 +110,49 @@ impl ChatMessage {
     }
 }
 
+/// How hard a reasoning model should think, when reasoning is requested.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffort {
+    /// The wire token used by OpenRouter's `reasoning.effort`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReasoningEffort::Low => "low",
+            ReasoningEffort::Medium => "medium",
+            ReasoningEffort::High => "high",
+        }
+    }
+}
+
+/// Opt-in reasoning controls for reasoning-capable models (e.g. GLM via
+/// OpenRouter). When set on an [`LlmRequest`], a supporting provider returns its
+/// thinking on a separate channel (surfaced as [`LlmResponse::reasoning`] /
+/// [`LlmStreamEvent::Reasoning`]). Providers that don't support it ignore this.
+#[derive(Debug, Clone, Default)]
+pub struct ReasoningConfig {
+    /// Reasoning effort. Mutually exclusive with `max_tokens` on most providers.
+    pub effort: Option<ReasoningEffort>,
+    /// Hard cap on reasoning tokens.
+    pub max_tokens: Option<u32>,
+    /// Let the model reason internally but omit the reasoning from the response.
+    pub exclude: bool,
+}
+
+impl ReasoningConfig {
+    /// Request reasoning at the given effort level.
+    pub fn effort(effort: ReasoningEffort) -> Self {
+        Self {
+            effort: Some(effort),
+            ..Default::default()
+        }
+    }
+}
+
 /// A request to an LLM provider for chat completion.
 #[derive(Debug, Clone)]
 pub struct LlmRequest {
@@ -116,6 +161,8 @@ pub struct LlmRequest {
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub force_json: bool,
+    /// Opt-in reasoning controls; `None` leaves provider defaults untouched.
+    pub reasoning: Option<ReasoningConfig>,
 }
 
 impl LlmRequest {
@@ -126,7 +173,13 @@ impl LlmRequest {
             temperature: None,
             max_tokens: None,
             force_json: false,
+            reasoning: None,
         }
+    }
+
+    pub fn reasoning(mut self, config: ReasoningConfig) -> Self {
+        self.reasoning = Some(config);
+        self
     }
 
     pub fn temperature(mut self, temp: f32) -> Self {
@@ -155,12 +208,19 @@ impl LlmRequest {
 pub struct LlmResponse {
     pub content: Option<String>,
     pub tool_calls: Option<Vec<ToolCall>>,
+    /// Reasoning-model "thinking" text, when the provider exposes it separately
+    /// from the answer (e.g. OpenRouter's `reasoning`, Zhipu/GLM's
+    /// `reasoning_content`). `None` for providers that don't surface it.
+    pub reasoning: Option<String>,
 }
 
 /// An event emitted during a streaming LLM response.
 #[derive(Debug, Clone)]
 pub enum LlmStreamEvent {
     ContentChunk(String),
+    /// A chunk of reasoning-model "thinking" text, distinct from the answer
+    /// content (e.g. OpenRouter's `reasoning` / Zhipu's `reasoning_content`).
+    Reasoning(String),
     ToolCallChunk {
         id: String,
         name: Option<String>,
