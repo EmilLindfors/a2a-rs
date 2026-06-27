@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.4.0...a2a-rs-v0.4.1) - 2026-06-27
+
+### Added
+
+- *(a2acli)* Add A2A command-line client + promote auto_connect into a2a-rs
+
+### Documentation
+
+- *(changelog)* Note a2acli, auto_connect, and the web-client delegation
+
 ### Added
 
 - *(a2a-rs)* `auto_connect` — URL-validate → card-driven negotiation → direct-client fallback, shared by the CLI and web client (behind the client features)
