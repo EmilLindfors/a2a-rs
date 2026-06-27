@@ -42,7 +42,8 @@ use std::sync::Arc;
 
 use a2a_agents::core::AgentBuilder;
 use a2a_agents_common::llm::{
-    ChatMessage, LlmProvider, LlmRequest, MessageRole, ToolCall, ToolDefinition,
+    ChatMessage, LlmProvider, LlmRequest, LlmStreamEvent, MessageRole, ReasoningConfig,
+    ReasoningEffort, ToolCall, ToolCallAccumulator, ToolDefinition,
 };
 use a2a_mcp::McpToA2ABridge;
 use a2a_rs::Artifact;
@@ -254,11 +255,22 @@ impl ResearchAssistantHandler {
         }
     }
 
-    /// Push an incremental progress artifact to any SSE subscriber.
-    async fn stream_progress(&self, task_id: &str, context_id: &str, text: &str) {
+    /// Broadcast one appending chunk of a named artifact to SSE subscribers.
+    ///
+    /// Chunks sharing an `artifact_id` accumulate client-side (the UI appends
+    /// `append: true` parts into the same bubble), so token-by-token content and
+    /// reasoning render live.
+    async fn stream_artifact(
+        &self,
+        task_id: &str,
+        context_id: &str,
+        artifact_id: &str,
+        name: &str,
+        text: &str,
+    ) {
         let artifact = Artifact {
-            artifact_id: format!("progress-{task_id}"),
-            name: "progress".to_string(),
+            artifact_id: artifact_id.to_string(),
+            name: name.to_string(),
             description: String::new(),
             parts: vec![Part::text(text.to_string())],
             metadata: ::buffa::MessageField::none(),
@@ -279,12 +291,26 @@ impl ResearchAssistantHandler {
             .broadcast_artifact_update(task_id, event)
             .await
         {
-            tracing::warn!("failed to broadcast progress: {e}");
+            tracing::warn!("failed to broadcast artifact: {e}");
         }
     }
 
+    /// Push a discrete progress line (status, tool calls) to SSE subscribers.
+    async fn stream_progress(&self, task_id: &str, context_id: &str, text: &str) {
+        self.stream_artifact(
+            task_id,
+            context_id,
+            &format!("progress-{task_id}"),
+            "progress",
+            text,
+        )
+        .await;
+    }
+
     /// LLM path: let the model pick tools, execute them via the bridge, loop
-    /// until it answers in prose.
+    /// until it answers in prose. Each round is **streamed** — reasoning and
+    /// answer tokens are broadcast to SSE subscribers as they arrive, so the UI
+    /// fills in live instead of stalling for the whole completion.
     async fn run_with_llm(
         &self,
         llm: &dyn LlmProvider,
@@ -292,60 +318,113 @@ impl ResearchAssistantHandler {
         context_id: &str,
         user_text: &str,
     ) -> Result<String, A2AError> {
+        use futures::StreamExt;
+
         let tools: Vec<ToolDefinition> = self.bridge.get_llm_tools();
         let mut messages = vec![
             ChatMessage::system(SYSTEM_PROMPT),
             ChatMessage::user(user_text),
         ];
+        // GLM and other OpenRouter reasoning models only return their thinking on
+        // a separate channel when asked. Gate on the same signal
+        // `provider_from_env` uses to pick OpenRouter, so a plain-OpenAI run
+        // never sends the (OpenRouter-specific) `reasoning` param.
+        let reasoning_enabled = std::env::var("OPENROUTER_API_KEY").is_ok();
 
-        for _round in 0..MAX_TOOL_ROUNDS {
+        for round in 0..MAX_TOOL_ROUNDS {
             let mut request = LlmRequest::new(messages.clone()).temperature(0.2);
             if !tools.is_empty() {
                 request = request.tools(tools.clone());
             }
+            if reasoning_enabled {
+                request = request.reasoning(ReasoningConfig::effort(ReasoningEffort::High));
+            }
 
-            let response = llm
-                .chat_completion(request)
+            let mut stream = llm
+                .chat_completion_stream(request)
                 .await
                 .map_err(|e| A2AError::Internal(format!("LLM error: {e}")))?;
 
-            match response.tool_calls {
-                Some(calls) if !calls.is_empty() => {
-                    // Record the assistant turn that requested the tools…
-                    messages.push(ChatMessage {
-                        role: MessageRole::Assistant,
-                        content: response.content.clone(),
-                        tool_calls: Some(calls.clone()),
-                        tool_call_id: None,
-                        name: None,
-                    });
-                    // …then execute each tool against MCP and feed results back.
-                    for call in &calls {
-                        self.stream_progress(
+            // Stable per-round ids so chunks accumulate into one bubble each.
+            let thinking_id = format!("thinking-{task_id}-{round}");
+            let answer_id = format!("answer-{task_id}-{round}");
+            let mut content = String::new();
+            let mut reasoning = String::new();
+            let mut calls = ToolCallAccumulator::new();
+
+            while let Some(event) = stream.next().await {
+                match event.map_err(|e| A2AError::Internal(format!("LLM stream error: {e}")))? {
+                    LlmStreamEvent::Reasoning(chunk) => {
+                        reasoning.push_str(&chunk);
+                        self.stream_artifact(
                             task_id,
                             context_id,
-                            &format!("🛠️ calling `{}`({})", call.name, call.arguments),
+                            &thinking_id,
+                            "AI Thinking...",
+                            &chunk,
                         )
                         .await;
-                        let result = self
-                            .bridge
-                            .execute_llm_tool_call(task_id, call)
-                            .await
-                            .map_err(|e| e.to_a2a_error())?;
-                        self.stream_progress(
-                            task_id,
-                            context_id,
-                            &format!("✅ `{}` → {result}", call.name),
-                        )
-                        .await;
-                        messages.push(ChatMessage::tool_result(
-                            call.id.clone(),
-                            call.name.clone(),
-                            result,
-                        ));
+                    }
+                    LlmStreamEvent::ContentChunk(chunk) => {
+                        content.push_str(&chunk);
+                        self.stream_artifact(task_id, context_id, &answer_id, "AI Answer", &chunk)
+                            .await;
+                    }
+                    LlmStreamEvent::ToolCallChunk {
+                        id,
+                        name,
+                        arguments,
+                    } => {
+                        calls.push(&id, name.as_deref(), &arguments);
+                    }
+                    LlmStreamEvent::ToolCall(call) => {
+                        calls.finalize(call);
                     }
                 }
-                _ => return Ok(response.content.unwrap_or_default()),
+            }
+
+            if !reasoning.trim().is_empty() {
+                let preview: String = reasoning.chars().take(280).collect();
+                tracing::info!(has_reasoning = true, "💭 reasoning: {preview}");
+            }
+
+            let calls = calls.drain_completed();
+            if calls.is_empty() {
+                return Ok(content);
+            }
+
+            // Record the assistant turn that requested the tools…
+            messages.push(ChatMessage {
+                role: MessageRole::Assistant,
+                content: (!content.is_empty()).then_some(content),
+                tool_calls: Some(calls.clone()),
+                tool_call_id: None,
+                name: None,
+            });
+            // …then execute each tool against MCP and feed results back.
+            for call in &calls {
+                self.stream_progress(
+                    task_id,
+                    context_id,
+                    &format!("🛠️ calling `{}`({})", call.name, call.arguments),
+                )
+                .await;
+                let result = self
+                    .bridge
+                    .execute_llm_tool_call(task_id, call)
+                    .await
+                    .map_err(|e| e.to_a2a_error())?;
+                self.stream_progress(
+                    task_id,
+                    context_id,
+                    &format!("✅ `{}` → {result}", call.name),
+                )
+                .await;
+                messages.push(ChatMessage::tool_result(
+                    call.id.clone(),
+                    call.name.clone(),
+                    result,
+                ));
             }
         }
         Ok("I couldn't converge on an answer within the tool-call budget.".to_string())
@@ -439,37 +518,58 @@ impl AsyncMessageHandler for ResearchAssistantHandler {
         }
         let context_id = self.lifecycle.get(&id, Some(1)).await?.context_id.clone();
 
-        // Record the user's message and move to Working — broadcast both.
-        self.update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
+        // Record the user's message and move to Working — broadcast both. The
+        // returned `Working` task is what the unary caller gets back immediately.
+        let working = self
+            .update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
             .await?;
-        self.stream_progress(task_id, &context_id, "🔎 Analyzing your request…")
-            .await;
 
+        // Run the LLM/tool loop on a background task so the unary `send` returns
+        // `Working` now and SSE subscribers watch the 💭/🛠️ artifacts and the
+        // final status arrive live (otherwise the synchronous handler would have
+        // finished the task before a client could subscribe).
+        let handler = self.clone();
+        let task_id = task_id.to_string();
         let user_text = extract_text(message);
-        let outcome = match &self.llm {
-            Some(llm) => {
-                self.run_with_llm(llm.as_ref(), task_id, &context_id, &user_text)
-                    .await
+        tokio::spawn(async move {
+            handler
+                .stream_progress(&task_id, &context_id, "🔎 Analyzing your request…")
+                .await;
+
+            let outcome = match &handler.llm {
+                Some(llm) => {
+                    handler
+                        .run_with_llm(llm.as_ref(), &task_id, &context_id, &user_text)
+                        .await
+                }
+                None => {
+                    handler
+                        .run_rule_based(&task_id, &context_id, &user_text)
+                        .await
+                }
+            };
+
+            let (state, reply) = match outcome {
+                Ok(text) => (TaskState::Completed, text),
+                Err(e) => (TaskState::Failed, format!("Sorry — I hit an error: {e}")),
+            };
+
+            let response = Message::builder()
+                .role(Role::Agent)
+                .parts(vec![Part::text(reply)])
+                .message_id(uuid::Uuid::new_v4().to_string())
+                .context_id(context_id.clone())
+                .build();
+
+            if let Err(e) = handler
+                .update_and_broadcast(&id, state, Some(response))
+                .await
+            {
+                tracing::warn!("failed to finalize task {task_id}: {e}");
             }
-            None => self.run_rule_based(task_id, &context_id, &user_text).await,
-        };
+        });
 
-        let (state, reply) = match outcome {
-            Ok(text) => (TaskState::Completed, text),
-            Err(e) => (TaskState::Failed, format!("Sorry — I hit an error: {e}")),
-        };
-
-        let response = Message::builder()
-            .role(Role::Agent)
-            .parts(vec![Part::text(reply)])
-            .message_id(uuid::Uuid::new_v4().to_string())
-            .context_id(context_id)
-            .build();
-
-        let final_task = self
-            .update_and_broadcast(&id, state, Some(response))
-            .await?;
-        Ok(final_task)
+        Ok(working)
     }
 
     async fn validate_message(&self, message: &Message) -> Result<(), A2AError> {
@@ -513,17 +613,9 @@ fn parse_two_numbers(text: &str) -> Option<(f64, f64)> {
 }
 
 fn load_llm() -> Option<Arc<dyn LlmProvider>> {
-    use a2a_agents_common::llm::{gemini::GeminiProvider, openai::OpenAiProvider};
-    if let Ok(gemini) = GeminiProvider::from_env() {
-        tracing::info!("🤖 LLM: Gemini (tool-calling enabled)");
-        return Some(Arc::new(gemini));
-    }
-    if let Ok(openai) = OpenAiProvider::from_env() {
-        tracing::info!("🤖 LLM: OpenAI (tool-calling enabled)");
-        return Some(Arc::new(openai));
-    }
-    tracing::info!("🤖 LLM: none configured — using rule-based fallback");
-    None
+    // Centralized selection (OpenRouter → Gemini → OpenAI). With no key set this
+    // returns None and the handler falls back to the rule-based router.
+    a2a_agents_common::llm::provider_from_env()
 }
 
 // ---------------------------------------------------------------------------

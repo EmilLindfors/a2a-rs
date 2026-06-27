@@ -139,19 +139,9 @@ impl ReimbursementHandler {
         streaming: impl a2a_rs::port::AsyncStreamingHandler + 'static,
         push_notifier: impl a2a_rs::port::AsyncPushNotifier + 'static,
     ) -> Self {
-        // Try to initialize AI client from environment
-        let llm_provider: Option<Arc<dyn LlmProvider>> = if let Ok(gemini) =
-            a2a_agents_common::llm::gemini::GeminiProvider::from_env()
-        {
-            info!("Gemini client initialized successfully");
-            Some(Arc::new(gemini))
-        } else if let Ok(openai) = a2a_agents_common::llm::openai::OpenAiProvider::from_env() {
-            info!("OpenAI client initialized successfully");
-            Some(Arc::new(openai))
-        } else {
-            warn!("Failed to initialize any AI client. Conversational features will be disabled.");
-            None
-        };
+        // Initialize an AI client from the environment (OpenRouter → Gemini →
+        // OpenAI). `None` disables conversational features.
+        let llm_provider = a2a_agents_common::llm::provider_from_env();
 
         Self::with_llm(task_lifecycle, streaming, push_notifier, llm_provider)
     }
@@ -536,6 +526,35 @@ Example response when asking for info:
                     };
 
                     tool_calls.finalize(call);
+
+                    let _ = self
+                        .streaming
+                        .broadcast_artifact_update(task_id, update_event)
+                        .await;
+                }
+                Ok(a2a_agents_common::llm::LlmStreamEvent::Reasoning(chunk)) => {
+                    // Reasoning-model thinking: surface it as a distinct artifact
+                    // but keep it OUT of `ai_response` — the request forces JSON,
+                    // and reasoning text would corrupt the parsed answer.
+                    let artifact = Artifact {
+                        artifact_id: artifact_id.clone(),
+                        name: "AI Thinking...".to_string(),
+                        description: String::new(),
+                        parts: vec![Part::text(chunk)],
+                        metadata: buffa::MessageField::none(),
+                        extensions: Vec::new(),
+                        ..Default::default()
+                    };
+
+                    let update_event = a2a_rs::domain::TaskArtifactUpdateEvent {
+                        task_id: task_id.to_string(),
+                        context_id: current_message.context_id.clone(),
+                        kind: "artifact-update".to_string(),
+                        artifact,
+                        append: Some(true),
+                        last_chunk: Some(false),
+                        metadata: None,
+                    };
 
                     let _ = self
                         .streaming

@@ -12,7 +12,14 @@ pub struct OpenAiConfig {
     pub base_url: String,
     pub model: String,
     pub api_key: Option<String>,
+    /// Extra HTTP headers attached to every request. Kept provider-agnostic so
+    /// the OpenAI-compatible adapter carries e.g. OpenRouter's `HTTP-Referer` /
+    /// `X-Title` attribution headers without knowing what they mean.
+    pub extra_headers: Vec<(String, String)>,
 }
+
+/// Default base URL for the OpenRouter API (OpenAI-compatible surface).
+pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
 impl OpenAiConfig {
     pub fn from_env() -> Result<Self, String> {
@@ -40,7 +47,62 @@ impl OpenAiConfig {
             base_url,
             model,
             api_key,
+            extra_headers: Vec::new(),
         })
+    }
+
+    /// Build an OpenRouter config (OpenAI-compatible) from explicit values.
+    ///
+    /// `base_url` defaults to [`OPENROUTER_BASE_URL`] when `None`. The optional
+    /// `http_referer` / `x_title` become OpenRouter attribution headers and are
+    /// only sent when provided.
+    pub fn openrouter(
+        api_key: String,
+        model: String,
+        base_url: Option<String>,
+        http_referer: Option<String>,
+        x_title: Option<String>,
+    ) -> Self {
+        let mut extra_headers = Vec::new();
+        if let Some(referer) = http_referer {
+            extra_headers.push(("HTTP-Referer".to_string(), referer));
+        }
+        if let Some(title) = x_title {
+            extra_headers.push(("X-Title".to_string(), title));
+        }
+        Self {
+            base_url: base_url.unwrap_or_else(|| OPENROUTER_BASE_URL.to_string()),
+            model,
+            api_key: Some(api_key),
+            extra_headers,
+        }
+    }
+
+    /// Read OpenRouter config from the environment.
+    ///
+    /// `OPENROUTER_API_KEY` is required; the rest fall back to defaults:
+    /// `OPENROUTER_MODEL` (`z-ai/glm-4.6`), `OPENROUTER_API_BASE_URL`
+    /// ([`OPENROUTER_BASE_URL`]), plus optional `OPENROUTER_HTTP_REFERER` /
+    /// `OPENROUTER_X_TITLE` attribution headers.
+    pub fn openrouter_from_env() -> Result<Self, String> {
+        let api_key = env::var("OPENROUTER_API_KEY")
+            .ok()
+            .map(|k| k.trim().to_string())
+            .filter(|k| !k.is_empty())
+            .ok_or_else(|| "OPENROUTER_API_KEY environment variable is required".to_string())?;
+
+        let model = env::var("OPENROUTER_MODEL").unwrap_or_else(|_| "z-ai/glm-4.6".to_string());
+        let base_url = env::var("OPENROUTER_API_BASE_URL").ok();
+        let http_referer = env::var("OPENROUTER_HTTP_REFERER").ok();
+        let x_title = env::var("OPENROUTER_X_TITLE").ok();
+
+        Ok(Self::openrouter(
+            api_key,
+            model,
+            base_url,
+            http_referer,
+            x_title,
+        ))
     }
 }
 
@@ -64,6 +126,34 @@ struct OpenAiChatRequest {
     tools: Option<Vec<OpenAiTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    /// OpenRouter's unified reasoning control. Only sent when the caller opts in
+    /// (skipped otherwise so plain OpenAI requests are unaffected).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<OpenRouterReasoning>,
+}
+
+/// OpenRouter's `reasoning` request object (see
+/// <https://openrouter.ai/docs/use-cases/reasoning-tokens>).
+#[derive(Debug, Serialize)]
+struct OpenRouterReasoning {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    exclude: bool,
+    enabled: bool,
+}
+
+impl From<super::ReasoningConfig> for OpenRouterReasoning {
+    fn from(c: super::ReasoningConfig) -> Self {
+        Self {
+            effort: c.effort.map(|e| e.as_str().to_string()),
+            max_tokens: c.max_tokens,
+            exclude: c.exclude,
+            enabled: true,
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -91,6 +181,13 @@ struct OpenAiChatMessage {
     tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    /// Reasoning-model thinking, as normalized by OpenRouter. Response-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning: Option<String>,
+    /// Raw Zhipu/GLM reasoning field (used when not going through OpenRouter's
+    /// normalization). Response-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -130,6 +227,10 @@ struct StreamChoice {
 #[derive(Debug, Deserialize)]
 struct StreamDelta {
     content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<StreamToolCall>>,
 }
 
@@ -205,6 +306,8 @@ impl LlmProvider for OpenAiProvider {
                 }),
                 tool_call_id: msg.tool_call_id,
                 name: msg.name,
+                reasoning: None,
+                reasoning_content: None,
             })
             .collect();
 
@@ -230,6 +333,7 @@ impl LlmProvider for OpenAiProvider {
             response_format,
             tools,
             stream: None,
+            reasoning: request.reasoning.map(Into::into),
         };
 
         debug!(
@@ -243,6 +347,10 @@ impl LlmProvider for OpenAiProvider {
 
         if let Some(ref api_key) = self.config.api_key {
             req_builder = req_builder.bearer_auth(api_key);
+        }
+
+        for (name, value) in &self.config.extra_headers {
+            req_builder = req_builder.header(name.as_str(), value.as_str());
         }
 
         let response = req_builder.send().await.map_err(|e| {
@@ -285,16 +393,22 @@ impl LlmProvider for OpenAiProvider {
         });
 
         let message_content = choice.message.content;
+        let reasoning = choice
+            .message
+            .reasoning
+            .or(choice.message.reasoning_content);
 
         info!(
             has_content = message_content.is_some(),
             has_tools = tool_calls.is_some(),
+            has_reasoning = reasoning.is_some(),
             "Received chat completion response"
         );
 
         Ok(LlmResponse {
             content: message_content,
             tool_calls,
+            reasoning,
         })
     }
 
@@ -338,6 +452,8 @@ impl LlmProvider for OpenAiProvider {
                 }),
                 tool_call_id: msg.tool_call_id,
                 name: msg.name,
+                reasoning: None,
+                reasoning_content: None,
             })
             .collect();
 
@@ -363,6 +479,7 @@ impl LlmProvider for OpenAiProvider {
             response_format,
             tools,
             stream: Some(true),
+            reasoning: request.reasoning.map(Into::into),
         };
 
         debug!(
@@ -375,6 +492,10 @@ impl LlmProvider for OpenAiProvider {
 
         if let Some(ref api_key) = self.config.api_key {
             req_builder = req_builder.bearer_auth(api_key);
+        }
+
+        for (name, value) in &self.config.extra_headers {
+            req_builder = req_builder.header(name.as_str(), value.as_str());
         }
 
         let response = req_builder.send().await.map_err(|e| {
@@ -433,6 +554,12 @@ impl LlmProvider for OpenAiProvider {
                 };
 
                 for choice in chunk.choices {
+                    if let Some(reasoning) = choice.delta.reasoning.or(choice.delta.reasoning_content) {
+                        if !reasoning.is_empty() {
+                            yield super::LlmStreamEvent::Reasoning(reasoning);
+                        }
+                    }
+
                     if let Some(content) = choice.delta.content {
                         if !content.is_empty() {
                             yield super::LlmStreamEvent::ContentChunk(content);

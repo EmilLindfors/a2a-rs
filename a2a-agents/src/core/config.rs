@@ -45,7 +45,7 @@ pub struct AgentConfig {
 /// LLM Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmConfig {
-    /// LLM Provider (e.g. "openai", "gemini")
+    /// LLM Provider (e.g. "openrouter", "openai", "gemini")
     pub provider: String,
     /// API key for the LLM
     pub api_key: Option<String>,
@@ -53,6 +53,12 @@ pub struct LlmConfig {
     pub model: Option<String>,
     /// Base URL (for providers like openai that support local LLMs like ollama)
     pub base_url: Option<String>,
+    /// OpenRouter `HTTP-Referer` attribution header (ignored by other providers)
+    #[serde(default)]
+    pub http_referer: Option<String>,
+    /// OpenRouter `X-Title` attribution header (ignored by other providers)
+    #[serde(default)]
+    pub x_title: Option<String>,
 }
 
 impl AgentConfig {

@@ -152,6 +152,16 @@
             border-left: 4px solid #1976d2;
         }
 
+        .message.progress {
+            background: #fafafa;
+            border-left: 4px solid #bdbdbd;
+            font-size: 13px;
+        }
+
+        .message.progress .role {
+            color: #9e9e9e;
+        }
+
         .message .role {
             font-weight: 600;
             margin-bottom: 4px;
@@ -221,6 +231,35 @@
         const messageInput = document.getElementById('messageInput');
         const sendBtn = document.getElementById('sendBtn');
 
+        // Streaming state: artifact id -> the .content element accumulating its
+        // chunks, so token-by-token reasoning/answer fill the same bubble.
+        let artifactBubbles = {};
+        let lastAnswerEl = null;
+
+        // Wire format is ProtoJSON: parts are flat `{ "text": "..." }`.
+        const renderParts = (parts) =>
+            (parts || []).map(p => p.text || '').filter(Boolean).join('\n');
+
+        // Append a streamed chunk into the bubble for `artifactId`, creating it on
+        // first sight. "AI Answer" renders as the agent reply; everything else
+        // (e.g. "AI Thinking...") renders as muted progress.
+        function appendArtifact(artifactId, name, text) {
+            clearEmptyState();
+            let contentEl = artifactBubbles[artifactId];
+            if (!contentEl) {
+                const role = name === 'AI Answer' ? 'agent' : 'progress';
+                const div = document.createElement('div');
+                div.className = `message ${role}`;
+                div.innerHTML = `<div class="role">${name}</div><div class="content"></div>`;
+                messagesContainer.appendChild(div);
+                contentEl = div.querySelector('.content');
+                artifactBubbles[artifactId] = contentEl;
+                if (name === 'AI Answer') lastAnswerEl = contentEl;
+            }
+            contentEl.textContent += text;
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
         function showStatus(message, type = 'info') {
             statusDiv.textContent = message;
             statusDiv.className = `status ${type}`;
@@ -273,33 +312,66 @@
                 const { task_id } = await response.json();
                 showStatus(`Connected to task stream (${task_id})`, 'success');
 
-                // Close existing SSE connection if any
+                // Close existing SSE connection and reset per-task stream state.
                 if (currentEventSource) {
                     currentEventSource.close();
                 }
+                artifactBubbles = {};
+                lastAnswerEl = null;
 
                 // Subscribe to task updates via SSE
                 currentEventSource = new EventSource(`/stream/${task_id}`);
 
+                // Initial snapshot — and, if we subscribed after the task already
+                // completed (no live stream to follow), its final agent message.
                 currentEventSource.addEventListener('task-update', (event) => {
                     const task = JSON.parse(event.data);
-                    if (task.history && task.history.length > 0) {
-                        const lastMessage = task.history[task.history.length - 1];
-                        if (lastMessage.role !== 'User') {
-                            const content = lastMessage.parts
-                                .filter(p => p.Text)
-                                .map(p => p.Text.text)
-                                .join('\n');
-                            if (content) {
-                                addMessage('Agent', content);
-                            }
-                        }
+                    const msg = task.status && task.status.message;
+                    if (msg && msg.role === 'ROLE_AGENT') {
+                        const content = renderParts(msg.parts);
+                        if (content) addMessage('Agent', content);
                     }
                 });
 
+                // Live tokens + progress. "AI Thinking..."/"AI Answer" stream in
+                // token-by-token (accumulated by artifact id); 🛠️/✅ tool steps
+                // arrive as discrete lines.
+                currentEventSource.addEventListener('artifact', (event) => {
+                    const ev = JSON.parse(event.data);
+                    const art = ev.artifact || {};
+                    const text = renderParts(art.parts);
+                    if (!text) return;
+                    if (art.name === 'AI Answer' || art.name === 'AI Thinking...') {
+                        appendArtifact(art.artifactId, art.name, text);
+                    } else {
+                        addMessage('Progress', text);
+                    }
+                });
+
+                // Status transitions. The streamed "AI Answer" bubble already holds
+                // the reply; reconcile it with the authoritative final text (or add
+                // it if nothing streamed, e.g. a non-streaming provider).
                 currentEventSource.addEventListener('task-status', (event) => {
-                    const status = JSON.parse(event.data);
-                    console.log('Task status:', status.state);
+                    const ev = JSON.parse(event.data);
+                    const state = ev.status && ev.status.state;
+                    const msg = ev.status && ev.status.message;
+                    if (msg && msg.role === 'ROLE_AGENT') {
+                        const content = renderParts(msg.parts);
+                        if (content) {
+                            if (lastAnswerEl) lastAnswerEl.textContent = content;
+                            else addMessage('Agent', content);
+                        }
+                    }
+                    if (state === 'TASK_STATE_COMPLETED' || state === 'TASK_STATE_FAILED') {
+                        showStatus(
+                            `Task ${state === 'TASK_STATE_COMPLETED' ? 'completed' : 'failed'}`,
+                            state === 'TASK_STATE_COMPLETED' ? 'success' : 'error'
+                        );
+                        if (currentEventSource) {
+                            currentEventSource.close();
+                            currentEventSource = null;
+                        }
+                    }
                 });
 
                 currentEventSource.onerror = () => {
