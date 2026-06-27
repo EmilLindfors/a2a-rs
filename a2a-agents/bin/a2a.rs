@@ -123,26 +123,27 @@ async fn main() -> anyhow::Result<()> {
                         AutoStorage::from_config(&builder.config().server.storage).await?;
 
                     // Initialize LLM from config if provided, else from the env.
-                    let llm_provider: Option<Arc<dyn LlmProvider>> = match &builder.config().llm {
-                        Some(llm_config) => {
-                            info!(
-                                "Loading LLM configuration from TOML (provider: {})",
-                                llm_config.provider
-                            );
-                            let settings = LlmSettings {
-                                provider: llm_config.provider.clone(),
-                                api_key: llm_config.api_key.clone(),
-                                model: llm_config.model.clone(),
-                                base_url: llm_config.base_url.clone(),
-                                http_referer: llm_config.http_referer.clone(),
-                                x_title: llm_config.x_title.clone(),
-                            };
-                            Some(provider_from_settings(&settings).map_err(|e| {
-                                anyhow::anyhow!("invalid LLM configuration: {e}")
-                            })?)
-                        }
-                        None => provider_from_env(),
-                    };
+                    let llm_provider: Option<Arc<dyn LlmProvider>> =
+                        match &builder.config().llm {
+                            Some(llm_config) => {
+                                info!(
+                                    "Loading LLM configuration from TOML (provider: {})",
+                                    llm_config.provider
+                                );
+                                let settings = LlmSettings {
+                                    provider: llm_config.provider.clone(),
+                                    api_key: llm_config.api_key.clone(),
+                                    model: llm_config.model.clone(),
+                                    base_url: llm_config.base_url.clone(),
+                                    http_referer: llm_config.http_referer.clone(),
+                                    x_title: llm_config.x_title.clone(),
+                                };
+                                Some(provider_from_settings(&settings).map_err(|e| {
+                                    anyhow::anyhow!("invalid LLM configuration: {e}")
+                                })?)
+                            }
+                            None => provider_from_env(),
+                        };
 
                     let streaming = InMemoryStreamingHandler::new();
                     let push = storage.push_notifier();

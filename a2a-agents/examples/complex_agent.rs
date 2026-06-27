@@ -297,8 +297,14 @@ impl ResearchAssistantHandler {
 
     /// Push a discrete progress line (status, tool calls) to SSE subscribers.
     async fn stream_progress(&self, task_id: &str, context_id: &str, text: &str) {
-        self.stream_artifact(task_id, context_id, &format!("progress-{task_id}"), "progress", text)
-            .await;
+        self.stream_artifact(
+            task_id,
+            context_id,
+            &format!("progress-{task_id}"),
+            "progress",
+            text,
+        )
+        .await;
     }
 
     /// LLM path: let the model pick tools, execute them via the bridge, loop
@@ -350,15 +356,25 @@ impl ResearchAssistantHandler {
                 match event.map_err(|e| A2AError::Internal(format!("LLM stream error: {e}")))? {
                     LlmStreamEvent::Reasoning(chunk) => {
                         reasoning.push_str(&chunk);
-                        self.stream_artifact(task_id, context_id, &thinking_id, "AI Thinking...", &chunk)
-                            .await;
+                        self.stream_artifact(
+                            task_id,
+                            context_id,
+                            &thinking_id,
+                            "AI Thinking...",
+                            &chunk,
+                        )
+                        .await;
                     }
                     LlmStreamEvent::ContentChunk(chunk) => {
                         content.push_str(&chunk);
                         self.stream_artifact(task_id, context_id, &answer_id, "AI Answer", &chunk)
                             .await;
                     }
-                    LlmStreamEvent::ToolCallChunk { id, name, arguments } => {
+                    LlmStreamEvent::ToolCallChunk {
+                        id,
+                        name,
+                        arguments,
+                    } => {
                         calls.push(&id, name.as_deref(), &arguments);
                     }
                     LlmStreamEvent::ToolCall(call) => {
@@ -398,8 +414,12 @@ impl ResearchAssistantHandler {
                     .execute_llm_tool_call(task_id, call)
                     .await
                     .map_err(|e| e.to_a2a_error())?;
-                self.stream_progress(task_id, context_id, &format!("✅ `{}` → {result}", call.name))
-                    .await;
+                self.stream_progress(
+                    task_id,
+                    context_id,
+                    &format!("✅ `{}` → {result}", call.name),
+                )
+                .await;
                 messages.push(ChatMessage::tool_result(
                     call.id.clone(),
                     call.name.clone(),
@@ -541,7 +561,10 @@ impl AsyncMessageHandler for ResearchAssistantHandler {
                 .context_id(context_id.clone())
                 .build();
 
-            if let Err(e) = handler.update_and_broadcast(&id, state, Some(response)).await {
+            if let Err(e) = handler
+                .update_and_broadcast(&id, state, Some(response))
+                .await
+            {
                 tracing::warn!("failed to finalize task {task_id}: {e}");
             }
         });
