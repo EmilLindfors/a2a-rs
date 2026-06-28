@@ -11,7 +11,7 @@ keywords = ["a2a", "agent", "framework", "toml"]
 categories = ["api-bindings", "network-programming"]
 
 [dependencies]
-a2a-rs = { path = "../a2a-rs", version = "0.4", features = ["server", "http-server", "tracing"] }
+a2a-rs = { path = "../a2a-rs", version = "0.4", features = ["server", "http-server", "http-client", "tracing"] }
 a2a-agents-common = { path = "../a2a-agents-common", version = "0.3" }
 a2a-ap2 = { path = "../a2a-ap2", version = "0.3", optional = true }
 a2a-client = { package = "a2a-web-client", path = "../a2a-client", version = "0.4" }
@@ -30,6 +30,10 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 bon = { workspace = true }
 dotenvy = "0.15.7"
 shellexpand = "3.1"
+
+# JSON Schema export for the declarative config (Terraform provider validation).
+# Optional: only the `schema` feature and `--print-schema` need it.
+schemars = { version = "1.0", features = ["chrono04"], optional = true }
 
 # Async foundation
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
@@ -61,7 +65,7 @@ futures = { workspace = true }
 anyhow = { workspace = true }
 
 [package.metadata.docs.rs]
-features = ["reimbursement-agent", "sqlx", "ap2", "auth"]
+features = ["reimbursement-agent", "sqlx", "ap2", "auth", "schema"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
@@ -70,6 +74,9 @@ reimbursement-agent = []
 ap2 = ["dep:a2a-ap2"]
 sqlx = ["a2a-rs/sqlite"]
 auth = ["a2a-rs/auth", "dep:oauth2"]
+# JSON Schema export for `AgentConfig` (used by the Terraform provider and the
+# `a2a --print-schema` subcommand to validate agent definitions).
+schema = ["dep:schemars"]
 # MCP server: expose any TOML-configured agent as an MCP stdio server via
 # `a2a-mcp::AgentToMcpBridge`. Pulls in `a2a-mcp` and the matching `rmcp` build.
 mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
@@ -83,7 +90,7 @@ mcp-client = ["dep:rmcp"]
 [[bin]]
 name = "a2a"
 path = "bin/a2a.rs"
-required-features = ["reimbursement-agent", "mcp-server"]
+required-features = ["reimbursement-agent", "mcp-server", "schema"]
 
 [[bin]]
 name = "reimbursement_demo"
@@ -149,5 +156,22 @@ name = "complex_agent"
 path = "examples/complex_agent.rs"
 required-features = ["mcp-server"]
 
+# TOML-only LLM-driven agent: no Rust code, drives the generic `llm` handler
+# registered in the `a2a` binary. Proves the config-as-artifact path.
+[[example]]
+name = "llm_agent"
+path = "examples/llm_agent.rs"
+required-features = ["mcp-server"]
+[[example]]
+name = "print_schema"
+path = "examples/print_schema.rs"
+required-features = ["schema"]
 
-
+[dev-dependencies]
+# Pull in the JSON-RPC server + client transports so integration tests can stand
+# up a real A2A agent on a socket and drive it through the Transport port
+# (e.g. the agent-as-tool delegation test).
+a2a-rs = { path = "../a2a-rs", features = ["jsonrpc-server", "jsonrpc-client"] }
+# a2a-rs serves on axum 0.8 while this crate's frontend is on 0.7; alias the 0.8
+# build for tests so `jsonrpc_router`'s Router matches the `serve` we call.
+axum8 = { package = "axum", version = "0.8" }

@@ -7,6 +7,85 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
 
+#[cfg(feature = "schema")]
+use schemars::JsonSchema;
+
+/// How a handler is selected for an agent.
+///
+/// The typed replacement for the stringly-typed `agent.implementation`. When
+/// absent, the legacy `agent.implementation` field is honoured, so existing
+/// configs keep working unchanged.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct HandlerConfig {
+    /// Built-in handler selector. "echo", "llm", "reimbursement", or any
+    /// custom name resolved by the host binary.
+    #[serde(default = "default_handler_type")]
+    pub r#type: String,
+
+    /// Options for the generic LLM-driven handler (`type = "llm"`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm: Option<LlmHandlerConfig>,
+}
+
+fn default_handler_type() -> String {
+    "echo".to_string()
+}
+
+/// Options for the generic config-driven LLM handler.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct LlmHandlerConfig {
+    /// System prompt steering the model's behaviour.
+    #[serde(default = "default_llm_system_prompt")]
+    pub system_prompt: String,
+
+    /// Maximum LLM <-> tool round-trips before the handler gives up.
+    #[serde(default = "default_max_tool_rounds")]
+    pub max_tool_rounds: u32,
+
+    /// Remote A2A agents exposed to the model as tools (`[[handler.llm.agents]]`),
+    /// enabling agent-to-agent delegation. Each becomes an `ask_<slug>` tool.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agents: Vec<RemoteAgentConfig>,
+}
+
+/// A remote A2A agent the LLM handler can delegate to, exposed as one tool.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+pub struct RemoteAgentConfig {
+    /// Friendly name; the tool the model sees is `ask_<slug-of-name>`.
+    pub name: String,
+
+    /// Base URL of the remote agent (its transport is auto-negotiated from the
+    /// agent card, falling back to a direct client).
+    pub url: String,
+
+    /// Optional override for the tool description shown to the model. When
+    /// omitted, a description is derived from the agent card at startup.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+fn default_llm_system_prompt() -> String {
+    "You are a helpful assistant. Use the available tools when they give a more precise answer than guessing, then reply concisely.".to_string()
+}
+
+fn default_max_tool_rounds() -> u32 {
+    4
+}
+
+impl Default for LlmHandlerConfig {
+    fn default() -> Self {
+        Self {
+            system_prompt: default_llm_system_prompt(),
+            max_tool_rounds: default_max_tool_rounds(),
+            agents: Vec::new(),
+        }
+    }
+}
+
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("Failed to read config file: {0}")]
@@ -21,9 +100,15 @@ pub enum ConfigError {
 
 /// Complete agent configuration from TOML
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct AgentConfig {
     /// Agent metadata
     pub agent: AgentMetadata,
+
+    /// Typed handler selection (`[handler]`). When omitted, the legacy
+    /// `agent.implementation` string is honoured via [`handler_type`].
+    #[serde(default)]
+    pub handler: HandlerConfig,
 
     /// Server configuration
     #[serde(default)]
@@ -44,6 +129,7 @@ pub struct AgentConfig {
 
 /// LLM Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct LlmConfig {
     /// LLM Provider (e.g. "openrouter", "openai", "gemini")
     pub provider: String,
@@ -75,6 +161,21 @@ impl AgentConfig {
         let config: AgentConfig = toml::from_str(&expanded)?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Resolve the handler selector, preferring `[handler].type` and falling
+    /// back to the legacy `agent.implementation` (so existing configs keep
+    /// working) and finally `"echo"`.
+    pub fn handler_type(&self) -> &str {
+        let t = self.handler.r#type.as_str();
+        if !t.is_empty() && t != "echo" {
+            return t;
+        }
+        self.agent
+            .implementation
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("echo")
     }
 
     /// Validate the configuration
@@ -111,6 +212,7 @@ impl AgentConfig {
 
 /// Agent metadata and identity
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct AgentMetadata {
     /// Agent name
     pub name: String,
@@ -139,6 +241,7 @@ pub struct AgentMetadata {
 
 /// Provider information
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ProviderInfo {
     pub name: String,
     pub url: String,
@@ -146,6 +249,7 @@ pub struct ProviderInfo {
 
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ServerConfig {
     /// Host to bind to
     #[serde(default = "default_host")]
@@ -177,6 +281,7 @@ impl Default for ServerConfig {
 
 /// Storage backend configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum StorageConfig {
     /// In-memory storage (default)
@@ -200,6 +305,7 @@ pub enum StorageConfig {
 
 /// Authentication configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum AuthConfig {
     /// No authentication (default for development)
@@ -284,6 +390,7 @@ pub enum AuthConfig {
 
 /// Skill configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct SkillConfig {
     /// Unique skill identifier
     pub id: String,
@@ -314,6 +421,7 @@ pub struct SkillConfig {
 
 /// Features configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct FeaturesConfig {
     /// Enable streaming updates
     #[serde(default)]
@@ -360,6 +468,7 @@ impl Default for FeaturesConfig {
 
 /// Protocol extensions configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct ExtensionsConfig {
     /// AP2 (Agent Payments Protocol) extension
     #[serde(default)]
@@ -368,6 +477,7 @@ pub struct ExtensionsConfig {
 
 /// AP2 extension configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct Ap2ExtensionConfig {
     /// AP2 roles this agent performs (merchant, shopper, credentials-provider, payment-processor)
     pub roles: Vec<String>,
@@ -379,6 +489,7 @@ pub struct Ap2ExtensionConfig {
 
 /// MCP server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct McpServerConfig {
     /// Enable MCP server (expose agent as MCP tools)
     #[serde(default)]
@@ -423,6 +534,7 @@ impl Default for McpServerConfig {
 /// HTTP transport (`rmcp`'s `StreamableHttpService`) instead of stdio, mounted
 /// at [`path`](Self::path) on `host:port`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct McpHttpConfig {
     /// Serve the MCP server over Streamable HTTP rather than stdio.
     #[serde(default)]
@@ -492,6 +604,7 @@ fn default_mcp_http_path() -> String {
 
 /// MCP client configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct McpClientConfig {
     /// Enable MCP client (connect to MCP servers to use their tools)
     #[serde(default)]
@@ -504,6 +617,7 @@ pub struct McpClientConfig {
 
 /// Configuration for connecting to an MCP server
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
 pub struct McpServerConnection {
     /// Unique name for this MCP server
     pub name: String,
@@ -891,5 +1005,77 @@ mod tests {
 
         let config = AgentConfig::from_toml(toml).unwrap();
         assert!(config.features.extensions.ap2.is_none());
+    }
+
+    #[test]
+    fn test_handler_block_llm() {
+        let toml = r#"
+            [agent]
+            name = "LLM Agent"
+
+            [handler]
+            type = "llm"
+
+            [handler.llm]
+            system_prompt = "be brief"
+            max_tool_rounds = 2
+        "#;
+        let config = AgentConfig::from_toml(toml).unwrap();
+        assert_eq!(config.handler_type(), "llm");
+        let llm = config.handler.llm.unwrap();
+        assert_eq!(llm.system_prompt, "be brief");
+        assert_eq!(llm.max_tool_rounds, 2);
+    }
+
+    #[test]
+    fn test_handler_llm_remote_agents() {
+        let toml = r#"
+            [agent]
+            name = "Orchestrator"
+
+            [handler]
+            type = "llm"
+
+            [handler.llm]
+            system_prompt = "route work to peers"
+
+            [[handler.llm.agents]]
+            name = "Weather Agent"
+            url = "http://localhost:8081"
+            description = "Knows the weather"
+
+            [[handler.llm.agents]]
+            name = "billing"
+            url = "http://localhost:8082"
+        "#;
+        let config = AgentConfig::from_toml(toml).unwrap();
+        let llm = config.handler.llm.unwrap();
+        assert_eq!(llm.agents.len(), 2);
+        assert_eq!(llm.agents[0].name, "Weather Agent");
+        assert_eq!(llm.agents[0].url, "http://localhost:8081");
+        assert_eq!(llm.agents[0].description.as_deref(), Some("Knows the weather"));
+        assert_eq!(llm.agents[1].name, "billing");
+        assert!(llm.agents[1].description.is_none());
+    }
+
+    #[test]
+    fn test_handler_falls_back_to_implementation() {
+        let toml = r#"
+            [agent]
+            name = "Legacy Agent"
+            implementation = "reimbursement"
+        "#;
+        let config = AgentConfig::from_toml(toml).unwrap();
+        assert_eq!(config.handler_type(), "reimbursement");
+    }
+
+    #[test]
+    fn test_handler_defaults_to_echo() {
+        let toml = r#"
+            [agent]
+            name = "Plain Agent"
+        "#;
+        let config = AgentConfig::from_toml(toml).unwrap();
+        assert_eq!(config.handler_type(), "echo");
     }
 }

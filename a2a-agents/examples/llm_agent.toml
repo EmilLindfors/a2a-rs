@@ -1,0 +1,42 @@
+# TOML-only LLM-driven agent: no custom Rust code required.
+# Drives the generic `llm` handler registered in the `a2a` binary.
+#
+# Run with:
+#   cargo run -p a2a-agents --bin a2a --features schema,mcp-server,reimbursement-agent -- run --config examples/llm_agent.toml
+#
+# Set an LLM key (OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY) to get
+# natural-language answers. With no key, the agent responds with a deterministic
+# fallback that lists available tools.
+
+[agent]
+name = "LLM Agent"
+description = "A config-driven agent that answers in natural language and can call MCP tools."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8080
+
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "chat"
+name = "Chat"
+description = "Answer questions in natural language, optionally using MCP tools."
+keywords = ["chat", "ask", "question", "help"]
+examples = ["What can you do?", "Explain how A2A works"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[handler]
+type = "llm"
+
+[handler.llm]
+system_prompt = "You are a concise, helpful assistant running as an A2A agent. Use available tools when they give a more precise answer than guessing."
+max_tool_rounds = 4
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true

@@ -31,8 +31,9 @@ pub mod runtime;
 // Re-export main types for convenience
 pub use builder::{AgentBuilder, BuildError};
 pub use config::{
-    AgentConfig, Ap2ExtensionConfig, AuthConfig, ConfigError, ExtensionsConfig, McpClientConfig,
-    McpServerConfig, McpServerConnection, ServerConfig, StorageConfig,
+    AgentConfig, Ap2ExtensionConfig, AuthConfig, ConfigError, ExtensionsConfig, HandlerConfig,
+    LlmHandlerConfig, McpClientConfig, McpServerConfig, McpServerConnection, RemoteAgentConfig,
+    ServerConfig, StorageConfig,
 };
 #[cfg(feature = "mcp-client")]
 pub use mcp_client::{McpClientError, McpClientManager};

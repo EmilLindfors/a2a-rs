@@ -82,6 +82,9 @@ pub mod core;
 pub mod traits;
 pub mod utils;
 
+/// Generic config-driven handlers.
+pub mod handlers;
+
 // Example agent implementations
 // Note: public for binaries/examples; intended to become private once agents
 // are extracted into their own crates.
@@ -90,6 +93,13 @@ pub mod agents;
 // Convenience re-exports for the most commonly used types
 pub use core::{AgentBuilder, AgentConfig, AgentRuntime, BuildError, ConfigError, RuntimeError};
 pub use traits::{AgentPlugin, SkillDefinition};
+
+pub use handlers::tools::{A2aAgentToolSource, ToolSource};
+
+#[cfg(feature = "mcp-server")]
+pub use handlers::llm::LlmHandler;
+#[cfg(feature = "mcp-server")]
+pub use handlers::tools::{McpToolSource, UnusedInner};
 
 // Re-export the reimbursement agent as a convenience
 // (intended to be removed once agents are extracted into their own crates)
