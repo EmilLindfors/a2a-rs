@@ -2,7 +2,7 @@
 //!
 //! This example flips both `features.mcp_server.enabled` and
 //! `features.mcp_server.http.enabled` in TOML and lets `AgentBuilder` /
-//! `AgentRuntime` do the rest: it serves an MCP Streamable HTTP endpoint that
+//! `AgentServer` do the rest: it serves an MCP Streamable HTTP endpoint that
 //! dispatches calls to the agent handler in-process. The agent's skills are
 //! callable as MCP tools by any networked MCP client.
 //!

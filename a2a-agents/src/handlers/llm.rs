@@ -121,7 +121,7 @@ impl LlmHandler {
             ChatMessage::system(self.system_prompt.clone()),
             ChatMessage::user(user_text),
         ];
-        let reasoning_enabled = std::env::var("OPENROUTER_API_KEY").is_ok();
+        let reasoning_enabled = llm.supports_reasoning();
 
         for round in 0..self.max_tool_rounds {
             let mut request = LlmRequest::new(messages.clone()).temperature(0.2);

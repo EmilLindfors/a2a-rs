@@ -153,17 +153,7 @@ impl ToolSource for A2aAgentToolSource {
 
 /// Derive an LLM tool name (`ask_<slug>`) from a free-form agent name.
 pub fn tool_name_for(agent: &str) -> String {
-    let slug: String = agent
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() {
-                c.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("ask_{}", slug.trim_matches('_'))
+    format!("ask_{}", crate::utils::slugify(agent, '_'))
 }
 
 /// True once the task has reached a terminal A2A state.

@@ -36,7 +36,7 @@ shellexpand = "3.1"
 schemars = { version = "1.0", features = ["chrono04"], optional = true }
 
 # Async foundation
-tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time"] }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "sync", "time", "process"] }
 async-trait = { workspace = true }
 
 # Command line interface
