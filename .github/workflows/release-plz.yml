@@ -24,6 +24,15 @@ jobs:
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
+    # Publish ONLY when the push is the merged "chore: release" PR (squash-merge
+    # the release PR so the commit subject is the PR title), or on an explicit
+    # manual dispatch. This is the release gate: ordinary pushes to master never
+    # attempt a publish, so a half-finished workspace state or an accidental
+    # hand-edited version bump on master can no longer auto-release. The actual
+    # version bumps are owned by the release PR (release-plz-pr below).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.event.head_commit.message, 'chore: release')
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -35,6 +44,11 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-semver-checks
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
 
       - name: Run release-plz (release)
         uses: release-plz/action@v0.5
@@ -61,6 +75,13 @@ jobs:
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-semver-checks
+        # Lets release-plz auto-detect breaking API changes and bump the minor
+        # (0.x) without relying on `!`/`BREAKING CHANGE:` in commit messages.
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
 
       - name: Run release-plz (release-pr)
         uses: release-plz/action@v0.5

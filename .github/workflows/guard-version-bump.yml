@@ -1,0 +1,49 @@
+name: Guard version bumps
+
+# Crate versions are owned by release-plz: it computes them from conventional
+# commits and lands them in the "chore: release" PR (branch `release-plz-*`).
+# A `version = "…"` edited in any *other* PR is almost always a mistake — a hand
+# bump that, once on master, would be picked up by the release job and published
+# outside the controlled flow. Fail the PR so the bump is caught before it merges.
+#
+# This pairs with the release gate in release-plz.yml (publish only on a
+# `chore: release` push): together they make "release from a PR, never by hand
+# from master" enforceable rather than conventional. Enable branch protection
+# requiring PRs to master so direct pushes can't bypass this check.
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  no-manual-version-bump:
+    name: No manual version bumps
+    runs-on: ubuntu-latest
+    # The release PR is the one place version bumps are allowed.
+    if: ${{ !startsWith(github.head_ref, 'release-plz-') }}
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Reject package-version edits outside the release PR
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "$BASE_REF"
+          # Only the package `version = "…"` line at column 0 counts; dependency
+          # specs (`foo = { version = "…" }`) are inline and don't match.
+          if git diff "origin/$BASE_REF...HEAD" -- '**/Cargo.toml' 'Cargo.toml' \
+               | grep -E '^\+version = "'; then
+            echo "::error::A crate package version was changed in this PR."
+            echo "Crate versions are owned by release-plz — do not bump them by hand."
+            echo "Revert the version edit; drive the release through conventional"
+            echo "commits (feat:/fix:/feat!:) and the generated 'chore: release' PR."
+            exit 1
+          fi
+          echo "No manual package-version edits found."
