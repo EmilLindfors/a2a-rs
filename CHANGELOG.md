@@ -2,7 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] - 2026-05-24
+## [Unreleased]
+
+### Added
+- **Declarative multi-agent platform (`a2a-agents`)**: `a2a-agents` grew from a single-agent builder into a platform for running and orchestrating *many* agents, with every outward capability defined as a **port** so the core `a2a-rs` protocol crate stays infrastructure-free.
+  - **Agent-as-tool delegation**: a config-driven `LlmHandler` (behind the `llm` feature) can call peer A2A agents and MCP servers as tools — an orchestrator delegates work by listing peers under `[[handler.llm.agents]]` and tool sources under `[[handler.llm.mcp]]`. The handler no longer depends on `mcp-server`; LLM provider selection routes through the shared provider helper.
+  - **Registry / discovery**: the `AgentRegistry` port + `InMemoryAgentRegistry` let agents find peers by **skill** instead of hard-coded URLs. Config refs resolve by `skill`/`agent_id`; the `a2a` binary self-registers in a two-phase startup.
+  - **Runtime / isolation**: one `AgentRuntime` port supervises agents as local processes or OCI containers — `LocalProcessRuntime`, `ContainerRuntime` (CLI shell-out backend), and `InMemoryAgentRuntime` for tests. Sandboxing lives in the platform, not in `a2a-rs`.
+  - **Control plane**: a `ControlPlane` service composes runtime + registry behind an HTTP API; `a2a control-plane` deploys, lists, and tears down agents (deploy is async).
+  - **`terraform-provider-a2aagent`** (WIP): a Terraform provider for declaring agents as infrastructure.
+- **OpenRouter LLM provider + reasoning (`a2a-agents-common`)**: added an OpenRouter provider with centralized provider selection and reasoning-token support; the `complex_agent` example streams GLM reasoning and answer tokens live over SSE.
+- **`a2acli` command-line client**: a new CLI driving the `a2a-rs` `Transport` port — `card`, `send`, `get`, `cancel`, `stream`. Endpoint from `A2A_URL` (`--url`/`-u`); `--transport auto|connectrpc|jsonrpc`; `--json` for machine-readable output. Auto mode negotiates the transport from the agent card with a direct-client fallback, doubling as a manual cross-SDK interop harness. `auto_connect` was promoted into `a2a-rs` and is now shared by the CLI and web client.
+
+### Changed
+- **BREAKING — runtime type renamed (`a2a-agents`)**: the old single-agent server type `core::AgentRuntime<H, S>` is now `AgentServer`; `AgentRuntime` is the new platform runtime **port**. In-workspace call sites are updated in the same change (pre-1.0, no shim).
+
+### Fixed
+- **AgentId lookups are canonicalized (`a2a-agents`)** and environment-variable expansion in TOML config was widened.
+
+## [0.4.0] - 2026-06-05
 
 ### Added
 - **Client-side `Transport` port + JSON-RPC 2.0 client + card-driven negotiation (`a2a-rs`)**: The client gained a hexagonal transport abstraction mirroring the server side, plus a wire-compatible JSON-RPC 2.0 client so it can talk to any standard A2A agent.
