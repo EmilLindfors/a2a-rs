@@ -1,0 +1,812 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AgentConfig",
+  "description": "Complete agent configuration from TOML",
+  "type": "object",
+  "properties": {
+    "agent": {
+      "description": "Agent metadata",
+      "$ref": "#/$defs/AgentMetadata"
+    },
+    "features": {
+      "description": "Features enabled for the agent",
+      "$ref": "#/$defs/FeaturesConfig",
+      "default": {
+        "authenticated_card": false,
+        "extensions": {
+          "ap2": null
+        },
+        "mcp_client": {
+          "enabled": false,
+          "servers": []
+        },
+        "mcp_server": {
+          "enabled": false,
+          "http": {
+            "enabled": false,
+            "host": "127.0.0.1",
+            "path": "/mcp",
+            "port": 8000
+          },
+          "stdio": true
+        },
+        "push_notifications": true,
+        "state_history": true,
+        "streaming": true
+      }
+    },
+    "handler": {
+      "description": "Typed handler selection (`[handler]`). When omitted, the legacy\n`agent.implementation` string is honoured via [`handler_type`].",
+      "$ref": "#/$defs/HandlerConfig",
+      "default": {
+        "type": ""
+      }
+    },
+    "llm": {
+      "description": "LLM Configuration",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/LlmConfig"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "server": {
+      "description": "Server configuration",
+      "$ref": "#/$defs/ServerConfig",
+      "default": {
+        "auth": {
+          "type": "none"
+        },
+        "host": "127.0.0.1",
+        "http_port": 8080,
+        "storage": {
+          "type": "inmemory"
+        }
+      }
+    },
+    "skills": {
+      "description": "Skills exposed by the agent",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SkillConfig"
+      }
+    }
+  },
+  "required": [
+    "agent"
+  ],
+  "$defs": {
+    "AgentMetadata": {
+      "description": "Agent metadata and identity",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Agent description",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "documentation_url": {
+          "description": "Documentation URL",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "implementation": {
+          "description": "The implementation handler to use for this agent (e.g. 'reimbursement', 'echo')\nUsed primarily by the generic a2a binary.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "description": "Agent name",
+          "type": "string"
+        },
+        "provider": {
+          "description": "Provider information",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProviderInfo"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "version": {
+          "description": "Agent version",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "Ap2ExtensionConfig": {
+      "description": "AP2 extension configuration",
+      "type": "object",
+      "properties": {
+        "required": {
+          "description": "Whether clients must understand AP2 to interact with this agent",
+          "type": "boolean",
+          "default": false
+        },
+        "roles": {
+          "description": "AP2 roles this agent performs (merchant, shopper, credentials-provider, payment-processor)",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "roles"
+      ]
+    },
+    "AuthConfig": {
+      "description": "Authentication configuration",
+      "oneOf": [
+        {
+          "description": "No authentication (default for development)",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Bearer token authentication",
+          "type": "object",
+          "properties": {
+            "format": {
+              "description": "Optional bearer format description (e.g., \"JWT\")",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "tokens": {
+              "description": "List of valid tokens (supports env vars)",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "bearer"
+            }
+          },
+          "required": [
+            "type",
+            "tokens"
+          ]
+        },
+        {
+          "description": "API Key authentication",
+          "type": "object",
+          "properties": {
+            "keys": {
+              "description": "Valid API keys",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "location": {
+              "description": "Location of the API key: \"header\", \"query\", or \"cookie\"",
+              "type": "string",
+              "default": "header"
+            },
+            "name": {
+              "description": "Name of the header/query param/cookie",
+              "type": "string",
+              "default": "X-API-Key"
+            },
+            "type": {
+              "type": "string",
+              "const": "apikey"
+            }
+          },
+          "required": [
+            "type",
+            "keys"
+          ]
+        },
+        {
+          "description": "JWT (JSON Web Token) authentication",
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "description": "Algorithm to use (HS256, HS384, HS512, RS256, RS384, RS512)",
+              "type": "string",
+              "default": "HS256"
+            },
+            "audience": {
+              "description": "Required audience (aud claim)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "issuer": {
+              "description": "Required issuer (iss claim)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "rsa_pem_path": {
+              "description": "RSA public key in PEM format for RSA algorithms (RS256, RS384, RS512)",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "secret": {
+              "description": "JWT secret for HMAC algorithms (HS256, HS384, HS512)\nUse ${ENV_VAR} for environment variables",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "jwt"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "OAuth2 authentication",
+          "type": "object",
+          "properties": {
+            "authorization_url": {
+              "description": "Authorization URL",
+              "type": "string"
+            },
+            "client_id": {
+              "description": "Client ID",
+              "type": "string"
+            },
+            "client_secret": {
+              "description": "Client secret (use ${ENV_VAR} for environment variables)",
+              "type": "string"
+            },
+            "flow": {
+              "description": "OAuth2 flow type: \"authorization_code\" or \"client_credentials\"",
+              "type": "string",
+              "default": "authorization_code"
+            },
+            "redirect_url": {
+              "description": "Redirect URL for authorization code flow",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scopes": {
+              "description": "Required scopes",
+              "type": "array",
+              "default": [],
+              "items": {
+                "type": "string"
+              }
+            },
+            "token_url": {
+              "description": "Token URL",
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "oauth2"
+            }
+          },
+          "required": [
+            "type",
+            "client_id",
+            "client_secret",
+            "authorization_url",
+            "token_url"
+          ]
+        }
+      ]
+    },
+    "ExtensionsConfig": {
+      "description": "Protocol extensions configuration",
+      "type": "object",
+      "properties": {
+        "ap2": {
+          "description": "AP2 (Agent Payments Protocol) extension",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Ap2ExtensionConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      }
+    },
+    "FeaturesConfig": {
+      "description": "Features configuration",
+      "type": "object",
+      "properties": {
+        "authenticated_card": {
+          "description": "Enable authenticated extended card",
+          "type": "boolean",
+          "default": false
+        },
+        "extensions": {
+          "description": "Protocol extensions (AP2, etc.)",
+          "$ref": "#/$defs/ExtensionsConfig",
+          "default": {
+            "ap2": null
+          }
+        },
+        "mcp_client": {
+          "description": "MCP client configuration (connect to MCP servers to use their tools)",
+          "$ref": "#/$defs/McpClientConfig",
+          "default": {
+            "enabled": false,
+            "servers": []
+          }
+        },
+        "mcp_server": {
+          "description": "MCP server configuration (expose agent as MCP server)",
+          "$ref": "#/$defs/McpServerConfig",
+          "default": {
+            "enabled": false,
+            "http": {
+              "enabled": false,
+              "host": "127.0.0.1",
+              "path": "/mcp",
+              "port": 8000
+            },
+            "stdio": true
+          }
+        },
+        "push_notifications": {
+          "description": "Enable push notifications",
+          "type": "boolean",
+          "default": false
+        },
+        "state_history": {
+          "description": "Enable state transition history",
+          "type": "boolean",
+          "default": false
+        },
+        "streaming": {
+          "description": "Enable streaming updates",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "HandlerConfig": {
+      "description": "How a handler is selected for an agent.\n\nThe typed replacement for the stringly-typed `agent.implementation`. When\nabsent, the legacy `agent.implementation` field is honoured, so existing\nconfigs keep working unchanged.",
+      "type": "object",
+      "properties": {
+        "llm": {
+          "description": "Options for the generic LLM-driven handler (`type = \"llm\"`).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LlmHandlerConfig"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "type": {
+          "description": "Built-in handler selector. \"echo\", \"llm\", \"reimbursement\", or any\ncustom name resolved by the host binary.",
+          "type": "string",
+          "default": "echo"
+        }
+      }
+    },
+    "LlmConfig": {
+      "description": "LLM Configuration",
+      "type": "object",
+      "properties": {
+        "api_key": {
+          "description": "API key for the LLM",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "base_url": {
+          "description": "Base URL (for providers like openai that support local LLMs like ollama)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "http_referer": {
+          "description": "OpenRouter `HTTP-Referer` attribution header (ignored by other providers)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "model": {
+          "description": "Model to use",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "description": "LLM Provider (e.g. \"openrouter\", \"openai\", \"gemini\")",
+          "type": "string"
+        },
+        "x_title": {
+          "description": "OpenRouter `X-Title` attribution header (ignored by other providers)",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "provider"
+      ]
+    },
+    "LlmHandlerConfig": {
+      "description": "Options for the generic config-driven LLM handler.",
+      "type": "object",
+      "properties": {
+        "max_tool_rounds": {
+          "description": "Maximum LLM <-> tool round-trips before the handler gives up.",
+          "type": "integer",
+          "format": "uint32",
+          "default": 4,
+          "minimum": 0
+        },
+        "system_prompt": {
+          "description": "System prompt steering the model's behaviour.",
+          "type": "string",
+          "default": "You are a helpful assistant. Use the available tools when they give a more precise answer than guessing, then reply concisely."
+        }
+      }
+    },
+    "McpClientConfig": {
+      "description": "MCP client configuration",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable MCP client (connect to MCP servers to use their tools)",
+          "type": "boolean",
+          "default": false
+        },
+        "servers": {
+          "description": "MCP servers to connect to",
+          "type": "array",
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/McpServerConnection"
+          }
+        }
+      }
+    },
+    "McpHttpConfig": {
+      "description": "Streamable HTTP transport configuration for the MCP server.\n\nWhen [`enabled`](Self::enabled), the agent is served over MCP's Streamable\nHTTP transport (`rmcp`'s `StreamableHttpService`) instead of stdio, mounted\nat [`path`](Self::path) on `host:port`.",
+      "type": "object",
+      "properties": {
+        "allowed_hosts": {
+          "description": "Hostnames / `host:port` authorities accepted in the inbound `Host`\nheader (DNS-rebinding protection).\n\n* Omitted → the secure default: loopback only (`localhost`, `127.0.0.1`,\n  `::1`).\n* `[]` → disable `Host` validation entirely (allow any host — required\n  for public binds, but **not recommended** without an upstream proxy).\n* Non-empty → only the listed authorities are accepted.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowed_origins": {
+          "description": "Browser `Origin` values accepted on inbound requests.\n\n* Omitted (or `[]`) → `Origin` validation disabled (the rmcp default).\n* Non-empty → requests carrying an `Origin` must match one of these per\n  RFC 6454 `(scheme, host, port)`; entries must include a scheme (e.g.\n  `https://app.example.com`). Requests without an `Origin` still pass.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "enabled": {
+          "description": "Serve the MCP server over Streamable HTTP rather than stdio.",
+          "type": "boolean",
+          "default": false
+        },
+        "host": {
+          "description": "Host/interface to bind to.",
+          "type": "string",
+          "default": "127.0.0.1"
+        },
+        "path": {
+          "description": "URL path the Streamable HTTP endpoint is mounted at.",
+          "type": "string",
+          "default": "/mcp"
+        },
+        "port": {
+          "description": "TCP port to bind to.",
+          "type": "integer",
+          "format": "uint16",
+          "default": 8000,
+          "maximum": 65535,
+          "minimum": 0
+        }
+      }
+    },
+    "McpServerConfig": {
+      "description": "MCP server configuration",
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "description": "Enable MCP server (expose agent as MCP tools)",
+          "type": "boolean",
+          "default": false
+        },
+        "http": {
+          "description": "Streamable HTTP transport (for networked MCP clients).",
+          "$ref": "#/$defs/McpHttpConfig",
+          "default": {
+            "enabled": false,
+            "host": "127.0.0.1",
+            "path": "/mcp",
+            "port": 8000
+          }
+        },
+        "name": {
+          "description": "Server name (defaults to agent name)",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stdio": {
+          "description": "Use stdio transport (for Claude Desktop integration).\n\nIgnored when [`http.enabled`](McpHttpConfig::enabled) is set — the HTTP\n(Streamable HTTP) transport takes precedence, since a single process\ncannot own stdin/stdout for stdio and bind a socket at the same time.",
+          "type": "boolean",
+          "default": true
+        },
+        "version": {
+          "description": "Server version (defaults to agent version)",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "McpServerConnection": {
+      "description": "Configuration for connecting to an MCP server",
+      "type": "object",
+      "properties": {
+        "args": {
+          "description": "Arguments to pass to the command",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "command": {
+          "description": "Command to run to start the MCP server",
+          "type": "string"
+        },
+        "cwd": {
+          "description": "Working directory for the command",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "env": {
+          "description": "Environment variables to set",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "name": {
+          "description": "Unique name for this MCP server",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "command"
+      ]
+    },
+    "ProviderInfo": {
+      "description": "Provider information",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "url"
+      ]
+    },
+    "ServerConfig": {
+      "description": "Server configuration",
+      "type": "object",
+      "properties": {
+        "auth": {
+          "description": "Authentication configuration",
+          "$ref": "#/$defs/AuthConfig",
+          "default": {
+            "type": "none"
+          }
+        },
+        "host": {
+          "description": "Host to bind to",
+          "type": "string",
+          "default": "127.0.0.1"
+        },
+        "http_port": {
+          "description": "HTTP server port (0 to disable)",
+          "type": "integer",
+          "format": "uint16",
+          "default": 8080,
+          "maximum": 65535,
+          "minimum": 0
+        },
+        "storage": {
+          "description": "Storage configuration",
+          "$ref": "#/$defs/StorageConfig",
+          "default": {
+            "type": "inmemory"
+          }
+        }
+      }
+    },
+    "SkillConfig": {
+      "description": "Skill configuration",
+      "type": "object",
+      "properties": {
+        "description": {
+          "description": "Skill description",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "examples": {
+          "description": "Example queries for this skill",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "description": "Unique skill identifier",
+          "type": "string"
+        },
+        "input_formats": {
+          "description": "Supported input formats",
+          "type": "array",
+          "default": [
+            "text",
+            "data"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "keywords": {
+          "description": "Keywords for skill discovery",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "description": "Human-readable skill name",
+          "type": "string"
+        },
+        "output_formats": {
+          "description": "Supported output formats",
+          "type": "array",
+          "default": [
+            "text",
+            "data"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "StorageConfig": {
+      "description": "Storage backend configuration",
+      "oneOf": [
+        {
+          "description": "In-memory storage (default)",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "inmemory"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "SQLx-based persistent storage",
+          "type": "object",
+          "properties": {
+            "enable_logging": {
+              "description": "Enable SQL query logging",
+              "type": "boolean",
+              "default": false
+            },
+            "max_connections": {
+              "description": "Maximum number of connections in the pool",
+              "type": "integer",
+              "format": "uint32",
+              "default": 10,
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "sqlx"
+            },
+            "url": {
+              "description": "Database URL (supports env vars like ${DATABASE_URL})",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "url"
+          ]
+        }
+      ]
+    }
+  }
+}

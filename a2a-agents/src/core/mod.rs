@@ -3,7 +3,7 @@
 //! This module provides the essential building blocks for creating A2A protocol agents:
 //! - [`builder`] - Declarative agent builder with fluent API
 //! - [`config`] - TOML-based configuration system
-//! - [`runtime`] - Agent runtime and server management
+//! - [`server`] - Per-agent serving lifecycle (HTTP/WS/MCP)
 //!
 //! # Example
 //!
@@ -26,14 +26,15 @@ pub mod builder;
 pub mod config;
 pub mod mcp;
 pub mod mcp_client;
-pub mod runtime;
+pub mod server;
 
 // Re-export main types for convenience
 pub use builder::{AgentBuilder, BuildError};
 pub use config::{
-    AgentConfig, Ap2ExtensionConfig, AuthConfig, ConfigError, ExtensionsConfig, McpClientConfig,
-    McpServerConfig, McpServerConnection, ServerConfig, StorageConfig,
+    AgentConfig, Ap2ExtensionConfig, AuthConfig, ConfigError, ExtensionsConfig, HandlerConfig,
+    HandlerType, LlmHandlerConfig, McpClientConfig, McpServerConfig, McpServerConnection,
+    RemoteAgentConfig, ServerConfig, StorageConfig,
 };
 #[cfg(feature = "mcp-client")]
 pub use mcp_client::{McpClientError, McpClientManager};
-pub use runtime::{AgentRuntime, RuntimeError};
+pub use server::{AgentServer, ServerError};

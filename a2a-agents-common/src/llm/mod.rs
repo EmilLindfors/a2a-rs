@@ -240,4 +240,12 @@ pub trait LlmProvider: Send + Sync {
         &self,
         request: LlmRequest,
     ) -> Result<BoxStream<'static, Result<LlmStreamEvent, LlmError>>, LlmError>;
+
+    /// Whether this provider surfaces a separate reasoning channel for
+    /// reasoning-capable models, so callers can opt into [`ReasoningConfig`]
+    /// instead of sniffing the environment. Defaults to `false`; providers that
+    /// support it (e.g. OpenRouter) override this.
+    fn supports_reasoning(&self) -> bool {
+        false
+    }
 }

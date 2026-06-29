@@ -140,6 +140,7 @@ pub fn provider_from_settings(settings: &LlmSettings) -> Result<Arc<dyn LlmProvi
                     .unwrap_or_else(|| "gpt-4o-mini".to_string()),
                 api_key: settings.api_key.clone(),
                 extra_headers: Vec::new(),
+                supports_reasoning: false,
             };
             Ok(Arc::new(OpenAiProvider::new(config)))
         }

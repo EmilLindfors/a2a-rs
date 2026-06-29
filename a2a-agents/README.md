@@ -242,6 +242,86 @@ The example connects to the bundled `mcp_echo_server`, so it runs with no
 external setup; point `command`/`args` at any MCP stdio server to talk to
 something real.
 
+## 🤖 LLM agents & multi-agent platform
+
+Beyond single agents, `a2a-agents` ships the building blocks for an
+**LLM-driven, multi-agent platform** — defined as **ports** in the platform
+layer so the pure `a2a-rs` protocol crate stays infrastructure-free. The
+`a2a` binary wires them together; it requires the `llm`, `mcp-server`, and
+`schema` features:
+
+```bash
+cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- <subcommand>
+```
+
+| Subcommand | What it does |
+|---|---|
+| `run --config <toml>…` | Run one or more agents from TOML configs |
+| `validate --config <toml>…` | Load + validate configs without serving |
+| `control-plane --bind … --config-dir … --runtime local\|container` | Serve the deploy/list/status/undeploy HTTP API |
+| `print-schema` | Print the `AgentConfig` JSON Schema to stdout |
+
+### Config-driven LLM handler (`llm` feature)
+
+Set `type = "llm"` and the framework drives a generic tool-calling LLM handler —
+**no Rust code**. The model provider is picked up from the environment
+(`OPENAI_API_KEY` / `GEMINI_API_KEY` / `OPENROUTER_API_KEY`):
+
+```toml
+[handler]
+type = "llm"
+
+[handler.llm]
+system_prompt = "You are a helpful assistant."
+max_tool_rounds = 4
+```
+
+The `llm` feature is independent of MCP: an LLM agent that only delegates to peer
+A2A agents builds without pulling in `rmcp`. Add `mcp-server` as well to also
+feed it the tools of connected MCP servers.
+
+### Agent-as-tool delegation
+
+List peer agents under `[[handler.llm.agents]]` and each is exposed to the model
+as one `ask_<slug>` tool, so an orchestrator delegates work to specialists. Name
+a peer by **exactly one** of `url`, `skill`, or `agent_id`:
+
+```toml
+[[handler.llm.agents]]
+name = "Weather Agent"
+url = "http://127.0.0.1:8081"     # dial directly, or…
+
+[[handler.llm.agents]]
+name = "Billing"
+skill = "invoice-lookup"          # …resolve by advertised skill, or…
+
+[[handler.llm.agents]]
+name = "Scheduler"
+agent_id = "scheduler-agent"      # …by registry id (slug of the name)
+```
+
+`skill` / `agent_id` are resolved against the **agent registry** at startup, so
+peers are found by capability instead of a hard-coded URL. See
+[`examples/orchestrator_agent.toml`](examples/orchestrator_agent.toml) and
+[`examples/registry_orchestrator.toml`](examples/registry_orchestrator.toml).
+
+### Control plane
+
+`control-plane` serves an HTTP API that composes the runtime and registry:
+`POST /agents` deploys an agent from rendered TOML (provision + start + register
+its card so peers discover it), `GET /agents` lists, `GET /agents/{id}` reports
+health, `DELETE /agents/{id}` tears down. Pick the backend with `--runtime`:
+`local` supervises child `a2a run` processes, `container` runs each agent in a
+`docker`/`podman` container (`--engine`, `--image`).
+
+```bash
+cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- \
+  control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local
+```
+
+See the workspace [`DECLARATIVE_AGENTS.md`](../DECLARATIVE_AGENTS.md) for the
+platform design and roadmap.
+
 ## Architecture
 
 ### ReimbursementMessageHandler
@@ -374,9 +454,11 @@ Here's an example conversation with the reimbursement agent:
 
 ## Current Limitations
 
-This example implementation demonstrates the framework architecture but has simplified business logic:
+The **reimbursement** reference agent deliberately keeps its business logic
+simple to showcase the framework architecture (the generic `llm` handler above
+is the path to real model-driven agents):
 
-- **Message Processing**: Basic pattern matching instead of LLM integration
+- **Message Processing**: Basic pattern matching (use `type = "llm"` for LLM-driven agents)
 - **Storage**: In-memory storage (framework supports SQLx for production)
 - **Authentication**: Not implemented (framework supports Bearer/OAuth2)
 - **Form Processing**: Simple JSON forms without complex validation

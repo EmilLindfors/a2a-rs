@@ -1,7 +1,7 @@
 //! Expose a declarative A2A agent as an MCP stdio server.
 //!
 //! This example flips `features.mcp_server.enabled = true` in TOML and lets
-//! `AgentBuilder` / `AgentRuntime` do the rest: it starts an MCP stdio bridge
+//! `AgentBuilder` / `AgentServer` do the rest: it starts an MCP stdio bridge
 //! that dispatches calls to the agent handler in-process (without needing to
 //! start an HTTP/WebSocket server). The agent's skills are callable as MCP
 //! tools by clients like Claude Desktop.

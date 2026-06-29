@@ -1,0 +1,51 @@
+# Agent-to-agent delegation: an LLM orchestrator that calls peer A2A agents
+# as tools. The multi-agent keystone — no custom Rust required.
+#
+# Run a downstream agent first (e.g. the llm_agent example on :8080), then:
+#   cargo run -p a2a-agents --bin a2a --features schema,mcp-server -- run --config examples/orchestrator_agent.toml
+#
+# The orchestrator exposes each [[handler.llm.agents]] entry to the model as an
+# `ask_<slug>` tool (here: `ask_weather_agent`), reached over the wire via the
+# A2A Transport port (auto-negotiated from the peer's agent card). Set an LLM key
+# (OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY) so the model can decide
+# when to delegate.
+
+[agent]
+name = "Orchestrator"
+description = "Routes requests to specialist A2A agents."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 9090
+
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "route"
+name = "Route"
+description = "Understand a request and delegate to the right specialist agent."
+keywords = ["route", "delegate", "orchestrate"]
+examples = ["Ask the weather agent about tomorrow", "Have billing summarize my invoice"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[handler]
+type = "llm"
+
+[handler.llm]
+system_prompt = "You are an orchestrator. When a specialist tool fits the request, call it and relay its answer. Otherwise answer directly and concisely."
+max_tool_rounds = 4
+
+# Each remote agent becomes one `ask_<slug>` tool. `description` is optional —
+# when omitted, it is derived from the peer's agent card at startup.
+[[handler.llm.agents]]
+name = "Weather Agent"
+url = "http://127.0.0.1:8080"
+description = "Answers questions about current and forecast weather."
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true

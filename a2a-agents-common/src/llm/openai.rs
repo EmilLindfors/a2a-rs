@@ -16,6 +16,10 @@ pub struct OpenAiConfig {
     /// the OpenAI-compatible adapter carries e.g. OpenRouter's `HTTP-Referer` /
     /// `X-Title` attribution headers without knowing what they mean.
     pub extra_headers: Vec<(String, String)>,
+    /// Whether this endpoint surfaces a separate reasoning channel (true for
+    /// OpenRouter, false for plain OpenAI / local servers). Drives
+    /// [`LlmProvider::supports_reasoning`].
+    pub supports_reasoning: bool,
 }
 
 /// Default base URL for the OpenRouter API (OpenAI-compatible surface).
@@ -48,6 +52,7 @@ impl OpenAiConfig {
             model,
             api_key,
             extra_headers: Vec::new(),
+            supports_reasoning: false,
         })
     }
 
@@ -75,6 +80,7 @@ impl OpenAiConfig {
             model,
             api_key: Some(api_key),
             extra_headers,
+            supports_reasoning: true,
         }
     }
 
@@ -269,6 +275,10 @@ impl OpenAiProvider {
 
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
+    fn supports_reasoning(&self) -> bool {
+        self.config.supports_reasoning
+    }
+
     async fn chat_completion(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
         let url = format!("{}/chat/completions", self.config.base_url);
 

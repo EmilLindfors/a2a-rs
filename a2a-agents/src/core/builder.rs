@@ -4,7 +4,7 @@
 //! or programmatically with minimal boilerplate.
 
 use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
-use crate::core::runtime::AgentRuntime;
+use crate::core::server::AgentServer;
 use a2a_rs::domain::{A2AError, ContextId, Task, TaskId, TaskPushNotificationConfig, TaskState};
 use a2a_rs::port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
@@ -261,7 +261,7 @@ impl<H, S> AgentBuilder<H, S> {
     ///
     /// Pass the *same* [`AsyncStreamingHandler`] instance your handler
     /// broadcasts to (clones of an `InMemoryStreamingHandler` share their
-    /// subscriber registry). The built [`AgentRuntime`] injects it into the
+    /// subscriber registry). The built [`AgentServer`] injects it into the
     /// transport so `tasks/subscribe` SSE streams observe those broadcasts —
     /// without it, the transport defaults to a no-op and updates never reach
     /// clients.
@@ -273,6 +273,17 @@ impl<H, S> AgentBuilder<H, S> {
     /// Access the configuration
     pub fn config(&self) -> &AgentConfig {
         &self.config
+    }
+
+    /// Build this agent's [`AgentCard`](a2a_rs::domain::AgentCard) from its
+    /// configuration, without starting a server. Used to self-register the
+    /// agent with an [`AgentRegistry`](crate::registry::AgentRegistry) before it
+    /// runs, so peers can discover it by skill.
+    pub async fn agent_card(&self) -> Result<a2a_rs::domain::AgentCard, a2a_rs::domain::A2AError> {
+        use a2a_rs::services::AgentInfoProvider;
+        crate::core::server::agent_info_from_config(&self.config, self.config.agent_url())
+            .get_agent_card()
+            .await
     }
 
     /// Modify the configuration
@@ -297,11 +308,11 @@ where
         + 'static,
 {
     /// Build the agent runtime
-    pub fn build(self) -> Result<AgentRuntime<H, S>, BuildError> {
+    pub fn build(self) -> Result<AgentServer<H, S>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
         let storage = self.storage.ok_or(BuildError::MissingStorage)?;
 
-        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        let mut runtime = AgentServer::new(self.config, Arc::new(handler), Arc::new(storage));
         if let Some(streaming) = self.streaming {
             runtime = runtime.with_streaming(streaming);
         }
@@ -316,7 +327,7 @@ where
     /// Create storage from the configuration
     /// This is a convenience method that automatically creates the appropriate storage
     /// based on what's configured in the TOML file
-    pub async fn build_with_auto_storage(self) -> Result<AgentRuntime<H, AutoStorage>, BuildError> {
+    pub async fn build_with_auto_storage(self) -> Result<AgentServer<H, AutoStorage>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
         let streaming = self.streaming;
 
@@ -352,7 +363,7 @@ where
             }
         };
 
-        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        let mut runtime = AgentServer::new(self.config, Arc::new(handler), Arc::new(storage));
         if let Some(streaming) = streaming {
             runtime = runtime.with_streaming(streaming);
         }
@@ -365,7 +376,7 @@ where
     pub async fn build_with_auto_storage_and_migrations(
         self,
         migrations: &'static [&'static str],
-    ) -> Result<AgentRuntime<H, AutoStorage>, BuildError> {
+    ) -> Result<AgentServer<H, AutoStorage>, BuildError> {
         let handler = self.handler.ok_or(BuildError::MissingHandler)?;
         let streaming = self.streaming;
 
@@ -399,7 +410,7 @@ where
             }
         };
 
-        let mut runtime = AgentRuntime::new(self.config, Arc::new(handler), Arc::new(storage));
+        let mut runtime = AgentServer::new(self.config, Arc::new(handler), Arc::new(storage));
         if let Some(streaming) = streaming {
             runtime = runtime.with_streaming(streaming);
         }

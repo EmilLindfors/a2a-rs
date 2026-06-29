@@ -1,7 +1,9 @@
-//! Agent runtime for managing server lifecycle
+//! Per-agent server that manages one agent's serving lifecycle.
 //!
-//! The runtime handles starting HTTP/WebSocket servers, wiring components,
-//! and managing the agent lifecycle based on configuration.
+//! [`AgentServer`] handles starting HTTP/WebSocket (or MCP) servers, wiring
+//! components, and serving a single agent based on its configuration. It is the
+//! leaf a higher-level [`AgentRuntime`](crate::runtime::AgentRuntime) supervises
+//! — not to be confused with that fleet-level port.
 
 use crate::core::config::{AgentConfig, AuthConfig, StorageConfig};
 use a2a_rs::adapter::{BearerTokenAuthenticator, ConnectRpcAdapter, HttpServer, SimpleAgentInfo};
@@ -19,8 +21,8 @@ use oauth2::{AuthUrl, ClientId, ClientSecret, RedirectUrl, TokenUrl};
 #[cfg(feature = "auth")]
 use std::collections::HashMap;
 
-/// Agent runtime that manages the server lifecycle
-pub struct AgentRuntime<H, S> {
+/// Per-agent server that manages one agent's serving lifecycle.
+pub struct AgentServer<H, S> {
     config: AgentConfig,
     handler: Arc<H>,
     storage: Arc<S>,
@@ -31,7 +33,179 @@ pub struct AgentRuntime<H, S> {
     streaming: Option<Arc<dyn AsyncStreamingHandler>>,
 }
 
-impl<H, S> AgentRuntime<H, S>
+/// Build a [`SimpleAgentInfo`] (an `AgentInfoProvider`) from agent configuration,
+/// independent of a running server. Shared by the runtime's HTTP/WS startup and
+/// by registry self-registration, which needs the agent card without binding a
+/// socket.
+pub(crate) fn agent_info_from_config(config: &AgentConfig, base_url: String) -> SimpleAgentInfo {
+    let mut agent_info = SimpleAgentInfo::new(config.agent.name.clone(), base_url);
+
+    if let Some(ref description) = config.agent.description {
+        agent_info = agent_info.with_description(description.clone());
+    }
+
+    if let Some(ref provider) = config.agent.provider {
+        agent_info = agent_info.with_provider(provider.name.clone(), provider.url.clone());
+    }
+
+    if let Some(ref doc_url) = config.agent.documentation_url {
+        agent_info = agent_info.with_documentation_url(doc_url.clone());
+    }
+
+    if let Some(ref version) = config.agent.version {
+        agent_info = agent_info.with_version(version.clone());
+    }
+
+    // Map AuthConfig into AgentCard security schemes
+    let mut schemes = std::collections::HashMap::new();
+    match &config.server.auth {
+        crate::core::config::AuthConfig::None => {}
+        crate::core::config::AuthConfig::Bearer { format, .. } => {
+            schemes.insert(
+                "bearer".to_string(),
+                a2a_rs::domain::SecurityScheme::http(
+                    "bearer".to_string(),
+                    format.clone(),
+                    Some("Bearer token authentication".to_string()),
+                ),
+            );
+        }
+        crate::core::config::AuthConfig::ApiKey { location, name, .. } => {
+            schemes.insert(
+                "api_key".to_string(),
+                a2a_rs::domain::SecurityScheme::api_key(
+                    name.clone(),
+                    location.clone(),
+                    Some("API Key authentication".to_string()),
+                ),
+            );
+        }
+        crate::core::config::AuthConfig::Jwt {
+            issuer, audience, ..
+        } => {
+            schemes.insert(
+                "jwt".to_string(),
+                a2a_rs::domain::SecurityScheme::http(
+                    "bearer".to_string(),
+                    Some("JWT".to_string()),
+                    Some(format!(
+                        "JWT authentication (issuer: {:?}, audience: {:?})",
+                        issuer, audience
+                    )),
+                ),
+            );
+        }
+        crate::core::config::AuthConfig::OAuth2 {
+            flow,
+            token_url,
+            authorization_url,
+            scopes,
+            ..
+        } => {
+            let scopes_map: std::collections::HashMap<String, String> =
+                scopes.iter().map(|s| (s.clone(), s.clone())).collect();
+            let flows = if flow == "client_credentials" {
+                a2a_rs::domain::OAuthFlows::client_credentials(
+                    a2a_rs::domain::ClientCredentialsOAuthFlow {
+                        token_url: token_url.clone(),
+                        refresh_url: String::new(),
+                        scopes: scopes_map,
+                        ..Default::default()
+                    },
+                )
+            } else {
+                a2a_rs::domain::OAuthFlows::authorization_code(
+                    a2a_rs::domain::AuthorizationCodeOAuthFlow {
+                        authorization_url: authorization_url.clone(),
+                        token_url: token_url.clone(),
+                        refresh_url: String::new(),
+                        scopes: scopes_map,
+                        ..Default::default()
+                    },
+                )
+            };
+            schemes.insert(
+                "oauth2".to_string(),
+                a2a_rs::domain::SecurityScheme::oauth2(
+                    flows,
+                    Some("OAuth2 authentication".to_string()),
+                    None,
+                ),
+            );
+        }
+    }
+    if !schemes.is_empty() {
+        agent_info = agent_info.with_security_schemes(schemes);
+    }
+
+    // Add features
+    if config.features.streaming {
+        agent_info = agent_info.with_streaming();
+    }
+
+    if config.features.push_notifications {
+        agent_info = agent_info.with_push_notifications();
+    }
+
+    if config.features.state_history {
+        agent_info = agent_info.with_state_transition_history();
+    }
+
+    if config.features.authenticated_card {
+        agent_info = agent_info.with_authenticated_extended_card();
+    }
+
+    // Add extensions
+    if let Some(ref ap2_config) = config.features.extensions.ap2 {
+        let roles_json: Vec<serde_json::Value> = ap2_config
+            .roles
+            .iter()
+            .map(|r| serde_json::Value::String(r.clone()))
+            .collect();
+
+        let mut params = std::collections::HashMap::new();
+        params.insert("roles".to_string(), serde_json::Value::Array(roles_json));
+        let params_val = serde_json::Value::Object(params.into_iter().collect());
+        let params_struct: buffa_types::google::protobuf::Struct =
+            serde_json::from_value(params_val).unwrap_or_default();
+
+        let ext = a2a_rs::domain::AgentExtension {
+            uri: "https://github.com/google-agentic-commerce/ap2/tree/v0.1".to_string(),
+            description: "Agent Payments Protocol (AP2) v0.1".to_string(),
+            required: ap2_config.required,
+            params: buffa::MessageField::some(params_struct),
+            ..Default::default()
+        };
+
+        agent_info = agent_info.add_extension(ext);
+        info!("💳 AP2 extension enabled (roles: {:?})", ap2_config.roles);
+    }
+
+    // Add skills
+    for skill in &config.skills {
+        agent_info = agent_info.add_comprehensive_skill(
+            skill.id.clone(),
+            skill.name.clone(),
+            skill.description.clone(),
+            if skill.keywords.is_empty() {
+                None
+            } else {
+                Some(skill.keywords.clone())
+            },
+            if skill.examples.is_empty() {
+                None
+            } else {
+                Some(skill.examples.clone())
+            },
+            Some(skill.input_formats.clone()),
+            Some(skill.output_formats.clone()),
+        );
+    }
+
+    agent_info
+}
+
+impl<H, S> AgentServer<H, S>
 where
     H: AsyncMessageHandler + Clone + Send + Sync + 'static,
     S: AsyncTaskLifecycle
@@ -42,7 +216,7 @@ where
         + Sync
         + 'static,
 {
-    /// Create a new runtime
+    /// Create a new agent server.
     pub fn new(config: AgentConfig, handler: Arc<H>, storage: Arc<S>) -> Self {
         Self {
             config,
@@ -63,179 +237,15 @@ where
         self
     }
 
-    /// Build agent info from configuration
+    /// Build agent info from this agent's configuration.
     fn build_agent_info(&self, base_url: String) -> SimpleAgentInfo {
-        let mut agent_info = SimpleAgentInfo::new(self.config.agent.name.clone(), base_url);
-
-        if let Some(ref description) = self.config.agent.description {
-            agent_info = agent_info.with_description(description.clone());
-        }
-
-        if let Some(ref provider) = self.config.agent.provider {
-            agent_info = agent_info.with_provider(provider.name.clone(), provider.url.clone());
-        }
-
-        if let Some(ref doc_url) = self.config.agent.documentation_url {
-            agent_info = agent_info.with_documentation_url(doc_url.clone());
-        }
-
-        if let Some(ref version) = self.config.agent.version {
-            agent_info = agent_info.with_version(version.clone());
-        }
-
-        // Map AuthConfig into AgentCard security schemes
-        let mut schemes = std::collections::HashMap::new();
-        match &self.config.server.auth {
-            crate::core::config::AuthConfig::None => {}
-            crate::core::config::AuthConfig::Bearer { format, .. } => {
-                schemes.insert(
-                    "bearer".to_string(),
-                    a2a_rs::domain::SecurityScheme::http(
-                        "bearer".to_string(),
-                        format.clone(),
-                        Some("Bearer token authentication".to_string()),
-                    ),
-                );
-            }
-            crate::core::config::AuthConfig::ApiKey { location, name, .. } => {
-                schemes.insert(
-                    "api_key".to_string(),
-                    a2a_rs::domain::SecurityScheme::api_key(
-                        name.clone(),
-                        location.clone(),
-                        Some("API Key authentication".to_string()),
-                    ),
-                );
-            }
-            crate::core::config::AuthConfig::Jwt {
-                issuer, audience, ..
-            } => {
-                schemes.insert(
-                    "jwt".to_string(),
-                    a2a_rs::domain::SecurityScheme::http(
-                        "bearer".to_string(),
-                        Some("JWT".to_string()),
-                        Some(format!(
-                            "JWT authentication (issuer: {:?}, audience: {:?})",
-                            issuer, audience
-                        )),
-                    ),
-                );
-            }
-            crate::core::config::AuthConfig::OAuth2 {
-                flow,
-                token_url,
-                authorization_url,
-                scopes,
-                ..
-            } => {
-                let scopes_map: std::collections::HashMap<String, String> =
-                    scopes.iter().map(|s| (s.clone(), s.clone())).collect();
-                let flows = if flow == "client_credentials" {
-                    a2a_rs::domain::OAuthFlows::client_credentials(
-                        a2a_rs::domain::ClientCredentialsOAuthFlow {
-                            token_url: token_url.clone(),
-                            refresh_url: String::new(),
-                            scopes: scopes_map,
-                            ..Default::default()
-                        },
-                    )
-                } else {
-                    a2a_rs::domain::OAuthFlows::authorization_code(
-                        a2a_rs::domain::AuthorizationCodeOAuthFlow {
-                            authorization_url: authorization_url.clone(),
-                            token_url: token_url.clone(),
-                            refresh_url: String::new(),
-                            scopes: scopes_map,
-                            ..Default::default()
-                        },
-                    )
-                };
-                schemes.insert(
-                    "oauth2".to_string(),
-                    a2a_rs::domain::SecurityScheme::oauth2(
-                        flows,
-                        Some("OAuth2 authentication".to_string()),
-                        None,
-                    ),
-                );
-            }
-        }
-        if !schemes.is_empty() {
-            agent_info = agent_info.with_security_schemes(schemes);
-        }
-
-        // Add features
-        if self.config.features.streaming {
-            agent_info = agent_info.with_streaming();
-        }
-
-        if self.config.features.push_notifications {
-            agent_info = agent_info.with_push_notifications();
-        }
-
-        if self.config.features.state_history {
-            agent_info = agent_info.with_state_transition_history();
-        }
-
-        if self.config.features.authenticated_card {
-            agent_info = agent_info.with_authenticated_extended_card();
-        }
-
-        // Add extensions
-        if let Some(ref ap2_config) = self.config.features.extensions.ap2 {
-            let roles_json: Vec<serde_json::Value> = ap2_config
-                .roles
-                .iter()
-                .map(|r| serde_json::Value::String(r.clone()))
-                .collect();
-
-            let mut params = std::collections::HashMap::new();
-            params.insert("roles".to_string(), serde_json::Value::Array(roles_json));
-            let params_val = serde_json::Value::Object(params.into_iter().collect());
-            let params_struct: buffa_types::google::protobuf::Struct =
-                serde_json::from_value(params_val).unwrap_or_default();
-
-            let ext = a2a_rs::domain::AgentExtension {
-                uri: "https://github.com/google-agentic-commerce/ap2/tree/v0.1".to_string(),
-                description: "Agent Payments Protocol (AP2) v0.1".to_string(),
-                required: ap2_config.required,
-                params: buffa::MessageField::some(params_struct),
-                ..Default::default()
-            };
-
-            agent_info = agent_info.add_extension(ext);
-            info!("💳 AP2 extension enabled (roles: {:?})", ap2_config.roles);
-        }
-
-        // Add skills
-        for skill in &self.config.skills {
-            agent_info = agent_info.add_comprehensive_skill(
-                skill.id.clone(),
-                skill.name.clone(),
-                skill.description.clone(),
-                if skill.keywords.is_empty() {
-                    None
-                } else {
-                    Some(skill.keywords.clone())
-                },
-                if skill.examples.is_empty() {
-                    None
-                } else {
-                    Some(skill.examples.clone())
-                },
-                Some(skill.input_formats.clone()),
-                Some(skill.output_formats.clone()),
-            );
-        }
-
-        agent_info
+        agent_info_from_config(&self.config, base_url)
     }
 
     /// Start HTTP server
-    pub async fn start_http(&self) -> Result<(), RuntimeError> {
+    pub async fn start_http(&self) -> Result<(), ServerError> {
         if self.config.server.http_port == 0 {
-            return Err(RuntimeError::ServerNotConfigured(
+            return Err(ServerError::ServerNotConfigured(
                 "HTTP port is 0".to_string(),
             ));
         }
@@ -275,7 +285,7 @@ where
                 server
                     .start()
                     .await
-                    .map_err(|e| RuntimeError::ServerError(e.to_string()))
+                    .map_err(|e| ServerError::ServerError(e.to_string()))
             }
             AuthConfig::Bearer { tokens, format } => {
                 info!(
@@ -292,7 +302,7 @@ where
                 server
                     .start()
                     .await
-                    .map_err(|e| RuntimeError::ServerError(e.to_string()))
+                    .map_err(|e| ServerError::ServerError(e.to_string()))
             }
             AuthConfig::ApiKey {
                 keys,
@@ -309,7 +319,7 @@ where
                 server
                     .start()
                     .await
-                    .map_err(|e| RuntimeError::ServerError(e.to_string()))
+                    .map_err(|e| ServerError::ServerError(e.to_string()))
             }
             #[cfg(feature = "auth")]
             AuthConfig::Jwt {
@@ -325,16 +335,16 @@ where
                     JwtAuthenticator::new_with_secret(secret.as_bytes())
                 } else if let Some(pem_path) = rsa_pem_path {
                     let pem_data = std::fs::read(pem_path).map_err(|e| {
-                        RuntimeError::ServerError(format!("Failed to read RSA PEM file: {}", e))
+                        ServerError::ServerError(format!("Failed to read RSA PEM file: {}", e))
                     })?;
                     JwtAuthenticator::new_with_rsa_pem(&pem_data).map_err(|e| {
-                        RuntimeError::ServerError(format!(
+                        ServerError::ServerError(format!(
                             "Failed to create JWT authenticator: {}",
                             e
                         ))
                     })?
                 } else {
-                    return Err(RuntimeError::ServerError(
+                    return Err(ServerError::ServerError(
                         "JWT authentication requires either 'secret' or 'rsa_pem_path'".to_string(),
                     ));
                 };
@@ -353,10 +363,10 @@ where
                 server
                     .start()
                     .await
-                    .map_err(|e| RuntimeError::ServerError(e.to_string()))
+                    .map_err(|e| ServerError::ServerError(e.to_string()))
             }
             #[cfg(not(feature = "auth"))]
-            AuthConfig::Jwt { .. } => Err(RuntimeError::ServerError(
+            AuthConfig::Jwt { .. } => Err(ServerError::ServerError(
                 "JWT authentication requires the 'auth' feature to be enabled".to_string(),
             )),
             #[cfg(feature = "auth")]
@@ -376,10 +386,10 @@ where
                 let client_id = ClientId::new(client_id.clone());
                 let client_secret = ClientSecret::new(client_secret.clone());
                 let auth_url = AuthUrl::new(authorization_url.clone()).map_err(|e| {
-                    RuntimeError::ServerError(format!("Invalid authorization URL: {}", e))
+                    ServerError::ServerError(format!("Invalid authorization URL: {}", e))
                 })?;
                 let token_url = TokenUrl::new(token_url.clone())
-                    .map_err(|e| RuntimeError::ServerError(format!("Invalid token URL: {}", e)))?;
+                    .map_err(|e| ServerError::ServerError(format!("Invalid token URL: {}", e)))?;
 
                 let scopes_map: HashMap<String, String> =
                     scopes.iter().map(|s| (s.clone(), s.clone())).collect();
@@ -399,7 +409,7 @@ where
                             .unwrap_or_else(|| "http://localhost:8080/callback".to_string()),
                     )
                     .map_err(|e| {
-                        RuntimeError::ServerError(format!("Invalid redirect URL: {}", e))
+                        ServerError::ServerError(format!("Invalid redirect URL: {}", e))
                     })?;
 
                     info!("   Redirect URL: {}", redirect_url.as_str());
@@ -419,17 +429,17 @@ where
                 server
                     .start()
                     .await
-                    .map_err(|e| RuntimeError::ServerError(e.to_string()))
+                    .map_err(|e| ServerError::ServerError(e.to_string()))
             }
             #[cfg(not(feature = "auth"))]
-            AuthConfig::OAuth2 { .. } => Err(RuntimeError::ServerError(
+            AuthConfig::OAuth2 { .. } => Err(ServerError::ServerError(
                 "OAuth2 authentication requires the 'auth' feature to be enabled".to_string(),
             )),
         }
     }
 
     /// Start the appropriate server(s) based on configuration
-    pub async fn run(self) -> Result<(), RuntimeError> {
+    pub async fn run(self) -> Result<(), ServerError> {
         // Check if MCP server mode is enabled
         if self.config.features.mcp_server.enabled {
             return self.run_as_mcp_server().await;
@@ -439,7 +449,7 @@ where
         if self.config.server.http_port > 0 {
             self.start_http().await
         } else {
-            Err(RuntimeError::ServerNotConfigured(
+            Err(ServerError::ServerNotConfigured(
                 "No servers configured".to_string(),
             ))
         }
@@ -452,7 +462,7 @@ where
     /// [`AuthConfig`] are not applicable here — if you also want a secured
     /// HTTP surface, run a normal `start_http()` instance in a separate
     /// process or task.
-    async fn run_as_mcp_server(self) -> Result<(), RuntimeError> {
+    async fn run_as_mcp_server(self) -> Result<(), ServerError> {
         use crate::core::mcp;
         use a2a_rs::services::AgentInfoProvider;
 
@@ -470,12 +480,12 @@ where
         let agent_card = agent_info
             .get_agent_card()
             .await
-            .map_err(|e| RuntimeError::ServerError(format!("Failed to get agent card: {}", e)))?;
+            .map_err(|e| ServerError::ServerError(format!("Failed to get agent card: {}", e)))?;
 
         let handler = (*self.handler).clone();
         mcp::run_mcp_server(&self.config.features.mcp_server, agent_card, handler)
             .await
-            .map_err(|e| RuntimeError::ServerError(format!("MCP server error: {}", e)))
+            .map_err(|e| ServerError::ServerError(format!("MCP server error: {}", e)))
     }
 
     /// Print agent information
@@ -500,9 +510,9 @@ where
     }
 }
 
-/// Runtime errors
+/// Errors serving a single agent.
 #[derive(Debug, thiserror::Error)]
-pub enum RuntimeError {
+pub enum ServerError {
     #[error("Server not configured: {0}")]
     ServerNotConfigured(String),
 

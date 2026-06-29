@@ -1,0 +1,50 @@
+# Registry-driven orchestration: find peers by SKILL, not hard-coded URLs.
+#
+# Unlike orchestrator_agent.toml (which names a peer by `url`), this config
+# references a peer by the skill it advertises. At startup the runner registers
+# every agent's card in a shared registry, then resolves `skill = "..."` against
+# it — so the orchestrator binds to whichever agent provides the capability,
+# wherever it happens to be running.
+#
+# Run alongside registry_worker.toml in one process (see that file's header).
+# Set an LLM key (OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY) so the
+# model can decide when to delegate.
+
+[agent]
+name = "Orchestrator"
+description = "Routes requests to specialist A2A agents discovered by skill."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 9090
+
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "route"
+name = "Route"
+description = "Understand a request and delegate to the right specialist agent."
+keywords = ["route", "delegate", "orchestrate"]
+examples = ["Ask about tomorrow's weather", "Have billing summarize my invoice"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[handler]
+type = "llm"
+
+[handler.llm]
+system_prompt = "You are an orchestrator. When a specialist tool fits the request, call it and relay its answer. Otherwise answer directly and concisely."
+max_tool_rounds = 4
+
+# Resolve the peer by the skill it advertises (matched against registered agent
+# cards) instead of a raw `url`. Could also be `agent_id = "weather-agent"`.
+[[handler.llm.agents]]
+name = "Weather Agent"
+skill = "weather-lookup"
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true

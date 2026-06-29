@@ -1,0 +1,39 @@
+# A specialist worker discovered by skill (see registry_orchestrator.toml).
+#
+# Run both in ONE process so the in-memory registry self-registers this worker
+# and the orchestrator resolves it by skill:
+#   cargo run -p a2a-agents --bin a2a --features "reimbursement-agent mcp-server schema" -- \
+#     run --config examples/registry_worker.toml \
+#         --config examples/registry_orchestrator.toml
+#
+# This worker advertises the `weather-lookup` skill; the orchestrator references
+# that skill instead of this URL, so the binding survives the worker moving.
+
+[agent]
+name = "Weather Agent"
+description = "Answers questions about current and forecast weather."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8080
+
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "weather-lookup"
+name = "Weather lookup"
+description = "Look up current and forecast weather for a location."
+keywords = ["weather", "forecast", "temperature"]
+examples = ["What's the weather in Oslo tomorrow?"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[handler]
+type = "echo"
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true
