@@ -15,9 +15,10 @@ The workspace is organized into several crates:
 |-------|-------------|
 | [a2a-rs](./a2a-rs/) | Core protocol library — types, traits, transports, storage |
 | [a2a-ap2](./a2a-ap2/) | Agent Payments Protocol (AP2) extension |
-| [a2a-agents](./a2a-agents/) | Declarative agent framework with TOML configuration |
-| [a2a-agents-common](./a2a-agents-common/) | Shared utilities (NLP, formatting, testing fixtures) |
+| [a2a-agents](./a2a-agents/) | Declarative TOML agent framework + multi-agent platform (registry, runtime, control-plane) |
+| [a2a-agents-common](./a2a-agents-common/) | Shared utilities (NLP, formatting, LLM providers, testing fixtures) |
 | [a2a-client](./a2a-client/) | Web client library for building agent frontends |
+| [a2a-mcp](./a2a-mcp/) | Bidirectional A2A ↔ MCP bridge (Model Context Protocol) |
 
 ## Quick start
 
@@ -34,16 +35,16 @@ cd a2a-agents && cargo run --bin reimbursement_demo
 ```toml
 [dependencies]
 # Server with default features (in-memory storage, tracing)
-a2a-rs = "0.2.0"
+a2a-rs = "0.4"
 
 # HTTP client
-a2a-rs = { version = "0.2.0", features = ["http-client"] }
+a2a-rs = { version = "0.4", features = ["http-client"] }
 
 # HTTP server with Axum
-a2a-rs = { version = "0.2.0", features = ["http-server"] }
+a2a-rs = { version = "0.4", features = ["http-server"] }
 
 # All transports, auth, SQLite + PostgreSQL storage
-a2a-rs = { version = "0.2.0", features = ["full"] }
+a2a-rs = { version = "0.4", features = ["full"] }
 ```
 
 ## Features
@@ -120,6 +121,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 See [a2a-agents/examples/](./a2a-agents/examples/) for complete examples.
+
+### Multi-agent platform
+
+`a2a-agents` is more than a single-agent builder — it provides the platform
+capabilities for running and orchestrating *many* agents, defined as **ports**
+in the platform layer (the pure `a2a-rs` protocol crate stays infrastructure-free):
+
+- **Agent-as-tool delegation** — a config-driven `LlmHandler` (enable the `llm`
+  feature) can call peer A2A agents as tools, so an orchestrator delegates work
+  by listing them in `[[handler.llm.agents]]`.
+- **Registry / discovery** — find peers by **skill** instead of hard-coded URLs
+  (`AgentRegistry` port + `InMemoryAgentRegistry`).
+- **Runtime / isolation** — supervise agents as local processes or OCI
+  containers behind one `AgentRuntime` port (`LocalProcessRuntime`,
+  `ContainerRuntime`).
+- **Control plane** — a service composing runtime + registry with an HTTP API;
+  `a2a control-plane` deploys, lists, and tears down agents.
+
+```bash
+# The `a2a` binary needs the llm, mcp-server, and schema features.
+# Run one agent from a TOML config
+cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- run --config agent.toml
+
+# Serve the control plane over local processes
+cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- \
+  control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local
+```
+
+See [`DECLARATIVE_AGENTS.md`](./DECLARATIVE_AGENTS.md) for the platform design and
+[a2a-agents/README.md](./a2a-agents/README.md) for usage.
 
 ## Architecture
 
