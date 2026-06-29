@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-v0.4.0...a2a-agents-v0.5.0) - 2026-06-29
+
+### Added
+
+- *(agents)* Registry, runtime port, control-plane, and container runtime
+- *(agents)* Declarative LLM handler with MCP + A2A-agent tool sources
+- *(example)* Stream GLM reasoning and answer tokens live in complex_agent
+
+### Changed
+
+- *(agents)* Decouple llm from mcp-server; async control-plane deploy
+- *(agents)* Route LLM selection through the shared provider helper
+
+### Documentation
+
+- *(changelog)* Close out 0.4.0; record the multi-agent platform under Unreleased
+- Document the multi-agent platform; refresh stale READMEs
+
+### Fixed
+
+- *(agents)* Canonicalize AgentId lookups + widen env-var expansion
+
+### Other
+
+- Drop premature a2a-agents version bump (let release-plz drive it)
+
 ## [0.4.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-v0.3.0...a2a-agents-v0.4.0) - 2026-06-05
 
 ### Added

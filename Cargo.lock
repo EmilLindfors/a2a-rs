@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "a2a-agents"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "a2a-agents-common",
  "a2a-ap2",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-agents-common"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-ap2"
-version = "0.3.1"
+version = "0.3.2"
 dependencies = [
  "a2a-rs",
  "buffa",
@@ -76,7 +76,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-mcp"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "a2a-agents-common",
  "a2a-rs",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-rs"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "arbitrary",
  "async-trait",
@@ -145,7 +145,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-web-client"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "a2a-agents",
  "a2a-rs",

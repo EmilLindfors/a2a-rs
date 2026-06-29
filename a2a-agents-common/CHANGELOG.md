@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-common-v0.3.1...a2a-agents-common-v0.4.0) - 2026-06-29
+
+### Added
+
+- *(agents)* Registry, runtime port, control-plane, and container runtime
+- *(llm)* Add OpenRouter provider, centralized selection, and reasoning support
+
+### Fixed
+
+- *(common)* Use current_thread runtime in AgentCache doctest
+
 ## [0.3.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-common-v0.3.0...a2a-agents-common-v0.3.1) - 2026-06-05
 
 ### Added
