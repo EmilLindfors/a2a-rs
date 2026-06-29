@@ -279,9 +279,7 @@ impl<H, S> AgentBuilder<H, S> {
     /// configuration, without starting a server. Used to self-register the
     /// agent with an [`AgentRegistry`](crate::registry::AgentRegistry) before it
     /// runs, so peers can discover it by skill.
-    pub async fn agent_card(
-        &self,
-    ) -> Result<a2a_rs::domain::AgentCard, a2a_rs::domain::A2AError> {
+    pub async fn agent_card(&self) -> Result<a2a_rs::domain::AgentCard, a2a_rs::domain::A2AError> {
         use a2a_rs::services::AgentInfoProvider;
         crate::core::server::agent_info_from_config(&self.config, self.config.agent_url())
             .get_agent_card()

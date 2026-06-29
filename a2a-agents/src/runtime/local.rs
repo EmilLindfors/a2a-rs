@@ -87,7 +87,9 @@ impl AgentRuntime for LocalProcessRuntime {
 
     async fn start(&self, id: &AgentId) -> Result<(), RuntimeError> {
         let mut guard = self.agents.lock().await;
-        let entry = guard.get_mut(id).ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
+        let entry = guard
+            .get_mut(id)
+            .ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
         if matches!(entry.state, ProcState::Running(_)) {
             return Err(RuntimeError::AlreadyRunning(id.clone()));
         }
@@ -109,7 +111,9 @@ impl AgentRuntime for LocalProcessRuntime {
 
     async fn stop(&self, id: &AgentId) -> Result<(), RuntimeError> {
         let mut guard = self.agents.lock().await;
-        let entry = guard.get_mut(id).ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
+        let entry = guard
+            .get_mut(id)
+            .ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
         if let ProcState::Running(child) = &mut entry.state {
             if let Err(e) = child.kill().await {
                 warn!("error killing agent '{}': {}", id, e);
@@ -124,7 +128,9 @@ impl AgentRuntime for LocalProcessRuntime {
         // so a slow network probe never serializes other lifecycle ops.
         let endpoint = {
             let mut guard = self.agents.lock().await;
-            let entry = guard.get_mut(id).ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
+            let entry = guard
+                .get_mut(id)
+                .ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
             match &mut entry.state {
                 ProcState::Provisioned => return Ok(RuntimeHealth::Provisioned),
                 ProcState::Stopped => return Ok(RuntimeHealth::Stopped),

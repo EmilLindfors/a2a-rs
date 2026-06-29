@@ -62,7 +62,10 @@ async fn wait_for_health(
 ) -> RuntimeHealth {
     let mut last = RuntimeHealth::Provisioned;
     for _ in 0..attempts {
-        last = rt.health(id).await.expect("health is infallible for a known id");
+        last = rt
+            .health(id)
+            .await
+            .expect("health is infallible for a known id");
         if last == want {
             return last;
         }

@@ -42,7 +42,9 @@ impl AgentRuntime for InMemoryAgentRuntime {
 
     async fn start(&self, id: &AgentId) -> Result<(), RuntimeError> {
         let mut guard = self.agents.lock().await;
-        let (_, health) = guard.get_mut(id).ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
+        let (_, health) = guard
+            .get_mut(id)
+            .ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
         if *health == RuntimeHealth::Healthy {
             return Err(RuntimeError::AlreadyRunning(id.clone()));
         }
@@ -52,7 +54,9 @@ impl AgentRuntime for InMemoryAgentRuntime {
 
     async fn stop(&self, id: &AgentId) -> Result<(), RuntimeError> {
         let mut guard = self.agents.lock().await;
-        let (_, health) = guard.get_mut(id).ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
+        let (_, health) = guard
+            .get_mut(id)
+            .ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
         *health = RuntimeHealth::Stopped;
         Ok(())
     }

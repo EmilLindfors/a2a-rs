@@ -209,7 +209,6 @@ impl Default for LlmHandlerConfig {
     }
 }
 
-
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("Failed to read config file: {0}")]
@@ -294,7 +293,12 @@ impl AgentConfig {
         if self.handler.r#type != HandlerType::Echo {
             return self.handler.r#type.clone();
         }
-        match self.agent.implementation.as_deref().filter(|s| !s.is_empty()) {
+        match self
+            .agent
+            .implementation
+            .as_deref()
+            .filter(|s| !s.is_empty())
+        {
             Some(implementation) => HandlerType::from(implementation),
             None => HandlerType::Echo,
         }
@@ -1231,7 +1235,10 @@ mod tests {
             llm.agents[0].target().unwrap(),
             RemoteAgentTarget::Url("http://localhost:8081")
         );
-        assert_eq!(llm.agents[0].description.as_deref(), Some("Knows the weather"));
+        assert_eq!(
+            llm.agents[0].description.as_deref(),
+            Some("Knows the weather")
+        );
         assert_eq!(llm.agents[1].name, "billing");
         assert!(llm.agents[1].description.is_none());
     }
@@ -1255,8 +1262,14 @@ mod tests {
         "#;
         let config = AgentConfig::from_toml(toml).unwrap();
         let agents = &config.handler.llm.as_ref().unwrap().agents;
-        assert_eq!(agents[0].target().unwrap(), RemoteAgentTarget::Skill("weather-lookup"));
-        assert_eq!(agents[1].target().unwrap(), RemoteAgentTarget::AgentId("billing-agent"));
+        assert_eq!(
+            agents[0].target().unwrap(),
+            RemoteAgentTarget::Skill("weather-lookup")
+        );
+        assert_eq!(
+            agents[1].target().unwrap(),
+            RemoteAgentTarget::AgentId("billing-agent")
+        );
     }
 
     #[test]

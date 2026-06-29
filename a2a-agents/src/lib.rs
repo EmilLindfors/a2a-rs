@@ -106,9 +106,7 @@ pub use traits::{AgentPlugin, SkillDefinition};
 
 pub use handlers::tools::{A2aAgentToolSource, ToolSource};
 
-pub use registry::{
-    AgentId, AgentRegistry, InMemoryAgentRegistry, RegisteredAgent, RegistryError,
-};
+pub use registry::{AgentId, AgentRegistry, InMemoryAgentRegistry, RegisteredAgent, RegistryError};
 
 pub use runtime::{
     AgentRuntime, AgentSpec, ContainerRuntime, InMemoryAgentRuntime, LocalProcessRuntime,

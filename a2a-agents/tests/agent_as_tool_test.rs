@@ -13,8 +13,8 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 
-use a2a_agents::handlers::tools::ToolSource;
 use a2a_agents::A2aAgentToolSource;
+use a2a_agents::handlers::tools::ToolSource;
 use a2a_agents_common::llm::ToolCall;
 
 use a2a_rs::adapter::business::{EchoResponder, Responder, ResponderMessageHandler};

@@ -88,7 +88,11 @@ http_port = {port}
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    assert_eq!(health, RuntimeHealth::Healthy, "agent should become Healthy");
+    assert_eq!(
+        health,
+        RuntimeHealth::Healthy,
+        "agent should become Healthy"
+    );
 
     rt.stop(&id).await.expect("stop");
     assert_eq!(rt.health(&id).await.unwrap(), RuntimeHealth::Stopped);

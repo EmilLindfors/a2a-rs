@@ -13,8 +13,8 @@
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    use a2a_agents::core::AgentBuilder;
     use a2a_agents::LlmHandler;
+    use a2a_agents::core::AgentBuilder;
     use a2a_rs::InMemoryStreamingHandler;
     use a2a_rs::InMemoryTaskStorage;
     use std::sync::Arc;
@@ -26,8 +26,8 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config_path = std::env::var("LLM_AGENT_CONFIG")
-        .unwrap_or_else(|_| "examples/llm_agent.toml".to_string());
+    let config_path =
+        std::env::var("LLM_AGENT_CONFIG").unwrap_or_else(|_| "examples/llm_agent.toml".to_string());
     println!("Loading agent config from: {config_path}");
     println!("Set OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY for LLM answers.");
 

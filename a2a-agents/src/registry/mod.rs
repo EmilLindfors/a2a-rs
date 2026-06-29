@@ -203,7 +203,10 @@ mod tests {
 
     #[test]
     fn agent_id_is_slugified_from_name() {
-        assert_eq!(AgentId::from_name("Weather Agent").as_str(), "weather-agent");
+        assert_eq!(
+            AgentId::from_name("Weather Agent").as_str(),
+            "weather-agent"
+        );
         assert_eq!(AgentId::from_name("billing").as_str(), "billing");
     }
 
@@ -233,9 +236,12 @@ mod tests {
             "Looks up the weather".into(),
             vec!["forecast".into(), "meteorology".into()],
         );
-        reg.register(card_with_skills("Weather Agent", vec![skill]), "http://w".into())
-            .await
-            .unwrap();
+        reg.register(
+            card_with_skills("Weather Agent", vec![skill]),
+            "http://w".into(),
+        )
+        .await
+        .unwrap();
         reg.register(card_with_skills("Idle Agent", vec![]), "http://i".into())
             .await
             .unwrap();
@@ -256,14 +262,8 @@ mod tests {
     #[tokio::test]
     async fn find_by_skill_returns_all_matches() {
         let reg = InMemoryAgentRegistry::new();
-        let mk = |id: &str| {
-            AgentSkill::new(
-                id.into(),
-                "S".into(),
-                "d".into(),
-                vec!["shared".into()],
-            )
-        };
+        let mk =
+            |id: &str| AgentSkill::new(id.into(), "S".into(), "d".into(), vec!["shared".into()]);
         reg.register(card_with_skills("A", vec![mk("a")]), "http://a".into())
             .await
             .unwrap();
@@ -286,7 +286,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(reg.list().await.unwrap().len(), 1);
-        let got = reg.get(&AgentId::from_name("Agent")).await.unwrap().unwrap();
+        let got = reg
+            .get(&AgentId::from_name("Agent"))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(got.endpoint, "http://new");
     }
 

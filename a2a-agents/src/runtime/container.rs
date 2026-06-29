@@ -141,10 +141,17 @@ impl AgentRuntime for ContainerRuntime {
         let port = config.server.http_port;
 
         // Clear a stale container of the same name so re-provision is idempotent.
-        let _ = run_engine(&self.engine, &["rm".to_string(), "-f".to_string(), container_name(&id)])
-            .await;
+        let _ = run_engine(
+            &self.engine,
+            &["rm".to_string(), "-f".to_string(), container_name(&id)],
+        )
+        .await;
 
-        run_engine(&self.engine, &create_args(&self.image, &id, port, &spec.config_path)).await?;
+        run_engine(
+            &self.engine,
+            &create_args(&self.image, &id, port, &spec.config_path),
+        )
+        .await?;
         self.agents.lock().await.insert(id.clone(), port);
         Ok(id)
     }
@@ -179,16 +186,19 @@ impl AgentRuntime for ContainerRuntime {
     async fn health(&self, id: &AgentId) -> Result<RuntimeHealth, RuntimeError> {
         let (name, port) = {
             let guard = self.agents.lock().await;
-            let port = *guard.get(id).ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
+            let port = *guard
+                .get(id)
+                .ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
             (container_name(id), port)
         };
         match self.inspect_status(&name).await.as_deref() {
             Some("created") => Ok(RuntimeHealth::Provisioned),
-            Some("running") => match a2a_rs::fetch_agent_card(&format!("http://127.0.0.1:{port}")).await
-            {
-                Ok(_) => Ok(RuntimeHealth::Healthy),
-                Err(_) => Ok(RuntimeHealth::Unhealthy),
-            },
+            Some("running") => {
+                match a2a_rs::fetch_agent_card(&format!("http://127.0.0.1:{port}")).await {
+                    Ok(_) => Ok(RuntimeHealth::Healthy),
+                    Err(_) => Ok(RuntimeHealth::Unhealthy),
+                }
+            }
             // exited / dead / paused / removed-out-of-band
             _ => Ok(RuntimeHealth::Stopped),
         }

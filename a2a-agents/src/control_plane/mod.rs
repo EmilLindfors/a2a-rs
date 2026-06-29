@@ -151,8 +151,8 @@ mod tests {
 
     impl TempConfig {
         fn echo(name: &str, port: u16) -> Self {
-            let path =
-                std::env::temp_dir().join(format!("cp_test_{}_{port}.toml", AgentId::from_name(name)));
+            let path = std::env::temp_dir()
+                .join(format!("cp_test_{}_{port}.toml", AgentId::from_name(name)));
             let toml = format!(
                 r#"
 [agent]

@@ -58,8 +58,8 @@ impl AgentSpec {
     /// as [`RuntimeError::Config`].
     pub fn from_config_path(path: impl Into<PathBuf>) -> Result<Self, RuntimeError> {
         let config_path = path.into();
-        let config =
-            AgentConfig::from_file(&config_path).map_err(|e| RuntimeError::Config(e.to_string()))?;
+        let config = AgentConfig::from_file(&config_path)
+            .map_err(|e| RuntimeError::Config(e.to_string()))?;
         Ok(Self {
             id: AgentId::from_name(&config.agent.name),
             endpoint: config.agent_url(),

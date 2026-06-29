@@ -44,7 +44,11 @@ use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[derive(Parser, Debug)]
-#[clap(name = "a2a", version, about = "Runs A2A agents from declarative configs")]
+#[clap(
+    name = "a2a",
+    version,
+    about = "Runs A2A agents from declarative configs"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -120,7 +124,10 @@ impl AsyncMessageHandler for EchoHandler {
         Ok(Task::builder()
             .id(task_id.to_string())
             .context_id(message.context_id.clone())
-            .status(TaskStatus::new(TaskState::Completed, Some(response.clone())))
+            .status(TaskStatus::new(
+                TaskState::Completed,
+                Some(response.clone()),
+            ))
             .history(vec![message.clone(), response])
             .build())
     }
@@ -129,7 +136,10 @@ impl AsyncMessageHandler for EchoHandler {
 fn resolve_llm(llm_config: &Option<LlmConfig>) -> Option<Arc<dyn LlmProvider>> {
     match llm_config {
         Some(cfg) => {
-            info!("Loading LLM configuration from TOML (provider: {})", cfg.provider);
+            info!(
+                "Loading LLM configuration from TOML (provider: {})",
+                cfg.provider
+            );
             let settings = LlmSettings {
                 provider: cfg.provider.clone(),
                 api_key: cfg.api_key.clone(),
@@ -166,7 +176,11 @@ async fn main() -> anyhow::Result<()> {
             for path in &config {
                 match AgentBuilder::from_file(path) {
                     Ok(builder) => {
-                        info!("OK: {} (handler: {})", path, builder.config().handler_type());
+                        info!(
+                            "OK: {} (handler: {})",
+                            path,
+                            builder.config().handler_type()
+                        );
                     }
                     Err(e) => {
                         error!("INVALID: {}: {}", path, e);
@@ -204,9 +218,7 @@ async fn run_control_plane(
     let registry: Arc<dyn AgentRegistry> = Arc::new(InMemoryAgentRegistry::default());
     let runtime: Arc<dyn AgentRuntime> = match runtime_kind {
         RuntimeKind::Local => Arc::new(LocalProcessRuntime::new()),
-        RuntimeKind::Container => {
-            Arc::new(ContainerRuntime::with_engine(engine).with_image(image))
-        }
+        RuntimeKind::Container => Arc::new(ContainerRuntime::with_engine(engine).with_image(image)),
     };
     let cp = Arc::new(ControlPlane::new(runtime, registry));
     let router = control_plane_router(cp, PathBuf::from(config_dir));
@@ -306,12 +318,8 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
             let llm_provider = resolve_llm(&builder.config().llm);
             let streaming = InMemoryStreamingHandler::new();
             let push = storage.push_notifier();
-            let handler = ReimbursementHandler::with_llm(
-                storage.clone(),
-                streaming,
-                push,
-                llm_provider,
-            );
+            let handler =
+                ReimbursementHandler::with_llm(storage.clone(), streaming, push, llm_provider);
             let runtime = builder
                 .with_handler(handler)
                 .with_storage(storage)
@@ -352,7 +360,11 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
 fn description_from_card(name: &str, card: &AgentCard) -> String {
     let card_desc = serde_json::to_value(card)
         .ok()
-        .and_then(|v| v.get("description").and_then(|d| d.as_str()).map(str::to_string))
+        .and_then(|v| {
+            v.get("description")
+                .and_then(|d| d.as_str())
+                .map(str::to_string)
+        })
         .filter(|s| !s.is_empty());
     match card_desc {
         Some(d) => format!("Delegate to the '{name}' A2A agent: {d}"),
@@ -371,12 +383,7 @@ async fn run_llm_agent(
     use rmcp::model::{ClientCapabilities, ClientInfo, Implementation, ProtocolVersion};
     use rmcp::transport::TokioChildProcess;
 
-    let llm_cfg: LlmHandlerConfig = builder
-        .config()
-        .handler
-        .llm
-        .clone()
-        .unwrap_or_default();
+    let llm_cfg: LlmHandlerConfig = builder.config().handler.llm.clone().unwrap_or_default();
     let llm_provider = resolve_llm(&builder.config().llm);
 
     // Assemble the tool sources the LLM loop can call: one per connected MCP
@@ -443,7 +450,10 @@ async fn run_llm_agent(
                     None
                 }
                 Err(e) => {
-                    warn!("remote agent '{}': registry lookup failed: {}", agent.name, e);
+                    warn!(
+                        "remote agent '{}': registry lookup failed: {}",
+                        agent.name, e
+                    );
                     None
                 }
             },
@@ -468,7 +478,10 @@ async fn run_llm_agent(
                     None
                 }
                 Err(e) => {
-                    warn!("remote agent '{}': registry lookup failed: {}", agent.name, e);
+                    warn!(
+                        "remote agent '{}': registry lookup failed: {}",
+                        agent.name, e
+                    );
                     None
                 }
             },

@@ -53,7 +53,8 @@ async fn spawn_agent(responder: impl Responder + 'static) -> String {
     let streaming = InMemoryStreamingHandler::new();
     let push = storage.push_notifier();
     let handler = ResponderMessageHandler::new(storage.clone(), streaming.clone(), push, responder);
-    let agent_info = SimpleAgentInfo::new("Weather Agent".to_string(), "http://localhost".to_string());
+    let agent_info =
+        SimpleAgentInfo::new("Weather Agent".to_string(), "http://localhost".to_string());
     let adapter = Arc::new(
         JsonRpcAdapter::new(handler, storage.clone(), storage.clone(), agent_info)
             .with_streaming_handler(streaming.clone()),
@@ -106,7 +107,11 @@ async fn discovers_peer_by_skill_then_delegates() {
 
     // Delegate to the resolved endpoint over the wire.
     let transport: Arc<dyn Transport> = Arc::new(JsonRpcClient::new(found.endpoint));
-    let source = A2aAgentToolSource::new(&found.card.name, "Weather specialist.".to_string(), transport);
+    let source = A2aAgentToolSource::new(
+        &found.card.name,
+        "Weather specialist.".to_string(),
+        transport,
+    );
     assert_eq!(source.tool_name(), "ask_weather_agent");
 
     let call = ToolCall {
@@ -130,11 +135,7 @@ async fn find_by_skill_misses_return_empty() {
         .unwrap();
 
     assert!(
-        registry
-            .find_by_skill("billing")
-            .await
-            .unwrap()
-            .is_empty(),
+        registry.find_by_skill("billing").await.unwrap().is_empty(),
         "an unadvertised skill resolves to no agents"
     );
 }

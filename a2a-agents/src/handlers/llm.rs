@@ -91,7 +91,11 @@ impl LlmHandler {
             last_chunk: Some(false),
             metadata: None,
         };
-        if let Err(e) = self.streaming.broadcast_artifact_update(task_id, event).await {
+        if let Err(e) = self
+            .streaming
+            .broadcast_artifact_update(task_id, event)
+            .await
+        {
             tracing::warn!("failed to broadcast artifact: {e}");
         }
     }
@@ -147,13 +151,25 @@ impl LlmHandler {
                 match event.map_err(|e| A2AError::Internal(format!("LLM stream error: {e}")))? {
                     LlmStreamEvent::Reasoning(chunk) => {
                         reasoning.push_str(&chunk);
-                        self.stream_artifact(task_id, context_id, &thinking_id, "AI Thinking...", &chunk).await;
+                        self.stream_artifact(
+                            task_id,
+                            context_id,
+                            &thinking_id,
+                            "AI Thinking...",
+                            &chunk,
+                        )
+                        .await;
                     }
                     LlmStreamEvent::ContentChunk(chunk) => {
                         content.push_str(&chunk);
-                        self.stream_artifact(task_id, context_id, &answer_id, "AI Answer", &chunk).await;
+                        self.stream_artifact(task_id, context_id, &answer_id, "AI Answer", &chunk)
+                            .await;
                     }
-                    LlmStreamEvent::ToolCallChunk { id, name, arguments } => {
+                    LlmStreamEvent::ToolCallChunk {
+                        id,
+                        name,
+                        arguments,
+                    } => {
                         calls.push(&id, name.as_deref(), &arguments);
                     }
                     LlmStreamEvent::ToolCall(call) => {
@@ -180,13 +196,23 @@ impl LlmHandler {
                 name: None,
             });
             for call in &calls {
-                self.stream_progress(task_id, context_id, &format!("calling {}({})", call.name, call.arguments)).await;
+                self.stream_progress(
+                    task_id,
+                    context_id,
+                    &format!("calling {}({})", call.name, call.arguments),
+                )
+                .await;
                 let source = tools::resolve(&self.tools, &call.name).ok_or_else(|| {
                     A2AError::Internal(format!("model called unknown tool '{}'", call.name))
                 })?;
                 let result = source.invoke(task_id, call).await?;
-                self.stream_progress(task_id, context_id, &format!("{} -> {result}", call.name)).await;
-                messages.push(ChatMessage::tool_result(call.id.clone(), call.name.clone(), result));
+                self.stream_progress(task_id, context_id, &format!("{} -> {result}", call.name))
+                    .await;
+                messages.push(ChatMessage::tool_result(
+                    call.id.clone(),
+                    call.name.clone(),
+                    result,
+                ));
             }
         }
         Ok("I could not converge on an answer within the tool-call budget.".to_string())
@@ -203,10 +229,16 @@ impl LlmHandler {
             .map(|t| t.name)
             .collect();
         if names.is_empty() {
-            return Ok(format!("No LLM key configured and no MCP tools available. You said: {user_text}"));
+            return Ok(format!(
+                "No LLM key configured and no MCP tools available. You said: {user_text}"
+            ));
         }
-        self.stream_progress(task_id, context_id, "no LLM key; routing deterministically").await;
-        Ok(format!("No LLM key is configured, so I cannot reason over your message. This agent has MCP tools available ({}). Set an LLM key (OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY) to enable natural-language answers.", names.join(", ")))
+        self.stream_progress(task_id, context_id, "no LLM key; routing deterministically")
+            .await;
+        Ok(format!(
+            "No LLM key is configured, so I cannot reason over your message. This agent has MCP tools available ({}). Set an LLM key (OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY) to enable natural-language answers.",
+            names.join(", ")
+        ))
     }
 }
 
@@ -239,11 +271,21 @@ impl AsyncMessageHandler for LlmHandler {
         let task_id = task_id.to_string();
         let user_text = extract_text(message);
         tokio::spawn(async move {
-            handler.stream_progress(&task_id, &context_id, "analyzing your request").await;
+            handler
+                .stream_progress(&task_id, &context_id, "analyzing your request")
+                .await;
 
             let outcome = match &handler.llm {
-                Some(llm) => handler.run_with_llm(llm.as_ref(), &task_id, &context_id, &user_text).await,
-                None => handler.run_fallback(&task_id, &context_id, &user_text).await,
+                Some(llm) => {
+                    handler
+                        .run_with_llm(llm.as_ref(), &task_id, &context_id, &user_text)
+                        .await
+                }
+                None => {
+                    handler
+                        .run_fallback(&task_id, &context_id, &user_text)
+                        .await
+                }
             };
 
             let (state, reply) = match outcome {
@@ -258,7 +300,10 @@ impl AsyncMessageHandler for LlmHandler {
                 .context_id(context_id.clone())
                 .build();
 
-            if let Err(e) = handler.update_and_broadcast(&id, state, Some(response)).await {
+            if let Err(e) = handler
+                .update_and_broadcast(&id, state, Some(response))
+                .await
+            {
                 tracing::warn!("failed to finalize task {task_id}: {e}");
             }
         });
