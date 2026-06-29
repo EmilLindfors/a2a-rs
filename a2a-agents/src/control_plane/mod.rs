@@ -17,7 +17,7 @@ mod http;
 
 pub use http::control_plane_router;
 
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -72,19 +72,24 @@ impl ControlPlane {
         Self { runtime, registry }
     }
 
-    /// Deploy an agent from its config file: provision + start it in the runtime,
-    /// then register its card so peers discover it. The runtime and registry ids
+    /// Deploy an already-parsed agent: provision + start it in the runtime, then
+    /// register its card so peers discover it. The runtime and registry ids
     /// coincide (both the slug of the agent name).
+    ///
+    /// The caller materializes the config on disk and passes the resulting
+    /// `config_path` (the file the runtime's child process reads) together with
+    /// the `builder` parsed from it — so the service orchestrates ports + pure
+    /// config without itself touching the filesystem (hex rule 9a), and the TOML
+    /// is parsed exactly once.
     pub async fn deploy(
         &self,
-        config_path: impl AsRef<Path>,
+        builder: &AgentBuilder,
+        config_path: PathBuf,
     ) -> Result<DeployedAgent, ControlPlaneError> {
-        let path = config_path.as_ref();
-        let builder = AgentBuilder::from_file(path)?;
         let config = builder.config();
         let spec = AgentSpec {
             id: AgentId::from_name(&config.agent.name),
-            config_path: path.to_path_buf(),
+            config_path,
             endpoint: config.agent_url(),
         };
         let endpoint = spec.endpoint.clone();
@@ -192,7 +197,11 @@ name = "Echo"
         let (cp, registry) = control_plane();
         let config = TempConfig::echo("Deploy Me", 8123);
 
-        let deployed = cp.deploy(&config.path).await.expect("deploy");
+        let builder = AgentBuilder::from_file(&config.path).unwrap();
+        let deployed = cp
+            .deploy(&builder, config.path.clone())
+            .await
+            .expect("deploy");
         assert_eq!(deployed.id, "deploy-me");
         assert_eq!(deployed.endpoint, "http://127.0.0.1:8123");
         assert_eq!(deployed.health, RuntimeHealth::Healthy);
@@ -214,7 +223,10 @@ name = "Echo"
         let (cp, registry) = control_plane();
         let config = TempConfig::echo("Skilled Agent", 8124);
 
-        cp.deploy(&config.path).await.expect("deploy");
+        let builder = AgentBuilder::from_file(&config.path).unwrap();
+        cp.deploy(&builder, config.path.clone())
+            .await
+            .expect("deploy");
 
         let matches = registry.find_by_skill("echo-skill").await.unwrap();
         assert_eq!(matches.len(), 1);

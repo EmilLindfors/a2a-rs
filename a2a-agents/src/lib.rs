@@ -115,7 +115,7 @@ pub use runtime::{
 
 pub use control_plane::{ControlPlane, ControlPlaneError, DeployedAgent, control_plane_router};
 
-#[cfg(feature = "mcp-server")]
+#[cfg(feature = "llm")]
 pub use handlers::llm::LlmHandler;
 #[cfg(feature = "mcp-server")]
 pub use handlers::tools::{McpToolSource, UnusedInner};

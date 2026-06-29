@@ -15,7 +15,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use super::{ControlPlane, ControlPlaneError, DeployedAgent};
-use crate::core::AgentConfig;
+use crate::core::AgentBuilder;
 use crate::registry::AgentId;
 use crate::runtime::{RuntimeError, RuntimeHealth};
 
@@ -53,15 +53,16 @@ async fn deploy(
     State(state): State<AppState>,
     Json(req): Json<DeployRequest>,
 ) -> Result<(StatusCode, Json<DeployedAgent>), ApiError> {
-    // Parse first: validates the TOML and yields the name for the filename.
-    let config = AgentConfig::from_toml(&req.config_toml)?;
-    let id = AgentId::from_name(&config.agent.name);
+    // Parse once: validates the TOML and yields the name for the filename; the
+    // same builder is handed to the service so it never re-reads the file.
+    let builder = AgentBuilder::from_toml(&req.config_toml)?;
+    let id = AgentId::from_name(&builder.config().agent.name);
 
-    std::fs::create_dir_all(&state.config_dir)?;
+    tokio::fs::create_dir_all(&state.config_dir).await?;
     let path = state.config_dir.join(format!("{id}.toml"));
-    std::fs::write(&path, &req.config_toml)?;
+    tokio::fs::write(&path, &req.config_toml).await?;
 
-    let deployed = state.cp.deploy(&path).await?;
+    let deployed = state.cp.deploy(&builder, path).await?;
     Ok((StatusCode::CREATED, Json(deployed)))
 }
 

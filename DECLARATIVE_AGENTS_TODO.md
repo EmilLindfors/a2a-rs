@@ -24,9 +24,11 @@ Shipped in `feat/declarative-agents` (commit `9decb30`).
 - ⬜ Stream the delegated agent's tokens through instead of poll-to-terminal:
   prefer `subscribe_to_task`, fall back to the current bounded `get_task`
   poll. (`A2aAgentToolSource::invoke`.)
-- ⬜ Decouple the `tools` module from the `mcp-server` feature so agent-as-tool
-  works without pulling in `rmcp` (today the only consumer, `LlmHandler`, is
-  `mcp-server`-gated). Add an `agent-tools` feature.
+- ✅ Decoupled the LLM handler from the `mcp-server` feature so agent-as-tool
+  works without pulling in `rmcp`: new `llm` feature gates `LlmHandler` (the
+  `tools` module / `A2aAgentToolSource` were already MCP-free; only the `mcp`
+  submodule / `McpToolSource` stay `mcp-server`-gated). `cargo check -p
+  a2a-agents --features llm` builds with zero MCP.
 - ⬜ Resolve the axum 0.7 (frontend) vs 0.8 (`a2a-rs`) split — the test uses an
   `axum8` dev-dep alias as a stopgap. Bump the frontend to 0.8 when
   `askama_axum` allows.
@@ -116,8 +118,8 @@ Make `terraform-provider-a2aagent` a real provider, not a file writer.
 - ⬜ Fix `renderTOML` drift: it emits ~8 of many fields and the legacy
   `implementation =` instead of `[handler].type`. Either render the full schema
   or generate from the JSON Schema.
-- ⬜ Commit the provider on its own (currently untracked); decide if it moves to
-  the extracted platform repo.
+- ⬜ Decide if the provider moves to the extracted platform repo (it is now
+  tracked in-tree as WIP, committed in `445389e`).
 
 ---
 
@@ -140,3 +142,13 @@ clean. Runtime + registry land in the new repo.
 - ✅ `reasoning_enabled` is driven by `LlmProvider::supports_reasoning()` (true
   for the OpenRouter provider via `OpenAiConfig`), not env-sniffing
   (`handlers/llm.rs`).
+- ✅ `AgentId` `From`/`FromStr` route through `slugify` so non-canonical lookup
+  keys (HTTP path param, config `agent_id` ref) resolve instead of silently
+  missing the slugified keyspace (`registry/mod.rs`).
+- ✅ `slugify` collapses separator runs and `expand_env_vars` matches
+  lower/mixed-case var names (was `[A-Z_]`-only, so `${database_url}` passed
+  through literally instead of erroring) (`utils/mod.rs`, `core/config.rs`).
+- ✅ `ControlPlane::deploy` takes an already-parsed `AgentBuilder` instead of
+  re-reading the file: the TOML is parsed once, the HTTP adapter writes it with
+  `tokio::fs` (no blocking I/O on the executor), and the service no longer
+  touches the filesystem (hex rule 9a) (`control_plane/{mod,http}.rs`).

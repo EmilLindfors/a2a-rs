@@ -8,7 +8,7 @@
 //! Run with:
 //!
 //! ```bash
-//! cargo run -p a2a-agents --example llm_agent --features mcp-server
+//! cargo run -p a2a-agents --example llm_agent --features llm
 //! ```
 
 #[tokio::main]

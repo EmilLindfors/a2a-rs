@@ -77,6 +77,10 @@ auth = ["a2a-rs/auth", "dep:oauth2"]
 # JSON Schema export for `AgentConfig` (used by the Terraform provider and the
 # `a2a --print-schema` subcommand to validate agent definitions).
 schema = ["dep:schemars"]
+# Generic LLM handler (`LlmHandler`) + its tool-calling loop. Independent of MCP:
+# an LLM agent can delegate to peer A2A agents (`A2aAgentToolSource`) with no
+# `rmcp`. Enable `mcp-server` *as well* to also feed it MCP-server tools.
+llm = []
 # MCP server: expose any TOML-configured agent as an MCP stdio server via
 # `a2a-mcp::AgentToMcpBridge`. Pulls in `a2a-mcp` and the matching `rmcp` build.
 mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
@@ -90,7 +94,7 @@ mcp-client = ["dep:rmcp"]
 [[bin]]
 name = "a2a"
 path = "bin/a2a.rs"
-required-features = ["reimbursement-agent", "mcp-server", "schema"]
+required-features = ["reimbursement-agent", "llm", "mcp-server", "schema"]
 
 [[bin]]
 name = "reimbursement_demo"
@@ -161,7 +165,7 @@ required-features = ["mcp-server"]
 [[example]]
 name = "llm_agent"
 path = "examples/llm_agent.rs"
-required-features = ["mcp-server"]
+required-features = ["llm"]
 [[example]]
 name = "print_schema"
 path = "examples/print_schema.rs"
