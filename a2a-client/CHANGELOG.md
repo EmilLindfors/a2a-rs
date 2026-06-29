@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.4.0...a2a-web-client-v0.4.1) - 2026-06-29
+
+### Added
+
+- *(a2acli)* Add A2A command-line client + promote auto_connect into a2a-rs
+
+### Documentation
+
+- *(changelog)* Note a2acli, auto_connect, and the web-client delegation
+
+### Fixed
+
+- *(client)* Render task-status/artifacts and stream tokens in sse example
+
 ### Changed
 
 - *(a2a-web-client)* `WebA2AClient::auto_connect` now delegates to `a2a_rs::auto_connect` (shared entry point); a malformed URL surfaces as `A2AError::InvalidParams`. Dropped the now-unused `reqwest` dependency.
