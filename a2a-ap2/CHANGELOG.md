@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 # Changelog
 
 All notable changes to this project will be documented in this file.
+# Changelog
+
+All notable changes to this project will be documented in this file.
 
 ## [0.3.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-ap2-v0.3.0...a2a-ap2-v0.3.1) - 2026-06-05
 
