@@ -817,8 +817,9 @@ fn default_formats() -> Vec<String> {
 fn expand_env_vars(content: &str) -> Result<String, ConfigError> {
     use std::sync::LazyLock;
     // group 1 = var name; group 2 (optional) = `:-default` fallback.
-    static ENV_VAR_RE: LazyLock<regex::Regex> =
-        LazyLock::new(|| regex::Regex::new(r"\$\{([A-Z_][A-Z0-9_]*)(?::-([^}]*))?\}").unwrap());
+    static ENV_VAR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}").unwrap()
+    });
 
     let mut result = content.to_string();
     let re = &*ENV_VAR_RE;
@@ -955,6 +956,28 @@ mod tests {
     #[test]
     fn test_env_var_without_default_still_errors() {
         let content = r#"key = "${A2A_DEFINITELY_UNSET_VAR}""#;
+        assert!(matches!(
+            expand_env_vars(content),
+            Err(ConfigError::EnvVarError(_))
+        ));
+    }
+
+    #[test]
+    fn test_env_var_lowercase_name_is_expanded() {
+        // SAFETY: test-only var, unique name, controlled environment.
+        unsafe {
+            std::env::set_var("a2a_lower_var", "from_env");
+        }
+        let content = r#"url = "${a2a_lower_var}""#;
+        let expanded = expand_env_vars(content).unwrap();
+        assert_eq!(expanded, r#"url = "from_env""#);
+    }
+
+    #[test]
+    fn test_env_var_lowercase_unset_still_errors() {
+        // A lowercase ref must obey the same "unset with no default is a hard
+        // error" contract as uppercase — not pass through literally.
+        let content = r#"url = "${a2a_unset_lower_var}""#;
         assert!(matches!(
             expand_env_vars(content),
             Err(ConfigError::EnvVarError(_))

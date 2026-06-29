@@ -49,15 +49,20 @@ impl fmt::Display for AgentId {
     }
 }
 
+// All conversions route through `from_name` so a raw lookup key (an HTTP path
+// param, a config `agent_id` ref) canonicalizes to the same slug the stored id
+// was built from. `slugify` is idempotent, so converting an already-canonical
+// slug is a no-op; without this, `agent_id = "Weather Agent"` would silently
+// miss a registry whose key is `weather-agent`.
 impl From<&str> for AgentId {
     fn from(s: &str) -> Self {
-        Self(s.to_string())
+        Self::from_name(s)
     }
 }
 
 impl From<String> for AgentId {
     fn from(s: String) -> Self {
-        Self(s)
+        Self::from_name(&s)
     }
 }
 
@@ -65,7 +70,7 @@ impl FromStr for AgentId {
     type Err = std::convert::Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(s.to_string()))
+        Ok(Self::from_name(s))
     }
 }
 
@@ -208,6 +213,33 @@ mod tests {
             "weather-agent"
         );
         assert_eq!(AgentId::from_name("billing").as_str(), "billing");
+    }
+
+    #[test]
+    fn agent_id_conversions_canonicalize_lookup_keys() {
+        // A raw lookup key (HTTP path param, config `agent_id` ref) must
+        // canonicalize to the same slug `from_name` produced, or lookups
+        // silently miss.
+        let canonical = AgentId::from_name("Weather Agent");
+        assert_eq!(AgentId::from("Weather Agent"), canonical);
+        assert_eq!(AgentId::from("Weather Agent".to_string()), canonical);
+        assert_eq!("Weather Agent".parse::<AgentId>().unwrap(), canonical);
+        // already-canonical key is a no-op
+        assert_eq!(AgentId::from("weather-agent"), canonical);
+    }
+
+    #[tokio::test]
+    async fn get_resolves_non_canonical_lookup_key() {
+        let reg = InMemoryAgentRegistry::new();
+        reg.register(card_with_skills("Weather Agent", vec![]), "http://w".into())
+            .await
+            .unwrap();
+
+        // Looking up by the raw, non-canonical name resolves to the slugified
+        // entry rather than silently missing.
+        let got = reg.get(&AgentId::from("Weather Agent")).await.unwrap();
+        assert!(got.is_some(), "non-canonical key should resolve");
+        assert_eq!(got.unwrap().card.name, "Weather Agent");
     }
 
     #[tokio::test]
