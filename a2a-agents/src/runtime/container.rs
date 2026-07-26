@@ -13,7 +13,7 @@ use super::{
     AgentRuntime, AgentSpec, EnvAllowlist, Recovered, RuntimeError, RuntimeHealth, RuntimeStatus,
     tail_lines,
 };
-use crate::core::AgentConfig;
+use crate::core::{AgentConfig, StorageConfig};
 use crate::registry::AgentId;
 
 /// Default base image (one image, config injected per agent). Override with
@@ -61,6 +61,14 @@ const LABEL_PORT: &str = "a2a-port";
 /// without it, any accepted config could name any variable this process holds
 /// and have it expanded into the agent's card for anyone to read back.
 ///
+/// **Hardening:** every agent is created with capabilities dropped, privilege
+/// escalation blocked, a process cap, and — where its storage permits — a
+/// read-only root filesystem. See [`ContainerHardening`] for what is on by
+/// default and why resource ceilings are not. Two consequences worth knowing:
+/// an agent cannot bind a port below 1024 (the image runs as a non-root user
+/// anyway), and a handler that writes outside `/tmp` needs either `sqlx`
+/// storage or a relaxed policy.
+///
 /// **Platform:** the config is bind-mounted (`-v host:container`), so host config
 /// paths must be expressible as a Docker volume source — works on Linux/macOS;
 /// Windows host paths need conversion (out of scope here).
@@ -70,6 +78,8 @@ pub struct ContainerRuntime {
     image: String,
     /// Which host env vars a deployed config may reference. Deny-all by default.
     allowed_env: EnvAllowlist,
+    /// What the engine is asked to enforce on each agent.
+    hardening: ContainerHardening,
     /// id -> published host port (presence == provisioned).
     agents: Arc<Mutex<HashMap<AgentId, u16>>>,
 }
@@ -86,8 +96,16 @@ impl ContainerRuntime {
             engine: engine.into(),
             image: DEFAULT_IMAGE.to_string(),
             allowed_env: EnvAllowlist::deny_all(),
+            hardening: ContainerHardening::default(),
             agents: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Replace the hardening policy applied to every agent this runtime
+    /// provisions (default: [`ContainerHardening::default`]).
+    pub fn with_hardening(mut self, hardening: ContainerHardening) -> Self {
+        self.hardening = hardening;
+        self
     }
 
     /// Override the base image (default [`DEFAULT_IMAGE`]).
@@ -122,26 +140,177 @@ impl Default for ContainerRuntime {
     }
 }
 
+/// Where a read-only agent gets scratch space, since a read-only root
+/// filesystem otherwise leaves nothing writable at all.
+const CONTAINER_TMPFS: &str = "/tmp";
+
+/// Default process cap. Nothing an agent legitimately does comes near this —
+/// even one spawning an `mcp_client` child per configured server — while a
+/// runaway loop or a fork bomb hits it immediately.
+const DEFAULT_PIDS_LIMIT: u32 = 512;
+
 /// The container name for an agent: `a2a-agent-<id>`.
 fn container_name(id: &AgentId) -> String {
     format!("a2a-agent-{id}")
 }
 
-/// Build the `docker create` argv that runs an agent: publish its port, inject
-/// the config as a read-only mount, bind all interfaces, pass through the env
-/// vars the config references, and run `a2a run --config /etc/agent.toml`.
+/// What [`ContainerRuntime`] asks the engine to enforce on each agent.
+///
+/// This is the cheap 80% of isolation: a handful of `create` flags that remove
+/// the capabilities an HTTP server never needs and bound what a misbehaving one
+/// can consume. It is *not* a sandbox against code written to escape — that
+/// would be a microVM, and it is deliberately not what this is. Until you have
+/// one, describe a container-run agent as **contained**, not *isolated*.
+///
+/// The defaults are the ones that cannot break a working agent. Resource
+/// *limits* are not among them: there is no memory ceiling that is right for
+/// every agent, and one guessed here would show up as an agent that dies under
+/// load for no visible reason. They are opt-in, per deployment
+/// ([`with_memory`](Self::with_memory), [`with_cpus`](Self::with_cpus)).
+#[derive(Debug, Clone)]
+pub struct ContainerHardening {
+    /// Drop every Linux capability. An agent binds a port above 1024 and talks
+    /// HTTP; it needs none of them.
+    pub drop_capabilities: bool,
+    /// Forbid gaining privileges through setuid binaries (`no-new-privileges`).
+    pub no_new_privileges: bool,
+    /// Mount the root filesystem read-only **where the agent's config allows
+    /// it** — see [`needs_writable_rootfs`]. A `/tmp` tmpfs is mounted alongside
+    /// so an agent still has scratch space.
+    pub read_only_rootfs: bool,
+    /// Cap on processes in the container.
+    pub pids_limit: Option<u32>,
+    /// Memory ceiling, in the engine's own notation (`"512m"`, `"2g"`).
+    /// Passed through verbatim — the engine is the authority on the format.
+    pub memory: Option<String>,
+    /// CPU allowance, in the engine's own notation (`"0.5"`, `"2"`).
+    pub cpus: Option<String>,
+}
+
+impl Default for ContainerHardening {
+    fn default() -> Self {
+        Self {
+            drop_capabilities: true,
+            no_new_privileges: true,
+            read_only_rootfs: true,
+            pids_limit: Some(DEFAULT_PIDS_LIMIT),
+            memory: None,
+            cpus: None,
+        }
+    }
+}
+
+impl ContainerHardening {
+    /// Every restriction off — containers as they were before hardening.
+    ///
+    /// The escape hatch for an agent that genuinely needs what the defaults
+    /// remove (a handler writing outside `/tmp`, an image with a setuid helper).
+    /// Prefer narrowing one field of [`Default`] to reaching for this.
+    pub fn none() -> Self {
+        Self {
+            drop_capabilities: false,
+            no_new_privileges: false,
+            read_only_rootfs: false,
+            pids_limit: None,
+            memory: None,
+            cpus: None,
+        }
+    }
+
+    /// Set the memory ceiling (engine notation, e.g. `"512m"`).
+    pub fn with_memory(mut self, memory: impl Into<String>) -> Self {
+        self.memory = Some(memory.into());
+        self
+    }
+
+    /// Set the CPU allowance (engine notation, e.g. `"1.5"`).
+    pub fn with_cpus(mut self, cpus: impl Into<String>) -> Self {
+        self.cpus = Some(cpus.into());
+        self
+    }
+
+    /// The `create` flags this policy contributes, given whether *this* agent
+    /// needs to write outside `/tmp`.
+    ///
+    /// Kept separate from the rest of the argv so the policy can be read, and
+    /// tested, on its own.
+    fn args(&self, writable_rootfs_needed: bool) -> Vec<String> {
+        let mut args = Vec::new();
+        if self.drop_capabilities {
+            args.push("--cap-drop=ALL".to_string());
+        }
+        if self.no_new_privileges {
+            args.push("--security-opt=no-new-privileges".to_string());
+        }
+        if self.read_only_rootfs && !writable_rootfs_needed {
+            args.push("--read-only".to_string());
+            args.push("--tmpfs".to_string());
+            args.push(CONTAINER_TMPFS.to_string());
+        }
+        if let Some(pids) = self.pids_limit {
+            args.push("--pids-limit".to_string());
+            args.push(pids.to_string());
+        }
+        if let Some(memory) = &self.memory {
+            args.push("--memory".to_string());
+            args.push(memory.clone());
+        }
+        if let Some(cpus) = &self.cpus {
+            args.push("--cpus".to_string());
+            args.push(cpus.clone());
+        }
+        args
+    }
+}
+
+/// Whether an agent's config requires a writable root filesystem.
+///
+/// Derived from the config rather than left to the operator, because getting it
+/// wrong in either direction is bad in a way that is hard to diagnose: a
+/// read-only `sqlx` agent crash-loops on a disk error, and a writable in-memory
+/// one gives up the protection for nothing.
+///
+/// The rule is deliberately conservative — only [`StorageConfig::InMemory`] is
+/// known to write nothing. A `sqlx` agent might be pointed at Postgres over the
+/// network and never touch the disk, but that would mean deciding from a URL
+/// string, and being wrong there means an agent that will not start.
+fn needs_writable_rootfs(config: &AgentConfig) -> bool {
+    !matches!(config.server.storage, StorageConfig::InMemory)
+}
+
+/// Everything [`create_args`] needs to build one agent's `create` argv.
+struct CreateParams<'a> {
+    image: &'a str,
+    id: &'a AgentId,
+    port: u16,
+    config_path: &'a Path,
+    /// Names only — see [`create_args`].
+    env_refs: &'a [String],
+    hardening: &'a ContainerHardening,
+    /// Whether this agent's storage rules out a read-only root filesystem.
+    writable_rootfs_needed: bool,
+}
+
+/// Build the `docker create` argv that runs an agent: publish its port, apply
+/// the hardening policy, inject the config as a read-only mount, bind all
+/// interfaces, pass through the env vars the config references, and run
+/// `a2a run --config /etc/agent.toml`.
 ///
 /// `env_refs` are passed as value-less `-e VAR` flags: the engine CLI reads
 /// each value from its own environment (this process's), so secret values never
 /// appear in the argv, and a variable unset here is simply not set in the
 /// container (letting an in-config `${VAR:-default}` apply).
-fn create_args(
-    image: &str,
-    id: &AgentId,
-    port: u16,
-    config_path: &Path,
-    env_refs: &[String],
-) -> Vec<String> {
+fn create_args(params: CreateParams<'_>) -> Vec<String> {
+    let CreateParams {
+        image,
+        id,
+        port,
+        config_path,
+        env_refs,
+        hardening,
+        writable_rootfs_needed,
+    } = params;
+
     let mut args = vec![
         "create".to_string(),
         "--name".to_string(),
@@ -155,9 +324,13 @@ fn create_args(
         args.push("-e".to_string());
         args.push(var.clone());
     }
+    args.extend(hardening.args(writable_rootfs_needed));
     args.extend([
         "-v".to_string(),
         format!("{}:{CONTAINER_CONFIG_PATH}:ro", config_path.display()),
+        // These two labels are how restart-recovery finds the fleet again
+        // (`recover` reads them straight back). Dropping either silently costs
+        // every agent on the next bounce.
         "--label".to_string(),
         format!("{LABEL_AGENT}={id}"),
         "--label".to_string(),
@@ -297,7 +470,15 @@ impl AgentRuntime for ContainerRuntime {
 
         run_engine(
             &self.engine,
-            &create_args(&self.image, &id, port, &spec.config_path, &env_refs),
+            &create_args(CreateParams {
+                image: &self.image,
+                id: &id,
+                port,
+                config_path: &spec.config_path,
+                env_refs: &env_refs,
+                hardening: &self.hardening,
+                writable_rootfs_needed: needs_writable_rootfs(&config),
+            }),
         )
         .await?;
         self.agents.lock().await.insert(id.clone(), port);
@@ -431,16 +612,31 @@ mod tests {
         );
     }
 
+    /// Build an argv the way `provision` would, so the tests below differ from
+    /// production only in the values they vary.
+    fn args_for(
+        id: &AgentId,
+        port: u16,
+        env_refs: &[String],
+        hardening: &ContainerHardening,
+        writable_rootfs_needed: bool,
+    ) -> Vec<String> {
+        create_args(CreateParams {
+            image: "a2a-agents:latest",
+            id,
+            port,
+            config_path: Path::new("/cfg/echo.toml"),
+            env_refs,
+            hardening,
+            writable_rootfs_needed,
+        })
+    }
+
     #[test]
     fn create_args_build_expected_argv() {
         let id = AgentId::from_name("Echo Agent");
-        let args = create_args(
-            "a2a-agents:latest",
-            &id,
-            8080,
-            Path::new("/cfg/echo.toml"),
-            &[],
-        );
+        // No hardening, so this pins the shape of everything else.
+        let args = args_for(&id, 8080, &[], &ContainerHardening::none(), false);
         assert_eq!(
             args,
             vec![
@@ -467,17 +663,12 @@ mod tests {
 
     /// Recovery reads back exactly what provisioning wrote, so the two must be
     /// checked against each other — a label renamed on one side only would lose
-    /// the whole fleet on the next restart.
+    /// the whole fleet on the next restart. Run against the **default**
+    /// hardening, since that is what production stamps.
     #[test]
     fn recovery_reads_back_what_create_stamped() {
         let id = AgentId::from_name("Weather Agent");
-        let args = create_args(
-            "a2a-agents:latest",
-            &id,
-            9100,
-            Path::new("/cfg/w.toml"),
-            &[],
-        );
+        let args = args_for(&id, 9100, &[], &ContainerHardening::default(), false);
 
         // Pull the labels out of the argv the way the engine would store them.
         let labels: Vec<&String> = args
@@ -548,12 +739,12 @@ billing-agent\t8081
     #[test]
     fn create_args_pass_env_refs_through_by_name_only() {
         let id = AgentId::from_name("LLM Agent");
-        let args = create_args(
-            "a2a-agents:latest",
+        let args = args_for(
             &id,
             8080,
-            Path::new("/cfg/llm.toml"),
             &["API_TOKEN".to_string(), "OPENROUTER_API_KEY".to_string()],
+            &ContainerHardening::default(),
+            false,
         );
         // Value-less `-e VAR` flags, right after the adapter-owned HOST, so
         // secret values never appear in the argv.
@@ -563,5 +754,118 @@ billing-agent\t8081
             ["-e", "API_TOKEN", "-e", "OPENROUTER_API_KEY"]
         );
         assert!(!args.iter().any(|a| a.contains('=') && a.contains("TOKEN")));
+    }
+
+    /// What an operator gets without asking. Asserted by name rather than by
+    /// position: the value is that these flags are *present*, and pinning their
+    /// order would make any future addition a test edit for no reason.
+    #[test]
+    fn default_hardening_drops_privileges_and_caps_processes() {
+        let args = args_for(
+            &AgentId::from_name("Echo Agent"),
+            8080,
+            &[],
+            &ContainerHardening::default(),
+            false,
+        );
+        for expected in ["--cap-drop=ALL", "--security-opt=no-new-privileges"] {
+            assert!(args.iter().any(|a| a == expected), "missing {expected}");
+        }
+        let pids = args.iter().position(|a| a == "--pids-limit").expect("pids");
+        assert_eq!(args[pids + 1], DEFAULT_PIDS_LIMIT.to_string());
+
+        // No memory or CPU ceiling is guessed: one that is wrong shows up as an
+        // agent dying under load for no visible reason.
+        assert!(!args.iter().any(|a| a == "--memory" || a == "--cpus"));
+    }
+
+    /// The flags that would break a working agent are the ones that have to be
+    /// asked for.
+    #[test]
+    fn resource_ceilings_are_opt_in() {
+        let hardening = ContainerHardening::default()
+            .with_memory("512m")
+            .with_cpus("1.5");
+        let args = args_for(&AgentId::from("a"), 8080, &[], &hardening, false);
+
+        let memory = args.iter().position(|a| a == "--memory").expect("memory");
+        assert_eq!(args[memory + 1], "512m");
+        let cpus = args.iter().position(|a| a == "--cpus").expect("cpus");
+        assert_eq!(args[cpus + 1], "1.5");
+    }
+
+    /// A read-only root is applied only where the agent's storage allows it —
+    /// and never without somewhere to write, or an agent that only needed
+    /// scratch space would fail for the wrong reason.
+    #[test]
+    fn read_only_rootfs_follows_what_the_agent_stores() {
+        let hardening = ContainerHardening::default();
+
+        let in_memory = args_for(&AgentId::from("a"), 8080, &[], &hardening, false);
+        assert!(in_memory.iter().any(|a| a == "--read-only"));
+        let tmpfs = in_memory
+            .iter()
+            .position(|a| a == "--tmpfs")
+            .expect("tmpfs");
+        assert_eq!(in_memory[tmpfs + 1], CONTAINER_TMPFS);
+
+        // A `sqlx` agent writes its database; a read-only root would crash-loop
+        // it on a disk error that names nothing useful.
+        let writes = args_for(&AgentId::from("a"), 8080, &[], &hardening, true);
+        assert!(!writes.iter().any(|a| a == "--read-only" || a == "--tmpfs"));
+        // The rest of the policy still applies — one agent needing a writable
+        // disk must not opt it out of capability dropping.
+        assert!(writes.iter().any(|a| a == "--cap-drop=ALL"));
+    }
+
+    #[test]
+    fn hardening_can_be_turned_off_entirely() {
+        let args = args_for(
+            &AgentId::from("a"),
+            8080,
+            &[],
+            &ContainerHardening::none(),
+            false,
+        );
+        for flag in [
+            "--cap-drop=ALL",
+            "--security-opt=no-new-privileges",
+            "--read-only",
+            "--pids-limit",
+        ] {
+            assert!(!args.iter().any(|a| a == flag), "{flag} should be absent");
+        }
+    }
+
+    /// The rule that decides `--read-only`, driven through the real parser so it
+    /// is checked against configs an operator could actually write — including
+    /// the one that omits `[server.storage]` entirely and gets the in-memory
+    /// default.
+    #[test]
+    fn only_in_memory_storage_is_known_not_to_write() {
+        let config = |storage: &str| {
+            AgentConfig::from_toml(&format!(
+                r#"
+[agent]
+name = "Store"
+
+[handler]
+type = "echo"
+
+[server]
+http_port = 8080
+{storage}
+"#
+            ))
+            .expect("parse")
+        };
+
+        assert!(!needs_writable_rootfs(&config("")));
+        assert!(!needs_writable_rootfs(&config(
+            "\n[server.storage]\ntype = \"inmemory\""
+        )));
+        assert!(needs_writable_rootfs(&config(
+            "\n[server.storage]\ntype = \"sqlx\"\nurl = \"sqlite:agent.db\""
+        )));
     }
 }

@@ -403,6 +403,34 @@ cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- \
 dev-loop backend; deploy configs you do not control on `--runtime container`,
 where only allow-listed variables cross the boundary.
 
+#### Container hardening
+
+Every container is created with capabilities dropped (`--cap-drop=ALL`),
+privilege escalation blocked (`no-new-privileges`), a 512-process cap, and — for
+agents whose storage writes nothing, i.e. `inmemory` — a read-only root
+filesystem with a `/tmp` tmpfs. The base image runs as uid 10001. That last pair
+is derived from the config rather than asked for, because guessing wrong is
+invisible either way: a read-only `sqlx` agent crash-loops on a disk error that
+names nothing useful, and a writable in-memory one gives up the protection for
+free.
+
+Resource ceilings are **not** defaulted — no memory limit is right for every
+agent, and a guessed one shows up as an agent dying under load for no visible
+reason:
+
+```bash
+a2a control-plane --runtime container --memory 512m --cpus 1.5
+a2a control-plane --runtime container --no-hardening   # escape hatch; warns
+```
+
+Two consequences worth knowing: an agent cannot bind a container port below 1024
+(publish it on whatever host port you like — `-p 80:8080`), and a handler that
+writes outside `/tmp` needs `sqlx` storage or a relaxed policy
+(`ContainerHardening`). This is the cheap 80% of isolation: it removes what an
+HTTP server never needed and bounds what a misbehaving one can consume. It is
+not a defence against code written to escape a container — call an agent run
+this way **contained**, not *isolated*.
+
 #### Driving it (`deploy` / `ps` / `logs` / `stop`)
 
 The same binary is the client. `--url` defaults to where `control-plane` binds

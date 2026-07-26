@@ -26,8 +26,8 @@ use a2a_agents::core::{
 use a2a_agents::core::{HandlerType, LlmHandlerConfig};
 use a2a_agents::utils::slugify;
 use a2a_agents::{
-    AgentId, AgentRegistry, AgentRuntime, ContainerRuntime, ControlPlane, ControlPlaneAuth,
-    ControlPlaneClient, ControlPlaneClientError, EnvAllowlist, HttpCardSource,
+    AgentId, AgentRegistry, AgentRuntime, ContainerHardening, ContainerRuntime, ControlPlane,
+    ControlPlaneAuth, ControlPlaneClient, ControlPlaneClientError, EnvAllowlist, HttpCardSource,
     InMemoryAgentRegistry, LocalProcessRuntime, Recovered, control_plane_router,
 };
 use a2a_agents_common::llm::{LlmProvider, LlmSettings, provider_from_env, provider_from_settings};
@@ -193,6 +193,20 @@ enum Command {
         /// it also stops every agent's output interleaving into this terminal.
         #[clap(long)]
         log_dir: Option<String>,
+        /// Memory ceiling per agent, in the engine's notation (`512m`, `2g`).
+        /// Unset means no limit (`--runtime container` only).
+        #[clap(long)]
+        memory: Option<String>,
+        /// CPU allowance per agent, in the engine's notation (`0.5`, `2`).
+        /// Unset means no limit (`--runtime container` only).
+        #[clap(long)]
+        cpus: Option<String>,
+        /// Create containers with no hardening — no dropped capabilities, no
+        /// read-only root, no process cap. For an agent that genuinely needs
+        /// what the defaults remove; not something to reach for casually
+        /// (`--runtime container` only).
+        #[clap(long)]
+        no_hardening: bool,
     },
     /// Deploy agents to a running control plane.
     ///
@@ -414,6 +428,9 @@ async fn main() -> anyhow::Result<()> {
             no_auth,
             allow_env,
             log_dir,
+            memory,
+            cpus,
+            no_hardening,
         } => {
             run_control_plane(ControlPlaneArgs {
                 bind,
@@ -425,6 +442,9 @@ async fn main() -> anyhow::Result<()> {
                 no_auth,
                 allow_env,
                 log_dir,
+                memory,
+                cpus,
+                no_hardening,
             })
             .await?;
         }
@@ -1101,6 +1121,9 @@ struct ControlPlaneArgs {
     no_auth: bool,
     allow_env: Vec<String>,
     log_dir: Option<String>,
+    memory: Option<String>,
+    cpus: Option<String>,
+    no_hardening: bool,
 }
 
 /// Environment variable holding the control-plane bearer token, so it need not
@@ -1145,6 +1168,26 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
     let registry: Arc<dyn AgentRegistry> = Arc::new(InMemoryAgentRegistry::default());
     let runtime: Arc<dyn AgentRuntime> = match args.runtime_kind {
         RuntimeKind::Local => {
+            // Flags that only the container backend can honour. Saying nothing
+            // would let someone believe their agents are memory-capped or
+            // deliberately unhardened when neither is true — the kind of
+            // silently-ignored setting this tool rejects everywhere else.
+            let ignored: Vec<&str> = [
+                args.memory.is_some().then_some("--memory"),
+                args.cpus.is_some().then_some("--cpus"),
+                args.no_hardening.then_some("--no-hardening"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            if !ignored.is_empty() {
+                warn!(
+                    "ignoring {} — container-only; `--runtime local` supervises plain child \
+                     processes and enforces nothing",
+                    ignored.join(", ")
+                );
+            }
+
             // Capture by default. Without it the children inherit this terminal
             // and `a2a logs` has nothing to serve — which would make the
             // subcommand a dead end on the runtime people try first.
@@ -1159,11 +1202,15 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
                     .with_log_dir(log_dir),
             )
         }
-        RuntimeKind::Container => Arc::new(
-            ContainerRuntime::with_engine(args.engine)
-                .with_image(args.image)
-                .with_allowed_env(allowed_env),
-        ),
+        RuntimeKind::Container => {
+            let hardening = resolve_hardening(args.no_hardening, args.memory, args.cpus);
+            Arc::new(
+                ContainerRuntime::with_engine(args.engine)
+                    .with_image(args.image)
+                    .with_allowed_env(allowed_env)
+                    .with_hardening(hardening),
+            )
+        }
     };
     let cp = Arc::new(ControlPlane::new(
         runtime,
@@ -1209,6 +1256,50 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
     }
     axum::serve(listener, router).await?;
     Ok(())
+}
+
+/// Decide what the container engine is asked to enforce on each agent.
+///
+/// Hardening is on unless explicitly waived — that is the point of it — and
+/// waiving it warns, for the same reason `--no-auth` does: it is a choice worth
+/// seeing in a log six months later.
+fn resolve_hardening(
+    no_hardening: bool,
+    memory: Option<String>,
+    cpus: Option<String>,
+) -> ContainerHardening {
+    if no_hardening {
+        warn!(
+            "--no-hardening: agent containers keep all capabilities, a writable root \
+             filesystem, and no process limit"
+        );
+        // Resource ceilings are still honoured — they are a limit, not a
+        // restriction, and someone who waived the security flags may well still
+        // want their agents bounded.
+        return ContainerHardening {
+            memory,
+            cpus,
+            ..ContainerHardening::none()
+        };
+    }
+
+    let hardening = ContainerHardening {
+        memory,
+        cpus,
+        ..ContainerHardening::default()
+    };
+    match (&hardening.memory, &hardening.cpus) {
+        (None, None) => info!(
+            "agent containers: capabilities dropped, no-new-privileges, read-only root \
+             where storage allows; no memory/CPU ceiling (--memory, --cpus)"
+        ),
+        _ => info!(
+            "agent containers: hardened, memory {:?}, cpus {:?}",
+            hardening.memory.as_deref().unwrap_or("unlimited"),
+            hardening.cpus.as_deref().unwrap_or("unlimited")
+        ),
+    }
+    hardening
 }
 
 /// Decide how the API authenticates, refusing to start unauthenticated unless

@@ -112,8 +112,9 @@ pub use registry::{
 };
 
 pub use runtime::{
-    AgentRuntime, AgentSpec, ContainerRuntime, EnvAllowlist, InMemoryAgentRuntime,
-    LocalProcessRuntime, Recovered, RuntimeError, RuntimeHealth, RuntimeStatus,
+    AgentRuntime, AgentSpec, ContainerHardening, ContainerRuntime, EnvAllowlist,
+    InMemoryAgentRuntime, LocalProcessRuntime, Recovered, RuntimeError, RuntimeHealth,
+    RuntimeStatus,
 };
 
 pub use control_plane::{

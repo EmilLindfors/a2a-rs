@@ -236,8 +236,33 @@ per-agent images) are independent and can be picked up whenever.
    (`tests/control_plane_test.rs`), an engine-accepts-the-query test that needs
    docker but no image, and the docker-gated e2e where a fresh runtime adopts a
    live container and stops it.
-5. ⬜ **Container hardening flags + non-root image** (pillar 3) — the cheap 80%
-   of isolation, roughly a day's work at the `create_args` chokepoint.
+5. ✅ **Container hardening flags + non-root image** (pillar 3) — the cheap 80%
+   of isolation, taken at the `create_args` chokepoint as planned.
+   `ContainerHardening` drops all capabilities, sets `no-new-privileges`, caps
+   processes at 512, and mounts the root filesystem read-only (with a `/tmp`
+   tmpfs) — the last **only where the agent's storage allows it**, derived from
+   the config rather than left to the operator, because getting it wrong either
+   way is invisible: a read-only `sqlx` agent crash-loops on a disk error that
+   names nothing, and a writable in-memory one gives up the protection for
+   free. The image runs as uid 10001.
+   Resource *ceilings* are deliberately not defaulted. There is no memory limit
+   that is right for every agent, and a guessed one surfaces as an agent dying
+   under load for no visible reason — so `--memory` / `--cpus` are opt-in, with
+   `--no-hardening` as the escape hatch (it warns, like `--no-auth`).
+   **Three latent breakages surfaced doing this, all in the container path:**
+   the base image could not build *at all* — the `llm` feature was added to the
+   binary's `required-features` and never to the Dockerfile, and cargo refuses
+   a named bin whose features are not all enabled; the pinned `rust:1.85`
+   builder was below what the dependency tree now requires (1.87+); and there
+   was no `.dockerignore`, so `COPY . .` shipped a 2 GB context, most of it
+   `target/`. None of it was caught because the docker-gated e2e *skips green
+   when the image is absent* — and an image that cannot be built is absent. The
+   fix for that class is a test that needs no Docker:
+   `the_dockerfile_enables_every_feature_the_a2a_binary_requires` parses both
+   sides and fails in CI. Verified against a real engine besides: a fully
+   hardened agent comes up healthy and `docker inspect` confirms the engine
+   applied each flag (a flag it ignored would pass the argv tests and protect
+   nothing).
 6. ⬜ **Per-agent images** (pillar 3) — the escape hatch that makes custom Rust
    handlers expressible declaratively.
 7. ⬜ **End-to-end `terraform apply` smoke test** — run a real `a2a
@@ -389,18 +414,18 @@ These are two different jobs and they belong in different phases:
   durable ties a stray `a2a run` to an `AgentId`, so the honest answer is "I
   cannot tell you", not an empty list. That is the concrete reason container is
   the supported control-plane backend and local is dev-only.
-- ⬜ **Container hardening — the cheap 80% of isolation.** `create_args` is
-  already the right chokepoint: add `--memory`, `--cpus`, `--pids-limit`,
-  `--read-only`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, plus a
-  non-root `USER` in the Dockerfile. Most of the practical safety of a sandbox
-  for the cost of a few more strings in a `Vec`. Until this lands, describe the
-  container runtime as *contained*, not *isolated*.
-  *Careful:* `create_args` now also stamps the `a2a-agent` / `a2a-port` labels
-  that restart-recovery reads back. Keep them — dropping either silently costs
-  the fleet on the next bounce (the round-trip is pinned by
-  `recovery_reads_back_what_create_stamped`). `--read-only` in particular needs
-  checking against the agent's storage: an `inmemory` agent is fine, a `sqlx`
-  one writes.
+- ✅ **Container hardening — the cheap 80% of isolation.** `ContainerHardening`
+  at the `create_args` chokepoint: `--cap-drop=ALL`,
+  `--security-opt=no-new-privileges`, `--pids-limit 512`, and `--read-only` +
+  `--tmpfs /tmp` where storage allows, plus opt-in `--memory` / `--cpus` and a
+  non-root `USER 10001` in the Dockerfile. Still describe this as *contained*,
+  not *isolated* — it removes what an HTTP server never needed and bounds what a
+  misbehaving one consumes; it is not a defence against code written to escape.
+  The `--read-only` caveat was handled by deriving it (`needs_writable_rootfs`)
+  rather than asking, and the labels restart-recovery reads back are called out
+  in `create_args` so a future edit does not drop them
+  (`recovery_reads_back_what_create_stamped` now runs against the *default*
+  hardening, i.e. what production actually stamps).
 - ⬜ **Per-agent images** (`image` on `AgentSpec` / a `[runtime]` config block).
   This is the escape hatch that keeps the declarative layer from being a toy: a
   custom Rust handler is just a different image and the platform stops caring.

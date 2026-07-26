@@ -27,7 +27,7 @@ mod container;
 mod local;
 mod memory;
 
-pub use container::ContainerRuntime;
+pub use container::{ContainerHardening, ContainerRuntime};
 pub use local::LocalProcessRuntime;
 pub use memory::InMemoryAgentRuntime;
 

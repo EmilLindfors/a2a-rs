@@ -11,7 +11,8 @@
 use std::time::Duration;
 
 use a2a_agents::{
-    AgentRuntime, AgentSpec, ContainerRuntime, EnvAllowlist, Recovered, RuntimeHealth,
+    AgentRuntime, AgentSpec, ContainerHardening, ContainerRuntime, EnvAllowlist, Recovered,
+    RuntimeHealth,
 };
 
 const IMAGE: &str = "a2a-agents:latest";
@@ -32,6 +33,63 @@ fn image_available(image: &str) -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
+}
+
+/// The image must be *buildable*, checked without building it.
+///
+/// This is the one failure the docker-gated tests below structurally cannot
+/// catch: they skip green when the image is absent, and an image that cannot be
+/// built is absent — so the whole container backend silently had no image after
+/// the `llm` feature was added to the binary's `required-features` and not to
+/// the Dockerfile. Cargo refuses to build a named bin whose required features
+/// are not all enabled, so the two lists have to agree, and nothing else in the
+/// suite says so.
+///
+/// Parsed rather than hard-coded, so adding a feature to either side is what
+/// fails, not a stale copy of the list in a test.
+#[test]
+fn the_dockerfile_enables_every_feature_the_a2a_binary_requires() {
+    let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
+        .expect("read Cargo.toml");
+    let dockerfile = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Dockerfile"))
+        .expect("read Dockerfile");
+
+    // The `required-features` line of the `[[bin]] name = "a2a"` section.
+    // Line-wise rather than substring matching: the checkout may have CRLF
+    // endings, and `name = "a2a"` is also a prefix of `name = "a2a_thing"`.
+    let bin_section = manifest
+        .split("[[bin]]")
+        .find(|section| section.lines().any(|line| line.trim() == r#"name = "a2a""#))
+        .expect("the a2a bin section");
+    let required: Vec<&str> = bin_section
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("required-features = ["))
+        .expect("required-features")
+        .trim_end_matches(']')
+        .split(',')
+        .map(|feature| feature.trim().trim_matches('"'))
+        .filter(|feature| !feature.is_empty())
+        .collect();
+    assert!(!required.is_empty(), "parsed no required features");
+
+    // Everything the Dockerfile passes to `--features`, across its (possibly
+    // line-continued) cargo invocation.
+    let enabled: Vec<&str> = dockerfile
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("--features "))
+        .expect("a --features line in the Dockerfile")
+        .split(',')
+        .map(str::trim)
+        .collect();
+
+    for feature in &required {
+        assert!(
+            enabled.contains(feature),
+            "the Dockerfile does not enable `{feature}`, which the `a2a` binary requires — \
+             `docker build` will fail with \"target `a2a` requires the features\", leaving \
+             the container runtime with no image. Dockerfile enables: {enabled:?}"
+        );
+    }
 }
 
 /// The recovery query against a *real* engine, with no image and no container
@@ -184,6 +242,131 @@ http_port = {port}
     // Best-effort cleanup of the container and temp config.
     let _ = std::process::Command::new("docker")
         .args(["rm", "-f", &format!("a2a-agent-{id}")])
+        .output();
+    let _ = std::fs::remove_file(&config_path);
+}
+
+/// `docker inspect -f <template> <container>`, trimmed.
+fn inspect(container: &str, template: &str) -> String {
+    let out = std::process::Command::new("docker")
+        .args(["inspect", "-f", template, container])
+        .output()
+        .expect("run docker inspect");
+    assert!(
+        out.status.success(),
+        "docker inspect {template} failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+/// A hardened agent still comes up.
+///
+/// The unit tests pin which flags are emitted; they cannot tell you the result
+/// runs. That is the failure mode hardening actually has — a root filesystem
+/// mounted read-only under a process that needed to write, or a dropped
+/// capability something quietly relied on, both of which look like an agent
+/// that never becomes `Healthy` and say nothing about why. So this asserts the
+/// agent answers its card *and* that the engine really applied the restrictions
+/// (a flag it ignored would pass the argv tests and protect nothing).
+#[tokio::test]
+async fn a_hardened_agent_still_serves_and_the_engine_applied_the_flags() {
+    if !docker_available() {
+        eprintln!("skipping a_hardened_agent_still_serves: docker not available");
+        return;
+    }
+    if !image_available(IMAGE) {
+        eprintln!("skipping a_hardened_agent_still_serves: image '{IMAGE}' not built");
+        return;
+    }
+
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let config_path = std::env::temp_dir().join(format!("container_hardened_{port}.toml"));
+    // In-memory storage, so the read-only root filesystem applies — the strictest
+    // policy this runtime will impose on anything.
+    std::fs::write(
+        &config_path,
+        format!(
+            r#"
+[agent]
+name = "Hardened Agent {port}"
+
+[handler]
+type = "echo"
+
+[server]
+http_port = {port}
+
+[server.storage]
+type = "inmemory"
+"#
+        ),
+    )
+    .unwrap();
+
+    let rt = ContainerRuntime::new().with_hardening(
+        ContainerHardening::default()
+            .with_memory("256m")
+            .with_cpus("1"),
+    );
+    let spec = AgentSpec::from_config_path(&config_path).expect("spec from config");
+    let id = rt.provision(spec).await.expect("provision");
+    rt.start(&id).await.expect("start");
+
+    let mut health = RuntimeHealth::Provisioned;
+    for _ in 0..60 {
+        health = rt.health(&id).await.unwrap();
+        if health == RuntimeHealth::Healthy {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    let container = format!("a2a-agent-{id}");
+    assert_eq!(
+        health,
+        RuntimeHealth::Healthy,
+        "a fully hardened agent must still serve its card; container logs:\n{}",
+        String::from_utf8_lossy(
+            &std::process::Command::new("docker")
+                .args(["logs", &container])
+                .output()
+                .map(|o| [o.stdout, o.stderr].concat())
+                .unwrap_or_default()
+        )
+    );
+
+    // The engine's own view — proof the flags were applied, not merely passed.
+    assert_eq!(
+        inspect(&container, "{{.HostConfig.ReadonlyRootfs}}"),
+        "true"
+    );
+    assert_eq!(inspect(&container, "{{.HostConfig.CapDrop}}"), "[ALL]");
+    assert_eq!(inspect(&container, "{{.HostConfig.PidsLimit}}"), "512");
+    assert!(
+        inspect(&container, "{{.HostConfig.SecurityOpt}}").contains("no-new-privileges"),
+        "no-new-privileges must reach the engine"
+    );
+    // 256m in bytes; the engine normalizes the notation we passed through.
+    assert_eq!(
+        inspect(&container, "{{.HostConfig.Memory}}"),
+        (256 * 1024 * 1024).to_string()
+    );
+
+    // The image runs unprivileged, which is the half of this that lives in the
+    // Dockerfile rather than in `create_args`.
+    let user = inspect(&container, "{{.Config.User}}");
+    assert!(
+        user != "0" && user != "root" && !user.is_empty(),
+        "the agent image must not run as root, got {user:?}"
+    );
+
+    rt.stop(&id).await.expect("stop");
+    let _ = std::process::Command::new("docker")
+        .args(["rm", "-f", &container])
         .output();
     let _ = std::fs::remove_file(&config_path);
 }
