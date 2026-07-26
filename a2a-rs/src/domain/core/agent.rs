@@ -12,6 +12,19 @@ pub use crate::domain::generated::{
 
 pub type PushNotificationAuthenticationInfo = AuthenticationInfo;
 
+/// JSON-RPC 2.0 over HTTP — the spec-default protocol binding, served by
+/// [`jsonrpc_router`](crate::adapter::transport::jsonrpc_router).
+pub const PROTOCOL_BINDING_JSONRPC: &str = "JSONRPC";
+
+/// ConnectRPC — the in-tree first-class streaming binding, served by
+/// [`HttpServer`](crate::adapter::HttpServer) over a
+/// [`ConnectRpcAdapter`](crate::adapter::ConnectRpcAdapter).
+pub const PROTOCOL_BINDING_CONNECTRPC: &str = "CONNECTRPC";
+
+/// Plain REST/JSON over HTTP, served by
+/// [`rest_router`](crate::adapter::transport::rest_router).
+pub const PROTOCOL_BINDING_HTTP_JSON: &str = "HTTP+JSON";
+
 impl AgentSkill {
     /// Create a new skill with the minimum required fields
     pub fn new(id: String, name: String, description: String, tags: Vec<String>) -> Self {
@@ -249,7 +262,7 @@ impl AgentCard {
         self.supported_interfaces
             .first()
             .map(|i| i.protocol_binding.as_str())
-            .unwrap_or("JSONRPC")
+            .unwrap_or(PROTOCOL_BINDING_JSONRPC)
     }
 
     pub fn supports_extended_agent_card(&self) -> bool {
@@ -427,7 +440,7 @@ impl AgentCardBuilder {
                 url: self.url,
                 protocol_binding: self
                     .preferred_transport
-                    .unwrap_or_else(|| "JSONRPC".to_string()),
+                    .unwrap_or_else(|| PROTOCOL_BINDING_JSONRPC.to_string()),
                 protocol_version: self.protocol_version.unwrap_or_else(|| "1.0".to_string()),
                 ..Default::default()
             };

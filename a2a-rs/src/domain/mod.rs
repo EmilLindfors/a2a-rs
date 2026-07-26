@@ -18,7 +18,8 @@ pub use core::{
     ClientCredentialsOAuthFlow, DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow,
     FilePartBuilder, GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams,
     ListTasksParams, ListTasksResult, Message, MessageSendConfiguration, MessageSendParams,
-    OAuthFlows, Part, PartBuilder, PushNotificationAuthenticationInfo, Role, SecurityRequirement,
+    OAuthFlows, PROTOCOL_BINDING_CONNECTRPC, PROTOCOL_BINDING_HTTP_JSON, PROTOCOL_BINDING_JSONRPC,
+    Part, PartBuilder, PushNotificationAuthenticationInfo, Role, SecurityRequirement,
     SecurityScheme, StringList, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
     TaskSendParams, TaskState, TaskStateExt, TaskStatus, VersionedTask, part,
 };

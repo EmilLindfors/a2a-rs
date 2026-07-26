@@ -13,6 +13,10 @@
 use async_trait::async_trait;
 
 use crate::domain::{A2AError, AgentCard, AgentInterface};
+#[cfg(feature = "http-client")]
+use crate::domain::PROTOCOL_BINDING_CONNECTRPC;
+#[cfg(feature = "jsonrpc-client")]
+use crate::domain::PROTOCOL_BINDING_JSONRPC;
 use crate::port::Transport;
 
 /// Builds a [`Transport`] for a single wire protocol from an agent interface.
@@ -39,7 +43,7 @@ pub struct JsonRpcTransportFactory;
 #[async_trait]
 impl TransportFactory for JsonRpcTransportFactory {
     fn protocol(&self) -> &str {
-        "JSONRPC"
+        PROTOCOL_BINDING_JSONRPC
     }
 
     async fn create(
@@ -61,7 +65,7 @@ pub struct ConnectRpcTransportFactory;
 #[async_trait]
 impl TransportFactory for ConnectRpcTransportFactory {
     fn protocol(&self) -> &str {
-        "CONNECTRPC"
+        PROTOCOL_BINDING_CONNECTRPC
     }
 
     async fn create(
