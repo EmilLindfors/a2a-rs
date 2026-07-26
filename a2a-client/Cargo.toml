@@ -2,7 +2,7 @@
 name = "a2a-web-client"
 version = "0.4.1"
 edition = "2024"
-rust-version = "1.85"
+rust-version.workspace = true
 authors = ["Emil Lindfors <emil@lindfors.no>"]
 description = "Generic web client library for building A2A agent frontends"
 license = "MIT"

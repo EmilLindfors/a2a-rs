@@ -2,7 +2,7 @@
 name = "a2a-agents"
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version.workspace = true
 authors = ["Emil Lindfors <emil@lindfors.no>"]
 description = "Framework for building A2A Protocol agents with declarative configuration"
 license = "MIT"

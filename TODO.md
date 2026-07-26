@@ -35,20 +35,26 @@ The `feat/a2acli` branch merged and shipped (`a2acli` 0.4.0, released in #29).
       had to cap each run with `timeout`. The stream should end when the task hits a
       terminal state. (Distinct from the `Last-Event-ID` gap in `ROADMAP.md`.)
 
-## 2b. Decide what MSRV we actually claim
+## 2b. MSRV
 
-- [ ] **`rust-version = "1.85"` may no longer be true.** `a2a-rs` and
-      `a2a-agents` both declare it, but the current dependency tree needs
-      **1.87+** — `icu_*`/`idna_adapter` want 1.86, `process-wrap` wants 1.87 —
-      which is how the agent Dockerfile's pinned `rust:1.85` builder came to fail
-      outright (fixed there by bumping to 1.96). Nothing catches this locally
-      because a developer's toolchain is newer; cargo only errors when the
-      *toolchain* is below what a dep requires, never when `rust-version` is.
-      Three options, and it is a publishing decision rather than a code one:
-      raise the declared MSRV to something true, pin the offending deps back to
-      versions that build on 1.85, or drop the claim. Whichever it is, an MSRV
-      that is asserted and untested is worth less than no claim at all — if we
-      keep one, it wants a CI job on that exact toolchain.
+- [x] **Raised to 1.96, declared once.** All seven crates claimed
+      `rust-version = "1.85"` while the dependency graph had moved to **1.87+**
+      (`icu_*` want 1.86, `process-wrap` 1.87) — a false claim that surfaced only
+      when the agent container image failed to build on its pinned `rust:1.85`.
+      Nothing catches this locally: cargo errors when the *toolchain* is below a
+      dep's floor, never when `rust-version` is.
+      Set to **1.96** rather than the 1.87 minimum on purpose — that is the
+      toolchain the workspace is built and tested with and the one
+      `a2a-agents/Dockerfile` pins, so the claim is one we actually exercise
+      instead of a guess. It now lives in `[workspace.package]` with members
+      inheriting via `rust-version.workspace = true`, so seven copies cannot
+      drift apart again.
+- [ ] **Pin an MSRV CI job the moment the claim drops below stable.** Not needed
+      *today*: every workflow uses `dtolnay/rust-toolchain@stable` and 1.96 is
+      current stable, so CI already builds on exactly the declared version. That
+      stops being true the day stable moves on — from then the number is
+      unproven again, and a `dtolnay/rust-toolchain@1.96` job is what makes it
+      real. Cheap to add then; redundant now.
 
 ## 3. CLI follow-ups
 

@@ -2,7 +2,7 @@
 name = "a2a-agents-common"
 version = "0.4.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version.workspace = true
 authors = ["Emil Lindfors <emil@lindfors.no>"]
 description = "Common utilities for building A2A Protocol agents"
 license = "MIT"

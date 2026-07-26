@@ -8,11 +8,12 @@
 #     -v "$PWD/agent.toml:/etc/agent.toml:ro" a2a-agents:latest
 
 # ---- builder ---------------------------------------------------------------
-# Must be at least what the *dependency tree* requires, which is not the same as
-# the crates' own `rust-version` (1.85): transitive deps raise their floor over
-# time, and cargo refuses the whole build when one of them wants more than the
-# toolchain offers. This is the line to bump when that happens — the symptom is
-# a wall of "requires rustc 1.8x" during `docker build`.
+# Keep in step with `rust-version` in the workspace `[workspace.package]`, and
+# note it must also satisfy what the *dependency tree* requires, which can be
+# higher: transitive deps raise their floor over time, and cargo refuses the
+# whole build when one wants more than the toolchain offers. This is the line to
+# bump when that happens — the symptom is a wall of "requires rustc 1.x" during
+# `docker build`.
 FROM rust:1.96-bookworm AS builder
 WORKDIR /src
 
