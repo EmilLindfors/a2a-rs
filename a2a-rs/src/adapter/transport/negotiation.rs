@@ -12,11 +12,11 @@
 
 use async_trait::async_trait;
 
-use crate::domain::{A2AError, AgentCard, AgentInterface};
 #[cfg(feature = "http-client")]
 use crate::domain::PROTOCOL_BINDING_CONNECTRPC;
 #[cfg(feature = "jsonrpc-client")]
 use crate::domain::PROTOCOL_BINDING_JSONRPC;
+use crate::domain::{A2AError, AgentCard, AgentInterface};
 use crate::port::Transport;
 
 /// Builds a [`Transport`] for a single wire protocol from an agent interface.
