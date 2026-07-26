@@ -407,12 +407,12 @@ impl Task {
             message.validate()?;
         }
 
-        if let Some(status) = self.status.as_option() {
-            if let Some(msg) = status.message.as_option() {
-                #[cfg(feature = "tracing")]
-                tracing::trace!("Validating status message");
-                msg.validate()?;
-            }
+        if let Some(status) = self.status.as_option()
+            && let Some(msg) = status.message.as_option()
+        {
+            #[cfg(feature = "tracing")]
+            tracing::trace!("Validating status message");
+            msg.validate()?;
         }
 
         #[cfg(feature = "tracing")]

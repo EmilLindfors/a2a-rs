@@ -232,10 +232,10 @@ impl AgentRuntime for LocalProcessRuntime {
         let entry = guard
             .get_mut(id)
             .ok_or_else(|| RuntimeError::NotFound(id.clone()))?;
-        if let ProcState::Running(child) = &mut entry.state {
-            if let Err(e) = child.kill().await {
-                warn!("error killing agent '{}': {}", id, e);
-            }
+        if let ProcState::Running(child) = &mut entry.state
+            && let Err(e) = child.kill().await
+        {
+            warn!("error killing agent '{}': {}", id, e);
         }
         entry.state = ProcState::Stopped;
         Ok(())

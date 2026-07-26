@@ -1007,31 +1007,25 @@ impl ServerHandler for AgentToMcpBridge {
             if let Some(a2a_rs::domain::generated::security_scheme::Scheme::Oauth2SecurityScheme(
                 oauth2_scheme,
             )) = &scheme.scheme
+                && let Some(flows) = oauth2_scheme.flows.as_option()
+                && let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(cc)) =
+                    &flows.flow
             {
-                if let Some(flows) = oauth2_scheme.flows.as_option() {
-                    if let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(
-                        cc,
-                    )) = &flows.flow
-                    {
-                        let mut cc_settings = serde_json::Map::new();
-                        cc_settings.insert(
-                            "tokenUrl".to_string(),
-                            serde_json::Value::String(cc.token_url.clone()),
-                        );
-                        if !oauth2_scheme.oauth2_metadata_url.is_empty() {
-                            cc_settings.insert(
-                                "metadataUrl".to_string(),
-                                serde_json::Value::String(
-                                    oauth2_scheme.oauth2_metadata_url.clone(),
-                                ),
-                            );
-                        }
-                        extensions.insert(
-                            "io.modelcontextprotocol/oauth-client-credentials".to_string(),
-                            cc_settings,
-                        );
-                    }
+                let mut cc_settings = serde_json::Map::new();
+                cc_settings.insert(
+                    "tokenUrl".to_string(),
+                    serde_json::Value::String(cc.token_url.clone()),
+                );
+                if !oauth2_scheme.oauth2_metadata_url.is_empty() {
+                    cc_settings.insert(
+                        "metadataUrl".to_string(),
+                        serde_json::Value::String(oauth2_scheme.oauth2_metadata_url.clone()),
+                    );
                 }
+                extensions.insert(
+                    "io.modelcontextprotocol/oauth-client-credentials".to_string(),
+                    cc_settings,
+                );
             }
         }
 

@@ -365,16 +365,16 @@ impl Transport for HttpClient {
             include_artifacts: params.include_artifacts,
             ..Default::default()
         };
-        if let Some(ref t_str) = params.status_timestamp_after {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t_str) {
-                let utc_dt = dt.with_timezone(&chrono::Utc);
-                request.status_timestamp_after =
-                    ::buffa::MessageField::some(::buffa_types::google::protobuf::Timestamp {
-                        seconds: utc_dt.timestamp(),
-                        nanos: utc_dt.timestamp_subsec_nanos() as i32,
-                        ..Default::default()
-                    });
-            }
+        if let Some(ref t_str) = params.status_timestamp_after
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t_str)
+        {
+            let utc_dt = dt.with_timezone(&chrono::Utc);
+            request.status_timestamp_after =
+                ::buffa::MessageField::some(::buffa_types::google::protobuf::Timestamp {
+                    seconds: utc_dt.timestamp(),
+                    nanos: utc_dt.timestamp_subsec_nanos() as i32,
+                    ..Default::default()
+                });
         }
 
         let response = self

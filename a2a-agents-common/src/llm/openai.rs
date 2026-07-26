@@ -564,16 +564,16 @@ impl LlmProvider for OpenAiProvider {
                 };
 
                 for choice in chunk.choices {
-                    if let Some(reasoning) = choice.delta.reasoning.or(choice.delta.reasoning_content) {
-                        if !reasoning.is_empty() {
-                            yield super::LlmStreamEvent::Reasoning(reasoning);
-                        }
+                    if let Some(reasoning) = choice.delta.reasoning.or(choice.delta.reasoning_content)
+                        && !reasoning.is_empty()
+                    {
+                        yield super::LlmStreamEvent::Reasoning(reasoning);
                     }
 
-                    if let Some(content) = choice.delta.content {
-                        if !content.is_empty() {
-                            yield super::LlmStreamEvent::ContentChunk(content);
-                        }
+                    if let Some(content) = choice.delta.content
+                        && !content.is_empty()
+                    {
+                        yield super::LlmStreamEvent::ContentChunk(content);
                     }
 
                     if let Some(tool_calls) = choice.delta.tool_calls {
@@ -596,11 +596,11 @@ impl LlmProvider for OpenAiProvider {
                                 }
                             });
 
-                            if let Some(f) = call.function {
-                                if let Some(args) = f.arguments {
-                                    new_args = args.clone();
-                                    entry.arguments.push_str(&args);
-                                }
+                            if let Some(f) = call.function
+                                && let Some(args) = f.arguments
+                            {
+                                new_args = args.clone();
+                                entry.arguments.push_str(&args);
                             }
 
                             yield super::LlmStreamEvent::ToolCallChunk {

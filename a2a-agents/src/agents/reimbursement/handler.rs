@@ -698,10 +698,10 @@ Example response when asking for info:
 
         for (idx, part) in message.parts.iter().enumerate() {
             let mut meta_map = Map::new();
-            if let Some(meta) = part.metadata.as_option() {
-                if let Ok(Value::Object(map)) = serde_json::to_value(meta) {
-                    meta_map = map;
-                }
+            if let Some(meta) = part.metadata.as_option()
+                && let Ok(Value::Object(map)) = serde_json::to_value(meta)
+            {
+                meta_map = map;
             }
 
             match &part.content {
@@ -785,13 +785,13 @@ Example response when asking for info:
             }
 
             // Check if it's a status query
-            if let Some(request_id) = data.get("request_id").and_then(|v| v.as_str()) {
-                if data.len() == 1 || data.get("action").and_then(|v| v.as_str()) == Some("status")
-                {
-                    return Ok(ReimbursementRequest::StatusQuery {
-                        request_id: request_id.to_string(),
-                    });
-                }
+            if let Some(request_id) = data.get("request_id").and_then(|v| v.as_str())
+                && (data.len() == 1
+                    || data.get("action").and_then(|v| v.as_str()) == Some("status"))
+            {
+                return Ok(ReimbursementRequest::StatusQuery {
+                    request_id: request_id.to_string(),
+                });
             }
 
             // Try to build an initial or form submission request
@@ -965,11 +965,11 @@ Example response when asking for info:
             r"\d{1,2}-\d{1,2}-\d{4}",
         ];
         for pattern in &date_patterns {
-            if let Ok(regex) = regex::Regex::new(pattern) {
-                if let Some(mat) = regex.find(text) {
-                    date = Some(mat.as_str().to_string());
-                    break;
-                }
+            if let Ok(regex) = regex::Regex::new(pattern)
+                && let Some(mat) = regex.find(text)
+            {
+                date = Some(mat.as_str().to_string());
+                break;
             }
         }
 
@@ -1033,14 +1033,14 @@ Example response when asking for info:
         match request {
             ReimbursementRequest::Initial { amount, .. } => {
                 // Validate amount if provided
-                if let Some(money) = amount {
-                    if let Err(e) = money.validate() {
-                        warn!(error = %e, "Amount validation failed");
-                        return Err(A2AError::ValidationError {
-                            field: "amount".to_string(),
-                            message: e,
-                        });
-                    }
+                if let Some(money) = amount
+                    && let Err(e) = money.validate()
+                {
+                    warn!(error = %e, "Amount validation failed");
+                    return Err(A2AError::ValidationError {
+                        field: "amount".to_string(),
+                        message: e,
+                    });
                 }
                 Ok(())
             }
@@ -1497,28 +1497,28 @@ impl AsyncMessageHandler for ReimbursementHandler {
 
         // Check if this task already has a completed/approved expense
         // If so, treat this as a follow-up conversation message
-        if let Some(ref task) = existing_task {
-            if task.status.state == TaskState::Completed {
-                // This is a follow-up to a completed task
-                // Add user message to history
-                self.update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
-                    .await?;
+        if let Some(ref task) = existing_task
+            && task.status.state == TaskState::Completed
+        {
+            // This is a follow-up to a completed task
+            // Add user message to history
+            self.update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
+                .await?;
 
-                // Send a simple acknowledgment
-                let response_message = Message::builder()
-                    .role(Role::Agent)
-                    .parts(vec![Part::text("Your expense has already been processed. Is there anything else I can help you with?".to_string())])
-                    .message_id(Uuid::new_v4().to_string())
-                    .context_id(message.context_id.clone())
-                    .build();
+            // Send a simple acknowledgment
+            let response_message = Message::builder()
+                .role(Role::Agent)
+                .parts(vec![Part::text("Your expense has already been processed. Is there anything else I can help you with?".to_string())])
+                .message_id(Uuid::new_v4().to_string())
+                .context_id(message.context_id.clone())
+                .build();
 
-                // Add agent response and return
-                let final_task = self
-                    .update_and_broadcast(&id, TaskState::Completed, Some(response_message))
-                    .await?;
+            // Add agent response and return
+            let final_task = self
+                .update_and_broadcast(&id, TaskState::Completed, Some(response_message))
+                .await?;
 
-                return Ok(final_task);
-            }
+            return Ok(final_task);
         }
 
         // Add the user's message to history first

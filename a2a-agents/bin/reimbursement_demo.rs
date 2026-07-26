@@ -544,10 +544,10 @@ async fn tasks_page(
 ) -> Result<impl IntoResponse, AppError> {
     let mut params = ListTasksParams::default();
 
-    if let Some(state_str) = &query.state {
-        if let Ok(state) = serde_json::from_str::<TaskState>(&format!("\"{}\"", state_str)) {
-            params.status = Some(state);
-        }
+    if let Some(state_str) = &query.state
+        && let Ok(state) = serde_json::from_str::<TaskState>(&format!("\"{}\"", state_str))
+    {
+        params.status = Some(state);
     }
 
     params.page_size = query.limit.map(|l| l as i32).or(Some(50));

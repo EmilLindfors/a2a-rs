@@ -544,31 +544,31 @@ impl LlmProvider for GeminiProvider {
 
                 if let Some(candidates) = chunk.candidates {
                     for candidate in candidates {
-                        if let Some(content) = candidate.content {
-                            if let Some(parts) = content.parts {
-                                for part in parts {
-                                    if let Some(text) = part.text {
-                                        if !text.is_empty() {
-                                            yield super::LlmStreamEvent::ContentChunk(text);
-                                        }
-                                    }
+                        if let Some(content) = candidate.content
+                            && let Some(parts) = content.parts
+                        {
+                            for part in parts {
+                                if let Some(text) = part.text
+                                    && !text.is_empty()
+                                {
+                                    yield super::LlmStreamEvent::ContentChunk(text);
+                                }
 
-                                    if let Some(call) = part.function_call {
-                                        let id = uuid::Uuid::new_v4().to_string();
-                                        let arguments = serde_json::to_string(&call.args).unwrap_or_default();
+                                if let Some(call) = part.function_call {
+                                    let id = uuid::Uuid::new_v4().to_string();
+                                    let arguments = serde_json::to_string(&call.args).unwrap_or_default();
 
-                                        yield super::LlmStreamEvent::ToolCallChunk {
-                                            id: id.clone(),
-                                            name: Some(call.name.clone()),
-                                            arguments: arguments.clone(),
-                                        };
+                                    yield super::LlmStreamEvent::ToolCallChunk {
+                                        id: id.clone(),
+                                        name: Some(call.name.clone()),
+                                        arguments: arguments.clone(),
+                                    };
 
-                                        yield super::LlmStreamEvent::ToolCall(super::ToolCall {
-                                            id,
-                                            name: call.name,
-                                            arguments,
-                                        });
-                                    }
+                                    yield super::LlmStreamEvent::ToolCall(super::ToolCall {
+                                        id,
+                                        name: call.name,
+                                        arguments,
+                                    });
                                 }
                             }
                         }

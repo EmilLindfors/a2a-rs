@@ -285,31 +285,27 @@ impl AsyncTaskQuery for InMemoryTaskStorage {
             .values()
             .filter(|task| {
                 // Filter by context_id if provided
-                if let Some(ref context_id) = params.context_id {
-                    if &task.context_id != context_id {
-                        return false;
-                    }
+                if let Some(ref context_id) = params.context_id
+                    && &task.context_id != context_id
+                {
+                    return false;
                 }
 
                 // Filter by status if provided
-                if let Some(ref status) = params.status {
-                    if &task.status.state != status {
-                        return false;
-                    }
+                if let Some(ref status) = params.status
+                    && &task.status.state != status
+                {
+                    return false;
                 }
 
                 // Filter by status_timestamp_after if provided
-                if let Some(status_timestamp_after) = &params.status_timestamp_after {
-                    if let Ok(after_dt) =
+                if let Some(status_timestamp_after) = &params.status_timestamp_after
+                    && let Ok(after_dt) =
                         chrono::DateTime::parse_from_rfc3339(status_timestamp_after)
-                    {
-                        let after_utc = after_dt.with_timezone(&chrono::Utc);
-                        if let Some(timestamp) = task.status.timestamp_utc() {
-                            if timestamp <= after_utc {
-                                return false;
-                            }
-                        }
-                    }
+                    && let Some(timestamp) = task.status.timestamp_utc()
+                    && timestamp <= after_dt.with_timezone(&chrono::Utc)
+                {
+                    return false;
                 }
 
                 true

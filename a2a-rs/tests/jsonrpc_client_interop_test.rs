@@ -214,11 +214,11 @@ async fn subscribe_resumes_from_last_event_id() {
     for _ in 0..16 {
         match tokio::time::timeout(Duration::from_secs(2), all.next()).await {
             Ok(Some(Ok(ev))) => {
-                if let StreamItem::StatusUpdate(e) = &ev.item {
-                    if e.status.state == ::buffa::EnumValue::from(TaskState::Completed) {
-                        completed_id = ev.event_id;
-                        break;
-                    }
+                if let StreamItem::StatusUpdate(e) = &ev.item
+                    && e.status.state == ::buffa::EnumValue::from(TaskState::Completed)
+                {
+                    completed_id = ev.event_id;
+                    break;
                 }
             }
             _ => break,
