@@ -35,6 +35,21 @@ The `feat/a2acli` branch merged and shipped (`a2acli` 0.4.0, released in #29).
       had to cap each run with `timeout`. The stream should end when the task hits a
       terminal state. (Distinct from the `Last-Event-ID` gap in `ROADMAP.md`.)
 
+## 2b. Decide what MSRV we actually claim
+
+- [ ] **`rust-version = "1.85"` may no longer be true.** `a2a-rs` and
+      `a2a-agents` both declare it, but the current dependency tree needs
+      **1.87+** — `icu_*`/`idna_adapter` want 1.86, `process-wrap` wants 1.87 —
+      which is how the agent Dockerfile's pinned `rust:1.85` builder came to fail
+      outright (fixed there by bumping to 1.96). Nothing catches this locally
+      because a developer's toolchain is newer; cargo only errors when the
+      *toolchain* is below what a dep requires, never when `rust-version` is.
+      Three options, and it is a publishing decision rather than a code one:
+      raise the declared MSRV to something true, pin the offending deps back to
+      versions that build on 1.85, or drop the claim. Whichever it is, an MSRV
+      that is asserted and untested is worth less than no claim at all — if we
+      keep one, it wants a CI job on that exact toolchain.
+
 ## 3. CLI follow-ups
 
 - [ ] **Thread `--auth`/`--timeout` through `auto` mode.** Today the negotiation
