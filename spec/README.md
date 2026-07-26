@@ -1,118 +1,83 @@
-# A2A Protocol Specification
+# A2A Protocol Specification (v1.0.0)
 
-This directory contains the Agent-to-Agent (A2A) Protocol specification split into focused, domain-specific files for better comprehension and compliance tracking.
+This directory vendors the **Agent-to-Agent (A2A) Protocol v1.0.0** definitions that
+`a2a-rs` generates its domain types from.
 
-## File Organization
+A2A v1.0.0 is **proto-first**: the canonical contract is the Protocol Buffer
+definition, and the JSON wire format is derived from it via the **ProtoJSON**
+serialization rules ([ADR-001](https://github.com/a2aproject/A2A/blob/main/adrs/adr-001-protojson-serialization.md),
+accepted 2025-11-18). There is no hand-written JSON Schema in this layout.
 
-The specification has been organized into the following files:
+## Files
 
-### Core Domain Models
-- **[agent.json](./agent.json)** - Agent cards, capabilities, skills, and provider information
-- **[message.json](./message.json)** - Message structures, parts (text, file, data), and content types
-- **[task.json](./task.json)** - Task lifecycle, states, status, and artifacts
+- **[a2a.proto](./a2a.proto)** — the canonical A2A protocol definition
+  (package `lf.a2a.v1`, service `A2AService`). This is the source of truth; the
+  generated Rust domain types are built from it.
+- **[google/](./google)** — `google.api` / well-known-type proto dependencies
+  imported by `a2a.proto`.
+- **[specification.json](./specification.json)** — a small index stub listing the
+  top-level definitions. **Not** a normative schema; the proto is authoritative.
+- **[CHANGELOG.md](./CHANGELOG.md)** — upstream spec changelog.
 
-### Protocol Infrastructure
-- **[jsonrpc.json](./jsonrpc.json)** - JSON-RPC 2.0 base types and message structures
-- **[requests.json](./requests.json)** - Method-specific requests, responses, and parameters
-- **[errors.json](./errors.json)** - Error codes and types (both JSON-RPC and A2A-specific)
+## Wire format (v1.0.0)
 
-### Specialized Features
-- **[security.json](./security.json)** - Authentication schemes (API key, HTTP, OAuth2, OpenID Connect)
-- **[notifications.json](./notifications.json)** - Push notification configuration and authentication
-- **[events.json](./events.json)** - Streaming events for status and artifact updates
+JSON bindings (JSON-RPC 2.0 and HTTP+JSON/REST) serialize the proto messages as
+**ProtoJSON**:
 
-### Extensions
-- **[ap2.json](./ap2.json)** - AP2 (Agent Payments Protocol) extension for commerce capabilities
+- **Enums** are the proto value names, **SCREAMING_SNAKE_CASE** — e.g.
+  `"role": "ROLE_USER"`, `"state": "TASK_STATE_COMPLETED"`. (Per ADR-001 this is a
+  deliberate breaking change from the pre-1.0 lowercase form like `"user"`.)
+- **Fields** are camelCase (with snake_case accepted on input).
+- **Timestamps** (`google.protobuf.Timestamp`) are RFC 3339 strings.
+- **Error details** use the ProtoJSON `Any` representation (`@type`), with
+  `google.rpc` `ErrorInfo` / `BadRequest` where applicable.
 
-## Key A2A Protocol Methods
+## Method names
 
-The specification defines the following core methods:
+The JSON-RPC and gRPC bindings use the **same PascalCase method names** as the
+proto RPCs (spec §5.3 Method Mapping Reference); REST maps them to custom-verb
+HTTP endpoints:
 
-### Message Methods
-1. **`message/send`** - Send a message to an agent (blocking)
-2. **`message/stream`** - Send a message with streaming response
+| Operation | JSON-RPC / gRPC method | REST endpoint |
+|---|---|---|
+| Send message | `SendMessage` | `POST /message:send` |
+| Send streaming message | `SendStreamingMessage` | `POST /message:stream` |
+| Get task | `GetTask` | `GET /tasks/{id}` |
+| List tasks | `ListTasks` | `GET /tasks` |
+| Cancel task | `CancelTask` | `POST /tasks/{id}:cancel` |
+| Subscribe to task | `SubscribeToTask` | `POST /tasks/{id}:subscribe` |
+| Create push notification config | `CreateTaskPushNotificationConfig` | `POST /tasks/{id}/pushNotificationConfigs` |
+| Get push notification config | `GetTaskPushNotificationConfig` | `GET /tasks/{id}/pushNotificationConfigs/{configId}` |
+| List push notification configs | `ListTaskPushNotificationConfigs` | `GET /tasks/{id}/pushNotificationConfigs` |
+| Delete push notification config | `DeleteTaskPushNotificationConfig` | `DELETE /tasks/{id}/pushNotificationConfigs/{configId}` |
+| Get extended Agent Card | `GetExtendedAgentCard` | `GET /extendedAgentCard` |
 
-### Task Management Methods
-3. **`tasks/get`** - Retrieve task information and history
-4. **`tasks/list`** - List tasks with filtering and pagination
-5. **`tasks/cancel`** - Cancel an active task
-6. **`tasks/resubscribe`** - Resubscribe to task updates
+> **Pre-1.0 note.** The older Google A2A spec used slash-style JSON-RPC methods
+> (`message/send`, `tasks/get`, `tasks/cancel`, `tasks/pushNotificationConfig/set`, …)
+> and lowercase enum values (`"user"`, `"working"`). Those are **not** v1.0.0.
+> Clients still on the pre-1.0 wire will not interoperate with a v1.0.0 server
+> without a compatibility shim. See the live spec at
+> <https://a2a-protocol.org/latest/specification/>.
 
-### Push Notification Methods
-7. **`tasks/pushNotificationConfig/set`** - Configure push notifications for a task
-8. **`tasks/pushNotificationConfig/get`** - Retrieve push notification configuration
-9. **`tasks/pushNotificationConfig/list`** - List all push notification configurations for a task
-10. **`tasks/pushNotificationConfig/delete`** - Delete a push notification configuration
+## Task states (`TaskState`)
 
-### Agent Discovery Methods
-11. **`agent/getAuthenticatedExtendedCard`** - Retrieve extended agent card for authenticated users
+`TASK_STATE_UNSPECIFIED`, `TASK_STATE_SUBMITTED`, `TASK_STATE_WORKING`,
+`TASK_STATE_INPUT_REQUIRED`, `TASK_STATE_COMPLETED`, `TASK_STATE_CANCELED`,
+`TASK_STATE_FAILED`, `TASK_STATE_REJECTED`, `TASK_STATE_AUTH_REQUIRED`.
 
-## Task States
+## A2A-specific JSON-RPC error codes
 
-Tasks progress through these states:
-- `submitted` - Task received by agent
-- `working` - Agent is processing the task
-- `input-required` - Agent needs additional input
-- `completed` - Task finished successfully
-- `canceled` - Task was canceled
-- `failed` - Task failed due to an error
-- `rejected` - Task was rejected by agent
-- `auth-required` - Authentication needed
-- `unknown` - State unknown
+- `-32700` … `-32603` — standard JSON-RPC errors
+- `-32001` — Task not found
+- `-32002` — Task not cancelable
+- `-32003` — Push notifications not supported
+- `-32004` — Unsupported operation
+- `-32005` — Content type not supported
+- `-32006` — Invalid agent response
+- `-32007` — Authenticated extended card not configured
 
-## Error Codes
+## AP2 (Agent Payments Protocol) extension
 
-The protocol defines specific error codes:
-- `-32700` to `-32603` - Standard JSON-RPC errors
-- `-32001` - Task not found
-- `-32002` - Task not cancelable
-- `-32003` - Push notifications not supported
-- `-32004` - Operation not supported
-- `-32005` - Content type not supported
-- `-32006` - Invalid agent response
-- `-32007` - Authenticated extended card not configured
-
-## Usage for Implementation
-
-When implementing the A2A protocol:
-
-1. Start with **agent.json** to understand agent capabilities and discovery
-2. Reference **message.json** and **task.json** for core data structures
-3. Use **requests.json** for method implementations
-4. Handle errors according to **errors.json**
-5. Implement security per **security.json** requirements
-6. Add streaming support using **events.json**
-7. Configure notifications via **notifications.json**
-
-Each file is self-contained with proper JSON Schema references to related files, making it easy to validate specific aspects of your implementation against the protocol specification.
-
-## AP2 (Agent Payments Protocol) Extension
-
-The AP2 extension enables commerce and payment capabilities between agents. See **[ap2.json](./ap2.json)** for the complete schema.
-
-### Key Concepts
-
-**Agent Roles:**
-- `merchant` - Handles payments and checkout
-- `shopper` - Makes purchases on behalf of users
-- `credentials-provider` - Supplies payment credentials
-- `payment-processor` - Processes transactions
-
-**Mandate Types:**
-1. **IntentMandate** (`ap2.mandates.IntentMandate`) - User's purchase intent with constraints
-2. **CartMandate** (`ap2.mandates.CartMandate`) - Merchant's cart and payment request
-3. **PaymentMandate** (`ap2.mandates.PaymentMandate`) - Authorized payment details
-
-### Extension URI
-
-`https://github.com/google-agentic-commerce/ap2/tree/v0.1`
-
-### Usage
-
-To declare AP2 support in your AgentCard:
-
-1. Add the extension URI to the `extensions` array
-2. Specify at least one role in the `roles` array
-3. Include mandates as Data parts in messages using the appropriate keys
-
-See the AP2 implementation plan and examples in the main repository for integration details.
+AP2 is implemented as a **separate crate** (`a2a-ap2`) that depends on `a2a-rs`,
+not as part of this core spec. See that crate for the mandate/receipt types and
+the extension URI.
