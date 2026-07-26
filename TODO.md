@@ -1,29 +1,35 @@
 # TODO — `a2acli` follow-ups
 
-Working branch: `feat/a2acli`. Tracks the next steps after landing the `a2acli`
-crate + the `auto_connect` promotion. Companion to `ROADMAP.md` (this is the
-near-term, actionable slice).
+Tracks the next steps after landing the `a2acli` crate + the `auto_connect`
+promotion. Companion to `ROADMAP.md` (this is the near-term, actionable slice).
+The platform/CLI roadmap lives in `DECLARATIVE_AGENTS_TODO.md`.
 
-## 1. Ship the current branch
+## 1. Ship the current branch ✅
 
-- [ ] Commit the staged work on `feat/a2acli` (new `a2acli` crate, `a2a_rs::auto_connect`,
+The `feat/a2acli` branch merged and shipped (`a2acli` 0.4.0, released in #29).
+
+- [x] Commit the staged work (new `a2acli` crate, `a2a_rs::auto_connect`,
       `WebA2AClient` delegation, unused-`reqwest` drop from `a2a-client`).
-- [ ] Open the PR. In the description, call out:
-  - the `--auth`/`--timeout` caveat in `auto` mode (item 3 below), and
-  - the agent-card transport-mislabel finding (item 4 below).
-- [ ] Add `a2acli` to the workspace table in `CLAUDE.md` (currently lists the six
-      library crates but not the new bin crate).
+- [x] Open the PR, calling out the `--auth`/`--timeout` caveat in `auto` mode
+      (item 3 below) and the agent-card transport-mislabel finding (item 2).
+- [x] Add `a2acli` to the workspace table in `CLAUDE.md` — done, with a note
+      distinguishing it from the `a2a` binary in `a2a-agents`, since "the CLI" is
+      now ambiguous between a client (`a2acli`) and a runner (`a2a`).
 
 ## 2. Bugs found while testing the CLI (not CLI bugs)
 
-- [ ] **Agent card mislabels its transport.** `a2a-agents` `AgentBuilder`/runtime
-      (`a2a-agents/src/core/runtime.rs`) mounts a **ConnectRPC** server
-      (`ConnectRpcAdapter` + `HttpServer`) but the published card advertises the
-      interface as **`JSONRPC`** (the `SimpleAgentInfo` default `protocol_binding`).
-      Client auto-negotiation then picks the JSON-RPC client and fails
-      (`invalid JSON-RPC response: error decoding response body`); `--transport
-      connectrpc` works. Fix card generation so `protocol_binding` matches the
-      mounted adapter. *Observed against `complex_agent` on :8080.*
+- [x] **Agent card mislabels its transport.** `a2a-agents`' `AgentServer` mounts a
+      **ConnectRPC** server (`ConnectRpcAdapter` + `HttpServer`) but the published
+      card advertised the interface as **`JSONRPC`** (the `SimpleAgentInfo`
+      default `protocol_binding`), so client auto-negotiation picked the JSON-RPC
+      client and failed (`invalid JSON-RPC response: error decoding response
+      body`). Not specific to `a2a-agents` — `HttpServer` mounts *only* the
+      ConnectRPC router, so every one of its users published a card that lied.
+      Fixed at the root: `HttpServer` stamps `CONNECTRPC` on the card it serves,
+      `agent_info_from_config` sets it at the source for the off-HTTP readers
+      (registry self-registration, MCP mode), and the binding strings are now
+      shared `PROTOCOL_BINDING_*` consts in `domain` so card and client cannot
+      drift. Regression: `a2a-rs/tests/agent_card_transport_test.rs`.
 - [ ] **ConnectRPC SSE subscription never closes on terminal state.** `a2acli stream`
       (and any subscriber) stays open after the task reaches `FAILED`/`COMPLETED`;
       had to cap each run with `timeout`. The stream should end when the task hits a
@@ -56,8 +62,11 @@ near-term, actionable slice).
 
 ## 5. Example/test ergonomics (minor)
 
-- [ ] `complex_agent`'s rule-based path is unreachable env-only:
-      `OpenAiProvider::from_env()` always returns `Ok` (it defaults base-url/model),
-      so `load_llm()` never returns `None`. Add an opt-out (e.g. `A2A_NO_LLM=1` or a
-      `--no-llm` flag) so the deterministic, no-network streaming path can be
-      exercised in demos/tests without standing up an LLM endpoint.
+- [x] `complex_agent`'s rule-based path is now reachable. Two separate causes:
+      the original one (`OpenAiProvider::from_env()` always returns `Ok`, so
+      `load_llm()` never returned `None`) went away when provider selection was
+      centralized — `provider_from_env()` gates each branch on a *set* key and
+      returns `None` otherwise. What remained is that the example loads a `.env`
+      at startup, so on a machine set up for the LLM path the deterministic
+      branch was still unreachable without unsetting things. `A2A_NO_LLM=1` is
+      the explicit opt-out (`load_llm`).

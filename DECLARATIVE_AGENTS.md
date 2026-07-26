@@ -1,9 +1,15 @@
 # Declarative Agents Platform
 
-This workspace contains the building blocks for a **declarative-agents platform**
-built on the A2A protocol: define agents in TOML/HCL, provision them with
-Terraform, run them with the `a2a` binary — zero custom Rust required for the
-common case.
+This workspace contains the building blocks for a **declarative-agents
+platform** built on the A2A protocol: define agents in TOML, run them with the
+`a2a` binary — zero custom Rust required for the common case.
+
+> **Direction (2026-07-25):** the `a2a` CLI is the front door. Terraform is
+> **deferred** — `terraform-provider-a2aagent/` is parked WIP and is not part of
+> the supported path today. See `DECLARATIVE_AGENTS_TODO.md` for the reasoning:
+> HCL is a front-end onto the same control plane and config schema, so it is
+> cheaper to settle config strictness, fleet composition, and lifecycle
+> commands standalone first than to design them through a Go provider.
 
 ## Pieces
 
@@ -11,31 +17,55 @@ common case.
   `AgentBuilder`, the `a2a` binary, and the generic config-driven `LlmHandler`
   (`src/handlers/llm.rs`).
 - `a2a-agents-common/` — LLM providers, NLP, formatting.
-- `terraform-provider-a2aagent/` — a Terraform provider that is the source of
-  truth for agent definitions and renders the TOML files the `a2a` binary
-  consumes.
+- `terraform-provider-a2aagent/` — **parked.** A Terraform provider that
+  currently renders TOML files. When it resumes it becomes a thin client over
+  the control-plane API rather than a file writer.
 
-## Config → Schema → Provider loop
+## Getting started
 
-```text
-  AgentConfig (Rust)            terraform-provider-a2aagent (Go)
-        │                              │
-        │ schemars derive               │ JSON Schema fixture
-        ▼                              ▼
-  a2a print-schema ──────────► internal/schema/agent_config.json
-        │                              │
-        │ a2a validate                  │ a2aagent_agent resource
-        ▼                              ▼
-  <name>.toml  ◄──────────────── renders + validates
-        │
-        ▼
-  a2a run --config <name>.toml
+```sh
+# Scaffold a commented, immediately-runnable config.
+a2a new "Weather Agent"                       # echo template, no keys needed
+a2a new "Router" --template orchestrator      # delegates to peer agents
+
+# Check it (unset ${VAR} refs are reported, not fatal; --strict-env to require).
+a2a validate --config weather-agent.toml
+
+# Check the *machine*: port free, MCP command installed, model key set.
+a2a doctor --config weather-agent.toml
+
+# Run it. The banner prints the endpoint and a command to poke it.
+a2a run --config weather-agent.toml
 ```
 
-The Rust `AgentConfig` type is the single source of truth: the provider never
-re-implements validation. It either shells out to `a2a validate` (preferred,
-when an `a2a` binary is configured) or validates against the JSON Schema
-exported by `a2a print-schema`.
+Templates: `echo` (no API keys, no external services), `llm`, `mcp`,
+`orchestrator`.
+
+## Config is the source of truth
+
+The Rust `AgentConfig` type defines what a valid agent is, and nothing
+re-implements that validation:
+
+```text
+  AgentConfig (Rust)  ──schemars──►  a2a print-schema  ──►  JSON Schema
+        │
+        │  a2a new       renders a starter config
+        │  a2a validate  checks shape (deny_unknown_fields: typos are errors)
+        ▼
+  <name>.toml  ──►  a2a run --config <name>.toml
+                    a2a up -f fleet.toml  (a set of configs, checked together)
+                    a2a deploy            (to a control plane; ps/logs/stop drive it)
+```
+
+Unknown keys are rejected, so a mistyped key is an error rather than a silently
+dropped setting. Any future front-end (a Terraform provider, a UI) is expected
+to pass configs through to this validator rather than duplicate it.
+
+`a2a validate` answers *is this config well-formed*; `a2a doctor` answers *will
+it work on this machine* — port free, MCP command installed, model key set,
+`${VAR}`s resolvable, and (for more than one config) whether they can run
+together. The split is why validate stays usable in CI without secrets while
+doctor treats a missing secret as fatal.
 
 ## The generic LLM handler (`handler.type = "llm"`)
 
@@ -75,6 +105,41 @@ to reach a terminal state, and returns the agent's reply. See
 `a2a-agents/examples/orchestrator_agent.toml`. This is the multi-agent keystone:
 zero Rust to wire a fleet of agents that call each other.
 
+## A fleet in one file
+
+A multi-agent system is a set of agents, so it should be one artifact — not a
+`--config` per agent retyped on every invocation. A fleet file names the set:
+
+```toml
+# fleet.toml
+name = "Weather Demo"
+
+[[agents]]
+config = "weather.toml"      # paths are relative to this file
+
+[[agents]]
+config = "orchestrator.toml"
+```
+
+```sh
+a2a up -f fleet.toml               # defaults to ./fleet.toml
+a2a validate --fleet fleet.toml    # check without running
+a2a doctor --fleet fleet.toml      # ...and check the machine it will run on
+```
+
+The fleet file redefines nothing about an agent — it is a list of configs plus
+the invariants that only exist *between* them, which `a2a up` checks before
+anything binds:
+
+- two agents claiming the same **port** (otherwise one silently fails to bind
+  inside a process that otherwise came up), and
+- two agent names that slugify to the same **registry id** (otherwise
+  registration upserts, and delegation by skill or `agent_id` reaches only
+  whichever registered last).
+
+Members run in one process sharing one registry, so peers resolve each other by
+skill. See `a2a-agents/examples/fleet.toml`.
+
 ## Extraction to a standalone repo
 
 The plan is to move the declarative-agent surface into its own repo
@@ -95,11 +160,58 @@ Migration steps (one PR, pre-1.0 "break cleanly" posture):
    `Cargo.toml`; update `README.md`/`CLAUDE.md` to point at the new repo.
 5. Keep `a2a-rs`, `a2a-ap2`, `a2a-client`, `a2a-mcp`, `a2acli` here.
 
+## Deploying a fleet (control plane)
+
+`a2a up` runs a fleet in one process, which is the right shape for a dev loop and
+a small deployment. Supervising agents as separate, individually
+restartable units goes through the control plane, which composes the
+`AgentRuntime` and `AgentRegistry` ports:
+
+```sh
+# Deploying is remote code execution, so a token is required (--no-auth to opt
+# out for a dev loop). `--allow-env` is deny-by-default: a deployed config may
+# only reference the variables you name here.
+A2A_CONTROL_PLANE_TOKEN=… a2a control-plane \
+  --runtime container \
+  --allow-env OPENROUTER_API_KEY
+```
+
+`POST/GET/DELETE /agents` deploys, lists, and tears down, and
+`GET /agents/{id}/logs` replays an agent's output. The same binary drives it, so
+nothing here needs Terraform or `curl`:
+
+```sh
+export A2A_CONTROL_PLANE_TOKEN=…   # --url defaults to where control-plane binds
+
+a2a deploy --fleet fleet.toml      # or --config <toml>, repeatable
+a2a ps                             # id, health, endpoint
+a2a logs weather-agent --tail 50   # why "unhealthy", not just that it is
+a2a stop weather-agent
+```
+
+Configs go over the wire **as written** — `${VAR}`s are the control plane's to
+resolve, against its own environment and allowlist — so the deploying machine
+never has to hold the secrets the agent runs with. The shape and cross-agent
+conflict checks run before anything is sent, since a port clash discovered
+halfway through a fleet leaves a partial rollout to unpick.
+
+On startup it **recovers** the fleet it was already running, before serving
+anything: `docker ps --filter label=a2a-agent` is the durable store (provisioning
+stamps the id and published port as labels), and adopted agents are re-registered
+for discovery by fetching their cards. Without that, a restart reports an empty
+fleet while the agents are still serving. `--runtime local` cannot recover — its
+children die with the supervisor — so it reports itself as *ephemeral* and warns;
+use `--runtime container` for a control plane you expect to bounce.
+
 ## Smoke tests
 
 ```sh
-# Validate a TOML config without starting a server:
-a2a validate --config a2a-agents/examples/llm_agent.toml
+# Scaffold and check a config (no API keys needed for the echo template):
+a2a new "Smoke Agent" --output /tmp/smoke.toml
+a2a validate --config /tmp/smoke.toml
+
+# Validate a shipped example without holding its secrets:
+a2a validate --config a2a-agents/examples/oauth2_auth.toml
 
 # Print the JSON Schema for AgentConfig:
 a2a print-schema > schema.json

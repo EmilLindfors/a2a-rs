@@ -106,14 +106,20 @@ pub use traits::{AgentPlugin, SkillDefinition};
 
 pub use handlers::tools::{A2aAgentToolSource, ToolSource};
 
-pub use registry::{AgentId, AgentRegistry, InMemoryAgentRegistry, RegisteredAgent, RegistryError};
-
-pub use runtime::{
-    AgentRuntime, AgentSpec, ContainerRuntime, InMemoryAgentRuntime, LocalProcessRuntime,
-    RuntimeError, RuntimeHealth, RuntimeStatus,
+pub use registry::{
+    AgentId, AgentRegistry, CardSource, CardSourceError, HttpCardSource, InMemoryAgentRegistry,
+    InMemoryCardSource, RegisteredAgent, RegistryError,
 };
 
-pub use control_plane::{ControlPlane, ControlPlaneError, DeployedAgent, control_plane_router};
+pub use runtime::{
+    AgentRuntime, AgentSpec, ContainerRuntime, EnvAllowlist, InMemoryAgentRuntime,
+    LocalProcessRuntime, Recovered, RuntimeError, RuntimeHealth, RuntimeStatus,
+};
+
+pub use control_plane::{
+    AgentLogs, AgentStatus, ControlPlane, ControlPlaneAuth, ControlPlaneClient,
+    ControlPlaneClientError, ControlPlaneError, DeployedAgent, control_plane_router,
+};
 
 #[cfg(feature = "llm")]
 pub use handlers::llm::LlmHandler;

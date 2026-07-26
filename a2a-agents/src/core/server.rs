@@ -38,7 +38,14 @@ pub struct AgentServer<H, S> {
 /// by registry self-registration, which needs the agent card without binding a
 /// socket.
 pub(crate) fn agent_info_from_config(config: &AgentConfig, base_url: String) -> SimpleAgentInfo {
-    let mut agent_info = SimpleAgentInfo::new(config.agent.name.clone(), base_url);
+    // `AgentServer::start_http` mounts a `ConnectRpcAdapter`, so the card must
+    // advertise CONNECTRPC or card-driven clients negotiate to a JSON-RPC
+    // endpoint that was never mounted. `HttpServer` also stamps this on the card
+    // it serves, but this provider is read off the HTTP path too — registry
+    // self-registration and MCP mode both take the card from here — so the
+    // truthful binding has to be set at the source.
+    let mut agent_info = SimpleAgentInfo::new(config.agent.name.clone(), base_url)
+        .with_preferred_transport(a2a_rs::domain::PROTOCOL_BINDING_CONNECTRPC.to_string());
 
     if let Some(ref description) = config.agent.description {
         agent_info = agent_info.with_description(description.clone());

@@ -1,10 +1,31 @@
 # A2A Agents
 
-Example agent implementations for the A2A Protocol with production-ready patterns and **declarative configuration**.
+Agent implementations for the A2A Protocol with production-ready patterns and
+**declarative configuration**.
 
-## 🚀 Quick Start (New Builder API)
+## 🚀 Quick Start (no Rust)
 
-Create a production-ready agent in just **~30 lines of code** instead of ~300!
+Scaffold, check, and run an agent with the `a2a` binary. The `echo` template
+needs no API keys and no external services:
+
+```bash
+a2a new "Weather Agent"                  # writes weather-agent.toml
+a2a validate --config weather-agent.toml
+a2a run --config weather-agent.toml      # prints the endpoint and how to poke it
+```
+
+Templates: `echo`, `llm` (natural-language answers), `mcp` (LLM + MCP tools),
+`orchestrator` (delegates to peer A2A agents). Pick one with `--template`, and
+`--port` / `--output` to place it.
+
+Generated configs are commented — they double as the schema documentation.
+`a2a print-schema` emits the full JSON Schema, and unknown keys are rejected, so
+a mistyped setting is an error rather than a silently ignored line.
+
+## Quick Start (custom Rust handler)
+
+When the built-in handlers are not enough, keep the TOML and supply your own
+`AsyncMessageHandler`.
 
 ### 1. Define your agent (`agent.toml`)
 
@@ -257,9 +278,59 @@ cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- <subcomman
 | Subcommand | What it does |
 |---|---|
 | `run --config <toml>…` | Run one or more agents from TOML configs |
-| `validate --config <toml>…` | Load + validate configs without serving |
-| `control-plane --bind … --config-dir … --runtime local\|container` | Serve the deploy/list/status/undeploy HTTP API |
-| `print-schema` | Print the `AgentConfig` JSON Schema to stdout |
+| `up -f <fleet.toml>` | Run every agent a fleet file names, checked together first |
+| `validate --config <toml>… [--fleet <toml>]` | Load + validate configs without serving |
+| `doctor [--config <toml>…] [--fleet <toml>]` | Pre-flight: port free, MCP command installed, model key set |
+| `control-plane --bind … --config-dir … --runtime local\|container` | Serve the deploy/list/status/logs/undeploy HTTP API |
+| `deploy --config <toml>… [--fleet <toml>]` | Deploy agents to a running control plane |
+| `ps` | List what a control plane is running, with health |
+| `logs <id> [--tail N]` | Print a deployed agent's captured output |
+| `stop <id>…` | Stop deployed agents and remove them from discovery |
+| `print-schema [--fleet]` | Print the `AgentConfig` (or `FleetConfig`) JSON Schema to stdout |
+
+### Fleets (`a2a up`)
+
+A multi-agent system is one artifact, not a `--config` per agent retyped every
+run. A fleet file lists member configs by path (relative to itself, so it runs
+from anywhere) and adds the checks that only exist *between* agents — a shared
+port, or two names that slugify to the same registry id. Both are silent-wrong
+at runtime, so `a2a up` catches them before anything binds:
+
+```toml
+# fleet.toml
+name = "Weather Demo"
+
+[[agents]]
+config = "registry_worker.toml"
+
+[[agents]]
+config = "registry_orchestrator.toml"
+```
+
+```bash
+a2a up -f fleet.toml               # defaults to ./fleet.toml
+a2a validate --fleet fleet.toml    # same checks, nothing started
+```
+
+Members share one process and one agent registry, so peers resolve each other by
+skill. See `examples/fleet.toml`.
+
+### Pre-flight (`a2a doctor`)
+
+`validate` asks whether a config is well-formed; `doctor` asks whether it will
+work *here* — port free, MCP command on `PATH`, model key set, `${VAR}`s
+resolvable, container engine present, and whether the configs named can run
+together:
+
+```bash
+a2a doctor --config weather.toml     # one agent
+a2a doctor --fleet fleet.toml        # the whole fleet, plus the environment
+```
+
+Only *problems* set the exit code; warnings (no model key, no container engine)
+describe something that will run, differently than you may have meant. An unset
+`${VAR}` is reported by `validate` and a problem here — `a2a run` refuses to
+start until it resolves.
 
 ### Config-driven LLM handler (`llm` feature)
 
@@ -310,14 +381,71 @@ peers are found by capability instead of a hard-coded URL. See
 `control-plane` serves an HTTP API that composes the runtime and registry:
 `POST /agents` deploys an agent from rendered TOML (provision + start + register
 its card so peers discover it), `GET /agents` lists, `GET /agents/{id}` reports
-health, `DELETE /agents/{id}` tears down. Pick the backend with `--runtime`:
-`local` supervises child `a2a run` processes, `container` runs each agent in a
-`docker`/`podman` container (`--engine`, `--image`).
+health, `GET /agents/{id}/logs` replays its output, `DELETE /agents/{id}` tears
+down. Pick the backend with `--runtime`: `local` supervises child `a2a run`
+processes, `container` runs each agent in a `docker`/`podman` container
+(`--engine`, `--image`).
+
+Deploying an agent is remote code execution, so the API **requires a bearer
+token** — startup fails without `--token` / `A2A_CONTROL_PLANE_TOKEN` unless you
+explicitly opt out with `--no-auth`. Secrets are deny-by-default: a deployed
+config may only reference environment variables named with `--allow-env`.
 
 ```bash
+export A2A_CONTROL_PLANE_TOKEN=$(openssl rand -hex 32)
+
 cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- \
-  control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local
+  control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local \
+  --allow-env OPENROUTER_API_KEY
 ```
+
+`--runtime local` children inherit the whole process environment, so it is a
+dev-loop backend; deploy configs you do not control on `--runtime container`,
+where only allow-listed variables cross the boundary.
+
+#### Driving it (`deploy` / `ps` / `logs` / `stop`)
+
+The same binary is the client. `--url` defaults to where `control-plane` binds
+and `--token` to `A2A_CONTROL_PLANE_TOKEN`, so a control plane in one terminal
+and these in another need no configuration to find each other:
+
+```bash
+export A2A_CONTROL_PLANE_TOKEN=…          # prefer the env var: argv is public
+
+a2a deploy --config weather.toml           # or --fleet fleet.toml
+a2a ps
+a2a logs weather-agent --tail 50
+a2a stop weather-agent
+```
+
+Configs are sent **as written**: `${VAR}` references are resolved by the control
+plane against its own environment and `--allow-env` allowlist, so the machine
+deploying never needs the secrets the agent runs with. Shape and the cross-agent
+conflict checks run locally first, before anything is sent — a port clash in a
+fleet should not leave half of it deployed.
+
+`logs` answers the question health cannot: `unhealthy` says the card probe is
+failing, not why. The container runtime replays what the engine retained; the
+local runtime serves the per-agent files it captured under `--log-dir`
+(defaulting to `<config-dir>/logs`). A backend that keeps no logs says so
+explicitly rather than reporting an empty log, since "printed nothing" and "not
+recorded" send you to very different places.
+
+#### Surviving a restart
+
+On startup the control plane **recovers** the fleet it was already running,
+before it serves a single request — otherwise a bounce leaves it reporting an
+empty fleet while the agents are still up (`GET /agents` → `[]`, `DELETE` → 404,
+and a Terraform `Read` concluding the agents were destroyed and redeploying on
+top of them).
+
+Only `--runtime container` can do this: `docker ps --filter label=a2a-agent` is
+the durable store, since provisioning stamps the agent id and published port as
+container labels. Recovered agents are re-registered for discovery by fetching
+their cards, so peers resolve them by skill again. `--runtime local` reports
+itself as *ephemeral* and warns loudly — its children die with the supervisor,
+and nothing durable ties a stray process to an agent id. **Use `container` for
+any control plane you expect to restart.**
 
 See the workspace [`DECLARATIVE_AGENTS.md`](../DECLARATIVE_AGENTS.md) for the
 platform design and roadmap.

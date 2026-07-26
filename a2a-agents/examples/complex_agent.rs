@@ -9,7 +9,9 @@
 //! Optionally export `OPENAI_API_KEY` or `GEMINI_API_KEY` first to let an LLM
 //! drive tool selection and answer in natural language. With no key set the
 //! agent still works — it falls back to a deterministic rule-based router so the
-//! example runs end-to-end in CI without secrets.
+//! example runs end-to-end in CI without secrets. Set `A2A_NO_LLM=1` to take
+//! that path even when a key *is* set (including one from a `.env` file), which
+//! is how the no-network branch gets demoed and tested.
 //!
 //! What it wires together:
 //!
@@ -613,6 +615,14 @@ fn parse_two_numbers(text: &str) -> Option<(f64, f64)> {
 }
 
 fn load_llm() -> Option<Arc<dyn LlmProvider>> {
+    // Explicit opt-out. Without it, the deterministic path is only reachable by
+    // *not having* a key — including one this binary loaded from a `.env` file
+    // at startup — so the no-network branch could not be demoed or tested on a
+    // developer machine that is set up for the LLM one.
+    if std::env::var("A2A_NO_LLM").is_ok_and(|value| !matches!(value.trim(), "" | "0")) {
+        tracing::info!("A2A_NO_LLM set — using the rule-based router, no model calls");
+        return None;
+    }
     // Centralized selection (OpenRouter → Gemini → OpenAI). With no key set this
     // returns None and the handler falls back to the rule-based router.
     a2a_agents_common::llm::provider_from_env()

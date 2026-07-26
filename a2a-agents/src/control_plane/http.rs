@@ -1,23 +1,25 @@
 //! HTTP API adapter for the [`ControlPlane`] service (axum 0.7).
 //!
 //! `POST /agents` deploys an agent from rendered TOML, `GET /agents` lists them,
-//! `GET /agents/:id` reports health, `DELETE /agents/:id` undeploys. This is the
-//! surface the Terraform provider drives (Create/Read/Delete).
+//! `GET /agents/:id` reports health, `GET /agents/:id/logs` replays its output,
+//! `DELETE /agents/:id` undeploys. This is the surface `a2a deploy/ps/logs/stop`
+//! drives through [`ControlPlaneClient`](super::ControlPlaneClient), and the one
+//! the Terraform provider will target (Create/Read/Delete).
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Path as AxPath, State};
+use axum::extract::{Path as AxPath, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
 
+use super::auth::ControlPlaneAuth;
+use super::wire::{AgentLogs, AgentStatus, ApiErrorBody, DeployRequest, LogsQuery};
 use super::{ControlPlane, ControlPlaneError, DeployedAgent};
-use crate::core::AgentBuilder;
 use crate::registry::AgentId;
-use crate::runtime::{RuntimeError, RuntimeHealth};
+use crate::runtime::RuntimeError;
 
 /// Shared handler state: the service plus where rendered configs are written.
 #[derive(Clone)]
@@ -28,41 +30,39 @@ struct AppState {
 
 /// Build the control-plane HTTP router over `cp`, writing deployed configs into
 /// `config_dir` (the path the spawned `a2a run` child reads).
-pub fn control_plane_router(cp: Arc<ControlPlane>, config_dir: PathBuf) -> Router {
+///
+/// `auth` guards every route. It is a required parameter rather than a builder
+/// step so an unauthenticated control plane cannot happen by omission — the
+/// caller has to write [`ControlPlaneAuth::Disabled`] to get one.
+pub fn control_plane_router(
+    cp: Arc<ControlPlane>,
+    config_dir: PathBuf,
+    auth: ControlPlaneAuth,
+) -> Router {
     let state = AppState { cp, config_dir };
-    Router::new()
+    let router = Router::new()
         .route("/agents", post(deploy).get(list))
         .route("/agents/:id", get(status).delete(undeploy))
-        .with_state(state)
-}
-
-/// `POST /agents` body: the rendered agent config TOML.
-#[derive(Deserialize)]
-struct DeployRequest {
-    config_toml: String,
-}
-
-/// `GET /agents/:id` response.
-#[derive(Serialize)]
-struct StatusResponse {
-    id: String,
-    health: RuntimeHealth,
+        .route("/agents/:id/logs", get(logs))
+        .with_state(state);
+    auth.apply(router)
 }
 
 async fn deploy(
     State(state): State<AppState>,
     Json(req): Json<DeployRequest>,
 ) -> Result<(StatusCode, Json<DeployedAgent>), ApiError> {
-    // Parse once: validates the TOML and yields the name for the filename; the
-    // same builder is handed to the service so it never re-reads the file.
-    let builder = AgentBuilder::from_toml(&req.config_toml)?;
-    let id = AgentId::from_name(&builder.config().agent.name);
+    // Vet + parse once. `prepare` checks the raw text against the env allowlist
+    // *before* parsing expands it, so a config naming a forbidden secret never
+    // reaches expansion — and the returned token is the only thing `deploy`
+    // accepts, so the check cannot be skipped here.
+    let prepared = state.cp.prepare(&req.config_toml)?;
 
     tokio::fs::create_dir_all(&state.config_dir).await?;
-    let path = state.config_dir.join(format!("{id}.toml"));
+    let path = state.config_dir.join(format!("{}.toml", prepared.id()));
     tokio::fs::write(&path, &req.config_toml).await?;
 
-    let deployed = state.cp.deploy(&builder, path).await?;
+    let deployed = state.cp.deploy(prepared, path).await?;
     Ok((StatusCode::CREATED, Json(deployed)))
 }
 
@@ -73,12 +73,25 @@ async fn list(State(state): State<AppState>) -> Result<Json<Vec<DeployedAgent>>,
 async fn status(
     State(state): State<AppState>,
     AxPath(id): AxPath<String>,
-) -> Result<Json<StatusResponse>, ApiError> {
+) -> Result<Json<AgentStatus>, ApiError> {
     let id = AgentId::from(id);
     let health = state.cp.status(&id).await?;
-    Ok(Json(StatusResponse {
+    Ok(Json(AgentStatus {
         id: id.to_string(),
         health,
+    }))
+}
+
+async fn logs(
+    State(state): State<AppState>,
+    AxPath(id): AxPath<String>,
+    Query(query): Query<LogsQuery>,
+) -> Result<Json<AgentLogs>, ApiError> {
+    let id = AgentId::from(id);
+    let lines = state.cp.logs(&id, query.tail).await?;
+    Ok(Json(AgentLogs {
+        id: id.to_string(),
+        lines,
     }))
 }
 
@@ -127,12 +140,19 @@ impl IntoResponse for ApiError {
             ApiError::Domain(ControlPlaneError::Config(_) | ControlPlaneError::Card(_)) => {
                 StatusCode::BAD_REQUEST
             }
+            // The backend genuinely cannot answer (logs from a runtime that
+            // does not capture them). Not the caller's mistake and not a
+            // failure — 501 says "this deployment can't", which is what the
+            // operator has to act on.
+            ApiError::Domain(ControlPlaneError::Runtime(RuntimeError::Unsupported { .. })) => {
+                StatusCode::NOT_IMPLEMENTED
+            }
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        let message = match &self {
+        let error = match &self {
             ApiError::Domain(e) => e.to_string(),
             ApiError::Io(e) => e.to_string(),
         };
-        (status, Json(serde_json::json!({ "error": message }))).into_response()
+        (status, Json(ApiErrorBody { error })).into_response()
     }
 }
