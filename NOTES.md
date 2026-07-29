@@ -131,8 +131,10 @@ second kind — which is what the `llm` and `orchestrator` templates scaffold. S
 `send` polls to a terminal *or interrupted* state (`input-required` and
 `auth-required` are stops too: the agent is waiting on the caller). `--no-wait`
 is the escape hatch, not the default, because "send a message to an agent" means
-"and show me what it said". Polling, not `subscribe_to_task`, only because the
-ConnectRPC subscription does not close on a terminal state yet — see `TODO.md`.
+"and show me what it said". It polls rather than using `subscribe_to_task` for a
+reason that has since been removed — subscriptions did not close on a terminal
+state — so switching it to a subscriber is now open work, not a constraint; see
+`TODO.md`.
 
 **Configs deploy raw; the control plane expands `${VAR}`.** Expanding client-side
 would put the operator's secrets on the wire, force every deploying machine to
@@ -216,6 +218,24 @@ a container build on a pinned builder image). The number now lives once in
 `[workspace.package]` and is set to the toolchain we actually build and test
 with, not the bare minimum, so it is a claim we exercise. It stops being proven
 the day stable moves past it; that is when an MSRV CI job earns its place.
+
+**`take_while`/`scan` cannot end a stream on its own last item.** Both decide to
+stop only when the *next* item arrives — so terminating a subscription "after
+the terminal event" with either one hangs on exactly the event it is supposed to
+close on, because after a terminal state no next item ever arrives and the
+broadcast receiver simply parks. The shape that works is `unfold` carrying the
+inner stream in an `Option` and dropping it on the settling item: the next poll
+ends without touching the inner stream, and the drop is also what releases the
+subscription. The general form: "inclusive take" is not a combinator futures
+gives you, and reaching for the exclusive one quietly inverts the bug.
+
+**Distinguish "last piece of a thing" from "the thing is over".** The predicate
+that ends a subscription cannot be the one that answers "is this final", because
+an artifact's `last_chunk` marks the end of *that artifact* while the task keeps
+working and may emit several more. The old `UpdateEvent::is_final` merged both
+and would have truncated a streaming response mid-task had anything used it.
+Name such predicates after the question the caller is actually asking
+(`settles_task`), not after the field they happen to read.
 
 **`EnvFilter::from_default_env()` enables nothing when `RUST_LOG` is unset.** It
 made `a2a run` start a server and print absolutely nothing. Any new binary needs

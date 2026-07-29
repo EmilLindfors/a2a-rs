@@ -45,6 +45,18 @@ impl TaskState {
         )
     }
 
+    /// Whether the task has stopped and will not advance on its own — terminal,
+    /// or interrupted waiting on the caller.
+    ///
+    /// This is the spec's own stopping condition for a blocking `SendMessage`:
+    /// `return_immediately = false` obliges the server to wait for a terminal
+    /// **or** interrupted state (`spec/a2a.proto:155`). It is also where a
+    /// subscription ends, and where a polling client stops. Those three had
+    /// each spelled the condition out separately.
+    pub fn is_settled(&self) -> bool {
+        self.is_terminal() || self.is_interrupted()
+    }
+
     /// Whether a client may still cancel a task in this state.
     ///
     /// Everything that has not finished: queued (`SUBMITTED`), running
@@ -64,6 +76,7 @@ impl TaskState {
 pub trait TaskStateExt {
     fn is_terminal(&self) -> bool;
     fn is_interrupted(&self) -> bool;
+    fn is_settled(&self) -> bool;
     fn is_cancelable(&self) -> bool;
 }
 
@@ -83,6 +96,13 @@ impl TaskStateExt for ::buffa::EnumValue<TaskState> {
             ::buffa::EnumValue::Known(state) => state.is_interrupted(),
             _ => false,
         }
+    }
+
+    /// An unrecognized state is *not* settled: a caller waiting on it should
+    /// keep waiting rather than report a task finished on the strength of a
+    /// state this build cannot read.
+    fn is_settled(&self) -> bool {
+        self.is_terminal() || self.is_interrupted()
     }
 
     fn is_cancelable(&self) -> bool {

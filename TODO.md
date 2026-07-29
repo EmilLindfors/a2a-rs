@@ -16,11 +16,10 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
 
 ## 1. Client CLI (`a2acli`)
 
-- [ ] **ConnectRPC SSE subscription never closes on terminal state.**
-      `a2acli stream` (and any subscriber) stays open after the task reaches
-      `FAILED`/`COMPLETED`; each run has to be capped with `timeout`. The stream
-      should end when the task hits a terminal state. (Distinct from the
-      `Last-Event-ID` gap in §7.)
+- [ ] **Switch `a2acli send` from polling to `subscribe_to_task`.** Its blocker
+      is gone — subscriptions now end when the task settles — so the wait can be
+      event-driven instead of a poll loop. Worth folding into the
+      `return_immediately` work in §5, which needs the same subscriber-as-wait.
 - [ ] **Thread `--auth` / `--timeout` through `auto` mode.** The negotiation
       factories (`TransportFactory` in
       `a2a-rs/src/adapter/transport/negotiation.rs`) build unauthenticated,
@@ -143,10 +142,11 @@ config fields, so the provider cannot express most agents even when correct.
       client-side today; that is a workaround for this, not the fix.
       Implementing it means holding the response until the task settles: the
       streaming handler already broadcasts every transition, so a subscriber can
-      be the wait, plus a bound so an agent that never finishes cannot pin a
-      connection open forever. Note the hand-written legacy
-      `MessageSendConfiguration.blocking` (`domain/core/task.rs`) is the v0.x
-      spelling of the same switch and is equally unused.
+      be the wait — now that subscriptions actually end — plus a bound so an
+      agent that never finishes cannot pin a connection open forever. Note the
+      hand-written legacy `MessageSendConfiguration.blocking`
+      (`domain/core/task.rs`) is the v0.x spelling of the same switch and is
+      equally unused.
       Worth doing **before** the interop runs below: a canonical client that
       waits on the documented default will look like it is hanging on us.
 - [ ] Point the **official** `a2aproject/a2acli` at our `examples/jsonrpc_server`

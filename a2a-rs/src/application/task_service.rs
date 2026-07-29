@@ -20,9 +20,10 @@
 use std::pin::Pin;
 use std::sync::Arc;
 
-use futures::Stream;
+use futures::{Stream, StreamExt};
 
 use crate::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
+use crate::domain::core::task::TaskStateExt;
 use crate::domain::{
     A2AError, AgentCard, DeleteTaskPushNotificationConfigParams,
     GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams, ListTasksParams,
@@ -38,6 +39,29 @@ use crate::services::server::AgentInfoProvider;
 /// per-task monotonic id (surfaced as the SSE `id:` field); the transport
 /// adapter maps the inner update onto its wire representation.
 pub type UpdateStream = Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>;
+
+/// End `stream` after — and including — the event that settles the task.
+///
+/// The rule lives here rather than in each transport adapter because every
+/// transport gets its stream from this service, and "the subscription outlives
+/// the task" is the same bug in each of them. A check that runs in one entry
+/// point and not the other is not a check (`NOTES.md`).
+///
+/// Implemented with `unfold` rather than `take_while`/`scan` for a reason that
+/// is easy to get wrong: those combinators only decide to stop when the *next*
+/// item arrives, and after a terminal state no next item ever arrives — the
+/// underlying broadcast receiver simply parks. The stream would hang open on
+/// exactly the events it is supposed to close on. Carrying the inner stream in
+/// an `Option` and dropping it on settle terminates without polling again, and
+/// dropping it is also what releases the subscription.
+fn until_settled(stream: UpdateStream) -> UpdateStream {
+    Box::pin(futures::stream::unfold(Some(stream), |state| async move {
+        let mut stream = state?;
+        let item = stream.next().await?;
+        let settled = matches!(&item, Ok(seq) if seq.event.settles_task());
+        Some((item, (!settled).then_some(stream)))
+    }))
+}
 
 /// Use-case orchestration over the A2A ports.
 ///
@@ -154,6 +178,10 @@ impl TaskService {
     /// early updates are missed. Returns the initial task and the stream; the
     /// caller is responsible for emitting the initial task ahead of stream
     /// items.
+    ///
+    /// The stream ends once the task settles (see [`until_settled`]), so a
+    /// caller that reads to completion is not left holding an open connection
+    /// to a finished task.
     pub async fn send_streaming_message(
         &self,
         task_id: &str,
@@ -184,7 +212,7 @@ impl TaskService {
             task = task.with_limited_history(Some(limit));
         }
 
-        Ok((task, update_stream))
+        Ok((task, until_settled(update_stream)))
     }
 
     /// Get a task by ID with optional history length limit.
@@ -213,6 +241,27 @@ impl TaskService {
     /// `from_event_id` carries a client's `Last-Event-ID` for resumption: when
     /// set, the handler replays buffered events with a greater id before
     /// streaming live updates.
+    ///
+    /// The stream ends once the task settles (see [`until_settled`]). If the
+    /// task is *already* terminal and no resumption point was given, the caller
+    /// gets its snapshot and an empty stream, because nothing further can ever
+    /// be broadcast for it.
+    ///
+    /// That short-circuit is conditional on `from_event_id` being unset, and
+    /// that condition is load-bearing: resuming after a disconnect on a task
+    /// that has since finished is precisely when the replay buffer matters —
+    /// the events the client missed are the ones it reconnected for. Skipping
+    /// the handler because the task looks finished would turn resumption into
+    /// silence.
+    ///
+    /// A task already sitting in an interrupted state (`INPUT_REQUIRED`,
+    /// `AUTH_REQUIRED`) deliberately does **not** short-circuit: it resumes
+    /// under the same id once the caller supplies what it asked for, and a
+    /// subscriber that attached first is entitled to watch that happen. The
+    /// asymmetry with [`UpdateEvent::settles_task`] is the point — arriving at
+    /// an interrupted state ends a stream, finding one already there does not.
+    ///
+    /// [`UpdateEvent::settles_task`]: crate::port::UpdateEvent::settles_task
     pub async fn subscribe(
         &self,
         task_id: &str,
@@ -226,12 +275,19 @@ impl TaskService {
             Err(e) => return Err(e),
         };
 
+        if from_event_id.is_none()
+            && let Some(task) = &initial_task
+            && task.status.state.is_terminal()
+        {
+            return Ok((initial_task, Box::pin(futures::stream::empty())));
+        }
+
         let update_stream = self
             .streaming_handler
             .start_task_streaming(task_id, from_event_id)
             .await?;
 
-        Ok((initial_task, update_stream))
+        Ok((initial_task, until_settled(update_stream)))
     }
 
     /// Create or replace a push-notification config (validated).

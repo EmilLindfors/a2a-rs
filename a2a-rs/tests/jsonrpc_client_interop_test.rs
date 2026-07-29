@@ -271,6 +271,94 @@ async fn subscribe_resumes_from_last_event_id() {
     }
 }
 
+/// Attach a live subscription to a freshly created (non-terminal) task and
+/// consume the initial snapshot, leaving the stream positioned on updates.
+async fn subscribe_to_live_task(
+    client: &JsonRpcClient,
+    handler: &TestBusinessHandler,
+    task_id: &str,
+) -> Pin<Box<dyn Stream<Item = Result<a2a_rs::StreamEvent, A2AError>> + Send>> {
+    let id: TaskId = task_id.parse().unwrap();
+    let ctx: ContextId = "ctx".parse().unwrap();
+    handler.create(&id, &ctx).await.unwrap();
+
+    let mut stream = client.subscribe_to_task(task_id, None, None).await.unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("snapshot within 5s")
+        .expect("stream not empty")
+        .expect("ok event");
+    assert!(
+        matches!(first.item, StreamItem::Task(_)),
+        "first event must be the initial snapshot"
+    );
+    stream
+}
+
+/// Read the next event, then assert the stream **ends** rather than parking
+/// open. Before this, a subscriber stayed connected after the task finished and
+/// every run had to be capped with an external `timeout`.
+async fn assert_closes_after_next(
+    stream: &mut Pin<Box<dyn Stream<Item = Result<a2a_rs::StreamEvent, A2AError>> + Send>>,
+    expected: TaskState,
+) {
+    let ev = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("settling event within 5s")
+        .expect("stream not empty")
+        .expect("ok event");
+    match &ev.item {
+        StreamItem::StatusUpdate(e) => {
+            assert_eq!(e.status.state, ::buffa::EnumValue::from(expected))
+        }
+        other => panic!("expected StatusUpdate, got {other:?}"),
+    }
+
+    // The settling event is delivered *and* the stream then closes on its own.
+    let end = tokio::time::timeout(Duration::from_secs(5), stream.next())
+        .await
+        .expect("stream must close within 5s rather than hang open");
+    assert!(end.is_none(), "stream should be closed, got {end:?}");
+}
+
+/// A subscription ends once the task reaches a terminal state.
+#[tokio::test]
+async fn subscribe_stream_closes_on_terminal_state() {
+    let (base, handler) = spawn_server_streaming().await;
+    let client = JsonRpcClient::new(base);
+
+    let mut stream = subscribe_to_live_task(&client, &handler, "task-close-terminal").await;
+    handler
+        .broadcast_status_update(
+            "task-close-terminal",
+            status_update("task-close-terminal", TaskState::Completed),
+        )
+        .await
+        .unwrap();
+
+    assert_closes_after_next(&mut stream, TaskState::Completed).await;
+}
+
+/// And on an *interrupted* state, which is the worse hang of the two: the agent
+/// is waiting on the caller, so a stream left open has both sides waiting on
+/// each other.
+#[tokio::test]
+async fn subscribe_stream_closes_on_interrupted_state() {
+    let (base, handler) = spawn_server_streaming().await;
+    let client = JsonRpcClient::new(base);
+
+    let mut stream = subscribe_to_live_task(&client, &handler, "task-close-input").await;
+    handler
+        .broadcast_status_update(
+            "task-close-input",
+            status_update("task-close-input", TaskState::InputRequired),
+        )
+        .await
+        .unwrap();
+
+    assert_closes_after_next(&mut stream, TaskState::InputRequired).await;
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
