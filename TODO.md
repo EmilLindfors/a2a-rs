@@ -1,93 +1,235 @@
-# TODO — `a2acli` follow-ups
+# TODO
 
-Tracks the next steps after landing the `a2acli` crate + the `auto_connect`
-promotion. Companion to `ROADMAP.md` (this is the near-term, actionable slice).
-The platform/CLI roadmap lives in `DECLARATIVE_AGENTS_TODO.md`.
+Open work across the workspace, roughly in the order it is worth doing.
 
-## 1. Ship the current branch ✅
+Companion docs: `CHANGELOG.md` records what shipped, `NOTES.md` the decisions
+behind it and the hazards worth not rediscovering.
 
-The `feat/a2acli` branch merged and shipped (`a2acli` 0.4.0, released in #29).
+Sections 1–6 are actionable now. Sections 7–9 are deferred themes: real work,
+but not scheduled — each needs its own pass rather than a slot in the current
+one.
 
-- [x] Commit the staged work (new `a2acli` crate, `a2a_rs::auto_connect`,
-      `WebA2AClient` delegation, unused-`reqwest` drop from `a2a-client`).
-- [x] Open the PR, calling out the `--auth`/`--timeout` caveat in `auto` mode
-      (item 3 below) and the agent-card transport-mislabel finding (item 2).
-- [x] Add `a2acli` to the workspace table in `CLAUDE.md` — done, with a note
-      distinguishing it from the `a2a` binary in `a2a-agents`, since "the CLI" is
-      now ambiguous between a client (`a2acli`) and a runner (`a2a`).
+The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
+2026-07-27 (see `CHANGELOG.md`).
 
-## 2. Bugs found while testing the CLI (not CLI bugs)
+---
 
-- [x] **Agent card mislabels its transport.** `a2a-agents`' `AgentServer` mounts a
-      **ConnectRPC** server (`ConnectRpcAdapter` + `HttpServer`) but the published
-      card advertised the interface as **`JSONRPC`** (the `SimpleAgentInfo`
-      default `protocol_binding`), so client auto-negotiation picked the JSON-RPC
-      client and failed (`invalid JSON-RPC response: error decoding response
-      body`). Not specific to `a2a-agents` — `HttpServer` mounts *only* the
-      ConnectRPC router, so every one of its users published a card that lied.
-      Fixed at the root: `HttpServer` stamps `CONNECTRPC` on the card it serves,
-      `agent_info_from_config` sets it at the source for the off-HTTP readers
-      (registry self-registration, MCP mode), and the binding strings are now
-      shared `PROTOCOL_BINDING_*` consts in `domain` so card and client cannot
-      drift. Regression: `a2a-rs/tests/agent_card_transport_test.rs`.
-- [ ] **ConnectRPC SSE subscription never closes on terminal state.** `a2acli stream`
-      (and any subscriber) stays open after the task reaches `FAILED`/`COMPLETED`;
-      had to cap each run with `timeout`. The stream should end when the task hits a
-      terminal state. (Distinct from the `Last-Event-ID` gap in `ROADMAP.md`.)
+## 1. Client CLI (`a2acli`)
 
-## 2b. MSRV
-
-- [x] **Raised to 1.96, declared once.** All seven crates claimed
-      `rust-version = "1.85"` while the dependency graph had moved to **1.87+**
-      (`icu_*` want 1.86, `process-wrap` 1.87) — a false claim that surfaced only
-      when the agent container image failed to build on its pinned `rust:1.85`.
-      Nothing catches this locally: cargo errors when the *toolchain* is below a
-      dep's floor, never when `rust-version` is.
-      Set to **1.96** rather than the 1.87 minimum on purpose — that is the
-      toolchain the workspace is built and tested with and the one
-      `a2a-agents/Dockerfile` pins, so the claim is one we actually exercise
-      instead of a guess. It now lives in `[workspace.package]` with members
-      inheriting via `rust-version.workspace = true`, so seven copies cannot
-      drift apart again.
-- [ ] **Pin an MSRV CI job the moment the claim drops below stable.** Not needed
-      *today*: every workflow uses `dtolnay/rust-toolchain@stable` and 1.96 is
-      current stable, so CI already builds on exactly the declared version. That
-      stops being true the day stable moves on — from then the number is
-      unproven again, and a `dtolnay/rust-toolchain@1.96` job is what makes it
-      real. Cheap to add then; redundant now.
-
-## 3. CLI follow-ups
-
-- [ ] **Thread `--auth`/`--timeout` through `auto` mode.** Today the negotiation
-      factories (`TransportFactory` in `a2a-rs/src/adapter/transport/negotiation.rs`)
-      build unauthenticated, default-timeout clients, so credentials only apply with
-      an explicit `--transport`. Options: add a `ClientConfig` (token + timeout) to
-      `TransportFactory::create`, or a `connect_with`/`auto_connect_with` variant.
+- [ ] **ConnectRPC SSE subscription never closes on terminal state.**
+      `a2acli stream` (and any subscriber) stays open after the task reaches
+      `FAILED`/`COMPLETED`; each run has to be capped with `timeout`. The stream
+      should end when the task hits a terminal state. (Distinct from the
+      `Last-Event-ID` gap in §7.)
+- [ ] **Thread `--auth` / `--timeout` through `auto` mode.** The negotiation
+      factories (`TransportFactory` in
+      `a2a-rs/src/adapter/transport/negotiation.rs`) build unauthenticated,
+      default-timeout clients, so credentials only apply with an explicit
+      `--transport`. Options: add a `ClientConfig` (token + timeout) to
+      `TransportFactory::create`, or a `connect_with` / `auto_connect_with`
+      variant.
 - [ ] **Add an `a2acli` integration test.** Spin up `examples/jsonrpc_server` and
-      drive the built binary through `card`/`send`/`get`/`cancel` (mirrors the manual
-      e2e). Complements `a2a-rs/tests/jsonrpc_client_interop_test.rs`.
-- [ ] **(Optional) `list` command** — the `Transport` port already has `list_tasks`;
-      expose it (`a2acli list [--state …] [--limit …]`). Push-notification-config
-      commands (`set`/`get`/`list`/`delete`) are also available on the port but are
-      out of the roadmap's `card/send/stream/get/cancel` scope.
+      drive the built binary through `card`/`send`/`get`/`cancel` (mirrors the
+      manual e2e). Complements `a2a-rs/tests/jsonrpc_client_interop_test.rs`.
+- [ ] *(Optional)* **`list` command** — the `Transport` port already has
+      `list_tasks`; expose it (`a2acli list [--state …] [--limit …]`).
+      Push-notification-config commands are also on the port but outside the
+      roadmap's `card/send/stream/get/cancel` scope.
 
-## 4. Cross-SDK interop validation (ROADMAP §0.5)
+## 2. Platform — runtime and delegation
 
-- [ ] Point the **official** `a2aproject/a2acli` at our
-      `examples/jsonrpc_server` (`:8137`) — validates our *server* against the
-      canonical client.
-- [ ] Point **our** `JsonRpcClient`/`a2acli` at a stock upstream A2A agent —
+- [ ] **Per-agent images** (`image` on `AgentSpec` or a `[runtime]` config
+      block). The escape hatch that keeps the declarative layer from being a toy:
+      a custom Rust handler becomes just a different image and the platform stops
+      caring. TOML-only covers the common case; image + config covers 100%. Also
+      retires the `HandlerType::Custom(_) → echo` fallback — with images
+      available, an unknown handler type should be a hard error. (`a2a doctor`
+      reports it as a problem today, so it is no longer *silent*; it is still
+      wrong at run time.)
+- [ ] **Scrub the child environment in `LocalProcessRuntime`.** The allowlist
+      bounds what a *config* may name, not what a spawned child can read. Needs
+      `Command::env_clear()` plus an explicit carry-over set, which is
+      platform-fiddly (`PATH`, `SystemRoot`, temp dirs) — hence deferred, with
+      the adapter documented as dev-only meanwhile. See `NOTES.md`.
+- [ ] **Stream a delegated agent's tokens through** instead of polling to a
+      terminal state: prefer `subscribe_to_task`, fall back to the current
+      bounded `get_task` poll (`A2aAgentToolSource::invoke`).
+- [ ] **Resolve peers at call time** (a dynamic registry-backed `ToolSource`) so
+      late joiners are reachable. A startup-only resolution pass goes stale by
+      design once agents come and go under a control plane.
+- [ ] **Card-fetch refresh loop** — re-poll `/.well-known/agent-card.json` for
+      liveness.
+- [ ] **Persistent `AgentRegistry` adapter**, for what recovery-by-derivation
+      cannot cover: agents registered by something other than this runtime, and
+      discovery shared across control-plane processes. Both speculative today —
+      hence a port and not a database (see `NOTES.md`).
+- [ ] **Resolve the axum 0.7 (frontend) vs 0.8 (`a2a-rs`) split.** Tests use an
+      `axum8` dev-dep alias as a stopgap; bump the frontend when `askama_axum`
+      allows.
+
+## 3. Platform extraction — before the provider work
+
+Move `a2a-agents`, `a2a-agents-common`, and the Terraform provider into
+`a2a-agents-platform`, depending only on **published** `a2a-rs` / `a2a-mcp` /
+`a2a-ap2` (no path deps back), keeping the protocol crates clean.
+
+Extract *before* the provider rework (§4), not after: a Terraform provider with
+its own Go toolchain, Go CI, and TF acceptance tests does not belong in the
+protocol repo, and the provider work is where the Go surface gets serious —
+extracting afterwards means moving a much larger, freshly-churning surface. The
+extraction only needs published `a2a-rs`; use a local `[patch.crates-io]` path
+override if co-development is needed during the transition.
+
+One PR, pre-1.0 "break cleanly" posture:
+
+- [ ] Create `a2a-agents-platform`; copy `a2a-agents/`, `a2a-agents-common/`,
+      and `terraform-provider-a2aagent/`.
+- [ ] Flip path deps to crates.io versions (`a2a-rs = "0.4"`, etc.).
+- [ ] Split the generic handler into its own crate if wanted — it is co-located
+      in `a2a-agents/src/handlers/` today to avoid a circular dep with `a2a-mcp`.
+- [ ] In this repo: drop `a2a-agents` / `a2a-agents-common` from the workspace
+      `Cargo.toml`; point `README.md` / `CLAUDE.md` at the new repo. Keep
+      `a2a-rs`, `a2a-ap2`, `a2a-client`, `a2a-mcp`, `a2acli` here.
+
+## 4. Terraform provider ⏸ (parked)
+
+Parked behind the standalone track and the extraction — see `NOTES.md` for why.
+The design below still holds for when it resumes.
+
+Present state, precisely: `renderTOML`
+(`internal/provider/agent_resource.go:223`) emits `implementation = "llm"`, a key
+`HandlerConfig` no longer reads, so the provider's output is *silently wrong* —
+`terraform apply` succeeds and the agent falls back to echo. Both validators
+(`:274`, `:286`) `return nil`, so nothing validates anything. And the
+control-plane HTTP API built for the provider to target is not targeted; the
+provider still writes files to a directory.
+
+The fix is structural. Hand-maintaining a TOML serializer in Go against a Rust
+struct is a permanent drift source, and the typed HCL attributes cover ~8 of ~40
+config fields, so the provider cannot express most agents even when correct.
+
+- [ ] **Passthrough config.** `POST /agents` already takes `config_toml: String`;
+      lean into it. `AgentConfig` derives `Deserialize`, so accepting a JSON body
+      variant is nearly free and lets HCL do `jsonencode(...)`. Go never learns
+      the schema, so it cannot drift, and Rust becomes the sole validator for
+      real.
+- [ ] **Delete `validateWithJSONSchema` rather than implementing it.** One
+      working validation path beats two stubs — either shell to `a2a validate`
+      (needs a stdin mode; it is paths-only today) or let the control plane
+      reject on deploy and surface it as a TF diagnostic. With passthrough
+      config the bundled `internal/schema/agent_config.json` fixture and the
+      `a2a print-schema` regeneration loop become unnecessary, not unimplemented.
+- [ ] **Real lifecycle against the control-plane API:** Create = provision +
+      start + register card; Read = health/inspect; Update = re-provision;
+      Delete = stop + deregister. Its blocker is gone — restart-recovery landed,
+      so `Read` no longer lies after a bounce (on `--runtime container`, the only
+      backend a TF-driven control plane should use).
+- [ ] **End-to-end `terraform apply` smoke test:** a live `a2a control-plane`,
+      real HCL, assert an agent answers. Every layer is tested in isolation and
+      the seams are exactly where the failures have been.
+
+## 5. Interop and CI
+
+- [ ] **`SendMessage` ignores `return_immediately`, and its default is the
+      opposite of the spec's.** `SendMessageConfiguration.return_immediately`
+      exists on the generated type and is read nowhere, so the server always
+      behaves as if it were `true`. The proto3 default is `false`, and `false`
+      means the server **MUST** wait until the task reaches a terminal
+      (`COMPLETED`/`FAILED`/`CANCELED`/`REJECTED`) or interrupted
+      (`INPUT_REQUIRED`/`AUTH_REQUIRED`) state before returning
+      (`spec/a2a.proto:155`). So a conformant client that sends no configuration
+      at all — which is what the official SDKs do — is promised a settled task
+      and gets a `WORKING` one, and has to poll. `a2acli send` does that polling
+      client-side today; that is a workaround for this, not the fix.
+      Implementing it means holding the response until the task settles: the
+      streaming handler already broadcasts every transition, so a subscriber can
+      be the wait, plus a bound so an agent that never finishes cannot pin a
+      connection open forever. Note the hand-written legacy
+      `MessageSendConfiguration.blocking` (`domain/core/task.rs`) is the v0.x
+      spelling of the same switch and is equally unused.
+      Worth doing **before** the interop runs below: a canonical client that
+      waits on the documented default will look like it is hanging on us.
+- [ ] Point the **official** `a2aproject/a2acli` at our `examples/jsonrpc_server`
+      (`:8137`) — validates our *server* against the canonical client.
+- [ ] Point **our** `JsonRpcClient` / `a2acli` at a stock upstream A2A agent —
       validates our *client* against other SDKs.
-- [ ] Once both pass, capture the matrix (which transports/SDKs interoperate) in the
-      `a2acli` README or `ROADMAP.md`.
+- [ ] Once both pass, capture the matrix (which transports and SDKs interoperate)
+      in the `a2acli` README.
+- [ ] **Pin an MSRV CI job the moment the declared version drops below stable.**
+      Not needed today: every workflow uses `dtolnay/rust-toolchain@stable` and
+      1.96 is current stable, so CI already builds on exactly the declared
+      version. That stops being true the day stable moves on — from then the
+      number is unproven again, and a `dtolnay/rust-toolchain@1.96` job is what
+      makes it real.
 
-## 5. Example/test ergonomics (minor)
+## 6. Docs
 
-- [x] `complex_agent`'s rule-based path is now reachable. Two separate causes:
-      the original one (`OpenAiProvider::from_env()` always returns `Ok`, so
-      `load_llm()` never returned `None`) went away when provider selection was
-      centralized — `provider_from_env()` gates each branch on a *set* key and
-      returns `None` otherwise. What remained is that the example loads a `.env`
-      at startup, so on a machine set up for the LLM path the deterministic
-      branch was still unreachable without unsetting things. `A2A_NO_LLM=1` is
-      the explicit opt-out (`load_llm`).
+- [ ] `terraform-provider-a2aagent/README.md` still describes the provider as the
+      source of truth for agent definitions. Fix when the provider resumes — or
+      sooner, with a parked-WIP banner, if it starts misleading anyone.
+
+---
+
+## 7. Protocol and core (`a2a-rs`) — deferred themes
+
+Real work, unscheduled. Each reshapes a surface and warrants its own pass.
+
+- [ ] **Multi-tenancy.** Thread a `tenant` through requests and storage. Only
+      placeholder fields exist today (`TaskPushNotificationConfig.tenant`, the
+      proto `/{tenant}/…` routes). Two viable shapes, and the choice is the work:
+      - **(a) edge tenant-routing** — a `TenantRouter` holding per-tenant
+        storage, resolving the tenant from the `/{tenant}/` path at the transport
+        edge, keeping domain and ports tenant-free. Smallest blast radius, most
+        hexagonal.
+      - **(b) per-request `tenant` parameter** threaded through every port
+        method, plus transport extraction and storage scoping. Matches the
+        official SDK exactly; largest diff, touches every call site in every
+        crate.
+- [ ] **Durable streaming resumption.** The replay buffer is in-memory and
+      bounded (256 events/task); past it, resume falls back to the initial
+      snapshot. A sqlx-backed event log would make resumption survive restarts.
+- [ ] **ConnectRPC SSE `Last-Event-ID`.** The ConnectRPC transport has none, so
+      `RetryingTransport` over it reconnects from scratch rather than resuming
+      gap-free.
+- [ ] **AP2 expansion (`a2a-ap2`).** Full support for the AP2 primitives
+      (Payment Request, Receipt); bridge AP2 with native LLM tool calling so a
+      model can request and verify payments; tests and error handling for the
+      flows.
+
+## 8. Blocked on upstream
+
+- [ ] **`aws-lc-sys` breaks any new `cross` target.** `cross` is used only for
+      `aarch64-unknown-linux-gnu` today (native cargo elsewhere) and that works,
+      but any *new* cross target (e.g. `aarch64-unknown-linux-musl`) hits the
+      `aws-lc-sys 0.41.0` "compiler bug detected" panic. Root cause: `rustls
+      0.23` — pulled in by `connectrpc`, `hyper-rustls`, and `reqwest` defaults —
+      re-enables the `aws_lc_rs` provider even though `a2a-rs` only asks for
+      `ring`.
+      A feature-only "ring-only" fix is **blocked by `connectrpc 0.3.3`**: it
+      exposes no TLS feature flags and depends on `hyper-rustls`/`tokio-rustls`
+      with their default `aws-lc-rs` provider, so no combination of our flags
+      removes `aws-lc-sys`. (`sqlx` offers `tls-rustls-ring` and `reqwest`
+      offers `rustls-tls-*-no-provider`, but fixing only those leaves connectrpc
+      still pulling `aws-lc-rs`.) A `[patch.crates-io]` swaps the *source*, not
+      features, so it cannot flip connectrpc's `hyper-rustls` default either.
+      Paths, none cheap:
+      - **(a)** upstream a `ring` feature into `connectrpc`, then set ring on
+        `connectrpc` + `reqwest` `rustls-tls-no-provider` + `sqlx`
+        `tls-rustls-ring`;
+      - **(b)** fork or vendor `connectrpc` with
+        `hyper-rustls = { default-features = false, features = ["ring", …] }`;
+      - **(c)** keep `aws-lc-rs` and make it cross-build — a `Cross.toml` whose
+        image carries clang and cmake (plus `AWS_LC_SYS_PREBUILT_NASM=1` on x86)
+        — sidestepping the provider question. Needs a reproducible `cross`
+        environment to validate.
+
+## 9. Nice to have
+
+- [ ] **Single bidirectional showcase** — fold `AgentToMcpBridge` (re-expose the
+      agent *as* MCP tools) into `complex_agent`. Already covered standalone by
+      `a2a-mcp/examples/bidirectional_demo.rs`; only worth it for one end-to-end
+      demo.
+- [ ] **MCP-native progress** — wire `McpToA2ABridge::with_streaming` +
+      `ProgressClientHandler` so downstream tool progress streams (the tool
+      server would need to emit `notify_progress`). Progress is handler-driven
+      today.

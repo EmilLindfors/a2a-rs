@@ -94,7 +94,7 @@ jobs:
         run: cargo doc --no-deps -p a2a-ap2 -p a2a-web-client -p a2a-agents-common
 
       - name: Check documentation (a2a-agents)
-        run: cargo doc --no-deps -p a2a-agents --features "reimbursement-agent,sqlx,ap2,auth"
+        run: cargo doc --no-deps -p a2a-agents --features "reimbursement-agent,ap2,auth"
 
   audit:
     name: Security Audit

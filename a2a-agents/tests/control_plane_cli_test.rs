@@ -186,7 +186,7 @@ fn deploy_ps_logs_stop_drive_a_running_control_plane() {
         |ok, _| ok,
     );
     assert!(
-        listed.contains("no agents deployed"),
+        listed.contains("no agents running"),
         "a fresh control plane has an empty fleet, and should say so plainly:\n{listed}\n\
          control plane said:\n{}",
         cp.output()
@@ -243,12 +243,25 @@ fn deploy_ps_logs_stop_drive_a_running_control_plane() {
     assert!(ok, "stop failed:\n{out}");
     assert!(out.contains("stopped cli-agent"), "{out}");
 
+    // It leaves the listing: an undeployed agent that keeps showing up in `ps`
+    // reads as one that refused to go away.
     let (ok, listed) = a2a_env(scratch.path(), &env, &["ps"]);
     assert!(ok, "{listed}");
     assert!(
-        listed.contains("cli-agent") && listed.contains("stopped"),
-        "a stopped agent stays listed, as stopped:\n{listed}"
+        !listed.contains("cli-agent"),
+        "a stopped agent is not part of what is running:\n{listed}"
     );
+
+    // …but it is not forgotten. `--all` is `docker ps -a`, and it is what makes
+    // the log of an agent that died still reachable by id.
+    let (ok, listed) = a2a_env(scratch.path(), &env, &["ps", "--all"]);
+    assert!(ok, "{listed}");
+    assert!(
+        listed.contains("cli-agent") && listed.contains("stopped"),
+        "--all must still show it, as stopped:\n{listed}"
+    );
+    let (ok, logs) = a2a_env(scratch.path(), &env, &["logs", "cli-agent"]);
+    assert!(ok, "a stopped agent's log is still readable:\n{logs}");
 }
 
 /// The failure an operator hits first: no control plane at that address. It has

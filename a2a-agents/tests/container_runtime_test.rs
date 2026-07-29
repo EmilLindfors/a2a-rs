@@ -35,61 +35,85 @@ fn image_available(image: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// The image must be *buildable*, checked without building it.
+/// Everything the `a2a` binary requires must be a **default** feature.
 ///
-/// This is the one failure the docker-gated tests below structurally cannot
-/// catch: they skip green when the image is absent, and an image that cannot be
-/// built is absent — so the whole container backend silently had no image after
-/// the `llm` feature was added to the binary's `required-features` and not to
-/// the Dockerfile. Cargo refuses to build a named bin whose required features
-/// are not all enabled, so the two lists have to agree, and nothing else in the
-/// suite says so.
+/// Cargo refuses to build a named bin whose required features are not all
+/// enabled, and it silently *skips* such a bin on `cargo install` rather than
+/// reporting it. Making `required-features` a subset of `default` is what makes
+/// every way of obtaining the binary work with no `--features` incantation:
+/// `cargo install a2a-agents`, the Dockerfile, and the release-binaries
+/// workflow. Each of those had already drifted from the list at least once —
+/// the release workflow shipped without `llm` and `schema`, and the image
+/// silently had none at all after `llm` was added here and not there.
+///
+/// This is also the one failure the docker-gated tests below structurally
+/// cannot catch: they skip green when the image is absent, and an image that
+/// cannot be built is absent.
 ///
 /// Parsed rather than hard-coded, so adding a feature to either side is what
 /// fails, not a stale copy of the list in a test.
 #[test]
-fn the_dockerfile_enables_every_feature_the_a2a_binary_requires() {
+fn every_feature_the_a2a_binary_requires_is_a_default() {
     let manifest = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"))
         .expect("read Cargo.toml");
-    let dockerfile = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Dockerfile"))
-        .expect("read Dockerfile");
 
-    // The `required-features` line of the `[[bin]] name = "a2a"` section.
-    // Line-wise rather than substring matching: the checkout may have CRLF
-    // endings, and `name = "a2a"` is also a prefix of `name = "a2a_thing"`.
+    /// The features named by a `<key> = ["a", "b"]` line, wherever it appears.
+    fn feature_list<'a>(manifest: &'a str, key: &str) -> Vec<&'a str> {
+        let prefix = format!("{key} = [");
+        manifest
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("no `{key}` list in the manifest"))
+            .trim_end_matches(']')
+            .split(',')
+            .map(|feature| feature.trim().trim_matches('"'))
+            .filter(|feature| !feature.is_empty())
+            .collect()
+    }
+
+    // Scoped to the `[[bin]] name = "a2a"` section: other targets have their own
+    // `required-features`, and `name = "a2a"` is a prefix of `name = "a2a_x"`.
     let bin_section = manifest
         .split("[[bin]]")
         .find(|section| section.lines().any(|line| line.trim() == r#"name = "a2a""#))
         .expect("the a2a bin section");
-    let required: Vec<&str> = bin_section
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("required-features = ["))
-        .expect("required-features")
-        .trim_end_matches(']')
-        .split(',')
-        .map(|feature| feature.trim().trim_matches('"'))
-        .filter(|feature| !feature.is_empty())
-        .collect();
-    assert!(!required.is_empty(), "parsed no required features");
 
-    // Everything the Dockerfile passes to `--features`, across its (possibly
-    // line-continued) cargo invocation.
-    let enabled: Vec<&str> = dockerfile
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("--features "))
-        .expect("a --features line in the Dockerfile")
-        .split(',')
-        .map(str::trim)
-        .collect();
+    let required = feature_list(bin_section, "required-features");
+    let default = feature_list(&manifest, "default");
+    assert!(!required.is_empty(), "parsed no required features");
 
     for feature in &required {
         assert!(
-            enabled.contains(feature),
-            "the Dockerfile does not enable `{feature}`, which the `a2a` binary requires — \
-             `docker build` will fail with \"target `a2a` requires the features\", leaving \
-             the container runtime with no image. Dockerfile enables: {enabled:?}"
+            default.contains(feature),
+            "the `a2a` binary requires `{feature}`, which is not a default feature — \
+             `cargo install a2a-agents` will silently skip the binary, and `docker build` \
+             will fail with \"target `a2a` requires the features\". Defaults: {default:?}"
         );
     }
+}
+
+/// The Dockerfile must not pin its own feature list.
+///
+/// Passing `--features` there means the image is a variant only that file knows
+/// how to build, which is how it drifted from `required-features` before. With
+/// the defaults covering the binary (above), the correct invocation names no
+/// features at all — and then it cannot drift.
+#[test]
+fn the_dockerfile_builds_the_binary_with_default_features() {
+    let dockerfile = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/Dockerfile"))
+        .expect("read Dockerfile");
+
+    let pinned: Vec<&str> = dockerfile
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("--features") || line.contains(" --features "))
+        .collect();
+
+    assert!(
+        pinned.is_empty(),
+        "the Dockerfile pins features instead of relying on the defaults, so the image \
+         can drift from what `cargo install` produces: {pinned:?}"
+    );
 }
 
 /// The recovery query against a *real* engine, with no image and no container

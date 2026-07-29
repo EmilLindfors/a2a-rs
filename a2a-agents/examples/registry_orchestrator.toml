@@ -17,7 +17,7 @@ version = "0.1.0"
 
 [server]
 host = "127.0.0.1"
-http_port = 9090
+http_port = 8090
 
 [server.storage]
 type = "inmemory"

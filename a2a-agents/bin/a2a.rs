@@ -17,18 +17,19 @@
 
 #[cfg(feature = "reimbursement-agent")]
 use a2a_agents::agents::reimbursement::ReimbursementHandler;
+#[cfg(feature = "reimbursement-agent")]
 use a2a_agents::core::builder::AutoStorage;
 use a2a_agents::core::config::LlmConfig;
 use a2a_agents::core::{
     AgentBuilder, AgentConfig, AgentTemplate, FleetConfig, Requirement, fleet_conflicts,
-    requirements,
+    fleet_header, member_block, member_path, requirements,
 };
 use a2a_agents::core::{HandlerType, LlmHandlerConfig};
 use a2a_agents::utils::slugify;
 use a2a_agents::{
     AgentId, AgentRegistry, AgentRuntime, ContainerHardening, ContainerRuntime, ControlPlane,
     ControlPlaneAuth, ControlPlaneClient, ControlPlaneClientError, EnvAllowlist, HttpCardSource,
-    InMemoryAgentRegistry, LocalProcessRuntime, Recovered, control_plane_router,
+    InMemoryAgentRegistry, ListFilter, LocalProcessRuntime, Recovered, control_plane_router,
 };
 use a2a_agents_common::llm::{LlmProvider, LlmSettings, provider_from_env, provider_from_settings};
 
@@ -50,7 +51,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tokio::task::JoinHandle;
+use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -117,10 +118,16 @@ enum Command {
         /// Where to write it. Defaults to `<slug-of-name>.toml` in the cwd.
         #[clap(short, long)]
         output: Option<String>,
-        /// HTTP port to bind. Defaults per template (8080, or 9090 for
+        /// HTTP port to bind. Defaults per template (8080, or 8090 for
         /// `orchestrator` so it can run alongside its first peer).
         #[clap(short, long)]
         port: Option<u16>,
+        /// Also add the new agent to this fleet file, creating it if absent.
+        ///
+        /// Repeat the flag across several `a2a new` runs to build a fleet up one
+        /// agent at a time, then `a2a up -f <file>` to run them together.
+        #[clap(long)]
+        fleet: Option<String>,
         /// Overwrite the output file if it already exists.
         #[clap(long)]
         force: bool,
@@ -226,6 +233,11 @@ enum Command {
     },
     /// List the agents a control plane is running, with their health.
     Ps {
+        /// Also show agents that have been stopped. Their entries are kept so
+        /// `a2a logs` can still explain why they went — they are simply not
+        /// part of what is running.
+        #[clap(short, long)]
+        all: bool,
         #[command(flatten)]
         target: ControlPlaneTarget,
     },
@@ -397,9 +409,17 @@ async fn main() -> anyhow::Result<()> {
             template,
             output,
             port,
+            fleet,
             force,
         } => {
-            scaffold_agent(&name, &template, output.as_deref(), port, force)?;
+            scaffold_agent(
+                &name,
+                &template,
+                output.as_deref(),
+                port,
+                fleet.as_deref(),
+                force,
+            )?;
         }
         Command::Run { config } => {
             run_agents(config).await?;
@@ -457,8 +477,13 @@ async fn main() -> anyhow::Result<()> {
                 std::process::exit(1);
             }
         }
-        Command::Ps { target } => {
-            list_agents(target.client()).await?;
+        Command::Ps { all, target } => {
+            let filter = if all {
+                ListFilter::All
+            } else {
+                ListFilter::Live
+            };
+            list_agents(target.client(), filter).await?;
         }
         Command::Logs { id, tail, target } => {
             print_logs(&id, tail, target.client()).await?;
@@ -557,10 +582,13 @@ async fn deploy_agents(
 }
 
 /// Print the deployed fleet as a table on **stdout**.
-async fn list_agents(client: ControlPlaneClient) -> anyhow::Result<()> {
-    let agents = client.list().await.map_err(explain)?;
+async fn list_agents(client: ControlPlaneClient, filter: ListFilter) -> anyhow::Result<()> {
+    let agents = client.list(filter).await.map_err(explain)?;
     if agents.is_empty() {
-        println!("no agents deployed at {}", client.base_url());
+        println!("no agents running at {}", client.base_url());
+        if filter == ListFilter::Live {
+            println!("stopped ones are hidden; see them with `a2a ps --all`");
+        }
         println!("deploy one with `a2a deploy --config <file>`");
         return Ok(());
     }
@@ -666,6 +694,7 @@ fn scaffold_agent(
     template: &str,
     output: Option<&str>,
     port: Option<u16>,
+    fleet: Option<&str>,
     force: bool,
 ) -> anyhow::Result<()> {
     let template: AgentTemplate = template.parse().map_err(anyhow::Error::msg)?;
@@ -694,10 +723,27 @@ fn scaffold_agent(
 
     let display = path.display();
     println!("created {display}  ({template} template, port {port})");
-    println!();
-    println!("next:");
-    println!("    a2a validate --config {display}");
-    println!("    a2a run --config {display}");
+
+    // A fleet turns the follow-up commands into the fleet's own: `a2a up` is
+    // what runs the set, and running only the agent just scaffolded would leave
+    // its peers down.
+    match fleet {
+        Some(fleet) => {
+            let added = add_to_fleet(fleet, &path)?;
+            println!("{} {fleet}", if added { "added to" } else { "already in" });
+            println!();
+            println!("next:");
+            println!("    a2a validate --fleet {fleet}");
+            println!("    a2a up -f {fleet}");
+        }
+        None => {
+            println!();
+            println!("next:");
+            println!("    a2a validate --config {display}");
+            println!("    a2a run --config {display}");
+        }
+    }
+
     if template.needs_llm_key() {
         println!();
         println!(
@@ -707,6 +753,44 @@ fn scaffold_agent(
         println!("without a key it still runs, answering with a deterministic fallback.");
     }
     Ok(())
+}
+
+/// Add `config_path` to the fleet file at `fleet_path`, creating the file if it
+/// is not there. Answers whether it was a new member.
+///
+/// Appends text rather than re-serializing a parsed [`FleetConfig`]: a fleet file
+/// is hand-written and carries comments and ordering that a round-trip through
+/// `toml::to_string` would silently discard.
+fn add_to_fleet(fleet_path: &str, config_path: &Path) -> anyhow::Result<bool> {
+    let fleet_path = Path::new(fleet_path);
+    let cwd = std::env::current_dir()?;
+    let member = member_path(fleet_path, config_path, &cwd);
+
+    // An existing fleet is parsed first, so a malformed file is reported as such
+    // instead of being appended to and left more broken than it was found.
+    let existing = match fleet_path.exists() {
+        true => {
+            let fleet = FleetConfig::from_file(fleet_path)
+                .map_err(|e| anyhow::anyhow!("{}: {e}", fleet_path.display()))?;
+            if fleet.agents.iter().any(|m| m.config == member) {
+                return Ok(false);
+            }
+            std::fs::read_to_string(fleet_path)?
+        }
+        false => {
+            if let Some(parent) = fleet_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)?;
+            }
+            let name = fleet_path
+                .file_stem()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "Fleet".to_string());
+            fleet_header(&name)
+        }
+    };
+
+    std::fs::write(fleet_path, format!("{existing}{}", member_block(&member)))?;
+    Ok(true)
 }
 
 /// Check each config and report on **stdout**, returning whether all passed.
@@ -751,6 +835,16 @@ fn check_config(path: &str, strict_env: bool) -> (bool, Option<AgentConfig>) {
                     "unset, not checked"
                 };
                 println!("        env ({how}): {}", unset.join(", "));
+            }
+            // Valid, and invisible: skill-based peer resolution has nothing to
+            // match on, so an orchestrator never finds this agent and reports
+            // only that no specialist fit. A warning, not a failure — an agent
+            // reached by explicit `agent_id` is legitimate.
+            if config.skills.is_empty() {
+                println!(
+                    "        warning: no [[skills]] — peers resolving by skill cannot \
+                     discover this agent"
+                );
             }
             (!failed_strict, Some(config))
         }
@@ -1390,22 +1484,40 @@ async fn run_agents(config_paths: Vec<String>) -> anyhow::Result<()> {
     print_run_banner(&config_paths);
 
     // Phase 2: build and run each agent; LLM handlers resolve registry refs.
-    let mut handles: Vec<JoinHandle<anyhow::Result<()>>> = Vec::new();
+    let mut agents: JoinSet<Result<(), String>> = JoinSet::new();
     for config_path in &config_paths {
         let config_path = config_path.clone();
         let registry = registry.clone();
-        let handle = tokio::spawn(async move {
-            if let Err(e) = run_one_agent(&config_path, registry).await {
-                error!("Agent task failed for {}: {}", config_path, e);
-            }
-            Ok(())
+        agents.spawn(async move {
+            run_one_agent(&config_path, registry)
+                .await
+                .map_err(|e| format!("{config_path}: {e}"))
         });
-        handles.push(handle);
     }
-    for handle in handles {
-        if let Err(e) = handle.await {
-            error!("Agent task panicked or was cancelled: {}", e);
-        }
+
+    // An agent stopping is news — it had just been announced by the banner as
+    // running, and the most common cause (a port already bound) leaves the
+    // survivors looking healthy. Reported on stdout in *completion* order, so a
+    // fleet member that dies on startup says so at once rather than when the
+    // last agent finally exits.
+    let total = config_paths.len();
+    let mut failures = 0usize;
+    while let Some(joined) = agents.join_next().await {
+        let reason = match joined {
+            Ok(Ok(())) => continue,
+            Ok(Err(reason)) => reason,
+            Err(e) => format!("agent task panicked or was cancelled: {e}"),
+        };
+        failures += 1;
+        println!("failed  {reason}");
+    }
+
+    // The survivors are left running deliberately: a fleet is more useful
+    // degraded than absent, and the operator can see what is missing. But the
+    // exit code has to reflect it — a supervisor (systemd, a container, this
+    // tool's own `LocalProcessRuntime`) reads nothing else.
+    if failures > 0 {
+        anyhow::bail!("{failures} of {total} agent(s) stopped early");
     }
     Ok(())
 }
@@ -1415,13 +1527,10 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
     #[cfg(not(feature = "mcp-server"))]
     let _ = &registry;
     info!("Loading agent config from: {}", config_path);
-    let builder = match AgentBuilder::from_file(config_path) {
-        Ok(b) => b,
-        Err(e) => {
-            error!("Failed to load config {}: {}", config_path, e);
-            return Err(anyhow::anyhow!("Config error: {}", e));
-        }
-    };
+    // Reported by the caller, which counts it and sets the exit code; logging it
+    // here as well would print the same failure twice.
+    let builder =
+        AgentBuilder::from_file(config_path).map_err(|e| anyhow::anyhow!("config error: {e}"))?;
     let handler_type = builder.config().handler_type();
     info!("Using handler: {}", handler_type);
     match handler_type {

@@ -20,7 +20,7 @@ use a2a_agents::runtime::{AgentSpec, Recovered, RuntimeError, RuntimeStatus};
 use a2a_agents::{
     AgentRegistry, AgentRuntime, ControlPlane, ControlPlaneAuth, ControlPlaneClient,
     ControlPlaneClientError, DeployedAgent, InMemoryAgentRegistry, InMemoryAgentRuntime,
-    InMemoryCardSource, RuntimeHealth, control_plane_router,
+    InMemoryCardSource, ListFilter, RuntimeHealth, control_plane_router,
 };
 
 /// The token the test control plane requires.
@@ -203,9 +203,23 @@ async fn deploy_list_status_undeploy_over_http() {
         .unwrap();
     assert_eq!(resp.status(), reqwest::StatusCode::NO_CONTENT);
 
-    // It is now Stopped.
+    // It has left the listing: an undeployed agent that kept showing up in
+    // `a2a ps` reads as one that refused to go away.
     let listed: Vec<DeployedAgent> = client
         .get(format!("{base}/agents"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert!(listed.is_empty(), "stopped agents are hidden by default");
+
+    // …but it is not forgotten — `?all=true` is `docker ps -a`, and its logs are
+    // still readable, which is when they matter most.
+    let listed: Vec<DeployedAgent> = client
+        .get(format!("{base}/agents?all=true"))
         .bearer_auth(TOKEN)
         .send()
         .await
@@ -402,13 +416,13 @@ async fn the_client_drives_the_full_lifecycle() {
     let id = AgentId::from("http-agent");
 
     // Nothing deployed yet — an empty fleet, not an error.
-    assert!(client.list().await.unwrap().is_empty());
+    assert!(client.list(ListFilter::Live).await.unwrap().is_empty());
 
     let deployed = client.deploy(ECHO_TOML).await.expect("deploy");
     assert_eq!(deployed.id, "http-agent");
     assert_eq!(deployed.health, RuntimeHealth::Healthy);
 
-    let listed = client.list().await.expect("list");
+    let listed = client.list(ListFilter::Live).await.expect("list");
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].id, "http-agent");
 
@@ -452,13 +466,13 @@ async fn client_errors_name_what_the_operator_has_to_fix() {
 
     let wrong_token = ControlPlaneClient::new(&base).with_token("not-the-token");
     assert!(matches!(
-        wrong_token.list().await,
+        wrong_token.list(ListFilter::Live).await,
         Err(ControlPlaneClientError::Unauthorized)
     ));
     // No token at all reads the same way — the API deliberately does not
     // distinguish them, and neither should the client.
     assert!(matches!(
-        ControlPlaneClient::new(&base).list().await,
+        ControlPlaneClient::new(&base).list(ListFilter::Live).await,
         Err(ControlPlaneClientError::Unauthorized)
     ));
 
@@ -483,8 +497,54 @@ async fn client_errors_name_what_the_operator_has_to_fix() {
         "the control plane's diagnosis must survive the trip back: {err}"
     );
 
+    // A config naming secrets the operator has not permitted is the *caller's*
+    // mistake, and its message says exactly what to change. Answering 500 would
+    // read to an operator — and to any alerting — as the server breaking.
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/agents"))
+        .bearer_auth(TOKEN)
+        .json(&serde_json::json!({
+            "config_toml": "[agent]\nname = \"Leaky\"\ndescription = \"${A2A_TEST_SECRET}\"\n",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(
+        resp.text().await.unwrap().contains("--allow-env"),
+        "the fix has to travel with the rejection"
+    );
+
     // The client must never invent an agent: a rejected deploy leaves nothing.
-    assert!(client.list().await.unwrap().is_empty());
+    assert!(client.list(ListFilter::Live).await.unwrap().is_empty());
+}
+
+/// The pre-flight `a2a up` runs over a fleet file has to run against the *live*
+/// fleet too. Without it the second deploy reports `ok … healthy`: the agent's
+/// process loses the bind race, but the card probe answers from the agent that
+/// won it.
+#[tokio::test]
+async fn deploying_onto_a_held_port_is_a_conflict_not_a_second_agent() {
+    let config_dir = temp_dir("portclash");
+    let base = serve(ControlPlaneAuth::Disabled, &config_dir).await;
+    let client = ControlPlaneClient::new(&base);
+
+    client.deploy(ECHO_TOML).await.expect("the first agent");
+
+    let squatter = ECHO_TOML.replace("Http Agent", "Squatter");
+    let err = client
+        .deploy(&squatter)
+        .await
+        .expect_err("the second must not be reported as deployed");
+    assert!(
+        matches!(&err, ControlPlaneClientError::Api { status, message }
+            if *status == reqwest::StatusCode::CONFLICT && message.contains("8200")),
+        "got: {err}"
+    );
+
+    let listed = client.list(ListFilter::All).await.expect("list");
+    assert_eq!(listed.len(), 1, "nothing half-deployed was left behind");
+    assert_eq!(listed[0].id, "http-agent");
 }
 
 /// "I do not keep logs" travels all the way from the adapter to the CLI as its
@@ -522,5 +582,5 @@ async fn a_backend_that_cannot_serve_logs_says_so_end_to_end() {
 
     // And the rest of the surface is unaffected — a runtime without logs is
     // still a runtime.
-    assert_eq!(client.list().await.unwrap().len(), 1);
+    assert_eq!(client.list(ListFilter::Live).await.unwrap().len(), 1);
 }

@@ -5,8 +5,19 @@ Agent implementations for the A2A Protocol with production-ready patterns and
 
 ## 🚀 Quick Start (no Rust)
 
-Scaffold, check, and run an agent with the `a2a` binary. The `echo` template
-needs no API keys and no external services:
+Install the `a2a` binary:
+
+```bash
+cargo install a2a-agents               # from crates.io
+cargo install --path a2a-agents        # from a checkout of this repo
+```
+
+The CLI's features are the crate's defaults, so that is all it takes. (The
+reimbursement sample agent is *not* in that build — add
+`--features reimbursement-agent` if you want it.)
+
+Then scaffold, check, and run an agent. The `echo` template needs no API keys
+and no external services:
 
 ```bash
 a2a new "Weather Agent"                  # writes weather-agent.toml
@@ -17,6 +28,15 @@ a2a run --config weather-agent.toml      # prints the endpoint and how to poke i
 Templates: `echo`, `llm` (natural-language answers), `mcp` (LLM + MCP tools),
 `orchestrator` (delegates to peer A2A agents). Pick one with `--template`, and
 `--port` / `--output` to place it.
+
+For more than one agent, `--fleet` adds each new agent to a fleet file (creating
+it the first time) so they can be run — and checked against each other — as a set:
+
+```bash
+a2a new "Weather Agent" --fleet demo.toml
+a2a new "Router" --template orchestrator --fleet demo.toml
+a2a up -f demo.toml                      # runs both, checked together first
+```
 
 Generated configs are commented — they double as the schema documentation.
 `a2a print-schema` emits the full JSON Schema, and unknown keys are rejected, so
@@ -77,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 **That's it!** The framework handles servers, agent cards, authentication, and more.
 
-📚 **[See complete Builder API documentation →](BUILDER_API.md)**
+📚 **[See complete Builder API documentation →](docs/builder-api.md)**
 
 ## Overview
 
@@ -268,25 +288,46 @@ something real.
 Beyond single agents, `a2a-agents` ships the building blocks for an
 **LLM-driven, multi-agent platform** — defined as **ports** in the platform
 layer so the pure `a2a-rs` protocol crate stays infrastructure-free. The
-`a2a` binary wires them together; it requires the `llm`, `mcp-server`, and
-`schema` features:
+`a2a` binary wires them together. Its features (`llm`, `mcp-server`, `schema`)
+are the crate defaults, so from a checkout:
 
 ```bash
-cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- <subcommand>
+cargo run -p a2a-agents --bin a2a -- <subcommand>
 ```
 
 | Subcommand | What it does |
 |---|---|
+| `new <name> [--template …] [--fleet <toml>]` | Scaffold a starter config, optionally adding it to a fleet |
 | `run --config <toml>…` | Run one or more agents from TOML configs |
 | `up -f <fleet.toml>` | Run every agent a fleet file names, checked together first |
 | `validate --config <toml>… [--fleet <toml>]` | Load + validate configs without serving |
 | `doctor [--config <toml>…] [--fleet <toml>]` | Pre-flight: port free, MCP command installed, model key set |
 | `control-plane --bind … --config-dir … --runtime local\|container` | Serve the deploy/list/status/logs/undeploy HTTP API |
 | `deploy --config <toml>… [--fleet <toml>]` | Deploy agents to a running control plane |
-| `ps` | List what a control plane is running, with health |
+| `ps [--all]` | List what a control plane is running, with health (`--all` includes stopped) |
 | `logs <id> [--tail N]` | Print a deployed agent's captured output |
 | `stop <id>…` | Stop deployed agents and remove them from discovery |
 | `print-schema [--fleet]` | Print the `AgentConfig` (or `FleetConfig`) JSON Schema to stdout |
+
+### Config is the source of truth
+
+The Rust `AgentConfig` type defines what a valid agent is, and nothing
+re-implements that validation:
+
+```text
+  AgentConfig (Rust)  ──schemars──►  a2a print-schema  ──►  JSON Schema
+        │
+        │  a2a new       renders a starter config
+        │  a2a validate  checks shape (deny_unknown_fields: typos are errors)
+        ▼
+  <name>.toml  ──►  a2a run --config <name>.toml
+                    a2a up -f fleet.toml  (a set of configs, checked together)
+                    a2a deploy            (to a control plane; ps/logs/stop drive it)
+```
+
+Unknown keys are rejected, so a mistyped key is an error rather than a silently
+dropped setting. Any future front-end (a Terraform provider, a UI) is expected to
+pass configs through to this validator rather than duplicate it.
 
 ### Fleets (`a2a up`)
 
@@ -394,7 +435,7 @@ config may only reference environment variables named with `--allow-env`.
 ```bash
 export A2A_CONTROL_PLANE_TOKEN=$(openssl rand -hex 32)
 
-cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- \
+cargo run -p a2a-agents --bin a2a -- \
   control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local \
   --allow-env OPENROUTER_API_KEY
 ```
@@ -475,162 +516,15 @@ itself as *ephemeral* and warns loudly — its children die with the supervisor,
 and nothing durable ties a stray process to an agent id. **Use `container` for
 any control plane you expect to restart.**
 
-See the workspace [`DECLARATIVE_AGENTS.md`](../DECLARATIVE_AGENTS.md) for the
-platform design and roadmap.
+See the workspace [`NOTES.md`](../NOTES.md) for the decisions behind this design
+(and why Terraform is deferred), and [`TODO.md`](../TODO.md) for open work.
 
-## Architecture
+## Reference agent and further reading
 
-### ReimbursementMessageHandler
-
-The core business logic implementing `AsyncMessageHandler`:
-
-- Processes reimbursement requests using the A2A message format
-- Generates interactive forms for expense submissions
-- Validates and approves reimbursement requests
-- Returns structured responses with proper task states
-
-### ModernReimbursementServer
-
-The server implementation using framework components:
-
-- Integrates with `DefaultBusinessHandler` for request processing
-- Uses `InMemoryTaskStorage` for task persistence
-- Configures `SimpleAgentInfo` with agent capabilities
-- Supports both HTTP transport
-
-## Usage
-
-### Quick Start - Unified Demo (Recommended)
-
-Run the complete demo with both agent backend and web frontend in a single command:
-
-```bash
-# Run everything (agent backend + web UI)
-cargo run --bin reimbursement_demo
-
-# Open your browser to http://localhost:3000
-```
-
-This starts:
-- **Agent Backend** on `http://localhost:8080` (HTTP)
-- **Web Frontend** on `http://localhost:3000`
-
-The frontend automatically connects to the local agent and provides an interactive interface for submitting expenses and viewing tasks.
-
-### Advanced Usage
-
-Run specific components:
-
-```bash
-# Run only the agent backend (HTTP)
-cargo run --bin reimbursement_demo -- --mode agent
-
-# Run only the web frontend (point it to an existing agent)
-AGENT_HTTP_URL=http://localhost:8080 cargo run --bin reimbursement_demo -- --mode frontend
-
-# Customize ports
-cargo run --bin reimbursement_demo -- \
-  --agent-http-port 8080 \
-  --frontend-port 3000
-
-# Run only HTTP transport for agent
-cargo run --bin reimbursement_demo -- --transport http
-
-```
-
-### Available Endpoints
-
-**Agent Backend:**
-- HTTP API: `http://localhost:8080` (ConnectRPC)
-- Agent Card: `http://localhost:8080/agent-card`
-
-**Web Frontend:**
-- Main UI: `http://localhost:3000`
-- Task List: `http://localhost:3000/tasks`
-- Expense Form: `http://localhost:3000/expense/new`
-
-## Example Conversation
-
-Here's an example conversation with the reimbursement agent:
-
-1. User: "Can you reimburse me $50 for the team lunch yesterday?"
-
-2. Agent: *Returns a form*
-   ```json
-   {
-     "type": "form",
-     "form": {
-       "type": "object",
-       "properties": {
-         "date": {
-           "type": "string",
-           "format": "date",
-           "description": "Date of expense",
-           "title": "Date"
-         },
-         "amount": {
-           "type": "string",
-           "format": "number",
-           "description": "Amount of expense",
-           "title": "Amount"
-         },
-         "purpose": {
-           "type": "string",
-           "description": "Purpose of expense",
-           "title": "Purpose"
-         },
-         "request_id": {
-           "type": "string",
-           "description": "Request id",
-           "title": "Request ID"
-         }
-       },
-       "required": ["request_id", "date", "amount", "purpose"]
-     },
-     "form_data": {
-       "request_id": "request_id_1234567",
-       "date": "<transaction date>",
-       "amount": "50",
-       "purpose": " the team lunch yesterday"
-     }
-   }
-   ```
-
-3. User: *Submits the filled form*
-   ```json
-   {
-     "request_id": "request_id_1234567",
-     "date": "2023-10-15",
-     "amount": "50",
-     "purpose": "team lunch with product team"
-   }
-   ```
-
-4. Agent: "Your reimbursement request has been approved. Request ID: request_id_1234567"
-
-## Current Limitations
-
-The **reimbursement** reference agent deliberately keeps its business logic
-simple to showcase the framework architecture (the generic `llm` handler above
-is the path to real model-driven agents):
-
-- **Message Processing**: Basic pattern matching (use `type = "llm"` for LLM-driven agents)
-- **Storage**: In-memory storage (framework supports SQLx for production)
-- **Authentication**: Not implemented (framework supports Bearer/OAuth2)
-- **Form Processing**: Simple JSON forms without complex validation
-
-## Future Enhancements
-
-See the workspace [ROADMAP.md](../ROADMAP.md) for deferred themes and planned
-work.
-
-## Framework Features Demonstrated
-
-- ✅ **AsyncMessageHandler** trait implementation
-- ✅ **DefaultBusinessHandler** integration  
-- ✅ **InMemoryTaskStorage** for task persistence
-- ✅ **SimpleAgentInfo** for agent metadata
-- ✅ **HTTP** transport support
-- ✅ **Structured error handling** with A2AError
-- ✅ **Modern async/await** patterns
-- ✅ **Builder patterns** for complex objects
+- [docs/reimbursement-demo.md](docs/reimbursement-demo.md) — the reimbursement
+  reference agent: a hand-written `AsyncMessageHandler` with an interactive form
+  flow and a small web frontend. Opt-in behind the `reimbursement-agent` feature.
+- [docs/builder-api.md](docs/builder-api.md) — the full `AgentBuilder` API.
+- [docs/authentication.md](docs/authentication.md) — Bearer, JWT, and OAuth2.
+- [examples/platform/](examples/platform/) — a worked walkthrough of the platform
+  lifecycle, from a config on disk to a supervised deployment.

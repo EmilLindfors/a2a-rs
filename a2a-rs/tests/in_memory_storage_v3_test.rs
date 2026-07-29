@@ -4,7 +4,7 @@ use a2a_rs::{
     TaskPushNotificationConfig,
     adapter::InMemoryTaskStorage,
     domain::{
-        DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
+        A2AError, DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
         ListTaskPushNotificationConfigsParams, ListTasksParams, TaskState,
     },
     port::{AsyncNotificationManager, AsyncTaskLifecycle, AsyncTaskQuery},
@@ -802,4 +802,93 @@ async fn test_delete_push_notification_config_idempotent() {
         result.is_ok(),
         "Delete should be idempotent for non-existent config"
     );
+}
+
+// --- cancellation -----------------------------------------------------------
+//
+// The storage had accepted `Working` only, so a client could not cancel work
+// that had not started yet, nor work stopped waiting on it — which is most of
+// what anyone actually wants to cancel.
+
+/// A queued task is the clearest case: nothing has started, and a client that
+/// changed its mind has no other way to stop it.
+#[tokio::test]
+async fn a_submitted_task_can_be_canceled() {
+    let storage = InMemoryTaskStorage::new();
+    storage.create(&tid("queued"), &cid("ctx")).await.unwrap();
+
+    let canceled = storage.cancel(&tid("queued")).await.expect("cancel");
+    assert_eq!(canceled.status.state, TaskState::Canceled);
+    assert_eq!(
+        storage
+            .get(&tid("queued"), None)
+            .await
+            .unwrap()
+            .status
+            .state,
+        TaskState::Canceled,
+        "the cancellation has to be persisted, not just returned"
+    );
+}
+
+/// The agent is waiting on the caller; cancelling is how the caller says
+/// "never mind" instead of being obliged to answer.
+#[tokio::test]
+async fn an_interrupted_task_can_be_canceled() {
+    for state in [TaskState::InputRequired, TaskState::AuthRequired] {
+        let storage = InMemoryTaskStorage::new();
+        storage.create(&tid("waiting"), &cid("ctx")).await.unwrap();
+        storage
+            .update_status(&tid("waiting"), state, None)
+            .await
+            .unwrap();
+
+        let canceled = storage
+            .cancel(&tid("waiting"))
+            .await
+            .unwrap_or_else(|e| panic!("cancelling from {state:?} should work: {e}"));
+        assert_eq!(canceled.status.state, TaskState::Canceled);
+    }
+}
+
+/// The other half of the rule: a finished task has nothing left to stop, and
+/// saying so is what keeps `cancel` from silently rewriting an outcome.
+#[tokio::test]
+async fn a_finished_task_cannot_be_canceled() {
+    for state in [
+        TaskState::Completed,
+        TaskState::Failed,
+        TaskState::Canceled,
+        TaskState::Rejected,
+    ] {
+        let storage = InMemoryTaskStorage::new();
+        storage.create(&tid("done"), &cid("ctx")).await.unwrap();
+        storage
+            .update_status(&tid("done"), state, None)
+            .await
+            .unwrap();
+
+        match storage.cancel(&tid("done")).await {
+            Err(A2AError::TaskNotCancelable(_)) => {}
+            other => panic!("{state:?} must refuse cancellation, got {other:?}"),
+        }
+    }
+}
+
+/// Cancelling leaves a message in history, so a reader of the task can tell a
+/// cancellation from a task that merely stopped.
+#[tokio::test]
+async fn cancelling_records_why_the_task_ended() {
+    let storage = InMemoryTaskStorage::new();
+    storage.create(&tid("t"), &cid("ctx")).await.unwrap();
+    let canceled = storage.cancel(&tid("t")).await.unwrap();
+
+    let said_so = canceled
+        .status
+        .message
+        .parts
+        .iter()
+        .filter_map(|p| p.get_text())
+        .any(|text| text.contains("canceled"));
+    assert!(said_so, "status: {:?}", canceled.status);
 }

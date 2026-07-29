@@ -28,9 +28,11 @@ use tower::ServiceExt;
 use a2a_rs::adapter::{
     InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router, rest_router,
 };
-use a2a_rs::domain::{A2AError, TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
-use a2a_rs::port::AsyncStreamingHandler;
+use a2a_rs::domain::{
+    A2AError, ContextId, TaskArtifactUpdateEvent, TaskId, TaskState, TaskStatusUpdateEvent,
+};
 use a2a_rs::port::streaming_handler::{SeqEvent, Subscriber};
+use a2a_rs::port::{AsyncStreamingHandler, AsyncTaskLifecycle};
 
 /// A streaming handler whose pull-streams are empty but valid.
 ///
@@ -128,12 +130,20 @@ fn streaming_adapter() -> Arc<JsonRpcAdapter> {
 /// Build an adapter backed by a real in-memory streaming handler so the SSE
 /// methods emit the initial task snapshot.
 fn adapter() -> Arc<JsonRpcAdapter> {
+    adapter_with_handler().0
+}
+
+/// As [`adapter`], also handing back the handler — the seam a test needs to put
+/// a task into a state the routes cannot reach on their own.
+fn adapter_with_handler() -> (Arc<JsonRpcAdapter>, TestBusinessHandler) {
     let handler = TestBusinessHandler::with_storage(InMemoryTaskStorage::new());
     let agent_info =
         SimpleAgentInfo::new("router-test".to_string(), "http://localhost".to_string());
-    Arc::new(
-        JsonRpcAdapter::with_handler(handler.clone(), agent_info).with_streaming_handler(handler),
-    )
+    let adapter = Arc::new(
+        JsonRpcAdapter::with_handler(handler.clone(), agent_info)
+            .with_streaming_handler(handler.clone()),
+    );
+    (adapter, handler)
 }
 
 fn send_message_body(task_id: &str) -> Value {
@@ -241,8 +251,19 @@ async fn rest_send_then_get_round_trips() {
 
 #[tokio::test]
 async fn rest_cancel_slash_alias_works() {
-    let a = adapter();
-    rest_call(&a, post("/message:send", &send_message_body("t2"))).await;
+    // A task still in flight: the echo handler finishes what it is sent, and a
+    // completed task is correctly not cancelable — which would make this route
+    // test fail for a reason that has nothing to do with routing.
+    let (a, handler) = adapter_with_handler();
+    let id: TaskId = "t2".parse().unwrap();
+    handler
+        .create(&id, &"ctx".parse::<ContextId>().unwrap())
+        .await
+        .unwrap();
+    handler
+        .update_status(&id, TaskState::Working, None)
+        .await
+        .unwrap();
 
     // The canonical `/tasks/{id}:cancel` colon form is unroutable in matchit;
     // the adapter serves the slash alias instead. Official clients accept both.

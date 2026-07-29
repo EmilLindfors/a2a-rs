@@ -48,12 +48,20 @@ transport negotiation is out of scope for the CLI.
 a2acli card                                   # fetch & print the agent card
 a2acli send "hello"                           # send to a fresh (uuid) task id
 a2acli send "hello" --task-id t1              # send to a specific task
+a2acli send "hello" --no-wait                 # don't wait for the reply
+a2acli send "hello" --wait-timeout 120        # wait longer than the 30s default
 a2acli get t1                                 # fetch a task by id
 a2acli cancel t1                              # cancel a task
 a2acli stream t1                              # subscribe to task updates
 a2acli stream t1 --resilient                  # reconnect with backoff on disconnect
 a2acli stream t1 --resilient --last-event-id 42   # resume from an event id
 ```
+
+`send` waits for the agent's reply. Many agents answer *asynchronously* — the
+call returns `working` and the answer lands on a later `get` — so it polls until
+the task finishes or stops for input, then prints what the agent said. If the
+budget runs out it prints the task as it stands plus how to follow it.
+`--no-wait` returns the acknowledgement immediately.
 
 Add `--json` to any command for machine-readable output (JSON object for
 `card`/`get`/`send`/`cancel`; one JSON envelope per line for `stream`).

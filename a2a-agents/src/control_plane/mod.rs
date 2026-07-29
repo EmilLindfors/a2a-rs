@@ -30,7 +30,7 @@ mod wire;
 pub use auth::ControlPlaneAuth;
 pub use client::{ControlPlaneClient, ControlPlaneClientError};
 pub use http::control_plane_router;
-pub use wire::{AgentLogs, AgentStatus, ApiErrorBody, DeployRequest, LogsQuery};
+pub use wire::{AgentLogs, AgentStatus, ApiErrorBody, DeployRequest, ListQuery, LogsQuery};
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,6 +75,21 @@ pub enum ControlPlaneError {
     /// The agent card could not be built from the config.
     #[error("could not build agent card: {0}")]
     Card(String),
+
+    /// The port this agent would bind is already claimed by a different agent in
+    /// the live fleet. Same rule as
+    /// [`FleetConflict::Port`](crate::core::FleetConflict::Port), checked against
+    /// what is deployed rather than within one submission.
+    #[error(
+        "port {port} is already claimed by agent '{holder}' — change this agent's \
+         `[server] http_port`, or stop '{holder}' first"
+    )]
+    PortInUse {
+        /// The contested port.
+        port: u16,
+        /// The id of the agent already holding it.
+        holder: String,
+    },
 }
 
 /// A submitted config that has passed policy checks **and** parsed cleanly.
@@ -174,6 +189,10 @@ impl ControlPlane {
     /// the runtime reads). So the service orchestrates ports + pure config
     /// without itself touching the filesystem (hex rule 9a), and the TOML is
     /// parsed exactly once, during `prepare`.
+    ///
+    /// Deploying onto a port another agent already holds is
+    /// [`PortInUse`](ControlPlaneError::PortInUse), not a started agent — see
+    /// [`check_port_free`](Self::check_port_free).
     pub async fn deploy(
         &self,
         prepared: PreparedDeploy,
@@ -187,6 +206,8 @@ impl ControlPlane {
             endpoint: config.agent_url(),
         };
         let endpoint = spec.endpoint.clone();
+
+        self.check_port_free(&spec).await?;
 
         // Build the card before mutating any state, so a bad card fails the
         // deploy without leaving a half-started agent behind.
@@ -205,6 +226,40 @@ impl ControlPlane {
             endpoint,
             health,
         })
+    }
+
+    /// Reject a spec whose port a *different* live agent already holds.
+    ///
+    /// Without it, the second deploy reports `ok … healthy` and is wrong twice
+    /// over: the agent's process loses the bind race and dies, while the card
+    /// probe — which only knows the endpoint — answers from the agent that won
+    /// it, so the deploy looks successful and `ps` admits the truth only later.
+    /// `a2a up` runs the same rule over a fleet file before anything binds; here
+    /// it runs against the live fleet, which is the only thing the deploying
+    /// client cannot see.
+    ///
+    /// A stopped agent holds nothing, so its (still-listed) entry never blocks a
+    /// deploy. Redeploying the *same* id is not a conflict — that falls through
+    /// to the runtime, which answers
+    /// [`AlreadyRunning`](RuntimeError::AlreadyRunning).
+    async fn check_port_free(&self, spec: &AgentSpec) -> Result<(), ControlPlaneError> {
+        // Port 0 means "no HTTP server" (MCP-only agents), so it never clashes —
+        // the same exemption `fleet_conflicts` makes.
+        let Some(port) = endpoint_port(&spec.endpoint).filter(|port| *port != 0) else {
+            return Ok(());
+        };
+        for status in self.runtime.list().await? {
+            if status.id != spec.id
+                && status.health != RuntimeHealth::Stopped
+                && endpoint_port(&status.endpoint) == Some(port)
+            {
+                return Err(ControlPlaneError::PortInUse {
+                    port,
+                    holder: status.id.to_string(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Re-adopt the agents this platform was already running, and put the ones
@@ -292,17 +347,18 @@ impl ControlPlane {
         Ok(self.runtime.logs(id, tail).await?)
     }
 
-    /// List every deployed agent with its endpoint and health, ordered by id.
+    /// List deployed agents with their endpoint and health, ordered by id.
     ///
     /// Sorted because a runtime's own order is its map's, i.e. arbitrary and
     /// unstable between calls — which makes `a2a ps` shuffle between runs and
     /// makes the API's response undiffable for no reason.
-    pub async fn list(&self) -> Result<Vec<DeployedAgent>, ControlPlaneError> {
+    pub async fn list(&self, filter: ListFilter) -> Result<Vec<DeployedAgent>, ControlPlaneError> {
         let mut agents: Vec<DeployedAgent> = self
             .runtime
             .list()
             .await?
             .into_iter()
+            .filter(|s| filter.includes(s.health))
             .map(|s| DeployedAgent {
                 id: s.id.to_string(),
                 endpoint: s.endpoint,
@@ -312,6 +368,44 @@ impl ControlPlane {
         agents.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(agents)
     }
+}
+
+/// Which deployed agents a listing includes.
+///
+/// A runtime keeps an entry after the agent stops — deliberately, because that
+/// is when its log matters most and `logs` still answers for it. But an
+/// undeployed agent that keeps appearing in `a2a ps` reads as one that failed to
+/// go away, so a listing hides them unless asked. Same split as `docker ps` and
+/// `docker ps -a`, and for the same reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ListFilter {
+    /// Only agents the runtime is still holding open: provisioned, healthy, or
+    /// unhealthy.
+    #[default]
+    Live,
+    /// Everything the runtime knows about, stopped agents included.
+    All,
+}
+
+impl ListFilter {
+    /// Whether an agent in this health belongs in the listing.
+    fn includes(self, health: RuntimeHealth) -> bool {
+        self == ListFilter::All || health != RuntimeHealth::Stopped
+    }
+}
+
+/// The TCP port an endpoint binds — `http://0.0.0.0:9090` → `9090`.
+///
+/// The port, not the whole endpoint, is what two agents contend for: they
+/// collide on one host whether they declared `0.0.0.0` or `127.0.0.1`. `None`
+/// for an endpoint carrying no port, which cannot collide with a known one.
+fn endpoint_port(endpoint: &str) -> Option<u16> {
+    endpoint
+        .rsplit(':')
+        .next()?
+        .trim_end_matches('/')
+        .parse()
+        .ok()
 }
 
 #[cfg(test)]
@@ -400,7 +494,7 @@ name = "Echo"
         let id = AgentId::from_name("Deploy Me");
         assert_eq!(cp.status(&id).await.unwrap(), RuntimeHealth::Healthy);
         assert!(registry.get(&id).await.unwrap().is_some());
-        assert_eq!(cp.list().await.unwrap().len(), 1);
+        assert_eq!(cp.list(ListFilter::All).await.unwrap().len(), 1);
 
         // Undeploy stops it and removes it from discovery.
         cp.undeploy(&id).await.expect("undeploy");
@@ -490,7 +584,7 @@ http_port = 8125
         let after = ControlPlane::new(runtime, registry.clone(), cards);
         let id = AgentId::from_name("Survivor");
         assert!(
-            after.list().await.unwrap().len() == 1,
+            after.list(ListFilter::All).await.unwrap().len() == 1,
             "the runtime half survives on its own"
         );
         assert!(
@@ -531,7 +625,7 @@ http_port = 8125
         // Two recoveries in a row leave exactly one of everything.
         cp.recover().await.expect("first recover");
         cp.recover().await.expect("second recover");
-        assert_eq!(cp.list().await.unwrap().len(), 1);
+        assert_eq!(cp.list(ListFilter::All).await.unwrap().len(), 1);
         assert_eq!(registry.list().await.unwrap().len(), 1);
     }
 
@@ -580,6 +674,98 @@ http_port = 8125
             Arc::new(InMemoryCardSource::new()),
         );
         assert_eq!(cp.recover().await.unwrap(), Recovered::Ephemeral);
+    }
+
+    /// The silent-wrong this check exists to remove: the second agent loses the
+    /// bind race, but the card probe hits the *first* agent's endpoint and calls
+    /// the deploy healthy. Only the control plane can see the live fleet, so
+    /// `up`'s pre-flight rule has to run here too.
+    #[tokio::test]
+    async fn deploying_onto_a_held_port_is_rejected() {
+        let (cp, registry) = control_plane();
+        let first = TempConfig::echo("First Up", 8130);
+        let second = TempConfig::echo("Second Up", 8130);
+
+        cp.deploy(prepared(&cp, &first), first.path.clone())
+            .await
+            .expect("the first agent takes the port");
+
+        let err = cp
+            .deploy(prepared(&cp, &second), second.path.clone())
+            .await
+            .expect_err("the second must not be reported as deployed");
+        assert!(
+            matches!(&err, ControlPlaneError::PortInUse { port: 8130, holder } if holder == "first-up"),
+            "got: {err:?}"
+        );
+
+        // Rejected *before* provisioning: nothing half-deployed is left behind.
+        assert_eq!(cp.list(ListFilter::All).await.unwrap().len(), 1);
+        assert!(
+            registry
+                .get(&AgentId::from("second-up"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Stopping the holder frees the port, even though its entry is still listed.
+    #[tokio::test]
+    async fn a_stopped_agent_does_not_hold_its_port() {
+        let (cp, _registry) = control_plane();
+        let first = TempConfig::echo("Vacating", 8131);
+        let second = TempConfig::echo("Moving In", 8131);
+
+        cp.deploy(prepared(&cp, &first), first.path.clone())
+            .await
+            .expect("deploy");
+        cp.undeploy(&AgentId::from("vacating"))
+            .await
+            .expect("undeploy");
+
+        cp.deploy(prepared(&cp, &second), second.path.clone())
+            .await
+            .expect("the port is free once its holder is stopped");
+    }
+
+    /// `http_port = 0` is "serve no HTTP", so any number of such agents coexist —
+    /// the same exemption `fleet_conflicts` makes.
+    #[tokio::test]
+    async fn port_zero_agents_never_conflict() {
+        let (cp, _registry) = control_plane();
+        for name in ["Mcp One", "Mcp Two"] {
+            let raw = format!(
+                r#"
+[agent]
+name = "{name}"
+
+[handler]
+type = "echo"
+
+[server]
+host = "127.0.0.1"
+http_port = 0
+
+[features.mcp_server]
+enabled = true
+"#
+            );
+            let prepared = cp.prepare(&raw).expect("prepare");
+            cp.deploy(prepared, PathBuf::from("unused.toml"))
+                .await
+                .expect("port 0 never collides");
+        }
+        assert_eq!(cp.list(ListFilter::All).await.unwrap().len(), 2);
+    }
+
+    #[test]
+    fn endpoint_ports_are_read_off_the_url() {
+        assert_eq!(endpoint_port("http://127.0.0.1:9090"), Some(9090));
+        assert_eq!(endpoint_port("http://0.0.0.0:9090/"), Some(9090));
+        assert_eq!(endpoint_port("http://[::1]:9090"), Some(9090));
+        // No port to contend for, so nothing to compare against.
+        assert_eq!(endpoint_port("http://agent.internal"), None);
     }
 
     #[tokio::test]

@@ -19,6 +19,6 @@ name = "Weather Demo"
 [[agents]]
 config = "registry_worker.toml"
 
-# The router. Finds the worker by skill and delegates to it. On :9090.
+# The router. Finds the worker by skill and delegates to it. On :8090.
 [[agents]]
 config = "registry_orchestrator.toml"

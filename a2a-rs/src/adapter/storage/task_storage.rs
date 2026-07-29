@@ -18,7 +18,7 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
     A2AError, ContextId, Message, Task, TaskId, TaskPushNotificationConfig, TaskState,
-    VersionedTask,
+    TaskStateExt, VersionedTask,
 };
 use crate::port::{
     AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle, AsyncTaskQuery,
@@ -180,10 +180,13 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
 
         let mut updated_task = task.clone();
 
-        // Only working tasks can be canceled
-        if updated_task.status.state != TaskState::Working {
+        // Anything that has not finished can be canceled — a queued
+        // (`Submitted`) task most of all, and an `InputRequired` one, where
+        // cancelling is how a client says "never mind". See
+        // `TaskState::is_cancelable`.
+        if !updated_task.status.state.is_cancelable() {
             return Err(A2AError::TaskNotCancelable(format!(
-                "Task {} is in state {:?} and cannot be canceled",
+                "Task {} has already finished in state {:?} and cannot be canceled",
                 task_id, updated_task.status.state
             )));
         }

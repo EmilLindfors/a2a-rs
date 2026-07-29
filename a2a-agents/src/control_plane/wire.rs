@@ -52,6 +52,15 @@ pub struct LogsQuery {
     pub tail: Option<usize>,
 }
 
+/// `GET /agents` query parameters.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ListQuery {
+    /// Include stopped agents. Defaults to false, so a listing shows what is
+    /// actually running — the same choice `docker ps` makes.
+    #[serde(default)]
+    pub all: bool,
+}
+
 /// The body every failing route returns.
 ///
 /// A single `error` string on purpose: the client turns it back into the text of

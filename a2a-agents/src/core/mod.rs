@@ -41,7 +41,10 @@ pub use config::{
     RemoteAgentConfig, ServerConfig, StorageConfig, referenced_env_vars,
 };
 pub use doctor::{Requirement, requirements};
-pub use fleet::{FleetConfig, FleetConflict, FleetMember, fleet_conflicts};
+pub use fleet::{
+    FleetConfig, FleetConflict, FleetMember, fleet_conflicts, fleet_header, member_block,
+    member_path,
+};
 #[cfg(feature = "mcp-client")]
 pub use mcp_client::{McpClientError, McpClientManager};
 pub use server::{AgentServer, ServerError};

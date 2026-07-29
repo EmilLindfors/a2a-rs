@@ -23,11 +23,11 @@ use futures::{Stream, StreamExt, stream};
 
 use a2a_rs::adapter::{InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router};
 use a2a_rs::domain::{
-    A2AError, AgentCard, AgentInterface, Message, TaskArtifactUpdateEvent,
+    A2AError, AgentCard, AgentInterface, ContextId, Message, TaskArtifactUpdateEvent, TaskId,
     TaskPushNotificationConfig, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
-use a2a_rs::port::AsyncStreamingHandler;
 use a2a_rs::port::streaming_handler::{SeqEvent, Subscriber};
+use a2a_rs::port::{AsyncStreamingHandler, AsyncTaskLifecycle};
 use a2a_rs::{JsonRpcClient, StreamItem, Transport, connect, default_registry};
 
 // ---------------------------------------------------------------------------
@@ -105,10 +105,16 @@ impl AsyncStreamingHandler for EmptyStreamHandler {
 /// Spawn the JSON-RPC server (with an agent-card route) on an ephemeral port and
 /// return its base URL.
 async fn spawn_server() -> String {
+    spawn_server_with_handler().await.0
+}
+
+/// As [`spawn_server`], also handing back the handler — the seam a test needs to
+/// put a task into a state the wire cannot reach on its own.
+async fn spawn_server_with_handler() -> (String, TestBusinessHandler) {
     let handler = TestBusinessHandler::with_storage(InMemoryTaskStorage::new());
     let agent_info = SimpleAgentInfo::new("interop".to_string(), "http://localhost".to_string());
     let adapter = Arc::new(
-        JsonRpcAdapter::with_handler(handler, agent_info)
+        JsonRpcAdapter::with_handler(handler.clone(), agent_info)
             .with_streaming_handler(EmptyStreamHandler),
     );
 
@@ -137,7 +143,7 @@ async fn spawn_server() -> String {
         axum::serve(listener, app).await.unwrap();
     });
 
-    base
+    (base, handler)
 }
 
 fn message() -> Message {
@@ -271,7 +277,7 @@ async fn subscribe_resumes_from_last_event_id() {
 
 #[tokio::test]
 async fn unary_roundtrip_send_get_list_cancel() {
-    let base = spawn_server().await;
+    let (base, handler) = spawn_server_with_handler().await;
     let client = JsonRpcClient::new(base);
 
     // send → returns a task
@@ -281,6 +287,11 @@ async fn unary_roundtrip_send_get_list_cancel() {
         .unwrap();
     let id = task.id.clone();
     assert!(!id.is_empty());
+    assert_eq!(
+        task.status.state,
+        TaskState::Completed,
+        "the echo agent finishes what it is sent"
+    );
 
     // get → same task
     let got = client.get_task(&id, None).await.unwrap();
@@ -293,9 +304,44 @@ async fn unary_roundtrip_send_get_list_cancel() {
         "listed tasks should contain {id}"
     );
 
-    // cancel → same task
-    let canceled = client.cancel_task(&id).await.unwrap();
-    assert_eq!(canceled.id, id);
+    // cancel → a task still in flight. The one above is already `Completed`, and
+    // a completed task is correctly *not* cancelable, so cancelling it would
+    // exercise the error path rather than `cancel_task`'s success decoding.
+    let pending: TaskId = "task-pending".parse().unwrap();
+    handler
+        .create(&pending, &"ctx".parse::<ContextId>().unwrap())
+        .await
+        .unwrap();
+    handler
+        .update_status(&pending, TaskState::Working, None)
+        .await
+        .unwrap();
+    let canceled = client.cancel_task(pending.as_str()).await.unwrap();
+    assert_eq!(canceled.id, "task-pending");
+    assert_eq!(canceled.status.state, TaskState::Canceled);
+}
+
+/// The other half of that pair: a finished task refuses cancellation, and the
+/// refusal survives the trip back with its typed details intact.
+#[tokio::test]
+async fn cancelling_a_completed_task_is_refused_over_the_wire() {
+    let base = spawn_server().await;
+    let client = JsonRpcClient::new(base);
+
+    client
+        .send_task_message("task-done", &message(), None, None)
+        .await
+        .unwrap();
+
+    let err = client
+        .cancel_task("task-done")
+        .await
+        .expect_err("a completed task cannot be canceled");
+    let rendered = format!("{err:?}");
+    assert!(
+        rendered.contains("TASK_NOT_CANCELABLE"),
+        "the reason has to survive the trip: {rendered}"
+    );
 }
 
 #[tokio::test]

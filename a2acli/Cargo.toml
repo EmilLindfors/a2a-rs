@@ -23,7 +23,7 @@ a2a-rs = { path = "../a2a-rs", version = "0.4", default-features = false, featur
     "tracing",
 ] }
 clap = { version = "4.4", features = ["derive", "env"] }
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }
 anyhow = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }

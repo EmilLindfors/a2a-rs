@@ -20,14 +20,14 @@ WORKDIR /src
 # Copy the whole workspace (the a2a binary depends on several in-workspace crates).
 COPY . .
 
-# Build just the `a2a` binary with the features its subcommands need. This must
-# stay in step with the binary's `required-features` in Cargo.toml — cargo
-# refuses to build a named bin whose features are not all enabled, so a feature
-# added there and not here makes this image unbuildable. Spelled out in full
-# rather than relying on the default set, so it fails loudly on a rename instead
-# of quietly depending on what `default` happens to include.
-RUN cargo build --release -p a2a-agents --bin a2a \
-    --features reimbursement-agent,llm,mcp-server,schema
+# Build just the `a2a` binary. Its `required-features` are the crate defaults,
+# so no `--features` is needed — and keeping it that way means this image builds
+# exactly what `cargo install a2a-agents` produces, rather than a variant only
+# this Dockerfile knows how to make.
+#
+# The reimbursement *sample* agent is deliberately absent: this image runs
+# whatever configs get deployed to it, and a demo handler is not one of them.
+RUN cargo build --release -p a2a-agents --bin a2a
 
 # ---- runtime ---------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime

@@ -9,10 +9,12 @@
 //! `a2a-rs/examples/jsonrpc_server.rs`, or point the official `a2aproject/a2acli`
 //! at the same server, to validate wire-compat against the canonical SDKs.
 
+use std::borrow::Cow;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
-use a2a_rs::domain::{A2AError, AgentCard, Message, Task};
+use a2a_rs::domain::{A2AError, AgentCard, Message, Task, TaskStateExt};
 use a2a_rs::{
     HttpClient, JsonRpcClient, RetryPolicy, StreamEvent, StreamItem, Transport, subscribe_resilient,
 };
@@ -90,6 +92,17 @@ enum Command {
         /// Number of history messages to return on the resulting task.
         #[arg(long)]
         history_length: Option<u32>,
+        /// Print the acknowledgement without waiting for the agent's reply.
+        ///
+        /// Agents that answer asynchronously (the `llm` handler, for one) return
+        /// `working` here and deliver the reply on a later `get`.
+        #[arg(long)]
+        no_wait: bool,
+        /// Seconds to wait for the agent to finish before giving up on it.
+        ///
+        /// Distinct from `--timeout`, which bounds a single request.
+        #[arg(long, default_value_t = 30, value_name = "SECS")]
+        wait_timeout: u64,
     },
 
     /// Get a task by id.
@@ -149,17 +162,34 @@ async fn main() -> anyhow::Result<()> {
             task_id,
             session_id,
             history_length,
+            no_wait,
+            wait_timeout,
         } => {
             let transport = build_transport(&cli, &url).await?;
             let task_id = task_id
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let message = Message::user_text(text.clone(), uuid::Uuid::new_v4().to_string());
-            let task = transport
+            let mut task = transport
                 .send_task_message(&task_id, &message, session_id.as_deref(), *history_length)
                 .await
                 .context("sending message")?;
+            if !no_wait && !is_settled(&task) {
+                task = poll_until_settled(
+                    transport.as_ref(),
+                    &task_id,
+                    *history_length,
+                    Duration::from_secs(*wait_timeout),
+                )
+                .await?;
+            }
             emit_task(cli.json, &task)?;
+            if !cli.json && !is_settled(&task) {
+                println!();
+                println!("the agent is still working; follow it with:");
+                println!("  a2acli --url {url} stream {task_id}");
+                println!("  a2acli --url {url} get {task_id}");
+            }
         }
 
         Command::Get {
@@ -253,6 +283,51 @@ async fn build_transport(cli: &Cli, url: &str) -> anyhow::Result<Arc<dyn Transpo
     Ok(Arc::from(transport))
 }
 
+/// Whether the agent has stopped making progress on its own — either finished,
+/// or waiting on the caller. Anything else means a reply is still coming.
+///
+fn is_settled(task: &Task) -> bool {
+    task.status.state.is_terminal() || task.status.state.is_interrupted()
+}
+
+/// Poll `get_task` until the task settles or the budget runs out.
+///
+/// `send_task_message` returns as soon as the agent accepts the message, so an
+/// agent that answers asynchronously reports `working` with no reply attached.
+/// Without this, a freshly scaffolded `llm` agent looks like it did nothing.
+async fn poll_until_settled(
+    transport: &dyn Transport,
+    task_id: &str,
+    history_length: Option<u32>,
+    budget: Duration,
+) -> anyhow::Result<Task> {
+    const INTERVAL: Duration = Duration::from_millis(250);
+    let deadline = tokio::time::Instant::now() + budget;
+    let mut announced = false;
+
+    loop {
+        let now = tokio::time::Instant::now();
+        tokio::time::sleep(INTERVAL.min(deadline.saturating_duration_since(now))).await;
+        let task = transport
+            .get_task(task_id, history_length)
+            .await
+            .context("polling task")?;
+        if is_settled(&task) || tokio::time::Instant::now() >= deadline {
+            return Ok(task);
+        }
+        // Straight to stderr rather than `tracing`: the default filter is `warn`,
+        // so a logged line would never reach the person waiting on the prompt —
+        // and the report on stdout has to stay greppable.
+        if !announced {
+            announced = true;
+            eprintln!(
+                "waiting up to {}s for the agent to reply (--no-wait to skip)...",
+                budget.as_secs()
+            );
+        }
+    }
+}
+
 // --- output -----------------------------------------------------------------
 //
 // Human output is derived from the serialized (ProtoJSON, camelCase) value with
@@ -304,7 +379,27 @@ fn emit_task(json: bool, task: &Task) -> anyhow::Result<()> {
     if let Some(ctx) = str_field(&value, "contextId") {
         println!("  context: {ctx}");
     }
-    println!("  state:   {}", or_dash(task_state(&value)));
+    println!("  state:   {}", task_state_label(&value));
+
+    // The agent's answer lives in the status message and in any artifacts.
+    // Printing only id and state made a working agent look like a broken one.
+    if let Some(reply) = value
+        .get("status")
+        .and_then(|status| status.get("message"))
+        .and_then(parts_text)
+    {
+        println!();
+        println!("{reply}");
+    }
+    for artifact in array_field(&value, "artifacts").into_iter().flatten() {
+        let Some(body) = parts_text(artifact) else {
+            continue;
+        };
+        let name = str_field(artifact, "name").or_else(|| str_field(artifact, "artifactId"));
+        println!();
+        println!("--- {} ---", or_dash(name));
+        println!("{body}");
+    }
     Ok(())
 }
 
@@ -330,15 +425,24 @@ fn emit_event(json: bool, event: &StreamEvent) -> anyhow::Result<()> {
         "task" => println!(
             "{id}● task {} [{}]",
             or_dash(str_field(&payload, "id")),
-            or_dash(task_state(&payload)),
+            task_state_label(&payload),
         ),
-        "status" => println!("{id}◌ status [{}]", or_dash(task_state(&payload))),
+        "status" => {
+            println!("{id}◌ status [{}]", task_state_label(&payload));
+            print_indented(
+                payload
+                    .get("status")
+                    .and_then(|status| status.get("message"))
+                    .and_then(parts_text),
+            );
+        }
         _ => {
             let artifact = payload.get("artifact");
             let name = artifact
                 .and_then(|a| str_field(a, "name"))
                 .or_else(|| artifact.and_then(|a| str_field(a, "artifactId")));
             println!("{id}▣ artifact {}", or_dash(name));
+            print_indented(artifact.and_then(parts_text));
         }
     }
     Ok(())
@@ -360,9 +464,52 @@ fn array_field<'a>(value: &'a Value, key: &str) -> Option<&'a Vec<Value>> {
         .filter(|a| !a.is_empty())
 }
 
-/// A task's `status.state`, e.g. `"TASK_STATE_SUBMITTED"`.
+/// A task's `status.state` as it appears on the wire, e.g. `"TASK_STATE_SUBMITTED"`.
 fn task_state(value: &Value) -> Option<&str> {
     value.get("status").and_then(|s| str_field(s, "state"))
+}
+
+/// The same state as a person would say it: `TASK_STATE_INPUT_REQUIRED` reads
+/// `input-required`. The proto name belongs on the wire and in `--json`.
+fn task_state_label(value: &Value) -> String {
+    let Some(state) = task_state(value) else {
+        return "-".to_string();
+    };
+    state
+        .strip_prefix("TASK_STATE_")
+        .unwrap_or(state)
+        .to_ascii_lowercase()
+        .replace('_', "-")
+}
+
+/// The text of a `parts[]`-carrying value (a message or an artifact), with
+/// non-text parts named rather than dropped. `None` when there is nothing to show.
+fn parts_text(container: &Value) -> Option<String> {
+    let rendered: Vec<Cow<'_, str>> = array_field(container, "parts")?
+        .iter()
+        .map(render_part)
+        .collect();
+    Some(rendered.join("\n"))
+}
+
+/// Text parts verbatim; everything else named in brackets, so a file part is
+/// never mistaken for the agent having said its filename.
+fn render_part(part: &Value) -> Cow<'_, str> {
+    if let Some(text) = str_field(part, "text") {
+        return Cow::Borrowed(text);
+    }
+    let what = str_field(part, "filename")
+        .or_else(|| str_field(part, "url"))
+        .or_else(|| str_field(part, "mediaType"))
+        .unwrap_or("non-text content");
+    Cow::Owned(format!("[{what}]"))
+}
+
+/// Print a block of agent text under the line it belongs to, or nothing at all.
+fn print_indented(text: Option<String>) {
+    for line in text.iter().flat_map(|text| text.lines()) {
+        println!("   {line}");
+    }
 }
 
 fn or_dash(value: Option<&str>) -> &str {

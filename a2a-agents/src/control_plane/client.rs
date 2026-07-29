@@ -13,8 +13,8 @@
 use reqwest::StatusCode;
 use thiserror::Error;
 
-use super::DeployedAgent;
-use super::wire::{AgentLogs, AgentStatus, ApiErrorBody, DeployRequest};
+use super::wire::{AgentLogs, AgentStatus, ApiErrorBody, DeployRequest, ListQuery};
+use super::{DeployedAgent, ListFilter};
 use crate::registry::AgentId;
 
 /// Why a control-plane call failed.
@@ -129,9 +129,19 @@ impl ControlPlaneClient {
         self.send(request, None).await
     }
 
-    /// Every deployed agent with its endpoint and current health.
-    pub async fn list(&self) -> Result<Vec<DeployedAgent>, ControlPlaneClientError> {
-        self.send(self.http.get(self.url("/agents")), None).await
+    /// Deployed agents with their endpoint and current health.
+    ///
+    /// [`ListFilter::Live`] hides agents that have been stopped; the control
+    /// plane keeps their entries (their logs are still readable) but they are
+    /// not part of what is running.
+    pub async fn list(
+        &self,
+        filter: ListFilter,
+    ) -> Result<Vec<DeployedAgent>, ControlPlaneClientError> {
+        let request = self.http.get(self.url("/agents")).query(&ListQuery {
+            all: filter == ListFilter::All,
+        });
+        self.send(request, None).await
     }
 
     /// One agent's current health.

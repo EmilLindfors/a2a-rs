@@ -52,8 +52,8 @@ pub trait Responder: Send + Sync {
     ) -> Result<(Message, TaskState), A2AError>;
 }
 
-/// The reference [`Responder`]: echoes the incoming text back and leaves the
-/// task in `Working`. Useful for smoke tests, examples, and as the default for
+/// The reference [`Responder`]: echoes the incoming text back and completes the
+/// task. Useful for smoke tests, examples, and as the default for
 /// [`ResponderMessageHandler::echo`].
 #[derive(Clone, Debug, Default)]
 pub struct EchoResponder;
@@ -80,9 +80,13 @@ impl Responder for EchoResponder {
             .context_id(message.context_id.clone())
             .build();
 
-        // The reference handler keeps the task Working; real agents pick a
-        // terminal state appropriate to their processing.
-        Ok((reply, TaskState::Working))
+        // An echo has fully processed the message the moment it has the reply,
+        // so `Completed` is the only honest state. `Working` with the answer
+        // already attached is a wire-level lie: a conformant client that waits
+        // for a terminal state waits forever, which is what every A2A client
+        // pointed at `examples/jsonrpc_server` did. Agents that genuinely
+        // acknowledge now and finish later implement `AsyncMessageHandler`.
+        Ok((reply, TaskState::Completed))
     }
 }
 
@@ -190,6 +194,7 @@ mod tests {
     use super::*;
     use crate::adapter::storage::InMemoryTaskStorage;
     use crate::adapter::streaming::InMemoryStreamingHandler;
+    use crate::domain::TaskStateExt;
 
     /// A responder that ignores the input and drives the task to a terminal
     /// state with a fixed reply — proof that the injected responder, not the
@@ -233,5 +238,33 @@ mod tests {
                 .any(|t| t == "done")
         });
         assert!(replied, "responder reply should be in task history");
+    }
+
+    /// The reference responder has to reach a terminal state. A client that
+    /// waits for one — which is every conformant A2A client, and `a2acli send`
+    /// by default — hangs against an agent that attaches its answer and keeps
+    /// saying `Working`.
+    #[tokio::test]
+    async fn the_echo_responder_completes_the_task() {
+        let storage = InMemoryTaskStorage::new();
+        let streaming = InMemoryStreamingHandler::new();
+        let push = storage.push_notifier();
+        let handler = ResponderMessageHandler::echo(storage, streaming, push);
+
+        let message = Message::user_text("ping".to_string(), "m1".to_string());
+        let task = handler.process_message("t1", &message, None).await.unwrap();
+
+        assert_eq!(task.status.state, TaskState::Completed);
+        assert!(task.status.state.is_terminal());
+        assert_eq!(
+            task.status
+                .message
+                .parts
+                .iter()
+                .filter_map(|p| p.get_text())
+                .collect::<Vec<_>>(),
+            ["Echo: ping"],
+            "the reply travels with the terminal status, not just in history"
+        );
     }
 }

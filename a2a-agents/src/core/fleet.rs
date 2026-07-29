@@ -120,6 +120,55 @@ impl FleetConfig {
     }
 }
 
+/// The `config` value to record in a fleet file for an agent config on disk —
+/// the inverse of [`FleetConfig::config_paths`].
+///
+/// Relative to the fleet file's directory whenever the config sits under it, so
+/// the pair stays portable and reviewable. Anything else is absolutized rather
+/// than written as-is: a relative path that does not resolve against the fleet
+/// file's directory would silently point somewhere else the moment the fleet is
+/// run from another directory, which is the one property `config_paths` exists
+/// to guarantee.
+///
+/// Both paths are taken as the caller sees them, so `cwd` is what a relative
+/// path resolves against.
+pub fn member_path(fleet_path: &Path, config_path: &Path, cwd: &Path) -> String {
+    let base = fleet_path.parent().unwrap_or_else(|| Path::new(""));
+    if let Ok(relative) = config_path.strip_prefix(base) {
+        return relative.to_string_lossy().replace('\\', "/");
+    }
+    let absolute = if config_path.is_absolute() {
+        config_path.to_path_buf()
+    } else {
+        cwd.join(config_path)
+    };
+    absolute.to_string_lossy().replace('\\', "/")
+}
+
+/// Render a `[[agents]]` block to append to a fleet file.
+///
+/// Text, not `toml::to_string`: re-serializing would drop the comments and
+/// ordering a hand-written fleet file carries, and a scaffolding step that
+/// reformats the user's file is a scaffolding step nobody runs twice.
+pub fn member_block(config: &str) -> String {
+    format!("\n[[agents]]\nconfig = {config:?}\n")
+}
+
+/// The header a scaffolded fleet file starts with, before its first member.
+pub fn fleet_header(name: &str) -> String {
+    format!(
+        "# A fleet: the agents that make up one system, in one file.\n\
+         #\n\
+         #   a2a validate --fleet <this file>   # each member, plus the rules between them\n\
+         #   a2a up -f <this file>              # run them all\n\
+         #\n\
+         # Member paths resolve against this file's directory, so the fleet runs\n\
+         # from anywhere.\n\
+         \n\
+         name = {name:?}\n"
+    )
+}
+
 /// A problem that exists only *between* fleet members, so no single
 /// [`AgentConfig`] can detect it.
 ///
@@ -320,6 +369,53 @@ mod tests {
 
     fn absolute(name: &str) -> PathBuf {
         std::env::temp_dir().join(name)
+    }
+
+    /// The round trip that makes a scaffolded fleet portable: what `member_path`
+    /// records has to be what `config_paths` resolves back to.
+    #[test]
+    fn a_recorded_member_resolves_back_to_the_config_it_named() {
+        let cwd = Path::new("/work");
+        for (fleet, config) in [
+            ("fleet.toml", "weather.toml"),
+            ("demo/fleet.toml", "demo/weather.toml"),
+            ("demo/fleet.toml", "demo/nested/billing.toml"),
+        ] {
+            let member = member_path(Path::new(fleet), Path::new(config), cwd);
+            let parsed = FleetConfig::from_toml(&format!(
+                "{}{}",
+                fleet_header("Test"),
+                member_block(&member)
+            ))
+            .expect("a scaffolded fleet parses");
+            assert_eq!(
+                parsed.config_paths(Path::new(fleet)),
+                [PathBuf::from(config)],
+                "member {member:?} for fleet {fleet:?}"
+            );
+        }
+    }
+
+    /// A config that is not under the fleet file's directory cannot be recorded
+    /// relative to it, and writing it as-is would resolve somewhere else the
+    /// moment the fleet ran from another directory. Absolutize instead.
+    #[test]
+    fn a_config_outside_the_fleets_directory_is_recorded_absolutely() {
+        let member = member_path(
+            Path::new("demo/fleet.toml"),
+            Path::new("elsewhere/weather.toml"),
+            Path::new("/work"),
+        );
+        assert_eq!(member, "/work/elsewhere/weather.toml");
+        assert!(Path::new(&member).is_absolute() || cfg!(windows));
+    }
+
+    #[test]
+    fn a_scaffolded_fleet_header_is_a_valid_empty_fleet_once_a_member_is_added() {
+        let toml = format!("{}{}", fleet_header("My Fleet"), member_block("a.toml"));
+        let fleet = FleetConfig::from_toml(&toml).expect("parses");
+        assert_eq!(fleet.name.as_deref(), Some("My Fleet"));
+        assert_eq!(fleet.agents[0].config, "a.toml");
     }
 
     #[test]

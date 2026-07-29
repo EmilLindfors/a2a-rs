@@ -47,9 +47,14 @@ impl AgentTemplate {
     /// The port a scaffolded agent binds unless overridden. The orchestrator
     /// differs so it can run alongside an agent scaffolded from another template
     /// without a port clash — the common first multi-agent setup.
+    ///
+    /// Both stay in the 80xx band, clear of the control plane's `:9090`: an
+    /// orchestrator and a control plane are exactly the pair someone runs
+    /// together, and the collision was silent enough that the losing bind read
+    /// as the agent simply not answering.
     pub fn default_port(&self) -> u16 {
         match self {
-            AgentTemplate::Orchestrator => 9090,
+            AgentTemplate::Orchestrator => 8090,
             _ => 8080,
         }
     }

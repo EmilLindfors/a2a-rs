@@ -22,31 +22,28 @@ use a2a_rs::adapter::{JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router};
 use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState};
 use a2a_rs::{InMemoryStreamingHandler, InMemoryTaskStorage, JsonRpcClient, Transport};
 
-/// Echo responder that drives the task to a terminal `Completed` state (the
-/// built-in [`EchoResponder`] deliberately stays `Working`, which models the
-/// "acknowledge now, finish later" case — used by the timeout test below).
-struct CompletingEcho;
+/// A remote that acknowledges and then never finishes — the case the tool
+/// source's deadline exists for.
+///
+/// Spelled out rather than borrowed from a built-in: a test whose subject is
+/// "the peer never reaches a terminal state" should say so, not depend on some
+/// other type happening to behave that way.
+struct NeverFinishes;
 
 #[async_trait]
-impl Responder for CompletingEcho {
+impl Responder for NeverFinishes {
     async fn respond(
         &self,
-        message: &Message,
+        _message: &Message,
         task: &Task,
     ) -> Result<(Message, TaskState), A2AError> {
-        let echoed = message
-            .parts
-            .iter()
-            .filter_map(|p| p.get_text())
-            .collect::<Vec<_>>()
-            .join(" ");
         let reply = Message::builder()
             .role(Role::Agent)
-            .parts(vec![Part::text(format!("Echo: {echoed}"))])
+            .parts(vec![Part::text("still thinking".to_string())])
             .message_id(uuid::Uuid::new_v4().to_string())
             .task_id(task.id.clone())
             .build();
-        Ok((reply, TaskState::Completed))
+        Ok((reply, TaskState::Working))
     }
 }
 
@@ -81,7 +78,7 @@ fn tool_call(message: &str) -> ToolCall {
 
 #[tokio::test]
 async fn delegates_to_remote_agent_over_the_wire() {
-    let base = spawn_agent(CompletingEcho).await;
+    let base = spawn_agent(EchoResponder).await;
     let transport: Arc<dyn Transport> = Arc::new(JsonRpcClient::new(base));
     let source = A2aAgentToolSource::new("echo", "Echoes the input back.".to_string(), transport);
 
@@ -96,9 +93,9 @@ async fn delegates_to_remote_agent_over_the_wire() {
 
 #[tokio::test]
 async fn times_out_when_remote_never_reaches_terminal_state() {
-    // EchoResponder keeps the task Working forever, so the tool source must give
-    // up once its deadline elapses rather than hang.
-    let base = spawn_agent(EchoResponder).await;
+    // The peer never leaves `Working`, so the tool source must give up once its
+    // deadline elapses rather than hang.
+    let base = spawn_agent(NeverFinishes).await;
     let transport: Arc<dyn Transport> = Arc::new(JsonRpcClient::new(base));
     let source = A2aAgentToolSource::new("echo", "Echoes the input back.".to_string(), transport)
         .with_deadline(Duration::from_millis(400));

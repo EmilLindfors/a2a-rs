@@ -16,8 +16,8 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 
 use super::auth::ControlPlaneAuth;
-use super::wire::{AgentLogs, AgentStatus, ApiErrorBody, DeployRequest, LogsQuery};
-use super::{ControlPlane, ControlPlaneError, DeployedAgent};
+use super::wire::{AgentLogs, AgentStatus, ApiErrorBody, DeployRequest, ListQuery, LogsQuery};
+use super::{ControlPlane, ControlPlaneError, DeployedAgent, ListFilter};
 use crate::registry::AgentId;
 use crate::runtime::RuntimeError;
 
@@ -66,8 +66,16 @@ async fn deploy(
     Ok((StatusCode::CREATED, Json(deployed)))
 }
 
-async fn list(State(state): State<AppState>) -> Result<Json<Vec<DeployedAgent>>, ApiError> {
-    Ok(Json(state.cp.list().await?))
+async fn list(
+    State(state): State<AppState>,
+    Query(query): Query<ListQuery>,
+) -> Result<Json<Vec<DeployedAgent>>, ApiError> {
+    let filter = if query.all {
+        ListFilter::All
+    } else {
+        ListFilter::Live
+    };
+    Ok(Json(state.cp.list(filter).await?))
 }
 
 async fn status(
@@ -134,12 +142,22 @@ impl IntoResponse for ApiError {
             ApiError::Domain(ControlPlaneError::Runtime(RuntimeError::NotFound(_))) => {
                 StatusCode::NOT_FOUND
             }
-            ApiError::Domain(ControlPlaneError::Runtime(RuntimeError::AlreadyRunning(_))) => {
-                StatusCode::CONFLICT
-            }
-            ApiError::Domain(ControlPlaneError::Config(_) | ControlPlaneError::Card(_)) => {
-                StatusCode::BAD_REQUEST
-            }
+            ApiError::Domain(
+                ControlPlaneError::Runtime(RuntimeError::AlreadyRunning(_))
+                | ControlPlaneError::PortInUse { .. },
+            ) => StatusCode::CONFLICT,
+            // Everything the *caller* got wrong, including a config naming
+            // secrets the operator has not permitted. `DisallowedEnv` carries a
+            // fully actionable message ("permit them with `--allow-env`"), so
+            // falling through to 500 would read — to an operator and to any
+            // alerting — as the server breaking.
+            ApiError::Domain(
+                ControlPlaneError::Config(_)
+                | ControlPlaneError::Card(_)
+                | ControlPlaneError::Runtime(
+                    RuntimeError::DisallowedEnv(_) | RuntimeError::Config(_),
+                ),
+            ) => StatusCode::BAD_REQUEST,
             // The backend genuinely cannot answer (logs from a runtime that
             // does not capture them). Not the caller's mistake and not a
             // failure — 501 says "this deployment can't", which is what the

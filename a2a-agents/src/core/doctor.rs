@@ -99,7 +99,17 @@ pub fn requirements(config: &AgentConfig) -> Vec<Requirement> {
             }
         }
         HandlerType::Custom(name) => requirements.push(Requirement::UnknownHandler { name }),
-        HandlerType::Echo | HandlerType::Reimbursement => {}
+        // The reimbursement agent is a sample behind an opt-in feature, so
+        // whether it exists depends on how this binary was built. Unbuilt, the
+        // runner falls back to echo — a config that looks configured behaving
+        // like a stub is precisely what this check is for.
+        #[cfg(not(feature = "reimbursement-agent"))]
+        HandlerType::Reimbursement => requirements.push(Requirement::UnknownHandler {
+            name: "reimbursement".to_string(),
+        }),
+        #[cfg(feature = "reimbursement-agent")]
+        HandlerType::Reimbursement => {}
+        HandlerType::Echo => {}
     }
 
     requirements

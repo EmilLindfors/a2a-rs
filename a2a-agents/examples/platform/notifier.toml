@@ -1,0 +1,34 @@
+# Notifier — the second member of the fleet. See README.md.
+#
+# Its only job in this walkthrough is to make the fleet a *fleet*: two agents
+# that have to be checked against each other (ports, registry ids) before either
+# binds, and two entries in `a2a ps` once deployed.
+
+[agent]
+name = "Notifier"
+description = "Relays notifications."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8082
+
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "notify"
+name = "Notify"
+description = "Relay a notification to its recipients."
+keywords = ["notify", "alert"]
+examples = ["Tell the team the build is green"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[handler]
+type = "echo"
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true
