@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-common-v0.4.0...a2a-agents-common-v0.5.0) - 2026-07-31
+
+### Build
+
+- Raise the minimum supported Rust version to 1.96
+
 ## [0.4.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-common-v0.3.1...a2a-agents-common-v0.4.0) - 2026-06-29
 
 ### Added
