@@ -149,6 +149,56 @@ config fields, so the provider cannot express most agents even when correct.
       number is unproven again, and a `dtolnay/rust-toolchain@1.96` job is what
       makes it real.
 
+### Release pipeline
+
+Everything below was hit shipping 0.6.0/0.5.0 on 2026-07-31. The release went
+out, but only after two manual recoveries — both of which reported *success*
+while doing nothing, which is the part worth fixing.
+
+- [ ] **The publish gate keys on the merge commit's subject, and fails silently.**
+      `release-plz-release` runs only
+      `if: workflow_dispatch || startsWith(head_commit.message, 'chore: release')`,
+      so merging the release PR with a **merge commit** — subject
+      `Merge pull request #34 from …` — skips publishing entirely while the
+      workflow still reports green. The only tell was a 32s run. The repo's
+      other PRs want merge commits (per-crate `feat!`/`fix!` scopes drive
+      release-plz), so "always squash" is not the answer and the asymmetry is a
+      trap. Options, roughly in order:
+      - drop the gate and always run `release-plz release` — it is already
+        idempotent, publishing only crates whose version is ahead of crates.io,
+        and `guard-version-bump.yml` now blocks the hand-edited bumps the gate
+        was added to stop, so the gate may be guarding a hole that is already
+        closed;
+      - key it on the merged PR's head branch (`release-plz-*`) rather than a
+        commit subject, which survives any merge method;
+      - failing both, make the skip **loud** — a job that annotates "publish
+        skipped: subject did not match" beats a green check that published
+        nothing.
+- [ ] **Give release-plz a PAT or GitHub App token so tag pushes trigger the
+      binary build.** The default `GITHUB_TOKEN` fires no downstream workflows,
+      so `release-binaries.yml` (`on: push: tags: a2a-agents-v*`) never runs for
+      a release release-plz tagged — every `a2a-agents` release needs
+      `gh workflow run release-binaries.yml -f tag=a2a-agents-v<x>` by hand, and
+      forgetting it ships a release whose binaries never appear. Known and
+      deferred since 0.4.0; it has now cost two cycles.
+- [ ] **Per-crate changelogs list commits belonging to other crates.**
+      `a2a-rs/CHANGELOG.md` for 0.5.0 opens with
+      `*(a2a-agents)* Close out the pre-release CLI audit`. `filter_commits` is
+      not a valid `[changelog]` field (that invalid key is what silently blocked
+      every 0.4.0 release), so find the supported mechanism — per-package
+      `commit_parsers` scope filtering — rather than re-adding it.
+- [ ] **Confirm the stale release branch is intended.** 0.6.0 shipped from
+      `release-plz-2026-06-29T10-27-50Z`, a branch created a month earlier:
+      release-plz force-pushed new content onto the existing open PR (#34)
+      instead of opening a fresh one, so the PR number and title were a month
+      stale while the diff was current. Harmless here, but it makes "which
+      release is this PR" unanswerable from the PR itself.
+- [ ] *(Minor)* **Dependents bump even when untouched.** `a2a-ap2` and
+      `a2a-agents-common` went to 0.4.0/0.5.0 in a cycle that changed neither,
+      because a path dependency's version moved. Defensible, but it costs a
+      version per crate per release and blurs the per-crate semver the split
+      exists to express.
+
 ## 6. Docs
 
 - [ ] `terraform-provider-a2aagent/README.md` still describes the provider as the
