@@ -2,7 +2,7 @@
 name = "a2a-agents"
 version = "0.5.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version.workspace = true
 authors = ["Emil Lindfors <emil@lindfors.no>"]
 description = "Framework for building A2A Protocol agents with declarative configuration"
 license = "MIT"
@@ -69,7 +69,15 @@ features = ["reimbursement-agent", "sqlx", "ap2", "auth", "schema"]
 rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
-default = ["reimbursement-agent", "sqlx"]
+# The `a2a` CLI is this crate's front door, so the defaults are whatever it
+# needs: `cargo install a2a-agents` has to produce a working `a2a`, and a binary
+# whose `required-features` are not default is silently skipped by cargo rather
+# than reported. Library-only consumers who want none of this take
+# `default-features = false` and enable what they use.
+#
+# The reimbursement agent is a *sample*, so it is opt-in — it has no business in
+# everyone's install, and nothing in the CLI needs it.
+default = ["llm", "mcp-server", "schema", "sqlx"]
 reimbursement-agent = []
 ap2 = ["dep:a2a-ap2"]
 sqlx = ["a2a-rs/sqlite"]
@@ -94,7 +102,11 @@ mcp-client = ["dep:rmcp"]
 [[bin]]
 name = "a2a"
 path = "bin/a2a.rs"
-required-features = ["reimbursement-agent", "llm", "mcp-server", "schema"]
+# All default, so a plain `cargo install a2a-agents` builds this. The
+# reimbursement handler is compiled in only when its feature is added; without
+# it `a2a doctor` reports a `reimbursement` config as an unknown handler rather
+# than letting it fall back to echo unannounced.
+required-features = ["llm", "mcp-server", "schema"]
 
 [[bin]]
 name = "reimbursement_demo"
@@ -108,10 +120,33 @@ name = "mcp_echo_server"
 path = "bin/mcp_echo_server.rs"
 required-features = ["mcp-client"]
 
+# Examples built on the reimbursement sample. Declared explicitly so they are
+# skipped when its (opt-in) feature is off, rather than failing the build of
+# every target for want of a module that was configured out.
 [[example]]
 name = "test_handler"
 path = "examples/test_handler.rs"
 required-features = ["reimbursement-agent"]
+
+[[example]]
+name = "test_metadata"
+path = "examples/test_metadata.rs"
+required-features = ["reimbursement-agent"]
+
+[[example]]
+name = "test_metrics"
+path = "examples/test_metrics.rs"
+required-features = ["reimbursement-agent"]
+
+[[example]]
+name = "test_config_demo"
+path = "examples/test_config_demo.rs"
+required-features = ["reimbursement-agent", "sqlx"]
+
+[[example]]
+name = "test_sqlx_storage"
+path = "examples/test_sqlx_storage.rs"
+required-features = ["reimbursement-agent", "sqlx"]
 
 [[example]]
 name = "minimal_agent"

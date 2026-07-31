@@ -6,7 +6,7 @@ use crate::{
 };
 use a2a_rs::{
     adapter::transport::http::HttpClient,
-    domain::{AgentCard, Message, Part, Role, Task, error::A2AError},
+    domain::{AgentCard, Message, Part, Role, SendCompletion, Task, error::A2AError},
     port::AsyncMessageHandler,
     port::client::Transport,
 };
@@ -84,8 +84,16 @@ impl BridgeBackend for HttpBackend {
         message: &Message,
         session_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError> {
+        // An MCP tool call is request/response: the caller wants the agent's
+        // answer, not an acknowledgement, and has no poll loop of its own.
         self.client
-            .send_task_message(task_id, message, session_id, None)
+            .send_task_message(
+                task_id,
+                message,
+                session_id,
+                None,
+                SendCompletion::WhenSettled,
+            )
             .await
     }
 
@@ -1007,31 +1015,25 @@ impl ServerHandler for AgentToMcpBridge {
             if let Some(a2a_rs::domain::generated::security_scheme::Scheme::Oauth2SecurityScheme(
                 oauth2_scheme,
             )) = &scheme.scheme
+                && let Some(flows) = oauth2_scheme.flows.as_option()
+                && let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(cc)) =
+                    &flows.flow
             {
-                if let Some(flows) = oauth2_scheme.flows.as_option() {
-                    if let Some(a2a_rs::domain::generated::o_auth_flows::Flow::ClientCredentials(
-                        cc,
-                    )) = &flows.flow
-                    {
-                        let mut cc_settings = serde_json::Map::new();
-                        cc_settings.insert(
-                            "tokenUrl".to_string(),
-                            serde_json::Value::String(cc.token_url.clone()),
-                        );
-                        if !oauth2_scheme.oauth2_metadata_url.is_empty() {
-                            cc_settings.insert(
-                                "metadataUrl".to_string(),
-                                serde_json::Value::String(
-                                    oauth2_scheme.oauth2_metadata_url.clone(),
-                                ),
-                            );
-                        }
-                        extensions.insert(
-                            "io.modelcontextprotocol/oauth-client-credentials".to_string(),
-                            cc_settings,
-                        );
-                    }
+                let mut cc_settings = serde_json::Map::new();
+                cc_settings.insert(
+                    "tokenUrl".to_string(),
+                    serde_json::Value::String(cc.token_url.clone()),
+                );
+                if !oauth2_scheme.oauth2_metadata_url.is_empty() {
+                    cc_settings.insert(
+                        "metadataUrl".to_string(),
+                        serde_json::Value::String(oauth2_scheme.oauth2_metadata_url.clone()),
+                    );
                 }
+                extensions.insert(
+                    "io.modelcontextprotocol/oauth-client-credentials".to_string(),
+                    cc_settings,
+                );
             }
         }
 

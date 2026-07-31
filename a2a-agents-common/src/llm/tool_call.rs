@@ -61,10 +61,10 @@ impl ToolCallAccumulator {
     pub fn push(&mut self, id: &str, name: Option<&str>, args_delta: &str) -> &PartialToolCall {
         let idx = self.index_of(id);
         let call = &mut self.calls[idx];
-        if let Some(n) = name {
-            if !n.is_empty() {
-                call.name = Some(n.to_string());
-            }
+        if let Some(n) = name
+            && !n.is_empty()
+        {
+            call.name = Some(n.to_string());
         }
         call.arguments.push_str(args_delta);
         &self.calls[idx]

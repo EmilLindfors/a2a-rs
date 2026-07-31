@@ -3,7 +3,9 @@ use a2a_client::WebA2AClient;
 use a2a_client::components::create_sse_stream;
 use a2a_rs::{
     InMemoryStreamingHandler, InMemoryTaskStorage,
-    domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatusUpdateEvent},
+    domain::{
+        A2AError, Message, Part, Role, SendCompletion, Task, TaskState, TaskStatusUpdateEvent,
+    },
     port::{AsyncMessageHandler, AsyncStreamingHandler},
 };
 use async_trait::async_trait;
@@ -116,7 +118,13 @@ async fn test_sse_stream_success() {
 
     let task: Task = client
         .transport
-        .send_task_message("test-task-1", &message, None, None)
+        .send_task_message(
+            "test-task-1",
+            &message,
+            None,
+            None,
+            SendCompletion::WhenCreated,
+        )
         .await
         .unwrap();
     assert_eq!(task.id, "test-task-1");
@@ -137,7 +145,13 @@ async fn test_sse_stream_success() {
     // Note: Re-subscribing might only get new events, so we might need another task for SSE testing
     let task2 = client
         .transport
-        .send_task_message("test-task-2", &message, None, None)
+        .send_task_message(
+            "test-task-2",
+            &message,
+            None,
+            None,
+            SendCompletion::WhenCreated,
+        )
         .await
         .unwrap();
     assert_eq!(task2.id, "test-task-2");

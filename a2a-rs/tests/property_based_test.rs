@@ -390,12 +390,12 @@ mod edge_case_properties {
             minimal_id in prop::option::of("")
         ) {
             // Test that we handle minimal inputs gracefully
-            if let (Some(text), Some(id)) = (minimal_text, minimal_id) {
-                if !id.is_empty() {
-                    let message = Message::user_text(text.to_string(), id.to_string());
-                    prop_assert_eq!(&message.message_id, &id);
-                    prop_assert_eq!(message.parts.len(), 1);
-                }
+            if let (Some(text), Some(id)) = (minimal_text, minimal_id)
+                && !id.is_empty()
+            {
+                let message = Message::user_text(text.to_string(), id.to_string());
+                prop_assert_eq!(&message.message_id, &id);
+                prop_assert_eq!(message.parts.len(), 1);
             }
         }
 

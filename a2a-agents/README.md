@@ -1,10 +1,51 @@
 # A2A Agents
 
-Example agent implementations for the A2A Protocol with production-ready patterns and **declarative configuration**.
+Agent implementations for the A2A Protocol with production-ready patterns and
+**declarative configuration**.
 
-## 🚀 Quick Start (New Builder API)
+## 🚀 Quick Start (no Rust)
 
-Create a production-ready agent in just **~30 lines of code** instead of ~300!
+Install the `a2a` binary:
+
+```bash
+cargo install a2a-agents               # from crates.io
+cargo install --path a2a-agents        # from a checkout of this repo
+```
+
+The CLI's features are the crate's defaults, so that is all it takes. (The
+reimbursement sample agent is *not* in that build — add
+`--features reimbursement-agent` if you want it.)
+
+Then scaffold, check, and run an agent. The `echo` template needs no API keys
+and no external services:
+
+```bash
+a2a new "Weather Agent"                  # writes weather-agent.toml
+a2a validate --config weather-agent.toml
+a2a run --config weather-agent.toml      # prints the endpoint and how to poke it
+```
+
+Templates: `echo`, `llm` (natural-language answers), `mcp` (LLM + MCP tools),
+`orchestrator` (delegates to peer A2A agents). Pick one with `--template`, and
+`--port` / `--output` to place it.
+
+For more than one agent, `--fleet` adds each new agent to a fleet file (creating
+it the first time) so they can be run — and checked against each other — as a set:
+
+```bash
+a2a new "Weather Agent" --fleet demo.toml
+a2a new "Router" --template orchestrator --fleet demo.toml
+a2a up -f demo.toml                      # runs both, checked together first
+```
+
+Generated configs are commented — they double as the schema documentation.
+`a2a print-schema` emits the full JSON Schema, and unknown keys are rejected, so
+a mistyped setting is an error rather than a silently ignored line.
+
+## Quick Start (custom Rust handler)
+
+When the built-in handlers are not enough, keep the TOML and supply your own
+`AsyncMessageHandler`.
 
 ### 1. Define your agent (`agent.toml`)
 
@@ -56,7 +97,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 **That's it!** The framework handles servers, agent cards, authentication, and more.
 
-📚 **[See complete Builder API documentation →](BUILDER_API.md)**
+📚 **[See complete Builder API documentation →](docs/builder-api.md)**
 
 ## Overview
 
@@ -247,19 +288,90 @@ something real.
 Beyond single agents, `a2a-agents` ships the building blocks for an
 **LLM-driven, multi-agent platform** — defined as **ports** in the platform
 layer so the pure `a2a-rs` protocol crate stays infrastructure-free. The
-`a2a` binary wires them together; it requires the `llm`, `mcp-server`, and
-`schema` features:
+`a2a` binary wires them together. Its features (`llm`, `mcp-server`, `schema`)
+are the crate defaults, so from a checkout:
 
 ```bash
-cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- <subcommand>
+cargo run -p a2a-agents --bin a2a -- <subcommand>
 ```
 
 | Subcommand | What it does |
 |---|---|
+| `new <name> [--template …] [--fleet <toml>]` | Scaffold a starter config, optionally adding it to a fleet |
 | `run --config <toml>…` | Run one or more agents from TOML configs |
-| `validate --config <toml>…` | Load + validate configs without serving |
-| `control-plane --bind … --config-dir … --runtime local\|container` | Serve the deploy/list/status/undeploy HTTP API |
-| `print-schema` | Print the `AgentConfig` JSON Schema to stdout |
+| `up -f <fleet.toml>` | Run every agent a fleet file names, checked together first |
+| `validate --config <toml>… [--fleet <toml>]` | Load + validate configs without serving |
+| `doctor [--config <toml>…] [--fleet <toml>]` | Pre-flight: port free, MCP command installed, model key set |
+| `control-plane --bind … --config-dir … --runtime local\|container` | Serve the deploy/list/status/logs/undeploy HTTP API |
+| `deploy --config <toml>… [--fleet <toml>]` | Deploy agents to a running control plane |
+| `ps [--all]` | List what a control plane is running, with health (`--all` includes stopped) |
+| `logs <id> [--tail N]` | Print a deployed agent's captured output |
+| `stop <id>…` | Stop deployed agents and remove them from discovery |
+| `print-schema [--fleet]` | Print the `AgentConfig` (or `FleetConfig`) JSON Schema to stdout |
+
+### Config is the source of truth
+
+The Rust `AgentConfig` type defines what a valid agent is, and nothing
+re-implements that validation:
+
+```text
+  AgentConfig (Rust)  ──schemars──►  a2a print-schema  ──►  JSON Schema
+        │
+        │  a2a new       renders a starter config
+        │  a2a validate  checks shape (deny_unknown_fields: typos are errors)
+        ▼
+  <name>.toml  ──►  a2a run --config <name>.toml
+                    a2a up -f fleet.toml  (a set of configs, checked together)
+                    a2a deploy            (to a control plane; ps/logs/stop drive it)
+```
+
+Unknown keys are rejected, so a mistyped key is an error rather than a silently
+dropped setting. Any future front-end (a Terraform provider, a UI) is expected to
+pass configs through to this validator rather than duplicate it.
+
+### Fleets (`a2a up`)
+
+A multi-agent system is one artifact, not a `--config` per agent retyped every
+run. A fleet file lists member configs by path (relative to itself, so it runs
+from anywhere) and adds the checks that only exist *between* agents — a shared
+port, or two names that slugify to the same registry id. Both are silent-wrong
+at runtime, so `a2a up` catches them before anything binds:
+
+```toml
+# fleet.toml
+name = "Weather Demo"
+
+[[agents]]
+config = "registry_worker.toml"
+
+[[agents]]
+config = "registry_orchestrator.toml"
+```
+
+```bash
+a2a up -f fleet.toml               # defaults to ./fleet.toml
+a2a validate --fleet fleet.toml    # same checks, nothing started
+```
+
+Members share one process and one agent registry, so peers resolve each other by
+skill. See `examples/fleet.toml`.
+
+### Pre-flight (`a2a doctor`)
+
+`validate` asks whether a config is well-formed; `doctor` asks whether it will
+work *here* — port free, MCP command on `PATH`, model key set, `${VAR}`s
+resolvable, container engine present, and whether the configs named can run
+together:
+
+```bash
+a2a doctor --config weather.toml     # one agent
+a2a doctor --fleet fleet.toml        # the whole fleet, plus the environment
+```
+
+Only *problems* set the exit code; warnings (no model key, no container engine)
+describe something that will run, differently than you may have meant. An unset
+`${VAR}` is reported by `validate` and a problem here — `a2a run` refuses to
+start until it resolves.
 
 ### Config-driven LLM handler (`llm` feature)
 
@@ -310,171 +422,109 @@ peers are found by capability instead of a hard-coded URL. See
 `control-plane` serves an HTTP API that composes the runtime and registry:
 `POST /agents` deploys an agent from rendered TOML (provision + start + register
 its card so peers discover it), `GET /agents` lists, `GET /agents/{id}` reports
-health, `DELETE /agents/{id}` tears down. Pick the backend with `--runtime`:
-`local` supervises child `a2a run` processes, `container` runs each agent in a
-`docker`/`podman` container (`--engine`, `--image`).
+health, `GET /agents/{id}/logs` replays its output, `DELETE /agents/{id}` tears
+down. Pick the backend with `--runtime`: `local` supervises child `a2a run`
+processes, `container` runs each agent in a `docker`/`podman` container
+(`--engine`, `--image`).
+
+Deploying an agent is remote code execution, so the API **requires a bearer
+token** — startup fails without `--token` / `A2A_CONTROL_PLANE_TOKEN` unless you
+explicitly opt out with `--no-auth`. Secrets are deny-by-default: a deployed
+config may only reference environment variables named with `--allow-env`.
 
 ```bash
-cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- \
-  control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local
+export A2A_CONTROL_PLANE_TOKEN=$(openssl rand -hex 32)
+
+cargo run -p a2a-agents --bin a2a -- \
+  control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local \
+  --allow-env OPENROUTER_API_KEY
 ```
 
-See the workspace [`DECLARATIVE_AGENTS.md`](../DECLARATIVE_AGENTS.md) for the
-platform design and roadmap.
+`--runtime local` children inherit the whole process environment, so it is a
+dev-loop backend; deploy configs you do not control on `--runtime container`,
+where only allow-listed variables cross the boundary.
 
-## Architecture
+#### Container hardening
 
-### ReimbursementMessageHandler
+Every container is created with capabilities dropped (`--cap-drop=ALL`),
+privilege escalation blocked (`no-new-privileges`), a 512-process cap, and — for
+agents whose storage writes nothing, i.e. `inmemory` — a read-only root
+filesystem with a `/tmp` tmpfs. The base image runs as uid 10001. That last pair
+is derived from the config rather than asked for, because guessing wrong is
+invisible either way: a read-only `sqlx` agent crash-loops on a disk error that
+names nothing useful, and a writable in-memory one gives up the protection for
+free.
 
-The core business logic implementing `AsyncMessageHandler`:
-
-- Processes reimbursement requests using the A2A message format
-- Generates interactive forms for expense submissions
-- Validates and approves reimbursement requests
-- Returns structured responses with proper task states
-
-### ModernReimbursementServer
-
-The server implementation using framework components:
-
-- Integrates with `DefaultBusinessHandler` for request processing
-- Uses `InMemoryTaskStorage` for task persistence
-- Configures `SimpleAgentInfo` with agent capabilities
-- Supports both HTTP transport
-
-## Usage
-
-### Quick Start - Unified Demo (Recommended)
-
-Run the complete demo with both agent backend and web frontend in a single command:
+Resource ceilings are **not** defaulted — no memory limit is right for every
+agent, and a guessed one shows up as an agent dying under load for no visible
+reason:
 
 ```bash
-# Run everything (agent backend + web UI)
-cargo run --bin reimbursement_demo
-
-# Open your browser to http://localhost:3000
+a2a control-plane --runtime container --memory 512m --cpus 1.5
+a2a control-plane --runtime container --no-hardening   # escape hatch; warns
 ```
 
-This starts:
-- **Agent Backend** on `http://localhost:8080` (HTTP)
-- **Web Frontend** on `http://localhost:3000`
+Two consequences worth knowing: an agent cannot bind a container port below 1024
+(publish it on whatever host port you like — `-p 80:8080`), and a handler that
+writes outside `/tmp` needs `sqlx` storage or a relaxed policy
+(`ContainerHardening`). This is the cheap 80% of isolation: it removes what an
+HTTP server never needed and bounds what a misbehaving one can consume. It is
+not a defence against code written to escape a container — call an agent run
+this way **contained**, not *isolated*.
 
-The frontend automatically connects to the local agent and provides an interactive interface for submitting expenses and viewing tasks.
+#### Driving it (`deploy` / `ps` / `logs` / `stop`)
 
-### Advanced Usage
-
-Run specific components:
+The same binary is the client. `--url` defaults to where `control-plane` binds
+and `--token` to `A2A_CONTROL_PLANE_TOKEN`, so a control plane in one terminal
+and these in another need no configuration to find each other:
 
 ```bash
-# Run only the agent backend (HTTP)
-cargo run --bin reimbursement_demo -- --mode agent
+export A2A_CONTROL_PLANE_TOKEN=…          # prefer the env var: argv is public
 
-# Run only the web frontend (point it to an existing agent)
-AGENT_HTTP_URL=http://localhost:8080 cargo run --bin reimbursement_demo -- --mode frontend
-
-# Customize ports
-cargo run --bin reimbursement_demo -- \
-  --agent-http-port 8080 \
-  --frontend-port 3000
-
-# Run only HTTP transport for agent
-cargo run --bin reimbursement_demo -- --transport http
-
+a2a deploy --config weather.toml           # or --fleet fleet.toml
+a2a ps
+a2a logs weather-agent --tail 50
+a2a stop weather-agent
 ```
 
-### Available Endpoints
+Configs are sent **as written**: `${VAR}` references are resolved by the control
+plane against its own environment and `--allow-env` allowlist, so the machine
+deploying never needs the secrets the agent runs with. Shape and the cross-agent
+conflict checks run locally first, before anything is sent — a port clash in a
+fleet should not leave half of it deployed.
 
-**Agent Backend:**
-- HTTP API: `http://localhost:8080` (ConnectRPC)
-- Agent Card: `http://localhost:8080/agent-card`
+`logs` answers the question health cannot: `unhealthy` says the card probe is
+failing, not why. The container runtime replays what the engine retained; the
+local runtime serves the per-agent files it captured under `--log-dir`
+(defaulting to `<config-dir>/logs`). A backend that keeps no logs says so
+explicitly rather than reporting an empty log, since "printed nothing" and "not
+recorded" send you to very different places.
 
-**Web Frontend:**
-- Main UI: `http://localhost:3000`
-- Task List: `http://localhost:3000/tasks`
-- Expense Form: `http://localhost:3000/expense/new`
+#### Surviving a restart
 
-## Example Conversation
+On startup the control plane **recovers** the fleet it was already running,
+before it serves a single request — otherwise a bounce leaves it reporting an
+empty fleet while the agents are still up (`GET /agents` → `[]`, `DELETE` → 404,
+and a Terraform `Read` concluding the agents were destroyed and redeploying on
+top of them).
 
-Here's an example conversation with the reimbursement agent:
+Only `--runtime container` can do this: `docker ps --filter label=a2a-agent` is
+the durable store, since provisioning stamps the agent id and published port as
+container labels. Recovered agents are re-registered for discovery by fetching
+their cards, so peers resolve them by skill again. `--runtime local` reports
+itself as *ephemeral* and warns loudly — its children die with the supervisor,
+and nothing durable ties a stray process to an agent id. **Use `container` for
+any control plane you expect to restart.**
 
-1. User: "Can you reimburse me $50 for the team lunch yesterday?"
+See the workspace [`NOTES.md`](../NOTES.md) for the decisions behind this design
+(and why Terraform is deferred), and [`TODO.md`](../TODO.md) for open work.
 
-2. Agent: *Returns a form*
-   ```json
-   {
-     "type": "form",
-     "form": {
-       "type": "object",
-       "properties": {
-         "date": {
-           "type": "string",
-           "format": "date",
-           "description": "Date of expense",
-           "title": "Date"
-         },
-         "amount": {
-           "type": "string",
-           "format": "number",
-           "description": "Amount of expense",
-           "title": "Amount"
-         },
-         "purpose": {
-           "type": "string",
-           "description": "Purpose of expense",
-           "title": "Purpose"
-         },
-         "request_id": {
-           "type": "string",
-           "description": "Request id",
-           "title": "Request ID"
-         }
-       },
-       "required": ["request_id", "date", "amount", "purpose"]
-     },
-     "form_data": {
-       "request_id": "request_id_1234567",
-       "date": "<transaction date>",
-       "amount": "50",
-       "purpose": " the team lunch yesterday"
-     }
-   }
-   ```
+## Reference agent and further reading
 
-3. User: *Submits the filled form*
-   ```json
-   {
-     "request_id": "request_id_1234567",
-     "date": "2023-10-15",
-     "amount": "50",
-     "purpose": "team lunch with product team"
-   }
-   ```
-
-4. Agent: "Your reimbursement request has been approved. Request ID: request_id_1234567"
-
-## Current Limitations
-
-The **reimbursement** reference agent deliberately keeps its business logic
-simple to showcase the framework architecture (the generic `llm` handler above
-is the path to real model-driven agents):
-
-- **Message Processing**: Basic pattern matching (use `type = "llm"` for LLM-driven agents)
-- **Storage**: In-memory storage (framework supports SQLx for production)
-- **Authentication**: Not implemented (framework supports Bearer/OAuth2)
-- **Form Processing**: Simple JSON forms without complex validation
-
-## Future Enhancements
-
-See the workspace [ROADMAP.md](../ROADMAP.md) for deferred themes and planned
-work.
-
-## Framework Features Demonstrated
-
-- ✅ **AsyncMessageHandler** trait implementation
-- ✅ **DefaultBusinessHandler** integration  
-- ✅ **InMemoryTaskStorage** for task persistence
-- ✅ **SimpleAgentInfo** for agent metadata
-- ✅ **HTTP** transport support
-- ✅ **Structured error handling** with A2AError
-- ✅ **Modern async/await** patterns
-- ✅ **Builder patterns** for complex objects
+- [docs/reimbursement-demo.md](docs/reimbursement-demo.md) — the reimbursement
+  reference agent: a hand-written `AsyncMessageHandler` with an interactive form
+  flow and a small web frontend. Opt-in behind the `reimbursement-agent` feature.
+- [docs/builder-api.md](docs/builder-api.md) — the full `AgentBuilder` API.
+- [docs/authentication.md](docs/authentication.md) — Bearer, JWT, and OAuth2.
+- [examples/platform/](examples/platform/) — a worked walkthrough of the platform
+  lifecycle, from a config on disk to a supervised deployment.

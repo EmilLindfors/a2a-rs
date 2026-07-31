@@ -91,6 +91,7 @@ impl std::fmt::Display for HandlerType {
 /// configs keep working unchanged.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct HandlerConfig {
     /// Built-in handler selector: `echo`, `llm`, `reimbursement`, or any custom
     /// name resolved by the host binary.
@@ -106,6 +107,7 @@ pub struct HandlerConfig {
 /// Options for the generic config-driven LLM handler.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct LlmHandlerConfig {
     /// System prompt steering the model's behaviour.
     #[serde(default = "default_llm_system_prompt")]
@@ -129,6 +131,7 @@ pub struct LlmHandlerConfig {
 /// [`target`](Self::target) to read the resolved one-of.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct RemoteAgentConfig {
     /// Friendly name; the tool the model sees is `ask_<slug-of-name>`.
     pub name: String,
@@ -224,6 +227,7 @@ pub enum ConfigError {
 /// Complete agent configuration from TOML
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AgentConfig {
     /// Agent metadata
     pub agent: AgentMetadata,
@@ -253,6 +257,7 @@ pub struct AgentConfig {
 /// LLM Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct LlmConfig {
     /// LLM Provider (e.g. "openrouter", "openai", "gemini")
     pub provider: String,
@@ -284,6 +289,29 @@ impl AgentConfig {
         let config: AgentConfig = toml::from_str(&expanded)?;
         config.validate()?;
         Ok(config)
+    }
+
+    /// Parse for **validation**, tolerating unset `${VAR}` references.
+    ///
+    /// Returns the config alongside the names of variables that had no value and
+    /// no `:-default` — they were substituted with a placeholder so the rest of
+    /// the config could still be checked. Everything else (unknown keys, wrong
+    /// types, failed [`validate`](Self::validate)) errors exactly as in
+    /// [`from_toml`](Self::from_toml).
+    ///
+    /// This is what `a2a validate` uses: a config's shape should be checkable
+    /// without the production secrets it will eventually run with.
+    pub fn check_toml(content: &str) -> Result<(Self, Vec<String>), ConfigError> {
+        let (expanded, unset) = expand_env_vars_lenient(content);
+        let config: AgentConfig = toml::from_str(&expanded)?;
+        config.validate()?;
+        Ok((config, unset))
+    }
+
+    /// [`check_toml`](Self::check_toml) for a file on disk.
+    pub fn check_file<P: AsRef<Path>>(path: P) -> Result<(Self, Vec<String>), ConfigError> {
+        let content = std::fs::read_to_string(path)?;
+        Self::check_toml(&content)
     }
 
     /// Resolve the handler selector, preferring `[handler].type` and falling
@@ -347,6 +375,7 @@ impl AgentConfig {
 /// Agent metadata and identity
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct AgentMetadata {
     /// Agent name
     pub name: String,
@@ -376,6 +405,7 @@ pub struct AgentMetadata {
 /// Provider information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ProviderInfo {
     pub name: String,
     pub url: String,
@@ -384,6 +414,7 @@ pub struct ProviderInfo {
 /// Server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ServerConfig {
     /// Host to bind to
     #[serde(default = "default_host")]
@@ -525,6 +556,7 @@ pub enum AuthConfig {
 /// Skill configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct SkillConfig {
     /// Unique skill identifier
     pub id: String,
@@ -556,6 +588,7 @@ pub struct SkillConfig {
 /// Features configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct FeaturesConfig {
     /// Enable streaming updates
     #[serde(default)]
@@ -603,6 +636,7 @@ impl Default for FeaturesConfig {
 /// Protocol extensions configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct ExtensionsConfig {
     /// AP2 (Agent Payments Protocol) extension
     #[serde(default)]
@@ -612,6 +646,7 @@ pub struct ExtensionsConfig {
 /// AP2 extension configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct Ap2ExtensionConfig {
     /// AP2 roles this agent performs (merchant, shopper, credentials-provider, payment-processor)
     pub roles: Vec<String>,
@@ -624,6 +659,7 @@ pub struct Ap2ExtensionConfig {
 /// MCP server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct McpServerConfig {
     /// Enable MCP server (expose agent as MCP tools)
     #[serde(default)]
@@ -669,6 +705,7 @@ impl Default for McpServerConfig {
 /// at [`path`](Self::path) on `host:port`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct McpHttpConfig {
     /// Serve the MCP server over Streamable HTTP rather than stdio.
     #[serde(default)]
@@ -739,6 +776,7 @@ fn default_mcp_http_path() -> String {
 /// MCP client configuration
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct McpClientConfig {
     /// Enable MCP client (connect to MCP servers to use their tools)
     #[serde(default)]
@@ -752,6 +790,7 @@ pub struct McpClientConfig {
 /// Configuration for connecting to an MCP server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
 pub struct McpServerConnection {
     /// Unique name for this MCP server
     pub name: String,
@@ -809,22 +848,70 @@ fn default_formats() -> Vec<String> {
     vec!["text".to_string(), "data".to_string()]
 }
 
+/// The `${VAR}` / `${VAR:-default}` reference syntax shared by
+/// [`expand_env_vars`] and [`referenced_env_vars`].
+/// Group 1 = var name; group 2 (optional) = `:-default` fallback.
+fn env_var_regex() -> &'static regex::Regex {
+    use std::sync::LazyLock;
+    static ENV_VAR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}").unwrap()
+    });
+    &ENV_VAR_RE
+}
+
+/// The set of environment-variable names a raw config string references via
+/// `${VAR}` / `${VAR:-default}`, deduplicated and sorted.
+///
+/// This is the *inspection* counterpart to [`expand_env_vars`]: a runtime that
+/// defers expansion to another environment (e.g. a container where `a2a run`
+/// re-parses the TOML) uses it to know which variables to inject there, so
+/// secrets can stay out of the on-disk TOML.
+pub fn referenced_env_vars(content: &str) -> std::collections::BTreeSet<String> {
+    env_var_regex()
+        .captures_iter(content)
+        .map(|cap| cap[1].to_string())
+        .collect()
+}
+
 /// Expand environment variables in the config string.
 ///
 /// Supports `${VAR_NAME}` and `${VAR_NAME:-default}` syntax. An unset variable
 /// with no default is a hard [`ConfigError::EnvVarError`]; with a default, the
 /// default (which may be empty) is substituted.
 fn expand_env_vars(content: &str) -> Result<String, ConfigError> {
-    use std::sync::LazyLock;
-    // group 1 = var name; group 2 (optional) = `:-default` fallback.
-    static ENV_VAR_RE: LazyLock<regex::Regex> = LazyLock::new(|| {
-        regex::Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}").unwrap()
-    });
+    let mut unset = Vec::new();
+    let expanded = expand_env_vars_inner(content, &mut unset);
+    match unset.first() {
+        Some(var) => Err(ConfigError::EnvVarError(var.clone())),
+        None => Ok(expanded),
+    }
+}
 
+/// Substituted for an unset variable when expanding leniently. Non-empty so
+/// fields with `String` types still parse, and recognizable if it ever leaks.
+const UNSET_ENV_PLACEHOLDER: &str = "<unset>";
+
+/// Expand for **validation**: an unset `${VAR}` becomes [`UNSET_ENV_PLACEHOLDER`]
+/// instead of failing, and every such name is collected (deduplicated, in first-
+/// seen order).
+///
+/// Checking a config's *shape* should not require holding the secrets it will
+/// run with — otherwise `a2a validate` is unusable in CI and on a fresh
+/// checkout, which is exactly where it is most useful. Callers that genuinely
+/// need the values (running an agent) use [`expand_env_vars`] and get the hard
+/// error.
+fn expand_env_vars_lenient(content: &str) -> (String, Vec<String>) {
+    let mut unset = Vec::new();
+    let expanded = expand_env_vars_inner(content, &mut unset);
+    (expanded, unset)
+}
+
+/// Shared expansion: substitutes every reference, recording the names that had
+/// neither a value nor a `:-default`.
+fn expand_env_vars_inner(content: &str, unset: &mut Vec<String>) -> String {
     let mut result = content.to_string();
-    let re = &*ENV_VAR_RE;
 
-    for cap in re.captures_iter(content) {
+    for cap in env_var_regex().captures_iter(content) {
         let full_match = &cap[0];
         let var_name = &cap[1];
 
@@ -832,19 +919,117 @@ fn expand_env_vars(content: &str) -> Result<String, ConfigError> {
             Ok(value) => value,
             Err(_) => match cap.get(2) {
                 Some(default) => default.as_str().to_string(),
-                None => return Err(ConfigError::EnvVarError(var_name.to_string())),
+                None => {
+                    if !unset.iter().any(|v| v == var_name) {
+                        unset.push(var_name.to_string());
+                    }
+                    UNSET_ENV_PLACEHOLDER.to_string()
+                }
             },
         };
 
         result = result.replace(full_match, &value);
     }
 
-    Ok(result)
+    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A mistyped key must be an error, not a silent default. This is the worst
+    /// failure mode a declarative config can have: `http_prot = 9999` used to
+    /// validate clean and then serve on 8080.
+    #[test]
+    fn unknown_field_is_rejected_and_suggests_the_real_ones() {
+        let toml = r#"
+            [agent]
+            name = "Typo Agent"
+
+            [server]
+            http_prot = 9999
+        "#;
+        let err = AgentConfig::from_toml(toml)
+            .expect_err("a mistyped key must not be silently ignored")
+            .to_string();
+        assert!(err.contains("http_prot"), "must name the bad key: {err}");
+        assert!(
+            err.contains("http_port"),
+            "must list the valid keys so the fix is obvious: {err}"
+        );
+    }
+
+    /// Strictness has to reach nested tables too, not just the top level.
+    #[test]
+    fn unknown_field_is_rejected_in_nested_tables() {
+        let toml = r#"
+            [agent]
+            name = "Nested"
+
+            [handler]
+            type = "llm"
+
+            [handler.llm]
+            sytsem_prompt = "oops"
+        "#;
+        let err = AgentConfig::from_toml(toml)
+            .expect_err("nested typo must be caught")
+            .to_string();
+        assert!(err.contains("sytsem_prompt"), "{err}");
+    }
+
+    #[test]
+    fn check_toml_reports_unset_env_vars_instead_of_failing() {
+        let toml = r#"
+            [agent]
+            name = "Needs Secrets"
+            description = "${A2A_DEFINITELY_UNSET_ONE}"
+
+            [server]
+            http_port = 8080
+            [server.auth]
+            type = "bearer"
+            tokens = ["${A2A_DEFINITELY_UNSET_TWO}"]
+        "#;
+
+        // Strict parsing refuses — that is right for actually running an agent.
+        assert!(AgentConfig::from_toml(toml).is_err());
+
+        // Validation still checks the shape and tells you what is missing.
+        let (config, unset) = AgentConfig::check_toml(toml).expect("shape is valid");
+        assert_eq!(config.agent.name, "Needs Secrets");
+        assert_eq!(
+            unset,
+            ["A2A_DEFINITELY_UNSET_ONE", "A2A_DEFINITELY_UNSET_TWO"]
+        );
+    }
+
+    /// Leniency is scoped to *missing values* — it must not weaken structural
+    /// checking, or `validate` would go back to rubber-stamping typos.
+    #[test]
+    fn check_toml_still_rejects_unknown_fields() {
+        let toml = r#"
+            [agent]
+            name = "Lenient But Not Lax"
+
+            [server]
+            http_prot = 1
+        "#;
+        assert!(AgentConfig::check_toml(toml).is_err());
+    }
+
+    #[test]
+    fn check_toml_reports_nothing_when_every_ref_has_a_default() {
+        let toml = r#"
+            [agent]
+            name = "Defaulted"
+            description = "${A2A_ALSO_UNSET:-a default}"
+        "#;
+        let (config, unset) = AgentConfig::check_toml(toml).unwrap();
+        assert_eq!(config.agent.description.as_deref(), Some("a default"));
+        assert!(unset.is_empty(), "a defaulted ref is not 'unset'");
+    }
 
     #[test]
     fn test_minimal_config() {
@@ -925,6 +1110,23 @@ mod tests {
 
         let expanded = expand_env_vars(content).unwrap();
         assert!(expanded.contains("secret123"));
+    }
+
+    #[test]
+    fn test_referenced_env_vars_dedups_and_sorts() {
+        let content = r#"
+            key = "${ZED_KEY}"
+            url = "${db_url:-sqlite:dev.db}"
+            token = "${ZED_KEY}"
+            plain = "no refs here"
+        "#;
+        let refs: Vec<String> = referenced_env_vars(content).into_iter().collect();
+        assert_eq!(refs, ["ZED_KEY", "db_url"]);
+    }
+
+    #[test]
+    fn test_referenced_env_vars_empty_when_no_refs() {
+        assert!(referenced_env_vars(r#"name = "plain""#).is_empty());
     }
 
     #[test]

@@ -18,8 +18,8 @@ use futures::Stream;
 use std::pin::Pin;
 
 use crate::domain::{
-    A2AError, ListTasksParams, ListTasksResult, Message, Task, TaskArtifactUpdateEvent,
-    TaskPushNotificationConfig, TaskStatusUpdateEvent,
+    A2AError, ListTasksParams, ListTasksResult, Message, SendCompletion, Task,
+    TaskArtifactUpdateEvent, TaskPushNotificationConfig, TaskStatusUpdateEvent,
 };
 
 /// The capability a client needs from a remote A2A agent, independent of wire
@@ -31,13 +31,25 @@ pub trait Transport: Send + Sync {
     /// `protocol_binding` (e.g. `"JSONRPC"`, `"CONNECTRPC"`, `"GRPC"`).
     fn protocol(&self) -> &str;
 
-    /// Send a message to a task
+    /// Send a message to a task.
+    ///
+    /// `completion` maps to the wire's
+    /// `SendMessageConfiguration.return_immediately`, inverted:
+    /// [`SendCompletion::WhenSettled`] (the spec default) asks the server to
+    /// hold the response until the task settles, so the returned task carries
+    /// the agent's actual answer rather than an acknowledgement.
+    ///
+    /// Pass [`SendCompletion::WhenCreated`] when the caller runs its own
+    /// follow-up — a poll loop or a subscription with its own deadline —
+    /// otherwise it inherits the server's wait on top of its own, and whichever
+    /// is longer wins.
     async fn send_task_message(
         &self,
         task_id: &str,
         message: &Message,
         session_id: Option<&str>,
         history_length: Option<u32>,
+        completion: SendCompletion,
     ) -> Result<Task, A2AError>;
 
     /// Get a task by ID

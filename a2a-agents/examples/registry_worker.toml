@@ -2,7 +2,7 @@
 #
 # Run both in ONE process so the in-memory registry self-registers this worker
 # and the orchestrator resolves it by skill:
-#   cargo run -p a2a-agents --bin a2a --features "reimbursement-agent mcp-server schema" -- \
+#   cargo run -p a2a-agents --bin a2a -- \
 #     run --config examples/registry_worker.toml \
 #         --config examples/registry_orchestrator.toml
 #

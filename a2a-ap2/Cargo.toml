@@ -2,7 +2,7 @@
 name = "a2a-ap2"
 version = "0.3.2"
 edition = "2024"
-rust-version = "1.85"
+rust-version.workspace = true
 authors = ["Emil Lindfors <emil@lindfors.no>"]
 description = "AP2 (Agent Payments Protocol) extension for the A2A Protocol"
 license = "MIT"

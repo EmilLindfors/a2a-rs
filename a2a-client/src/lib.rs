@@ -22,7 +22,7 @@
 //!
 //! ```rust,no_run
 //! use a2a_client::WebA2AClient;
-//! use a2a_rs::domain::Message;
+//! use a2a_rs::domain::{Message, SendCompletion};
 //! use a2a_rs::Transport;
 //!
 //! # #[tokio::main]
@@ -33,7 +33,12 @@
 //! // Send a message
 //! let message = Message::user_text("Hello, agent!".to_string(), "msg-1".to_string());
 //!
-//! let task = client.transport.send_task_message("task-1", &message, None, None).await?;
+//! // `WhenSettled` is the A2A default: the server holds the response until the
+//! // task finishes, so `task` carries the agent's reply rather than an ack.
+//! let task = client
+//!     .transport
+//!     .send_task_message("task-1", &message, None, None, SendCompletion::WhenSettled)
+//!     .await?;
 //! println!("Task ID: {}", task.id);
 //! # Ok(())
 //! # }

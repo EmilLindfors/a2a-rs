@@ -48,10 +48,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     AgentBuilder::from_file("reimbursement.toml")?
         .with_config(|config| {
             // Override config from environment if needed
-            if let Ok(port) = env::var("HTTP_PORT") {
-                if let Ok(port_num) = port.parse() {
-                    config.server.http_port = port_num;
-                }
+            if let Ok(port) = env::var("HTTP_PORT")
+                && let Ok(port_num) = port.parse()
+            {
+                config.server.http_port = port_num;
             }
         })
         .with_handler(handler)

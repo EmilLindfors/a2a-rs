@@ -246,7 +246,7 @@ See the `examples/` directory for complete working examples:
 
 ## Roadmap
 
-See the workspace [ROADMAP.md](../ROADMAP.md) for planned features and improvements.
+See the workspace [TODO.md](../TODO.md) for open and deferred work.
 
 ## Contributing
 

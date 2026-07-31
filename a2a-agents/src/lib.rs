@@ -73,10 +73,19 @@
 //!
 //! # Features
 //!
-//! - `default` - Includes reimbursement agent example and SQLx storage
-//! - `reimbursement-agent` - Include reimbursement agent example
+//! - `default` - What the `a2a` CLI needs: `llm`, `mcp-server`, `schema`, `sqlx`
+//! - `llm` - Generic config-driven LLM handler and its tool-calling loop
+//! - `mcp-server` - Expose a configured agent as an MCP server; MCP tool sources
+//! - `mcp-client` - Call out to external MCP servers from an agent
+//! - `schema` - JSON Schema export for `AgentConfig` (`a2a print-schema`)
 //! - `sqlx` - Enable SQLx-based task storage
 //! - `auth` - Enable authentication features (JWT, OAuth2)
+//! - `reimbursement-agent` - Build the reimbursement sample agent (opt-in)
+//! - `ap2` - Agent Payments Protocol types
+//!
+//! Library-only consumers can take `default-features = false` and enable just
+//! what they use; the defaults exist so `cargo install a2a-agents` yields a
+//! working `a2a` binary.
 
 // Core framework modules
 pub mod core;
@@ -106,14 +115,21 @@ pub use traits::{AgentPlugin, SkillDefinition};
 
 pub use handlers::tools::{A2aAgentToolSource, ToolSource};
 
-pub use registry::{AgentId, AgentRegistry, InMemoryAgentRegistry, RegisteredAgent, RegistryError};
-
-pub use runtime::{
-    AgentRuntime, AgentSpec, ContainerRuntime, InMemoryAgentRuntime, LocalProcessRuntime,
-    RuntimeError, RuntimeHealth, RuntimeStatus,
+pub use registry::{
+    AgentId, AgentRegistry, CardSource, CardSourceError, HttpCardSource, InMemoryAgentRegistry,
+    InMemoryCardSource, RegisteredAgent, RegistryError,
 };
 
-pub use control_plane::{ControlPlane, ControlPlaneError, DeployedAgent, control_plane_router};
+pub use runtime::{
+    AgentRuntime, AgentSpec, ContainerHardening, ContainerRuntime, EnvAllowlist,
+    InMemoryAgentRuntime, LocalProcessRuntime, Recovered, RuntimeError, RuntimeHealth,
+    RuntimeStatus,
+};
+
+pub use control_plane::{
+    AgentLogs, AgentStatus, ControlPlane, ControlPlaneAuth, ControlPlaneClient,
+    ControlPlaneClientError, ControlPlaneError, DeployedAgent, ListFilter, control_plane_router,
+};
 
 #[cfg(feature = "llm")]
 pub use handlers::llm::LlmHandler;

@@ -179,11 +179,11 @@ fn extract_from_part<T: serde::de::DeserializeOwned>(part: &Part, key: &str) -> 
     match &part.content {
         Some(a2a_rs::domain::generated::part::Content::Data(data)) => {
             let json_val = serde_json::to_value(data)?;
-            if let Some(map) = json_val.as_object() {
-                if let Some(value) = map.get(key) {
-                    let t = serde_json::from_value(value.clone())?;
-                    return Ok(Some(t));
-                }
+            if let Some(map) = json_val.as_object()
+                && let Some(value) = map.get(key)
+            {
+                let t = serde_json::from_value(value.clone())?;
+                return Ok(Some(t));
             }
             Ok(None)
         }

@@ -118,13 +118,13 @@ pub trait AsyncTaskLifecycleExt: AsyncTaskLifecycle {
     /// Validate query parameters, then fetch the task.
     async fn get_validated(&self, params: &TaskQueryParams) -> Result<Task, A2AError> {
         let id: TaskId = params.id.parse()?;
-        if let Some(history_length) = params.history_length {
-            if history_length > 1000 {
-                return Err(A2AError::ValidationError {
-                    field: "history_length".to_string(),
-                    message: "History length cannot exceed 1000".to_string(),
-                });
-            }
+        if let Some(history_length) = params.history_length
+            && history_length > 1000
+        {
+            return Err(A2AError::ValidationError {
+                field: "history_length".to_string(),
+                message: "History length cannot exceed 1000".to_string(),
+            });
         }
         self.get(&id, params.history_length).await
     }

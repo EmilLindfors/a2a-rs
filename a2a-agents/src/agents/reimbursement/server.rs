@@ -153,6 +153,8 @@ impl ReimbursementServer {
             "Reimbursement Agent".to_string(),
             format!("http://{}:{}", self.config.host, self.config.http_port),
         )
+        // This server mounts a `ConnectRpcAdapter`; say so on the card.
+        .with_preferred_transport(a2a_rs::domain::PROTOCOL_BINDING_CONNECTRPC.to_string())
         .with_description("An intelligent agent that handles employee reimbursement requests, from form generation to approval processing.".to_string())
         .with_provider(
             "Example Organization".to_string(),

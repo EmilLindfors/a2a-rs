@@ -3,6 +3,20 @@ resolver = "2"
 members = ["a2a-rs", "a2a-agents", "a2a-client", "a2a-ap2", "a2a-agents-common", "a2a-mcp", "a2acli"]
 exclude = ["a2a-mcp/rust-sdk"]
 
+# Package metadata shared by every member (`field.workspace = true`), for the
+# same anti-drift reason as the dependency table below: seven copies of a
+# version number is seven chances to update six of them.
+[workspace.package]
+# The toolchain this workspace is built and tested with, and the one the agent
+# container image pins (`a2a-agents/Dockerfile`). Deliberately not the lowest
+# version that would compile: an MSRV nobody runs is a guess, and the previous
+# claim of 1.85 had already become false — the dependency graph now needs 1.87+
+# (`icu_*` want 1.86, `process-wrap` 1.87), which surfaced only when the
+# container image failed to build. Raising this is a breaking change for
+# consumers on older toolchains; lower it only alongside a CI job that proves
+# the lower number.
+rust-version = "1.96"
+
 # Common dependencies shared across workspace members. Members reference these
 # with `dep.workspace = true`, adding `features`/`optional`/`default-features`
 # locally as needed (those compose; the version is pinned here once). Keeps the

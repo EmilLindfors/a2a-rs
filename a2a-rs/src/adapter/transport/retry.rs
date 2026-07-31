@@ -38,7 +38,7 @@ use futures::{Stream, StreamExt};
 
 use crate::domain::core::task::TaskStateExt;
 use crate::domain::{
-    A2AError, ListTasksParams, ListTasksResult, Message, RetryPolicy, Task,
+    A2AError, ListTasksParams, ListTasksResult, Message, RetryPolicy, SendCompletion, Task,
     TaskPushNotificationConfig,
 };
 use crate::port::{StreamEvent, StreamItem, Transport};
@@ -215,9 +215,10 @@ impl Transport for RetryingTransport {
         message: &Message,
         session_id: Option<&str>,
         history_length: Option<u32>,
+        completion: SendCompletion,
     ) -> Result<Task, A2AError> {
         self.inner
-            .send_task_message(task_id, message, session_id, history_length)
+            .send_task_message(task_id, message, session_id, history_length, completion)
             .await
     }
 

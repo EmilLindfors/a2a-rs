@@ -1,0 +1,24 @@
+# A fleet: the agents that make up one system, in one file.
+#
+#   a2a up -f examples/fleet.toml
+#
+# Every member runs in a single process sharing one agent registry, so the
+# orchestrator below resolves its peer by *skill* rather than by URL (see
+# registry_orchestrator.toml). Paths are relative to this file, so the fleet runs
+# from any directory.
+#
+# Before anything binds, `a2a up` validates each member and the invariants that
+# only exist between them — two agents claiming the same port, or two names that
+# slugify to the same registry id. Check without running:
+#
+#   a2a validate --fleet examples/fleet.toml
+
+name = "Weather Demo"
+
+# The specialist. Advertises the `weather-lookup` skill on :8080.
+[[agents]]
+config = "registry_worker.toml"
+
+# The router. Finds the worker by skill and delegates to it. On :8090.
+[[agents]]
+config = "registry_orchestrator.toml"

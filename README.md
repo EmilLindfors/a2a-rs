@@ -22,12 +22,28 @@ The workspace is organized into several crates:
 
 ## Quick start
 
+Define an agent in TOML and run it — no Rust required. The `echo` template needs
+no API keys and no external services:
+
+```bash
+cargo install a2a-agents        # installs the `a2a` CLI
+
+a2a new "Weather Agent"                  # writes weather-agent.toml
+a2a validate --config weather-agent.toml # is the config well-formed?
+a2a doctor   --config weather-agent.toml # will it run on this machine?
+a2a run      --config weather-agent.toml # prints the endpoint and how to poke it
+```
+
+To work on the crates themselves:
+
 ```bash
 git clone https://github.com/emillindfors/a2a-rs.git
 cd a2a-rs
+cargo build --workspace
 
-# Run the reimbursement agent demo (agent + web UI on http://localhost:3000)
-cd a2a-agents && cargo run --bin reimbursement_demo
+# The reimbursement reference agent (agent + web UI on http://localhost:3000).
+# Opt-in: it is a sample, so it is not in the default build.
+cargo run -p a2a-agents --features reimbursement-agent --bin reimbursement_demo
 ```
 
 ### Add to your project
@@ -69,13 +85,21 @@ The core library uses Cargo feature flags so you only compile what you need:
 ```rust
 use a2a_rs::{HttpClient, Message};
 use a2a_rs::Transport;
+use a2a_rs::domain::SendCompletion;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = HttpClient::new("http://localhost:3030".to_string());
 
-    let message = Message::user_text("I need to submit a $50 lunch expense".to_string());
-    let task = client.send_task_message("task-123", &message, None, None).await?;
+    let message = Message::user_text(
+        "I need to submit a $50 lunch expense".to_string(),
+        "msg-123".to_string(),
+    );
+    // `WhenSettled` is the A2A default: the server holds the response until the
+    // task finishes, so `task.status.state` is the agent's answer, not `WORKING`.
+    let task = client
+        .send_task_message("task-123", &message, None, None, SendCompletion::WhenSettled)
+        .await?;
 
     println!("Task state: {:?}", task.status.state);
     Ok(())
@@ -142,15 +166,15 @@ in the platform layer (the pure `a2a-rs` protocol crate stays infrastructure-fre
 ```bash
 # The `a2a` binary needs the llm, mcp-server, and schema features.
 # Run one agent from a TOML config
-cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- run --config agent.toml
+cargo run -p a2a-agents --bin a2a -- run --config agent.toml
 
 # Serve the control plane over local processes
-cargo run -p a2a-agents --features llm,mcp-server,schema --bin a2a -- \
+cargo run -p a2a-agents --bin a2a -- \
   control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local
 ```
 
-See [`DECLARATIVE_AGENTS.md`](./DECLARATIVE_AGENTS.md) for the platform design and
-[a2a-agents/README.md](./a2a-agents/README.md) for usage.
+See [a2a-agents/README.md](./a2a-agents/README.md) for the full platform
+documentation — fleets, pre-flight checks, the control plane, and the `a2a` CLI.
 
 ## Architecture
 
@@ -232,7 +256,8 @@ cargo test --workspace
 cargo clippy --workspace -- -D warnings
 ```
 
-See [ISSUES.md](./ISSUES.md) for known issues and areas where help is appreciated.
+See [TODO.md](./TODO.md) for open work and areas where help is appreciated, and
+[NOTES.md](./NOTES.md) for the reasoning behind the current design.
 
 ## License
 

@@ -10,13 +10,24 @@ mod common;
 
 use a2a_rs::adapter::transport::jsonrpc::{JsonRpcId, JsonRpcRequest, error_code, methods};
 use a2a_rs::adapter::{InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo};
+use a2a_rs::domain::{ContextId, TaskId, TaskState};
+use a2a_rs::port::AsyncTaskLifecycle;
 use common::TestBusinessHandler;
 use serde_json::{Value, json};
 
 fn adapter() -> JsonRpcAdapter {
+    adapter_with_handler().0
+}
+
+/// As [`adapter`], also handing back the handler — the seam a test needs to put
+/// a task into a state the dispatched methods cannot reach on their own.
+fn adapter_with_handler() -> (JsonRpcAdapter, TestBusinessHandler) {
     let handler = TestBusinessHandler::with_storage(InMemoryTaskStorage::new());
     let agent_info = SimpleAgentInfo::new("test-agent".to_string(), "http://localhost".to_string());
-    JsonRpcAdapter::with_handler(handler, agent_info)
+    (
+        JsonRpcAdapter::with_handler(handler.clone(), agent_info),
+        handler,
+    )
 }
 
 fn request(method: &str, params: Value) -> JsonRpcRequest {
@@ -86,12 +97,18 @@ async fn get_task_round_trips() {
 
 #[tokio::test]
 async fn cancel_task_returns_canceled_state() {
-    let a = adapter();
-    a.handle_unary(request(
-        methods::SEND_MESSAGE,
-        send_message_params("task-3"),
-    ))
-    .await;
+    // The echo handler finishes what it is sent, and a completed task is
+    // correctly not cancelable — so the task is driven to `Working` directly.
+    let (a, handler) = adapter_with_handler();
+    let id: TaskId = "task-3".parse().unwrap();
+    handler
+        .create(&id, &"ctx".parse::<ContextId>().unwrap())
+        .await
+        .unwrap();
+    handler
+        .update_status(&id, TaskState::Working, None)
+        .await
+        .unwrap();
 
     let resp = a
         .handle_unary(request(methods::CANCEL_TASK, json!({ "id": "task-3" })))
@@ -99,6 +116,7 @@ async fn cancel_task_returns_canceled_state() {
     let value = serde_json::to_value(&resp).unwrap();
     assert!(value.get("error").is_none(), "unexpected error: {value:?}");
     assert_eq!(value["result"]["id"], "task-3");
+    assert_eq!(value["result"]["status"]["state"], "TASK_STATE_CANCELED");
 }
 
 #[tokio::test]

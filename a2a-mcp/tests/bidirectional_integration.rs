@@ -37,10 +37,10 @@ async fn test_message_roundtrip() {
     assert_eq!(converted_message.parts.len(), original_message.parts.len());
 
     // Check text content is preserved
-    if let Some(text) = converted_message.parts[0].get_text() {
-        if let Some(original_text) = original_message.parts[0].get_text() {
-            assert_eq!(text, original_text);
-        }
+    if let Some(text) = converted_message.parts[0].get_text()
+        && let Some(original_text) = original_message.parts[0].get_text()
+    {
+        assert_eq!(text, original_text);
     }
 }
 

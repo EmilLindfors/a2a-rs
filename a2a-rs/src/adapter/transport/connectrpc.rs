@@ -15,10 +15,10 @@ use buffa::Enumeration;
 use std::pin::Pin;
 
 use crate::{
-    application::TaskService,
+    application::{SendOptions, TaskService},
     domain::{
-        A2AError, AgentCard, Task, TaskArtifactUpdateEvent, TaskId, TaskPushNotificationConfig,
-        TaskStatusUpdateEvent,
+        A2AError, AgentCard, SendCompletion, Task, TaskArtifactUpdateEvent, TaskId,
+        TaskPushNotificationConfig, TaskStatusUpdateEvent,
         generated::{
             A2aService, CancelTaskRequestView, DeleteTaskPushNotificationConfigRequestView,
             GetExtendedAgentCardRequestView, GetTaskPushNotificationConfigRequestView,
@@ -221,11 +221,9 @@ impl A2aService for ConnectRpcAdapter {
             Some(message.context_id.as_str())
         };
 
-        let (push_config, history_limit) = decode_send_config(config);
-
         let task = self
             .service
-            .send_message(&task_id, &message, session_id, push_config, history_limit)
+            .send_message(&task_id, &message, session_id, decode_send_config(config))
             .await
             .map_err(map_err)?;
 
@@ -270,11 +268,21 @@ impl A2aService for ConnectRpcAdapter {
             Some(message.context_id.as_str())
         };
 
-        let (push_config, history_limit) = decode_send_config(config);
+        // `completion` is deliberately dropped here rather than passed along:
+        // on a streaming call the stream itself is the wait, so blocking the
+        // initial response would only delay the snapshot the client needs to
+        // start reading.
+        let opts = decode_send_config(config);
 
         let (task, update_stream) = self
             .service
-            .send_streaming_message(&task_id, &message, session_id, push_config, history_limit)
+            .send_streaming_message(
+                &task_id,
+                &message,
+                session_id,
+                opts.push_config,
+                opts.history_limit,
+            )
             .await
             .map_err(map_err)?;
 
@@ -513,20 +521,32 @@ pub(super) fn list_request_to_params(req: ListTasksRequest) -> crate::domain::Li
     }
 }
 
-/// Decode the optional `SendMessageConfiguration` view into the domain push
-/// config + history limit the service expects.
+/// Decode the optional `SendMessageConfiguration` view into the [`SendOptions`]
+/// the service expects.
 ///
 /// Shared with the JSON-RPC adapter (both decode the same generated config
 /// message), so the two transports agree on the wire shape.
+///
+/// Note the polarity: an **absent** configuration is not "no opinion", it is
+/// `return_immediately = false`, which obliges the server to wait. That is the
+/// proto3 default and the case every conformant client hits by default, so it
+/// has to be the branch that waits — [`SendOptions::default`] gives exactly
+/// that.
 pub(super) fn decode_send_config(
     config: Option<crate::domain::generated::SendMessageConfiguration>,
-) -> (Option<TaskPushNotificationConfig>, Option<u32>) {
+) -> SendOptions {
     let Some(c) = config else {
-        return (None, None);
+        return SendOptions::default();
     };
-    let push_config = c.task_push_notification_config.into_option();
-    let history_limit = c.history_length.map(|limit| limit as u32);
-    (push_config, history_limit)
+    SendOptions {
+        push_config: c.task_push_notification_config.into_option(),
+        history_limit: c.history_length.map(|limit| limit as u32),
+        completion: if c.return_immediately {
+            SendCompletion::WhenCreated
+        } else {
+            SendCompletion::WhenSettled
+        },
+    }
 }
 
 /// A no-op [`AsyncStreamingHandler`] used as the adapter's default streaming port

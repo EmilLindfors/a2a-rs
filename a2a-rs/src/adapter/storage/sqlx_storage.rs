@@ -24,8 +24,8 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
-    A2AError, ContextId, Message, Task, TaskId, TaskPushNotificationConfig, TaskState, TaskStatus,
-    VersionedTask,
+    A2AError, ContextId, Message, Task, TaskId, TaskPushNotificationConfig, TaskState,
+    TaskStateExt, TaskStatus, VersionedTask,
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
@@ -528,10 +528,13 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         // Get current task
         let task = self.get(id, None).await?;
 
-        // Only working tasks can be canceled
-        if task.status.state != TaskState::Working {
+        // Anything that has not finished can be canceled — a queued
+        // (`Submitted`) task most of all, and an `InputRequired` one, where
+        // cancelling is how a client says "never mind". See
+        // `TaskState::is_cancelable`.
+        if !task.status.state.is_cancelable() {
             return Err(A2AError::TaskNotCancelable(format!(
-                "Task {} is in state {:?} and cannot be canceled",
+                "Task {} has already finished in state {:?} and cannot be canceled",
                 task_id, task.status.state
             )));
         }

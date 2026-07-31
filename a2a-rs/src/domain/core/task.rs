@@ -34,18 +34,116 @@ impl TaskState {
                 | Self::TASK_STATE_REJECTED
         )
     }
+
+    /// The spec's *interrupted* states: the agent has stopped and is waiting on
+    /// the caller. Not terminal — the task resumes once the caller supplies what
+    /// it asked for — but a caller polling for progress should stop here too.
+    pub fn is_interrupted(&self) -> bool {
+        matches!(
+            self,
+            Self::TASK_STATE_INPUT_REQUIRED | Self::TASK_STATE_AUTH_REQUIRED
+        )
+    }
+
+    /// Whether the task has stopped and will not advance on its own — terminal,
+    /// or interrupted waiting on the caller.
+    ///
+    /// This is the spec's own stopping condition for a blocking `SendMessage`:
+    /// `return_immediately = false` obliges the server to wait for a terminal
+    /// **or** interrupted state (`spec/a2a.proto:155`). It is also where a
+    /// subscription ends, and where a polling client stops. Those three had
+    /// each spelled the condition out separately.
+    pub fn is_settled(&self) -> bool {
+        self.is_terminal() || self.is_interrupted()
+    }
+
+    /// Whether a client may still cancel a task in this state.
+    ///
+    /// Everything that has not finished: queued (`SUBMITTED`), running
+    /// (`WORKING`), and the interrupted states — cancelling an `INPUT_REQUIRED`
+    /// task is exactly how a client says "never mind". Only the terminal states
+    /// refuse, because there is nothing left to stop.
+    ///
+    /// Defined here rather than in each storage adapter so the rule has one
+    /// home: a state added later is cancelable unless it is declared terminal,
+    /// which is the safe direction to be wrong in — the alternative strands a
+    /// task no client can get rid of.
+    pub fn is_cancelable(&self) -> bool {
+        !self.is_terminal()
+    }
+}
+
+/// When a `SendMessage` call should return.
+///
+/// The A2A default is the **waiting** one, which is easy to get backwards:
+/// `SendMessageConfiguration.return_immediately` is a proto3 `bool` and so
+/// defaults to `false`, and `false` obliges the server to wait until the task
+/// settles before returning (`spec/a2a.proto:155`). A conformant client that
+/// sends no configuration at all — which is what the official SDKs do — is
+/// therefore promised a settled task, not an acknowledgement.
+///
+/// Modelled as an enum rather than the wire's bare `bool` because
+/// `send_message(…, false)` at a call site reads as "don't" with no way to tell
+/// *what* is being declined, and the polarity is already the trap here.
+///
+/// Lives in the domain because both directions need it: the server decodes it
+/// from the request, and the client `Transport` port sets it on the way out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SendCompletion {
+    /// Wait until the task reaches a terminal or interrupted state. The spec
+    /// default, and what a client that sent no configuration is owed.
+    #[default]
+    WhenSettled,
+    /// Return as soon as the message is accepted, even if the agent is still
+    /// working (`return_immediately = true`).
+    ///
+    /// What a caller doing its own follow-up wants: it keeps *its* deadline in
+    /// charge instead of inheriting the server's.
+    WhenCreated,
+}
+
+impl SendCompletion {
+    /// The wire spelling. Note the inversion — this is why the enum exists.
+    #[inline]
+    pub fn return_immediately(self) -> bool {
+        matches!(self, Self::WhenCreated)
+    }
 }
 
 pub trait TaskStateExt {
     fn is_terminal(&self) -> bool;
+    fn is_interrupted(&self) -> bool;
+    fn is_settled(&self) -> bool;
+    fn is_cancelable(&self) -> bool;
 }
 
+/// An unrecognized state is treated as non-terminal, and therefore cancelable:
+/// a peer speaking a newer protocol may have states this build does not know,
+/// and refusing to cancel one would leave the client no way out at all.
 impl TaskStateExt for ::buffa::EnumValue<TaskState> {
     fn is_terminal(&self) -> bool {
         match self {
             ::buffa::EnumValue::Known(state) => state.is_terminal(),
             _ => false,
         }
+    }
+
+    fn is_interrupted(&self) -> bool {
+        match self {
+            ::buffa::EnumValue::Known(state) => state.is_interrupted(),
+            _ => false,
+        }
+    }
+
+    /// An unrecognized state is *not* settled: a caller waiting on it should
+    /// keep waiting rather than report a task finished on the strength of a
+    /// state this build cannot read.
+    fn is_settled(&self) -> bool {
+        self.is_terminal() || self.is_interrupted()
+    }
+
+    fn is_cancelable(&self) -> bool {
+        !self.is_terminal()
     }
 }
 
@@ -407,12 +505,12 @@ impl Task {
             message.validate()?;
         }
 
-        if let Some(status) = self.status.as_option() {
-            if let Some(msg) = status.message.as_option() {
-                #[cfg(feature = "tracing")]
-                tracing::trace!("Validating status message");
-                msg.validate()?;
-            }
+        if let Some(status) = self.status.as_option()
+            && let Some(msg) = status.message.as_option()
+        {
+            #[cfg(feature = "tracing")]
+            tracing::trace!("Validating status message");
+            msg.validate()?;
         }
 
         #[cfg(feature = "tracing")]
@@ -442,5 +540,62 @@ impl VersionedTask {
     /// Pair a task with a version.
     pub fn new(task: Task, version: u64) -> Self {
         Self { task, version }
+    }
+}
+
+#[cfg(test)]
+mod state_predicate_tests {
+    use super::*;
+
+    /// Every state is classified exactly once, so a state added to the proto
+    /// cannot slip through unclassified — the failure mode being a task that
+    /// nothing will cancel and no client can be rid of.
+    #[test]
+    fn every_state_is_either_terminal_or_cancelable() {
+        let all = [
+            TaskState::TASK_STATE_UNSPECIFIED,
+            TaskState::TASK_STATE_SUBMITTED,
+            TaskState::TASK_STATE_WORKING,
+            TaskState::TASK_STATE_COMPLETED,
+            TaskState::TASK_STATE_FAILED,
+            TaskState::TASK_STATE_CANCELED,
+            TaskState::TASK_STATE_INPUT_REQUIRED,
+            TaskState::TASK_STATE_REJECTED,
+            TaskState::TASK_STATE_AUTH_REQUIRED,
+        ];
+        for state in all {
+            assert_ne!(
+                state.is_terminal(),
+                state.is_cancelable(),
+                "{state:?} must be exactly one of terminal / cancelable"
+            );
+        }
+    }
+
+    /// The states that had been refused: queued work, and work stopped waiting
+    /// on the caller. Cancelling those is the whole point of cancel.
+    #[test]
+    fn unfinished_work_can_be_canceled() {
+        assert!(TaskState::Submitted.is_cancelable());
+        assert!(TaskState::Working.is_cancelable());
+        assert!(TaskState::InputRequired.is_cancelable());
+        assert!(TaskState::AuthRequired.is_cancelable());
+    }
+
+    #[test]
+    fn finished_work_cannot_be_canceled() {
+        assert!(!TaskState::Completed.is_cancelable());
+        assert!(!TaskState::Failed.is_cancelable());
+        assert!(!TaskState::Canceled.is_cancelable());
+        assert!(!TaskState::Rejected.is_cancelable());
+    }
+
+    /// A state this build does not recognize leaves the client a way out
+    /// rather than stranding the task.
+    #[test]
+    fn an_unrecognized_state_is_cancelable() {
+        let unknown: ::buffa::EnumValue<TaskState> = ::buffa::EnumValue::Unknown(99);
+        assert!(!unknown.is_terminal());
+        assert!(unknown.is_cancelable());
     }
 }

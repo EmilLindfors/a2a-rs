@@ -11,6 +11,15 @@
 //! future sqlx- or control-plane-backed adapter is a drop-in behind the same
 //! port — which is why every method returns [`Result`] even though
 //! [`InMemoryAgentRegistry`] never actually fails.
+//!
+//! [`CardSource`] is the neighbouring capability: this module's registry
+//! *stores* cards, while a `CardSource` *obtains* one from a running agent —
+//! which is how a restarted control plane rebuilds discovery from the agents it
+//! finds still running.
+
+mod card_source;
+
+pub use card_source::{CardSource, CardSourceError, HttpCardSource, InMemoryCardSource};
 
 use std::collections::HashMap;
 use std::fmt;

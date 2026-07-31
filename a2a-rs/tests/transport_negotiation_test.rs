@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use futures::Stream;
 
 use a2a_rs::domain::{
-    A2AError, AgentCard, AgentInterface, ListTasksParams, ListTasksResult, Message, Task,
-    TaskPushNotificationConfig,
+    A2AError, AgentCard, AgentInterface, ListTasksParams, ListTasksResult, Message, SendCompletion,
+    Task, TaskPushNotificationConfig,
 };
 use a2a_rs::{StreamEvent, Transport, TransportFactory, TransportNegotiator};
 
@@ -36,6 +36,7 @@ impl Transport for DummyTransport {
         _: &Message,
         _: Option<&str>,
         _: Option<u32>,
+        _: SendCompletion,
     ) -> Result<Task, A2AError> {
         unimplemented!()
     }

@@ -2,7 +2,7 @@
 # Drives the generic `llm` handler registered in the `a2a` binary.
 #
 # Run with:
-#   cargo run -p a2a-agents --bin a2a --features schema,mcp-server,reimbursement-agent -- run --config examples/llm_agent.toml
+#   cargo run -p a2a-agents --bin a2a -- run --config examples/llm_agent.toml
 #
 # Set an LLM key (OPENAI_API_KEY / GEMINI_API_KEY / OPENROUTER_API_KEY) to get
 # natural-language answers. With no key, the agent responds with a deterministic

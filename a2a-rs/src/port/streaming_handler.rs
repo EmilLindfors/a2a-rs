@@ -268,12 +268,91 @@ impl UpdateEvent {
         }
     }
 
-    /// Check if this is a final update
+    /// Whether this event settles the task, and so ends a subscription.
+    ///
+    /// True for a status update that reaches a terminal state (`COMPLETED`,
+    /// `FAILED`, `CANCELED`, `REJECTED`) or an interrupted one
+    /// (`INPUT_REQUIRED`, `AUTH_REQUIRED`). Both mean the agent has stopped and
+    /// will emit nothing further until the caller acts — and leaving the stream
+    /// open on an interrupted state is the worse of the two, because then the
+    /// client waits on the agent while the agent waits on the client.
+    ///
+    /// An artifact update never settles a task, **including** its last chunk:
+    /// `last_chunk` marks the end of *that artifact*, and a task may emit
+    /// several while still `WORKING`. Conflating the two ends the stream
+    /// mid-task, which is why this is not the same predicate as "is this the
+    /// last piece of something".
+    ///
+    /// A2A v1.0 has no `final` flag on `TaskStatusUpdateEvent` (v0.x did), so
+    /// the end of a stream is derived from the task state and nowhere else.
     #[inline]
-    pub fn is_final(&self) -> bool {
+    pub fn settles_task(&self) -> bool {
         match self {
-            UpdateEvent::StatusUpdate(event) => event.status.state.is_terminal(),
-            UpdateEvent::ArtifactUpdate(event) => event.last_chunk.unwrap_or(false),
+            UpdateEvent::StatusUpdate(event) => event.status.state.is_settled(),
+            UpdateEvent::ArtifactUpdate(_) => false,
         }
+    }
+}
+
+#[cfg(test)]
+mod settles_task_tests {
+    use super::*;
+    use crate::domain::{Artifact, TaskState, TaskStatus};
+
+    fn status(state: TaskState) -> UpdateEvent {
+        UpdateEvent::StatusUpdate(TaskStatusUpdateEvent {
+            task_id: "t".to_string(),
+            context_id: "ctx".to_string(),
+            kind: "status-update".to_string(),
+            status: TaskStatus::new(state, None),
+            metadata: None,
+        })
+    }
+
+    fn artifact(last_chunk: bool) -> UpdateEvent {
+        UpdateEvent::ArtifactUpdate(TaskArtifactUpdateEvent {
+            task_id: "t".to_string(),
+            context_id: "ctx".to_string(),
+            kind: "artifact-update".to_string(),
+            artifact: Artifact::default(),
+            append: Some(false),
+            last_chunk: Some(last_chunk),
+            metadata: None,
+        })
+    }
+
+    #[test]
+    fn terminal_states_settle_the_task() {
+        for state in [
+            TaskState::Completed,
+            TaskState::Failed,
+            TaskState::Canceled,
+            TaskState::Rejected,
+        ] {
+            assert!(status(state).settles_task(), "{state:?} must settle");
+        }
+    }
+
+    /// The mutual-wait case: the agent has stopped and is waiting on the
+    /// caller, so a stream left open here has both sides waiting on each other.
+    #[test]
+    fn interrupted_states_settle_the_task() {
+        assert!(status(TaskState::InputRequired).settles_task());
+        assert!(status(TaskState::AuthRequired).settles_task());
+    }
+
+    #[test]
+    fn in_flight_states_do_not_settle_the_task() {
+        assert!(!status(TaskState::Submitted).settles_task());
+        assert!(!status(TaskState::Working).settles_task());
+    }
+
+    /// The regression this predicate exists to prevent: `last_chunk` ends an
+    /// *artifact*, not the task. A `WORKING` task may emit several, and closing
+    /// the stream on the first one truncates the response mid-task.
+    #[test]
+    fn a_final_artifact_chunk_does_not_settle_the_task() {
+        assert!(!artifact(true).settles_task());
+        assert!(!artifact(false).settles_task());
     }
 }

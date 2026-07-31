@@ -17,7 +17,7 @@
 //!    ```
 
 use a2a_client::WebA2AClient;
-use a2a_rs::domain::{Message, Part};
+use a2a_rs::domain::{Message, Part, SendCompletion};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -47,7 +47,7 @@ async fn main() -> anyhow::Result<()> {
 
     match client
         .transport
-        .send_task_message(&task_id, &message, None, None)
+        .send_task_message(&task_id, &message, None, None, SendCompletion::WhenSettled)
         .await
     {
         Ok(task) => {

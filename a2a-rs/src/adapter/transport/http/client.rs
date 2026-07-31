@@ -15,7 +15,7 @@ use crate::{
     adapter::error::HttpClientError,
     adapter::transport::codec::stream_response_to_item,
     domain::{
-        A2AError, AgentCard, ListTasksParams, ListTasksResult, Message, Task,
+        A2AError, AgentCard, ListTasksParams, ListTasksResult, Message, SendCompletion, Task,
         TaskPushNotificationConfig,
         generated::{
             A2aServiceClient, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
@@ -250,6 +250,7 @@ impl Transport for HttpClient {
         message: &Message,
         session_id: Option<&str>,
         history_length: Option<u32>,
+        completion: SendCompletion,
     ) -> Result<Task, A2AError> {
         let mut msg = message.clone();
         msg.task_id = task_id.to_string();
@@ -259,6 +260,7 @@ impl Transport for HttpClient {
 
         let config = SendMessageConfiguration {
             history_length: history_length.map(|l| l as i32),
+            return_immediately: completion.return_immediately(),
             ..Default::default()
         };
 
@@ -365,16 +367,16 @@ impl Transport for HttpClient {
             include_artifacts: params.include_artifacts,
             ..Default::default()
         };
-        if let Some(ref t_str) = params.status_timestamp_after {
-            if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t_str) {
-                let utc_dt = dt.with_timezone(&chrono::Utc);
-                request.status_timestamp_after =
-                    ::buffa::MessageField::some(::buffa_types::google::protobuf::Timestamp {
-                        seconds: utc_dt.timestamp(),
-                        nanos: utc_dt.timestamp_subsec_nanos() as i32,
-                        ..Default::default()
-                    });
-            }
+        if let Some(ref t_str) = params.status_timestamp_after
+            && let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t_str)
+        {
+            let utc_dt = dt.with_timezone(&chrono::Utc);
+            request.status_timestamp_after =
+                ::buffa::MessageField::some(::buffa_types::google::protobuf::Timestamp {
+                    seconds: utc_dt.timestamp(),
+                    nanos: utc_dt.timestamp_subsec_nanos() as i32,
+                    ..Default::default()
+                });
         }
 
         let response = self

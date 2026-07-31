@@ -59,9 +59,9 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release -p a2a-agents --bin a2a --target ${{ matrix.target }} --features "mcp-server,reimbursement-agent"
+            cross build --release -p a2a-agents --bin a2a --target ${{ matrix.target }}
           else
-            cargo build --release -p a2a-agents --bin a2a --target ${{ matrix.target }} --features "mcp-server,reimbursement-agent"
+            cargo build --release -p a2a-agents --bin a2a --target ${{ matrix.target }}
           fi
 
       - name: Package binary (Unix)

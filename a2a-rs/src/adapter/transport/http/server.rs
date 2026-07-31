@@ -143,6 +143,27 @@ where
     }
 }
 
+/// Force the card's primary interface to advertise the binding this server
+/// actually mounts.
+///
+/// [`HttpServer::start`] serves exactly one protocol — ConnectRPC, registered as
+/// the fallback service — but an agent card built via `SimpleAgentInfo::new`
+/// defaults its primary interface to `JSONRPC` (the spec default). Left alone,
+/// every `HttpServer` publishes a card that lies about its own transport, and
+/// card-driven clients negotiate to a JSON-RPC endpoint that was never mounted.
+/// Rather than make each caller remember `with_preferred_transport`, the server
+/// states the truth about itself.
+///
+/// Secondary interfaces are untouched, so a deployment fronted by a proxy that
+/// *does* offer other bindings still advertises them via
+/// `SimpleAgentInfo::add_interface`. A card with no interfaces at all carries no
+/// dialable URL either, so there is nothing truthful to stamp — it is left as-is.
+fn stamp_served_binding(card: &mut crate::domain::AgentCard) {
+    if let Some(primary) = card.supported_interfaces.first_mut() {
+        primary.protocol_binding = crate::domain::PROTOCOL_BINDING_CONNECTRPC.to_string();
+    }
+}
+
 /// Handle a request for the agent card
 #[cfg_attr(feature = "tracing", instrument(skip(state)))]
 async fn handle_agent_card<A>(State(state): State<ServerState<A>>) -> impl IntoResponse
@@ -152,9 +173,10 @@ where
     #[cfg(feature = "tracing")]
     debug!("Fetching agent card");
     match state.agent_info.get_agent_card().await {
-        Ok(card) => {
+        Ok(mut card) => {
             #[cfg(feature = "tracing")]
             debug!("Agent card retrieved successfully");
+            stamp_served_binding(&mut card);
             (StatusCode::OK, Json(card)).into_response()
         }
         Err(e) => {

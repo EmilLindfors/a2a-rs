@@ -1,7 +1,7 @@
 use a2a_agents::{AgentPlugin, SkillDefinition};
 use a2a_client::WebA2AClient;
 use a2a_rs::adapter::{ConnectRpcAdapter, HttpServer, InMemoryTaskStorage, SimpleAgentInfo};
-use a2a_rs::domain::{A2AError, ContextId, Message, Task, TaskId, TaskState};
+use a2a_rs::domain::{A2AError, ContextId, Message, SendCompletion, Task, TaskId, TaskState};
 use a2a_rs::port::AsyncMessageHandler;
 use async_trait::async_trait;
 use std::time::Duration;
@@ -111,7 +111,7 @@ async fn test_framework_lifecycle_e2e() {
 
     let task = client
         .transport
-        .send_task_message(&task_id, &message, None, None)
+        .send_task_message(&task_id, &message, None, None, SendCompletion::WhenCreated)
         .await
         .expect("Failed to send task");
 

@@ -23,7 +23,7 @@ use std::time::Duration;
 
 use futures::StreamExt;
 
-use a2a_rs::domain::Message;
+use a2a_rs::domain::{Message, SendCompletion};
 use a2a_rs::{JsonRpcClient, StreamItem, Transport, connect, default_registry};
 
 #[tokio::main]
@@ -53,6 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             &Message::user_text("hello".to_string(), "m1".to_string()),
             None,
             None,
+            SendCompletion::WhenSettled,
         )
         .await?;
     println!("📨 sent message; task id = {}", task.id);

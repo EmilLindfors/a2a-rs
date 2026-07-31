@@ -91,6 +91,47 @@ mod sqlx_tests {
         Ok(())
     }
 
+    /// A queued task is the clearest case, and the one the storage used to
+    /// refuse: nothing has started, and a client that changed its mind has no
+    /// other way to stop it. Same rule as the in-memory adapter — the two
+    /// consult `TaskState::is_cancelable` rather than each carrying their own
+    /// copy of it.
+    #[tokio::test]
+    async fn a_submitted_task_can_be_canceled() -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+        let task_id = Uuid::new_v4().to_string();
+        storage.create(&tid(&task_id), &cid("test-context")).await?;
+
+        let canceled = storage.cancel(&tid(&task_id)).await?;
+        assert_eq!(canceled.status.state, TaskState::Canceled);
+        assert_eq!(
+            storage.get(&tid(&task_id), None).await?.status.state,
+            TaskState::Canceled,
+            "the cancellation has to reach the database, not just the response"
+        );
+        Ok(())
+    }
+
+    /// The agent is waiting on the caller; cancelling is how the caller says
+    /// "never mind" instead of being obliged to answer.
+    #[tokio::test]
+    async fn an_interrupted_task_can_be_canceled() -> Result<(), Box<dyn std::error::Error>> {
+        for state in [TaskState::InputRequired, TaskState::AuthRequired] {
+            let storage = create_test_storage().await?;
+            let task_id = Uuid::new_v4().to_string();
+            storage.create(&tid(&task_id), &cid("test-context")).await?;
+            storage.update_status(&tid(&task_id), state, None).await?;
+
+            let canceled = storage.cancel(&tid(&task_id)).await?;
+            assert_eq!(
+                canceled.status.state,
+                TaskState::Canceled,
+                "cancelling from {state:?} should work"
+            );
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_cannot_cancel_completed_task() -> Result<(), Box<dyn std::error::Error>> {
         let storage = create_test_storage().await?;

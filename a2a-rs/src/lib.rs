@@ -20,6 +20,7 @@
 //! # #[cfg(feature = "http-client")]
 //! # {
 //! use a2a_rs::{HttpClient, Message};
+//! use a2a_rs::domain::SendCompletion;
 //! use a2a_rs::Transport;
 //!
 //! #[tokio::main]
@@ -29,7 +30,11 @@
 //!
 //!     // Send a task message
 //!     let message = Message::user_text("Hello, world!".to_string(), "msg-123".to_string());
-//!     let task = client.send_task_message("task-123", &message, None, None).await?;
+//!     // `SendCompletion::WhenSettled` is the A2A default: the server holds the
+//!     // response until the task finishes, so `task` carries the agent's reply.
+//!     let task = client
+//!         .send_task_message("task-123", &message, None, None, SendCompletion::WhenSettled)
+//!         .await?;
 //!
 //!     println!("Task: {:?}", task);
 //!     Ok(())
