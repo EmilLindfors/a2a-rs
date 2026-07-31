@@ -54,6 +54,16 @@ impl ScratchDir {
     pub fn a2a(&self, args: &[&str]) -> (bool, String) {
         a2a(&self.path, args)
     }
+
+    /// Run the `a2a` binary here with `unset` removed from its environment.
+    ///
+    /// For checks whose result depends on the host's environment: clearing the
+    /// vars in the *child* pins the machine the test is describing, where
+    /// `std::env::remove_var` would mutate the shared environment of every
+    /// other test in the binary — which run on threads alongside it.
+    pub fn a2a_env(&self, args: &[&str], unset: &[&str]) -> (bool, String) {
+        a2a_env(&self.path, args, unset)
+    }
 }
 
 impl Drop for ScratchDir {
@@ -68,11 +78,17 @@ impl Drop for ScratchDir {
 /// reports go to stdout, `tracing` to stderr — and a test asserting on what the
 /// user sees should not have to know which.
 pub fn a2a(dir: &Path, args: &[&str]) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_a2a"))
-        .current_dir(dir)
-        .args(args)
-        .output()
-        .expect("run a2a binary");
+    a2a_env(dir, args, &[])
+}
+
+/// As [`a2a`], with `unset` removed from the child's environment.
+pub fn a2a_env(dir: &Path, args: &[&str], unset: &[&str]) -> (bool, String) {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_a2a"));
+    command.current_dir(dir).args(args);
+    for var in unset {
+        command.env_remove(var);
+    }
+    let out = command.output().expect("run a2a binary");
     let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();
     combined.push_str(&String::from_utf8_lossy(&out.stderr));
     (out.status.success(), combined)

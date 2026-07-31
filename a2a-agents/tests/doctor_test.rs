@@ -35,6 +35,42 @@ fn a_runnable_agent_is_all_clear() {
     assert!(out.contains("all clear"), "{out}");
 }
 
+/// "All clear" has to mean the same thing on every machine. It did not: the
+/// environment report warned about a missing model key and a missing container
+/// engine whether or not anything being checked wanted one, so an echo agent
+/// came back clean on a laptop with `OPENAI_API_KEY` exported and warned on CI.
+/// A check that depends on the host's unrelated state is one people learn to
+/// ignore — so absence is judged against what the config asks for.
+#[test]
+fn an_echo_agent_is_clear_without_a_model_key() {
+    let scratch = ScratchDir::new("nokey");
+    scratch.agent("Weather", free_port(), "weather.toml");
+
+    let (ok, out) = scratch.a2a_env(
+        &["doctor", "--config", "weather.toml"],
+        // Every var `llm_env_var` consults, cleared: the shape of a machine that
+        // has never configured a model provider.
+        &[
+            "OPENROUTER_API_KEY",
+            "GEMINI_API_KEY",
+            "OPENAI_API_KEY",
+            "AI_API_KEY",
+            "OPENAI_API_BASE_URL",
+            "AI_API_BASE_URL",
+        ],
+    );
+
+    assert!(ok, "an echo agent needs no model key:\n{out}");
+    assert!(
+        out.contains("all clear"),
+        "an echo agent must not be warned about a provider it never calls:\n{out}"
+    );
+    assert!(
+        !out.contains("no model key"),
+        "the warning belongs to `llm` handlers, not to every run:\n{out}"
+    );
+}
+
 /// The check that earns the command: the config is valid and the run still
 /// cannot work, because something else already holds the port.
 #[test]

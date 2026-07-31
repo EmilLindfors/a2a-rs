@@ -1046,16 +1046,27 @@ fn probe_bind(host: &str, port: u16) -> Result<(), std::io::Error> {
 }
 
 /// What the host offers, independent of any config.
-fn environment_findings() -> Vec<Finding> {
+///
+/// `bare` distinguishes `a2a doctor` with no configs — where this report is the
+/// whole output — from a run that also checks configs. A capability that is
+/// *absent* is only a warning in the bare case: with configs in hand, whether
+/// its absence matters is a question about them, and the per-config
+/// requirements answer it precisely ([`Requirement::LlmProviderFromEnv`] fires
+/// for `llm` handlers and not for `echo`). Warning unconditionally made an echo
+/// agent on a keyless machine — CI, or any laptop that never exported a model
+/// key — report a warning about a provider it will never call, which is the
+/// false positive that teaches people to ignore the tool.
+fn environment_findings(bare: bool) -> Vec<Finding> {
     let mut findings = Vec::new();
 
     match llm_env_var() {
         Some(var) => findings.push(Finding::ok(format!("model provider: {var} is set"))),
-        None => findings.push(Finding::warn(format!(
+        None if bare => findings.push(Finding::warn(format!(
             "no model key in the environment ({}) — `llm` handlers fall back to a \
              deterministic reply",
             LLM_KEY_VARS.join(", ")
         ))),
+        None => {}
     }
 
     match ["docker", "podman"]
@@ -1066,10 +1077,11 @@ fn environment_findings() -> Vec<Finding> {
             "container engine: {engine} ({})",
             path.display()
         ))),
-        None => findings.push(Finding::warn(
+        None if bare => findings.push(Finding::warn(
             "no container engine on PATH (docker, podman) — `a2a control-plane \
              --runtime container` needs one",
         )),
+        None => {}
     }
 
     findings
@@ -1168,7 +1180,10 @@ fn run_doctor(config_paths: &[String], fleet: Option<&str>) -> anyhow::Result<bo
         println!();
     };
 
-    report("environment".to_string(), environment_findings());
+    report(
+        "environment".to_string(),
+        environment_findings(paths.is_empty()),
+    );
 
     let mut loaded: Vec<(String, AgentConfig)> = Vec::with_capacity(paths.len());
     for path in &paths {
