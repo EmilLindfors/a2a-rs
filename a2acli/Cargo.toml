@@ -1,6 +1,6 @@
 [package]
 name = "a2acli"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Emil Lindfors <emil@lindfors.no>"]
@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 # Drive the client `Transport` port from a2a-rs directly (not a2a-client, which
 # drags in axum/askama for zero CLI benefit). Both wire transports compiled in.
-a2a-rs = { path = "../a2a-rs", version = "0.4", default-features = false, features = [
+a2a-rs = { path = "../a2a-rs", version = "0.5", default-features = false, features = [
     "http-client",
     "jsonrpc-client",
     "tracing",

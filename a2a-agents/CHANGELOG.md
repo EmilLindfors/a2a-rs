@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-v0.5.0...a2a-agents-v0.6.0) - 2026-07-31
+
+### Added
+
+- *(a2a-agents)* Close out the pre-release CLI audit
+- *(a2a-agents)* Harden agent containers, and fix the image that could not build
+- *(a2a-agents)* Make `a2a` a standalone platform CLI
+
+### Fixed
+
+- *(a2a-agents)* Stop `a2a doctor` warning about capabilities nothing needs
+- *(a2a-rs)* Honour `return_immediately` on `SendMessage`
+
+### Build
+
+- Raise the minimum supported Rust version to 1.96
+
 ## [0.5.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-v0.4.0...a2a-agents-v0.5.0) - 2026-06-29
 
 ### Added
