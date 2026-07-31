@@ -19,10 +19,12 @@
 
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures::{Stream, StreamExt};
 
 use crate::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
+use crate::domain::SendCompletion;
 use crate::domain::core::task::TaskStateExt;
 use crate::domain::{
     A2AError, AgentCard, DeleteTaskPushNotificationConfigParams,
@@ -39,6 +41,23 @@ use crate::services::server::AgentInfoProvider;
 /// per-task monotonic id (surfaced as the SSE `id:` field); the transport
 /// adapter maps the inner update onto its wire representation.
 pub type UpdateStream = Pin<Box<dyn Stream<Item = Result<SeqEvent, A2AError>> + Send>>;
+
+/// The optional knobs on a `SendMessage` request, decoded once from the wire
+/// `SendMessageConfiguration` and shared by both transports.
+///
+/// Grouped into a struct rather than threaded as three more positional
+/// parameters: the call already carried five, and a bare `Option<u32>` next to
+/// a bare `bool` is exactly the signature where an argument gets passed in the
+/// wrong slot.
+#[derive(Debug, Clone, Default)]
+pub struct SendOptions {
+    /// Push-notification config to register for the task before processing.
+    pub push_config: Option<TaskPushNotificationConfig>,
+    /// Truncate the returned task's history to this many messages.
+    pub history_limit: Option<u32>,
+    /// Whether to hold the response until the task settles.
+    pub completion: SendCompletion,
+}
 
 /// End `stream` after — and including — the event that settles the task.
 ///
@@ -78,7 +97,20 @@ pub struct TaskService {
     agent_info: Arc<dyn AgentInfoProvider>,
     streaming_handler: Arc<dyn AsyncStreamingHandler>,
     push_notifier: Arc<dyn AsyncPushNotifier>,
+    send_wait: Duration,
 }
+
+/// How long a blocking `SendMessage` waits before returning the task unsettled.
+///
+/// **Must stay below the client's per-request timeout**, which is 30s for both
+/// `JsonRpcClient` and `HttpClient` (and for `a2acli`, whose `--timeout`
+/// defaults to theirs). If the server waited the full 30s the two would race,
+/// and the client would report a transport timeout instead of receiving the
+/// unsettled task the wait is supposed to hand back — turning a slow agent into
+/// a connection error. The 5s of headroom is for the response itself.
+///
+/// Raising this without raising the client timeout re-creates that race.
+const DEFAULT_SEND_WAIT: Duration = Duration::from_secs(25);
 
 impl TaskService {
     /// Assemble a service from separate handlers.
@@ -102,6 +134,7 @@ impl TaskService {
             agent_info: Arc::new(agent_info),
             streaming_handler: Arc::new(streaming_handler),
             push_notifier: Arc::new(push_notifier),
+            send_wait: DEFAULT_SEND_WAIT,
         }
     }
 
@@ -125,6 +158,7 @@ impl TaskService {
             agent_info: Arc::new(agent_info),
             streaming_handler: Arc::new(streaming_handler),
             push_notifier: Arc::new(push_notifier),
+            send_wait: DEFAULT_SEND_WAIT,
         }
     }
 
@@ -143,33 +177,115 @@ impl TaskService {
         self
     }
 
+    /// How long a blocking `SendMessage` waits for the task to settle before
+    /// returning it unsettled. Defaults to 25s.
+    ///
+    /// Raise it for agents that legitimately take minutes — but raise the
+    /// calling client's request timeout with it. The two are a pair: whichever
+    /// is shorter decides what the caller sees, and if the client gives up
+    /// first it gets a transport error instead of the task.
+    pub fn with_send_wait(mut self, send_wait: Duration) -> Self {
+        self.send_wait = send_wait;
+        self
+    }
+
     /// Process a message for a task, optionally configuring push notifications
     /// and limiting the returned history.
+    ///
+    /// With [`SendCompletion::WhenSettled`] — the spec default — the response is
+    /// held until the task reaches a terminal or interrupted state, bounded by
+    /// [`with_send_wait`]. The wait is driven by the streaming handler rather
+    /// than a poll loop: it already broadcasts every transition, so a subscriber
+    /// *is* the wait.
+    ///
+    /// Two ordering details are load-bearing. The subscription is opened
+    /// **before** `process_message`, because a handler that finishes
+    /// synchronously (the echo responder does) broadcasts its terminal event
+    /// during that call — subscribing afterwards would miss it and then wait
+    /// for a transition that has already happened. And the task is re-fetched
+    /// after the wait rather than assembled from the event, because the event
+    /// carries a status, not the artifacts and history the caller asked for.
+    ///
+    /// [`with_send_wait`]: TaskService::with_send_wait
     pub async fn send_message(
         &self,
         task_id: &str,
         message: &Message,
         session_id: Option<&str>,
-        push_config: Option<TaskPushNotificationConfig>,
-        history_limit: Option<u32>,
+        opts: SendOptions,
     ) -> Result<Task, A2AError> {
-        if let Some(mut push_config) = push_config {
+        if let Some(mut push_config) = opts.push_config {
             push_config.task_id = task_id.to_string();
             self.notification_manager
                 .set_validated(&push_config)
                 .await?;
         }
 
+        let updates = match opts.completion {
+            SendCompletion::WhenCreated => None,
+            // A handler with no streaming backend (`NoopStreamingHandler`)
+            // reports `UnsupportedOperation` here. That is not a reason to fail
+            // the send: it means this server cannot observe transitions, so the
+            // most it can honestly do is return what it has.
+            SendCompletion::WhenSettled => self
+                .streaming_handler
+                .start_task_streaming(task_id, None)
+                .await
+                .ok(),
+        };
+
         let mut task = self
             .message_handler
             .process_message(task_id, message, session_id)
             .await?;
 
-        if let Some(limit) = history_limit {
+        if let Some(updates) = updates
+            && !task.status.state.is_settled()
+        {
+            task = self.wait_for_settled(task_id, updates).await?;
+        }
+
+        if let Some(limit) = opts.history_limit {
             task = task.with_limited_history(Some(limit));
         }
 
         Ok(task)
+    }
+
+    /// Block on `updates` until the task settles or the budget runs out, then
+    /// return the task as stored.
+    ///
+    /// On expiry the *current* task is returned rather than an error. The state
+    /// it carries is true — `WORKING` says exactly that the agent has not
+    /// finished — so the caller gets a usable task id and can follow it, which
+    /// an error would deny them. The bound exists because the spec's "MUST
+    /// wait" has no escape clause, and an agent that never finishes would
+    /// otherwise pin the connection for as long as the client tolerates it.
+    async fn wait_for_settled(
+        &self,
+        task_id: &str,
+        updates: UpdateStream,
+    ) -> Result<Task, A2AError> {
+        let id: TaskId = task_id.parse()?;
+
+        // `until_settled` ends the stream on the settling event, so draining it
+        // to completion *is* the wait — no per-item inspection needed.
+        let drained = tokio::time::timeout(self.send_wait, async {
+            let mut updates = until_settled(updates);
+            while updates.next().await.is_some() {}
+        })
+        .await;
+
+        if drained.is_err() {
+            #[cfg(feature = "tracing")]
+            tracing::debug!(
+                task_id,
+                timeout_secs = self.send_wait.as_secs(),
+                "send_message gave up waiting for the task to settle; returning it unsettled"
+            );
+        }
+
+        self.task_lifecycle.get(&id, None).await
     }
 
     /// Process a message and subscribe to its update stream.

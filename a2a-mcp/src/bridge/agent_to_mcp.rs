@@ -6,7 +6,7 @@ use crate::{
 };
 use a2a_rs::{
     adapter::transport::http::HttpClient,
-    domain::{AgentCard, Message, Part, Role, Task, error::A2AError},
+    domain::{AgentCard, Message, Part, Role, SendCompletion, Task, error::A2AError},
     port::AsyncMessageHandler,
     port::client::Transport,
 };
@@ -84,8 +84,16 @@ impl BridgeBackend for HttpBackend {
         message: &Message,
         session_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError> {
+        // An MCP tool call is request/response: the caller wants the agent's
+        // answer, not an acknowledgement, and has no poll loop of its own.
         self.client
-            .send_task_message(task_id, message, session_id, None)
+            .send_task_message(
+                task_id,
+                message,
+                session_id,
+                None,
+                SendCompletion::WhenSettled,
+            )
             .await
     }
 

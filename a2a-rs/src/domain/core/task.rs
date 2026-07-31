@@ -73,6 +73,43 @@ impl TaskState {
     }
 }
 
+/// When a `SendMessage` call should return.
+///
+/// The A2A default is the **waiting** one, which is easy to get backwards:
+/// `SendMessageConfiguration.return_immediately` is a proto3 `bool` and so
+/// defaults to `false`, and `false` obliges the server to wait until the task
+/// settles before returning (`spec/a2a.proto:155`). A conformant client that
+/// sends no configuration at all — which is what the official SDKs do — is
+/// therefore promised a settled task, not an acknowledgement.
+///
+/// Modelled as an enum rather than the wire's bare `bool` because
+/// `send_message(…, false)` at a call site reads as "don't" with no way to tell
+/// *what* is being declined, and the polarity is already the trap here.
+///
+/// Lives in the domain because both directions need it: the server decodes it
+/// from the request, and the client `Transport` port sets it on the way out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SendCompletion {
+    /// Wait until the task reaches a terminal or interrupted state. The spec
+    /// default, and what a client that sent no configuration is owed.
+    #[default]
+    WhenSettled,
+    /// Return as soon as the message is accepted, even if the agent is still
+    /// working (`return_immediately = true`).
+    ///
+    /// What a caller doing its own follow-up wants: it keeps *its* deadline in
+    /// charge instead of inheriting the server's.
+    WhenCreated,
+}
+
+impl SendCompletion {
+    /// The wire spelling. Note the inversion — this is why the enum exists.
+    #[inline]
+    pub fn return_immediately(self) -> bool {
+        matches!(self, Self::WhenCreated)
+    }
+}
+
 pub trait TaskStateExt {
     fn is_terminal(&self) -> bool;
     fn is_interrupted(&self) -> bool;

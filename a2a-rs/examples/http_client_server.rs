@@ -10,7 +10,7 @@ use a2a_rs::adapter::{
 
 mod common;
 use a2a_rs::Transport;
-use a2a_rs::domain::{Message, Part, Role};
+use a2a_rs::domain::{Message, Part, Role, SendCompletion};
 use a2a_rs::observability;
 use common::SimpleAgentHandler;
 
@@ -125,7 +125,7 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     match client
-        .send_task_message(&task_id, &message, None, None)
+        .send_task_message(&task_id, &message, None, None, SendCompletion::WhenSettled)
         .await
     {
         Ok(response) => {

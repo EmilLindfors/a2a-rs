@@ -19,7 +19,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use a2a_agents_common::llm::{ToolCall, ToolDefinition};
-use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskStateExt};
+use a2a_rs::domain::{A2AError, Message, Part, Role, SendCompletion, Task, TaskStateExt};
 use a2a_rs::port::Transport;
 use async_trait::async_trait;
 use tokio::time::Instant;
@@ -131,9 +131,19 @@ impl ToolSource for A2aAgentToolSource {
             .message_id(uuid::Uuid::new_v4().to_string())
             .build();
 
+        // Return as soon as the peer accepts, so `self.deadline` below is what
+        // governs. Letting the peer block instead would stack its wait on top
+        // of ours and silently promote the longer of the two — a 400ms
+        // delegation deadline would sit behind the peer's 25s.
         let mut task = self
             .transport
-            .send_task_message(&remote_task_id, &msg, None, Some(1))
+            .send_task_message(
+                &remote_task_id,
+                &msg,
+                None,
+                Some(1),
+                SendCompletion::WhenCreated,
+            )
             .await?;
 
         let start = Instant::now();

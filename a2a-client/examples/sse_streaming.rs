@@ -21,7 +21,7 @@
 //!    The response will stream in real-time via SSE.
 
 use a2a_client::{WebA2AClient, components::create_sse_stream};
-use a2a_rs::domain::{Message, Part, Role};
+use a2a_rs::domain::{Message, Part, Role, SendCompletion};
 use axum::{
     Json, Router,
     extract::{Path, State},
@@ -99,7 +99,7 @@ async fn send_message_handler(
 
     match client
         .transport
-        .send_task_message(&task_id, &message, None, None)
+        .send_task_message(&task_id, &message, None, None, SendCompletion::WhenCreated)
         .await
     {
         Ok(task) => {

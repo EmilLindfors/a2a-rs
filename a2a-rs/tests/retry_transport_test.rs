@@ -13,7 +13,7 @@ use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 
 use a2a_rs::domain::{
-    A2AError, ListTasksParams, ListTasksResult, Message, RetryPolicy, Task,
+    A2AError, ListTasksParams, ListTasksResult, Message, RetryPolicy, SendCompletion, Task,
     TaskPushNotificationConfig, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 use a2a_rs::port::{StreamEvent, StreamItem, Transport};
@@ -94,6 +94,7 @@ impl Transport for FakeTransport {
         _: &Message,
         _: Option<&str>,
         _: Option<u32>,
+        _: SendCompletion,
     ) -> Result<Task, A2AError> {
         unimplemented!()
     }

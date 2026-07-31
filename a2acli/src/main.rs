@@ -14,7 +14,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use a2a_rs::domain::{A2AError, AgentCard, Message, Task, TaskStateExt};
+use a2a_rs::domain::{A2AError, AgentCard, Message, SendCompletion, Task, TaskStateExt};
 use a2a_rs::{
     HttpClient, JsonRpcClient, RetryPolicy, StreamEvent, StreamItem, Transport, subscribe_resilient,
 };
@@ -170,10 +170,27 @@ async fn main() -> anyhow::Result<()> {
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let message = Message::user_text(text.clone(), uuid::Uuid::new_v4().to_string());
+            // `--no-wait` has to reach the server too. Asking a conformant agent
+            // to block and then declining to wait for it just moves the wait
+            // somewhere the flag cannot switch off.
+            let completion = if *no_wait {
+                SendCompletion::WhenCreated
+            } else {
+                SendCompletion::WhenSettled
+            };
             let mut task = transport
-                .send_task_message(&task_id, &message, session_id.as_deref(), *history_length)
+                .send_task_message(
+                    &task_id,
+                    &message,
+                    session_id.as_deref(),
+                    *history_length,
+                    completion,
+                )
                 .await
                 .context("sending message")?;
+            // A conformant agent has already settled the task by the time it
+            // answers; this loop is the fallback for one that ignores
+            // `return_immediately`.
             if !no_wait && !is_settled(&task) {
                 task = poll_until_settled(
                     transport.as_ref(),
@@ -286,15 +303,17 @@ async fn build_transport(cli: &Cli, url: &str) -> anyhow::Result<Arc<dyn Transpo
 /// Whether the agent has stopped making progress on its own — either finished,
 /// or waiting on the caller. Anything else means a reply is still coming.
 ///
+/// Delegates to the domain so the CLI, the server's blocking `SendMessage`, and
+/// the subscription-close rule all stop at the same set of states.
 fn is_settled(task: &Task) -> bool {
-    task.status.state.is_terminal() || task.status.state.is_interrupted()
+    task.status.state.is_settled()
 }
 
 /// Poll `get_task` until the task settles or the budget runs out.
 ///
-/// `send_task_message` returns as soon as the agent accepts the message, so an
-/// agent that answers asynchronously reports `working` with no reply attached.
-/// Without this, a freshly scaffolded `llm` agent looks like it did nothing.
+/// The fallback for an agent that ignores `return_immediately` and answers
+/// asynchronously: it reports `working` with no reply attached, and without
+/// this a freshly scaffolded `llm` agent looks like it did nothing.
 async fn poll_until_settled(
     transport: &dyn Transport,
     task_id: &str,

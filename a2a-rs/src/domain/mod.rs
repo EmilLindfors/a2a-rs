@@ -20,8 +20,8 @@ pub use core::{
     ListTasksParams, ListTasksResult, Message, MessageSendConfiguration, MessageSendParams,
     OAuthFlows, PROTOCOL_BINDING_CONNECTRPC, PROTOCOL_BINDING_HTTP_JSON, PROTOCOL_BINDING_JSONRPC,
     Part, PartBuilder, PushNotificationAuthenticationInfo, Role, SecurityRequirement,
-    SecurityScheme, StringList, Task, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-    TaskSendParams, TaskState, TaskStateExt, TaskStatus, VersionedTask, part,
+    SecurityScheme, SendCompletion, StringList, Task, TaskIdParams, TaskPushNotificationConfig,
+    TaskQueryParams, TaskSendParams, TaskState, TaskStateExt, TaskStatus, VersionedTask, part,
 };
 pub use error::{A2AError, Result};
 pub use error_details::{ErrorDetail, ErrorInfo, FieldViolation};

@@ -67,6 +67,11 @@ criterion = { version = "0.5", features = ["html_reports"] }
 arbitrary = { version = "1.3", features = ["derive"] }
 # Drives the axum routers via `ServiceExt::oneshot` in the JSON-RPC router tests.
 tower = { version = "0.5", features = ["util"] }
+# `test-util` for `#[tokio::test(start_paused = true)]`, which lets the
+# `SendMessage` wait tests exercise the real 25s default budget on the virtual
+# clock instead of spending it. Listed here rather than relied on via workspace
+# feature unification: `cargo test -p a2a-rs` alone would not get it otherwise.
+tokio = { workspace = true, features = ["test-util"] }
 
 [features]
 default = ["server", "tracing"]

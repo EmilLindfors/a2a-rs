@@ -16,10 +16,12 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
 
 ## 1. Client CLI (`a2acli`)
 
-- [ ] **Switch `a2acli send` from polling to `subscribe_to_task`.** Its blocker
-      is gone — subscriptions now end when the task settles — so the wait can be
-      event-driven instead of a poll loop. Worth folding into the
-      `return_immediately` work in §5, which needs the same subscriber-as-wait.
+- [ ] **Switch `a2acli send`'s fallback wait from polling to `subscribe_to_task`.**
+      Demoted, not resolved, by the blocking `SendMessage` work: against a
+      conformant server the poll loop no longer runs at all, since the task
+      comes back settled. What is left is the fallback for a server that ignores
+      `return_immediately` — and there, an event-driven wait is still the better
+      shape now that subscriptions end when the task settles.
 - [ ] **Thread `--auth` / `--timeout` through `auto` mode.** The negotiation
       factories (`TransportFactory` in
       `a2a-rs/src/adapter/transport/negotiation.rs`) build unauthenticated,
@@ -129,26 +131,11 @@ config fields, so the provider cannot express most agents even when correct.
 
 ## 5. Interop and CI
 
-- [ ] **`SendMessage` ignores `return_immediately`, and its default is the
-      opposite of the spec's.** `SendMessageConfiguration.return_immediately`
-      exists on the generated type and is read nowhere, so the server always
-      behaves as if it were `true`. The proto3 default is `false`, and `false`
-      means the server **MUST** wait until the task reaches a terminal
-      (`COMPLETED`/`FAILED`/`CANCELED`/`REJECTED`) or interrupted
-      (`INPUT_REQUIRED`/`AUTH_REQUIRED`) state before returning
-      (`spec/a2a.proto:155`). So a conformant client that sends no configuration
-      at all — which is what the official SDKs do — is promised a settled task
-      and gets a `WORKING` one, and has to poll. `a2acli send` does that polling
-      client-side today; that is a workaround for this, not the fix.
-      Implementing it means holding the response until the task settles: the
-      streaming handler already broadcasts every transition, so a subscriber can
-      be the wait — now that subscriptions actually end — plus a bound so an
-      agent that never finishes cannot pin a connection open forever. Note the
-      hand-written legacy `MessageSendConfiguration.blocking`
-      (`domain/core/task.rs`) is the v0.x spelling of the same switch and is
-      equally unused.
-      Worth doing **before** the interop runs below: a canonical client that
-      waits on the documented default will look like it is hanging on us.
+- [ ] **Retire the legacy `MessageSendConfiguration.blocking`**
+      (`domain/core/task.rs`) — the v0.x spelling of `return_immediately`, still
+      read nowhere. The whole hand-written `MessageSendParams` family is
+      re-exported but unused by the v1.0 path; decide whether it is deleted or
+      documented as legacy-only.
 - [ ] Point the **official** `a2aproject/a2acli` at our `examples/jsonrpc_server`
       (`:8137`) — validates our *server* against the canonical client.
 - [ ] Point **our** `JsonRpcClient` / `a2acli` at a stock upstream A2A agent —

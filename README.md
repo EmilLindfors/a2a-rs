@@ -85,13 +85,21 @@ The core library uses Cargo feature flags so you only compile what you need:
 ```rust
 use a2a_rs::{HttpClient, Message};
 use a2a_rs::Transport;
+use a2a_rs::domain::SendCompletion;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = HttpClient::new("http://localhost:3030".to_string());
 
-    let message = Message::user_text("I need to submit a $50 lunch expense".to_string());
-    let task = client.send_task_message("task-123", &message, None, None).await?;
+    let message = Message::user_text(
+        "I need to submit a $50 lunch expense".to_string(),
+        "msg-123".to_string(),
+    );
+    // `WhenSettled` is the A2A default: the server holds the response until the
+    // task finishes, so `task.status.state` is the agent's answer, not `WORKING`.
+    let task = client
+        .send_task_message("task-123", &message, None, None, SendCompletion::WhenSettled)
+        .await?;
 
     println!("Task state: {:?}", task.status.state);
     Ok(())

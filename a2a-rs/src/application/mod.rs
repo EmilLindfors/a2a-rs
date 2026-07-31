@@ -6,7 +6,7 @@ pub mod task_service;
 pub mod task_status_broadcast;
 
 #[cfg(feature = "server")]
-pub use task_service::{TaskService, UpdateStream};
+pub use task_service::{SendOptions, TaskService, UpdateStream};
 #[cfg(feature = "server")]
 pub use task_status_broadcast::{
     HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast,

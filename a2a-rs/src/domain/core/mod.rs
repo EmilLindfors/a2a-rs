@@ -15,6 +15,7 @@ pub use message::{Artifact, FilePartBuilder, Message, Part, PartBuilder, Role, p
 pub use task::{
     DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
     ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult,
-    MessageSendConfiguration, MessageSendParams, Task, TaskIdParams, TaskPushNotificationConfig,
-    TaskQueryParams, TaskSendParams, TaskState, TaskStateExt, TaskStatus, VersionedTask,
+    MessageSendConfiguration, MessageSendParams, SendCompletion, Task, TaskIdParams,
+    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStateExt,
+    TaskStatus, VersionedTask,
 };

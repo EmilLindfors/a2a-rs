@@ -48,7 +48,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::{
-    application::TaskService,
+    application::{SendOptions, TaskService},
     domain::{
         A2AError, TaskId, TaskPushNotificationConfig,
         generated::{
@@ -265,17 +265,10 @@ impl JsonRpcAdapter {
     }
 
     async fn send_message(&self, params: Option<Value>) -> Result<Value, A2AError> {
-        let (task_id, message, session_id, push_config, history_limit) =
-            decode_send_message(parse_params(params)?)?;
+        let (task_id, message, session_id, opts) = decode_send_message(parse_params(params)?)?;
         let task = self
             .service
-            .send_message(
-                &task_id,
-                &message,
-                session_id.as_deref(),
-                push_config,
-                history_limit,
-            )
+            .send_message(&task_id, &message, session_id.as_deref(), opts)
             .await?;
         let response = SendMessageResponse {
             payload: Some(send_message_response::Payload::Task(Box::new(task))),
@@ -369,7 +362,9 @@ impl JsonRpcAdapter {
     ) -> Result<StreamResponseStream, A2AError> {
         match method {
             methods::SEND_STREAMING_MESSAGE => {
-                let (task_id, message, session_id, push_config, history_limit) =
+                // As in the Connect adapter, `completion` does not apply to a
+                // streaming call: the stream is the wait.
+                let (task_id, message, session_id, opts) =
                     decode_send_message(parse_params(params)?)?;
                 let (task, updates) = self
                     .service
@@ -377,8 +372,8 @@ impl JsonRpcAdapter {
                         &task_id,
                         &message,
                         session_id.as_deref(),
-                        push_config,
-                        history_limit,
+                        opts.push_config,
+                        opts.history_limit,
                     )
                     .await?;
                 Ok(chain_initial_task(Some(task), updates))
@@ -730,13 +725,7 @@ fn to_value<T: Serialize>(value: &T) -> Result<Value, A2AError> {
 
 /// Decode a [`SendMessageRequest`] into the arguments [`TaskService::send_message`]
 /// expects. Mirrors the Connect adapter's `send_message` decode exactly.
-type SendArgs = (
-    String,
-    crate::domain::Message,
-    Option<String>,
-    Option<TaskPushNotificationConfig>,
-    Option<u32>,
-);
+type SendArgs = (String, crate::domain::Message, Option<String>, SendOptions);
 fn decode_send_message(req: SendMessageRequest) -> Result<SendArgs, A2AError> {
     let message = req
         .message
@@ -744,8 +733,8 @@ fn decode_send_message(req: SendMessageRequest) -> Result<SendArgs, A2AError> {
         .ok_or_else(|| A2AError::InvalidParams("missing message".to_string()))?;
     let task_id = message.task_id.clone();
     let session_id = (!message.context_id.is_empty()).then(|| message.context_id.clone());
-    let (push_config, history_limit) = decode_send_config(req.configuration.into_option());
-    Ok((task_id, message, session_id, push_config, history_limit))
+    let opts = decode_send_config(req.configuration.into_option());
+    Ok((task_id, message, session_id, opts))
 }
 
 /// Build the SSE stream: initial task snapshot (if present) followed by the

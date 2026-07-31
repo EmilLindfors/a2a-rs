@@ -45,13 +45,19 @@ a2a-rs = { version = "0.1.0", features = ["full"] }
 ```rust
 use a2a_rs::{HttpClient, Message};
 use a2a_rs::Transport;
+use a2a_rs::domain::SendCompletion;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = HttpClient::new("https://api.example.com".to_string());
 
     let message = Message::user_text("Hello, agent!".to_string(), "msg-123".to_string());
-    let task = client.send_task_message("task-123", &message, None, None).await?;
+    // `WhenSettled` is the A2A default: the server holds the response until the
+    // task finishes, so `task` carries the agent's reply rather than an ack.
+    // Pass `WhenCreated` to get the task id back immediately and follow it yourself.
+    let task = client
+        .send_task_message("task-123", &message, None, None, SendCompletion::WhenSettled)
+        .await?;
 
     println!("Task created: {:?}", task);
     Ok(())

@@ -5,7 +5,7 @@ use a2a_client::{
     WebA2AClient,
     components::{MessageView, TaskView, create_sse_stream},
 };
-use a2a_rs::domain::{ListTasksParams, TaskState, TaskStatusUpdateEvent};
+use a2a_rs::domain::{ListTasksParams, SendCompletion, TaskState, TaskStatusUpdateEvent};
 use askama::Template;
 use askama_axum::IntoResponse;
 use axum::{
@@ -491,7 +491,13 @@ async fn submit_expense(
     let response = state
         .client
         .transport
-        .send_task_message(&task_id, &message, None, Some(50))
+        .send_task_message(
+            &task_id,
+            &message,
+            None,
+            Some(50),
+            SendCompletion::WhenSettled,
+        )
         .await
         .map_err(|e| AppError(anyhow::anyhow!("Failed to submit expense: {}", e)))?;
 
@@ -698,7 +704,13 @@ async fn send_message(
     let response = state
         .client
         .transport
-        .send_task_message(&task_id, &message, None, Some(50))
+        .send_task_message(
+            &task_id,
+            &message,
+            None,
+            Some(50),
+            SendCompletion::WhenSettled,
+        )
         .await
         .map_err(|e| AppError(anyhow::anyhow!("Failed to send message: {}", e)))?;
 

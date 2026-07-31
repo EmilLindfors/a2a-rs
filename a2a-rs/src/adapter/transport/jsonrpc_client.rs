@@ -29,7 +29,7 @@ use crate::{
     adapter::error::HttpClientError,
     adapter::transport::codec::stream_response_to_item,
     domain::{
-        A2AError, AgentCard, ListTasksParams, ListTasksResult, Message, Task,
+        A2AError, AgentCard, ListTasksParams, ListTasksResult, Message, SendCompletion, Task,
         TaskPushNotificationConfig,
         generated::{
             CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
@@ -274,6 +274,7 @@ impl Transport for JsonRpcClient {
         message: &Message,
         session_id: Option<&str>,
         history_length: Option<u32>,
+        completion: SendCompletion,
     ) -> Result<Task, A2AError> {
         let mut msg = message.clone();
         msg.task_id = task_id.to_string();
@@ -285,6 +286,7 @@ impl Transport for JsonRpcClient {
             message: ::buffa::MessageField::some(msg),
             configuration: ::buffa::MessageField::some(SendMessageConfiguration {
                 history_length: history_length.map(|l| l as i32),
+                return_immediately: completion.return_immediately(),
                 ..Default::default()
             }),
             ..Default::default()

@@ -23,8 +23,9 @@ use futures::{Stream, StreamExt, stream};
 
 use a2a_rs::adapter::{InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router};
 use a2a_rs::domain::{
-    A2AError, AgentCard, AgentInterface, ContextId, Message, TaskArtifactUpdateEvent, TaskId,
-    TaskPushNotificationConfig, TaskState, TaskStatus, TaskStatusUpdateEvent,
+    A2AError, AgentCard, AgentInterface, ContextId, Message, SendCompletion,
+    TaskArtifactUpdateEvent, TaskId, TaskPushNotificationConfig, TaskState, TaskStatus,
+    TaskStatusUpdateEvent,
 };
 use a2a_rs::port::streaming_handler::{SeqEvent, Subscriber};
 use a2a_rs::port::{AsyncStreamingHandler, AsyncTaskLifecycle};
@@ -189,7 +190,13 @@ async fn subscribe_resumes_from_last_event_id() {
 
     // Create the task so subscribe emits an initial snapshot.
     client
-        .send_task_message("task-resume", &message(), None, None)
+        .send_task_message(
+            "task-resume",
+            &message(),
+            None,
+            None,
+            SendCompletion::WhenSettled,
+        )
         .await
         .unwrap();
 
@@ -370,7 +377,13 @@ async fn unary_roundtrip_send_get_list_cancel() {
 
     // send → returns a task
     let task = client
-        .send_task_message("task-1", &message(), None, None)
+        .send_task_message(
+            "task-1",
+            &message(),
+            None,
+            None,
+            SendCompletion::WhenSettled,
+        )
         .await
         .unwrap();
     let id = task.id.clone();
@@ -417,7 +430,13 @@ async fn cancelling_a_completed_task_is_refused_over_the_wire() {
     let client = JsonRpcClient::new(base);
 
     client
-        .send_task_message("task-done", &message(), None, None)
+        .send_task_message(
+            "task-done",
+            &message(),
+            None,
+            None,
+            SendCompletion::WhenSettled,
+        )
         .await
         .unwrap();
 
@@ -438,7 +457,13 @@ async fn push_config_lifecycle() {
     let client = JsonRpcClient::new(base);
 
     let task = client
-        .send_task_message("task-pc", &message(), None, None)
+        .send_task_message(
+            "task-pc",
+            &message(),
+            None,
+            None,
+            SendCompletion::WhenSettled,
+        )
         .await
         .unwrap();
     let id = task.id.clone();
@@ -477,7 +502,13 @@ async fn subscribe_yields_initial_task_over_sse() {
     let client = JsonRpcClient::new(base);
 
     let task = client
-        .send_task_message("task-sub", &message(), None, None)
+        .send_task_message(
+            "task-sub",
+            &message(),
+            None,
+            None,
+            SendCompletion::WhenSettled,
+        )
         .await
         .unwrap();
     let id = task.id.clone();
@@ -507,7 +538,13 @@ async fn connect_negotiates_jsonrpc_from_card() {
     assert_eq!(transport.protocol(), "JSONRPC");
 
     let task = transport
-        .send_task_message("task-neg", &message(), None, None)
+        .send_task_message(
+            "task-neg",
+            &message(),
+            None,
+            None,
+            SendCompletion::WhenSettled,
+        )
         .await
         .unwrap();
     let got = transport.get_task(&task.id, None).await.unwrap();

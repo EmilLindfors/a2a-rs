@@ -128,13 +128,19 @@ scaffolded `echo` handler completes in the same call) or asynchronously (the
 `llm` handler returns `working` and delivers the reply on a later `get`). A
 client that printed only what `send` returned showed nothing at all for the
 second kind — which is what the `llm` and `orchestrator` templates scaffold. So
-`send` polls to a terminal *or interrupted* state (`input-required` and
+`send` waits for a terminal *or interrupted* state (`input-required` and
 `auth-required` are stops too: the agent is waiting on the caller). `--no-wait`
 is the escape hatch, not the default, because "send a message to an agent" means
-"and show me what it said". It polls rather than using `subscribe_to_task` for a
-reason that has since been removed — subscriptions did not close on a terminal
-state — so switching it to a subscriber is now open work, not a constraint; see
-`TODO.md`.
+"and show me what it said".
+
+Since blocking `SendMessage` landed the wait is mostly the *server's*: `send`
+leaves `return_immediately` at its spec default, so a conformant agent hands
+back a settled task and the client-side poll loop never runs. The loop stays as
+the fallback for an agent that ignores the flag. `--no-wait` has to switch off
+both halves — declining to poll while the server blocks anyway just relocates
+the wait somewhere the flag cannot reach. Making that fallback a subscriber
+rather than a poll is open work, not a constraint (the reason it polled —
+subscriptions never closed — is gone); see `TODO.md`.
 
 **Configs deploy raw; the control plane expands `${VAR}`.** Expanding client-side
 would put the operator's secrets on the wire, force every deploying machine to
@@ -218,6 +224,57 @@ a container build on a pinned builder image). The number now lives once in
 `[workspace.package]` and is set to the toolchain we actually build and test
 with, not the bare minimum, so it is a claim we exercise. It stops being proven
 the day stable moves past it; that is when an MSRV CI job earns its place.
+
+**A proto3 `bool` makes the spec's default the one you have to write code for.**
+`SendMessageConfiguration.return_immediately` defaults to `false`, and `false`
+is the *demanding* branch — it obliges the server to block until the task
+settles. So the request that exercises it is the empty one: a client that sends
+no configuration at all, which is what every official SDK does. The field read
+as an opt-*in* to blocking and was in fact an opt-*out*, which is why it sat
+unimplemented while looking harmless. Whenever a proto3 scalar carries policy,
+check which way the zero value points before deciding a field is optional —
+and model it in Rust as an enum (`SendCompletion::{WhenSettled, WhenCreated}`),
+never the bare `bool`, so the polarity cannot be misread at a call site.
+
+**A "MUST wait" needs a bound, and the bound must return, not error.**
+`send_message` gives up after 25s and returns the task *unsettled*. Returning an
+error instead would deny the caller the one thing that makes the situation
+recoverable — the task id — and `WORKING` is not a lie: the agent genuinely has
+not finished.
+
+**Making a call block is a change to everyone who already had their own
+deadline.** Turning on the spec's blocking `SendMessage` quietly broke the two
+callers that ran their own follow-up: agent-as-tool delegation polls to a
+400ms deadline, and `a2acli send --no-wait` skips its poll loop — both now sat
+behind the peer's 25s wait, because two nested waits do not compose, the longer
+one just wins. The tell was a test going from 0.5s to 25.5s while still
+passing. So a caller that manages its own completion must be able to say
+`WhenCreated`, which is why the flag had to reach the client `Transport` port
+and not just the server. Whenever you add blocking to a call, go find every
+caller that already had a timeout and ask which one is supposed to be in charge.
+
+**A server-side wait must expire before the client's request timeout.** The
+first cut used 30s, which is exactly what `JsonRpcClient`, `HttpClient` and
+`a2acli --timeout` all default to — a dead heat, in which a slow agent yields a
+*transport error* rather than the unsettled task the bound exists to hand back.
+The blocking wait had converted "agent is slow" into "connection failed", which
+is strictly worse than the behaviour it replaced. Hence 25s: the server must
+lose that race on purpose. Any pair of nested timeouts needs the inner one
+strictly shorter, and the two here live in different crates, so the constant
+carries the invariant in its doc comment.
+
+**Test a timeout's *default* on tokio's virtual clock, not the wall clock.** The
+one test that has to exercise the real 25s budget — rather than a short one
+injected via `with_send_wait` — spent 25s of every CI run watching a timer
+expire. `#[tokio::test(start_paused = true)]` advances the clock whenever
+nothing is runnable, so the same assertion costs 0.06s; measure with
+`tokio::time::Instant`, since the paused clock does not move `std`'s. Two
+catches. It needs tokio's `test-util` feature, and *workspace feature
+unification will hide a missing one*: `cargo test --workspace --all-features`
+compiled it via another crate's dev-dep while `cargo test -p a2a-rs` did not, so
+the crate that uses a dev-dep feature must name it itself. And a virtual clock
+removes the lower bound for free — a wait that was skipped entirely reports 0s
+and passes an upper-bound-only assertion — so assert both ends.
 
 **`take_while`/`scan` cannot end a stream on its own last item.** Both decide to
 stop only when the *next* item arrives — so terminating a subscription "after
