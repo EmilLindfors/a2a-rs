@@ -67,43 +67,76 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
-    /// Create a new HTTP client with the given base URL
+    /// Create a new HTTP client with the given base URL.
+    ///
+    /// # Panics
+    ///
+    /// If `base_url` is not a valid `http::Uri`. Use [`try_new`](Self::try_new)
+    /// whenever the URL came from outside the program — a CLI flag, a config
+    /// file, or an agent card.
     pub fn new(base_url: String) -> Self {
-        let uri = base_url.parse::<http::Uri>().expect("Invalid base URL");
-        let is_https = uri.scheme_str() == Some("https");
-
-        let transport = if is_https {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let tls_config = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth();
-            connectrpc::client::HttpClient::with_tls(Arc::new(tls_config))
-        } else {
-            connectrpc::client::HttpClient::plaintext()
-        };
-
-        let mut config = connectrpc::client::ClientConfig::new(uri);
-        config = config.default_timeout(Duration::from_secs(30));
-
-        let connect_client = A2aServiceClient::new(transport, config);
-
-        Self {
-            base_url,
-            client: Client::new(),
-            connect_client,
-            auth_token: None,
-            timeout: 30,
-        }
+        Self::try_new(base_url).expect("Invalid base URL")
     }
 
-    /// Create a new HTTP client with authentication
-    pub fn with_auth(base_url: String, auth_token: String) -> Self {
-        let uri = base_url.parse::<http::Uri>().expect("Invalid base URL");
-        let is_https = uri.scheme_str() == Some("https");
+    /// Create a new HTTP client, reporting an unusable base URL rather than
+    /// panicking.
+    ///
+    /// `http::Uri` is stricter than the URL parsers callers tend to validate
+    /// with: `reqwest::Url` accepts an IDN host like `http://münchen.de` and
+    /// normalizes it to punycode, while `http::Uri` rejects the raw bytes. A
+    /// caller that checked with the former and built with `new` would panic on
+    /// a URL it had just declared valid.
+    pub fn try_new(base_url: String) -> Result<Self, A2AError> {
+        let (transport, config) = Self::transport_for(&base_url)?;
+        Ok(Self {
+            base_url,
+            client: Client::new(),
+            connect_client: A2aServiceClient::new(transport, config),
+            auth_token: None,
+            timeout: 30,
+        })
+    }
 
-        let transport = if is_https {
+    /// Create a new HTTP client with authentication.
+    ///
+    /// # Panics
+    ///
+    /// As [`new`](Self::new); see [`try_with_auth`](Self::try_with_auth).
+    pub fn with_auth(base_url: String, auth_token: String) -> Self {
+        Self::try_with_auth(base_url, auth_token).expect("Invalid base URL")
+    }
+
+    /// Create an authenticated HTTP client, reporting an unusable base URL
+    /// rather than panicking. See [`try_new`](Self::try_new).
+    pub fn try_with_auth(base_url: String, auth_token: String) -> Result<Self, A2AError> {
+        let (transport, config) = Self::transport_for(&base_url)?;
+        let config = config.default_header("authorization", format!("Bearer {}", auth_token));
+        Ok(Self {
+            base_url,
+            client: Client::new(),
+            connect_client: A2aServiceClient::new(transport, config),
+            auth_token: Some(auth_token),
+            timeout: 30,
+        })
+    }
+
+    /// The ConnectRPC transport and base config for `base_url`, TLS-enabled for
+    /// `https`. Shared so the authenticated and anonymous constructors cannot
+    /// drift on which scheme gets a TLS stack.
+    fn transport_for(
+        base_url: &str,
+    ) -> Result<
+        (
+            connectrpc::client::HttpClient,
+            connectrpc::client::ClientConfig,
+        ),
+        A2AError,
+    > {
+        let uri = base_url
+            .parse::<http::Uri>()
+            .map_err(|e| A2AError::InvalidParams(format!("invalid base url {base_url}: {e}")))?;
+
+        let transport = if uri.scheme_str() == Some("https") {
             let _ = rustls::crypto::ring::default_provider().install_default();
             let mut root_store = rustls::RootCertStore::empty();
             root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
@@ -115,20 +148,9 @@ impl HttpClient {
             connectrpc::client::HttpClient::plaintext()
         };
 
-        let mut config = connectrpc::client::ClientConfig::new(uri);
-        config = config
-            .default_timeout(Duration::from_secs(30))
-            .default_header("authorization", format!("Bearer {}", auth_token));
-
-        let connect_client = A2aServiceClient::new(transport, config);
-
-        Self {
-            base_url,
-            client: Client::new(),
-            connect_client,
-            auth_token: Some(auth_token),
-            timeout: 30,
-        }
+        let config =
+            connectrpc::client::ClientConfig::new(uri).default_timeout(Duration::from_secs(30));
+        Ok((transport, config))
     }
 
     /// Set the timeout for requests

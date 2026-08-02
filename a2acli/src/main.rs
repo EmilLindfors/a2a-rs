@@ -285,11 +285,14 @@ async fn build_transport(cli: &Cli, url: &str) -> anyhow::Result<Arc<dyn Transpo
         TransportChoice::Auto => a2a_rs::auto_connect_with(url, &config)
             .await
             .context("auto-connecting to agent")?,
+        // `try_*` rather than `HttpClient::new`, which panics on a URL
+        // `http::Uri` cannot represent — and `--url` is user input.
         TransportChoice::Connectrpc => {
             let mut client = match &cli.auth {
-                Some(token) => HttpClient::with_auth(url.to_string(), token.clone()),
-                None => HttpClient::new(url.to_string()),
-            };
+                Some(token) => HttpClient::try_with_auth(url.to_string(), token.clone()),
+                None => HttpClient::try_new(url.to_string()),
+            }
+            .context("building a ConnectRPC client")?;
             if let Some(secs) = cli.timeout {
                 client = client.with_timeout(secs);
             }
