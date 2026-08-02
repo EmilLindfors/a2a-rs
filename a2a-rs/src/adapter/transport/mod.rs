@@ -33,6 +33,6 @@ pub use jsonrpc::{JsonRpcAdapter, jsonrpc_router, rest_router};
 #[cfg(feature = "jsonrpc-client")]
 pub use jsonrpc_client::JsonRpcClient;
 #[cfg(feature = "client")]
-pub use negotiation::{TransportFactory, TransportNegotiator, default_registry};
+pub use negotiation::{ClientConfig, TransportFactory, TransportNegotiator, default_registry};
 #[cfg(feature = "client")]
 pub use retry::{RetryingTransport, subscribe_resilient};

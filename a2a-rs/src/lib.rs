@@ -113,13 +113,15 @@ pub use adapter::HttpClient;
 pub use adapter::JsonRpcClient;
 
 #[cfg(feature = "client")]
-pub use adapter::{TransportFactory, TransportNegotiator, default_registry};
+pub use adapter::{ClientConfig, TransportFactory, TransportNegotiator, default_registry};
 
 #[cfg(feature = "client")]
 pub use adapter::{RetryingTransport, subscribe_resilient};
 
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
-pub use adapter::{auto_connect, connect, fetch_agent_card};
+pub use adapter::{
+    auto_connect, auto_connect_with, connect, connect_with, fetch_agent_card, fetch_agent_card_with,
+};
 
 #[cfg(feature = "http-server")]
 pub use adapter::HttpServer;

@@ -27,9 +27,13 @@ pub use transport::http::HttpClient;
 #[cfg(feature = "jsonrpc-client")]
 pub use transport::jsonrpc_client::JsonRpcClient;
 #[cfg(feature = "client")]
-pub use transport::negotiation::{TransportFactory, TransportNegotiator, default_registry};
+pub use transport::negotiation::{
+    ClientConfig, TransportFactory, TransportNegotiator, default_registry,
+};
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
-pub use transport::negotiation::{auto_connect, connect, fetch_agent_card};
+pub use transport::negotiation::{
+    auto_connect, auto_connect_with, connect, connect_with, fetch_agent_card, fetch_agent_card_with,
+};
 #[cfg(feature = "client")]
 pub use transport::retry::{RetryingTransport, subscribe_resilient};
 

@@ -9,6 +9,7 @@
 #![cfg(feature = "client")]
 
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use futures::Stream;
@@ -17,7 +18,7 @@ use a2a_rs::domain::{
     A2AError, AgentCard, AgentInterface, ListTasksParams, ListTasksResult, Message, SendCompletion,
     Task, TaskPushNotificationConfig,
 };
-use a2a_rs::{StreamEvent, Transport, TransportFactory, TransportNegotiator};
+use a2a_rs::{ClientConfig, StreamEvent, Transport, TransportFactory, TransportNegotiator};
 
 /// A no-op transport that only reports its protocol — its RPC methods are never
 /// called in negotiation tests.
@@ -88,10 +89,22 @@ impl Transport for DummyTransport {
 }
 
 /// A factory that builds a [`DummyTransport`] for one protocol, optionally
-/// failing `create` to exercise fall-through.
+/// failing `create` to exercise fall-through. It records the config it was
+/// handed, so a test can prove negotiation forwards it rather than dropping it.
 struct FakeFactory {
     proto: &'static str,
     fail: bool,
+    seen_auth: Arc<Mutex<Option<String>>>,
+}
+
+impl FakeFactory {
+    fn new(proto: &'static str, fail: bool) -> Self {
+        Self {
+            proto,
+            fail,
+            seen_auth: Arc::new(Mutex::new(None)),
+        }
+    }
 }
 
 #[async_trait]
@@ -103,7 +116,9 @@ impl TransportFactory for FakeFactory {
         &self,
         _card: &AgentCard,
         _iface: &AgentInterface,
+        config: &ClientConfig,
     ) -> Result<Box<dyn Transport>, A2AError> {
+        *self.seen_auth.lock().unwrap() = config.auth_token().map(str::to_string);
         if self.fail {
             Err(A2AError::Internal("boom".to_string()))
         } else {
@@ -131,14 +146,8 @@ fn card(interfaces: Vec<AgentInterface>) -> AgentCard {
 #[tokio::test]
 async fn prefers_client_order_over_card_order() {
     let negotiator = TransportNegotiator::new()
-        .with(FakeFactory {
-            proto: "CONNECTRPC",
-            fail: false,
-        })
-        .with(FakeFactory {
-            proto: "JSONRPC",
-            fail: false,
-        });
+        .with(FakeFactory::new("CONNECTRPC", false))
+        .with(FakeFactory::new("JSONRPC", false));
     // Card lists JSONRPC first, but the client prefers CONNECTRPC.
     let c = card(vec![iface("JSONRPC", "1.0"), iface("CONNECTRPC", "1.0")]);
     let transport = negotiator.negotiate(&c).await.unwrap();
@@ -148,14 +157,8 @@ async fn prefers_client_order_over_card_order() {
 #[tokio::test]
 async fn falls_through_on_create_failure() {
     let negotiator = TransportNegotiator::new()
-        .with(FakeFactory {
-            proto: "CONNECTRPC",
-            fail: true,
-        })
-        .with(FakeFactory {
-            proto: "JSONRPC",
-            fail: false,
-        });
+        .with(FakeFactory::new("CONNECTRPC", true))
+        .with(FakeFactory::new("JSONRPC", false));
     let c = card(vec![iface("CONNECTRPC", "1.0"), iface("JSONRPC", "1.0")]);
     let transport = negotiator.negotiate(&c).await.unwrap();
     assert_eq!(transport.protocol(), "JSONRPC");
@@ -163,10 +166,7 @@ async fn falls_through_on_create_failure() {
 
 #[tokio::test]
 async fn unknown_protocol_errors() {
-    let negotiator = TransportNegotiator::new().with(FakeFactory {
-        proto: "JSONRPC",
-        fail: false,
-    });
+    let negotiator = TransportNegotiator::new().with(FakeFactory::new("JSONRPC", false));
     // `Box<dyn Transport>` isn't `Debug`, so match the Result rather than `unwrap_err`.
     let result = negotiator
         .negotiate(&card(vec![iface("GRPC", "1.0")]))
@@ -176,19 +176,13 @@ async fn unknown_protocol_errors() {
 
 #[tokio::test]
 async fn empty_interfaces_errors() {
-    let negotiator = TransportNegotiator::new().with(FakeFactory {
-        proto: "JSONRPC",
-        fail: false,
-    });
+    let negotiator = TransportNegotiator::new().with(FakeFactory::new("JSONRPC", false));
     assert!(negotiator.negotiate(&card(vec![])).await.is_err());
 }
 
 #[tokio::test]
 async fn skips_incompatible_major_version() {
-    let negotiator = TransportNegotiator::new().with(FakeFactory {
-        proto: "JSONRPC",
-        fail: false,
-    });
+    let negotiator = TransportNegotiator::new().with(FakeFactory::new("JSONRPC", false));
     // v2.x is not compatible with this client.
     assert!(
         negotiator
@@ -204,17 +198,46 @@ async fn skips_incompatible_major_version() {
     assert_eq!(transport.protocol(), "JSONRPC");
 }
 
+/// Negotiation forwards the caller's [`ClientConfig`] to the factory it picks.
+/// Before this, a negotiated client was always unauthenticated, so `--auth` on a
+/// CLI silently did nothing unless the transport was named explicitly.
+#[tokio::test]
+async fn negotiate_with_forwards_client_config() {
+    let factory = FakeFactory::new("JSONRPC", false);
+    let seen = factory.seen_auth.clone();
+    let negotiator = TransportNegotiator::new().with(factory);
+
+    negotiator
+        .negotiate_with(
+            &card(vec![iface("JSONRPC", "1.0")]),
+            &ClientConfig::new().with_auth_token("s3cret"),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(seen.lock().unwrap().as_deref(), Some("s3cret"));
+}
+
+/// The no-config `negotiate` is the same path with defaults, not a second one.
+#[tokio::test]
+async fn negotiate_defaults_to_unauthenticated() {
+    let factory = FakeFactory::new("JSONRPC", false);
+    let seen = factory.seen_auth.clone();
+    let negotiator = TransportNegotiator::new().with(factory);
+
+    negotiator
+        .negotiate(&card(vec![iface("JSONRPC", "1.0")]))
+        .await
+        .unwrap();
+
+    assert_eq!(seen.lock().unwrap().as_deref(), None);
+}
+
 #[test]
 fn supported_lists_protocols_in_preference_order() {
     let negotiator = TransportNegotiator::new()
-        .with(FakeFactory {
-            proto: "CONNECTRPC",
-            fail: false,
-        })
-        .with(FakeFactory {
-            proto: "JSONRPC",
-            fail: false,
-        });
+        .with(FakeFactory::new("CONNECTRPC", false))
+        .with(FakeFactory::new("JSONRPC", false));
     assert_eq!(
         negotiator.supported().collect::<Vec<_>>(),
         vec!["CONNECTRPC", "JSONRPC"]
