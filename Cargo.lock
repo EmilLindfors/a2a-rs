@@ -171,6 +171,8 @@ version = "0.5.0"
 dependencies = [
  "a2a-rs",
  "anyhow",
+ "async-trait",
+ "axum 0.8.9",
  "clap",
  "futures",
  "serde_json",

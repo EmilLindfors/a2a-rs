@@ -30,17 +30,13 @@ a2acli --url http://localhost:8137 card
 |---|---|
 | `-u, --url <URL>` (`--base-url`) | Agent base URL. Env: `A2A_URL`. |
 | `--transport <auto\|connectrpc\|jsonrpc>` | Wire transport. Default `auto` (negotiate from the agent card, ConnectRPC preferred, JSON-RPC 2.0 as interop fallback). |
-| `--auth <TOKEN>` | Bearer token. Env: `A2A_AUTH_TOKEN`. **See caveat below.** |
-| `--timeout <SECS>` | Request timeout. **See caveat below.** |
+| `--auth <TOKEN>` | Bearer token. Env: `A2A_AUTH_TOKEN`. |
+| `--timeout <SECS>` | Timeout for a single request (not the whole wait for a reply — that is `send --wait-timeout`). |
 | `--json` | Emit raw JSON instead of human-readable output. |
 
-### `--auth` / `--timeout` caveat
-
-The card-driven negotiation factories build *unauthenticated* clients, so
-`--auth` and `--timeout` apply only when you pin a transport with
-`--transport connectrpc` or `--transport jsonrpc`. In the default `auto` mode they
-are ignored (a warning is logged to stderr). Threading credentials through
-transport negotiation is out of scope for the CLI.
+`--auth` and `--timeout` apply in every transport mode, including the default
+`auto`, and including the agent-card fetch that drives negotiation — an agent
+that guards its RPC endpoints usually guards its card too.
 
 ## Commands
 
@@ -61,10 +57,11 @@ a2acli stream t1 --resilient --last-event-id 42   # resume from an event id
 default (`return_immediately = false`) obliges it to hold the response until the
 task finishes or stops for input, so a conformant agent answers with the reply
 already attached. Against an agent that ignores the flag and returns `working`,
-`send` falls back to polling until the task settles. Either way it prints what
-the agent said, and if the budget runs out it prints the task as it stands plus
-how to follow it. `--no-wait` opts out of both halves — it tells the server not
-to block and skips the poll — returning the acknowledgement immediately.
+`send` waits on the task's event stream, falling back to polling if that agent
+has no streaming backend either. Either way it prints what the agent said, and
+if the budget runs out it prints the task as it stands plus how to follow it.
+`--no-wait` opts out of both halves — it tells the server not to block and skips
+the client-side wait — returning the acknowledgement immediately.
 
 Add `--json` to any command for machine-readable output (JSON object for
 `card`/`get`/`send`/`cancel`; one JSON envelope per line for `stream`).

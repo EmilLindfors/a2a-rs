@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use a2a_rs::domain::{A2AError, AgentCard, Message, SendCompletion, Task, TaskStateExt};
 use a2a_rs::{
-    HttpClient, JsonRpcClient, RetryPolicy, StreamEvent, StreamItem, Transport, subscribe_resilient,
+    ClientConfig, HttpClient, JsonRpcClient, RetryPolicy, StreamEvent, StreamItem, Transport,
+    subscribe_resilient,
 };
 use anyhow::Context;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -43,12 +44,13 @@ struct Cli {
 
     /// Bearer token for authenticated agents.
     ///
-    /// Only applied with `--transport connectrpc|jsonrpc`; ignored in the default
-    /// `auto` mode (the negotiation factories build unauthenticated clients).
+    /// Applies in every transport mode, including the agent-card fetch — an
+    /// agent that guards its RPC endpoints usually guards its card too.
     #[arg(long, env = "A2A_AUTH_TOKEN", global = true)]
     auth: Option<String>,
 
-    /// Request timeout in seconds. Applies to explicit transports only (see `--auth`).
+    /// Request timeout in seconds. Bounds a single request, not the whole wait
+    /// for an agent's reply — that is `send --wait-timeout`.
     #[arg(long, global = true)]
     timeout: Option<u64>,
 
@@ -151,7 +153,7 @@ async fn main() -> anyhow::Result<()> {
 
     match &cli.command {
         Command::Card => {
-            let card = a2a_rs::fetch_agent_card(&url)
+            let card = a2a_rs::fetch_agent_card_with(&url, &client_config(&cli))
                 .await
                 .context("fetching agent card")?;
             emit_card(cli.json, &card)?;
@@ -189,10 +191,10 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("sending message")?;
             // A conformant agent has already settled the task by the time it
-            // answers; this loop is the fallback for one that ignores
+            // answers; this wait is the fallback for one that ignores
             // `return_immediately`.
             if !no_wait && !is_settled(&task) {
-                task = poll_until_settled(
+                task = wait_until_settled(
                     transport.as_ref(),
                     &task_id,
                     *history_length,
@@ -261,21 +263,28 @@ async fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The credentials and timeout the caller supplied, in the shape every
+/// connection path takes — negotiated, direct, or a bare card fetch.
+fn client_config(cli: &Cli) -> ClientConfig {
+    let mut config = ClientConfig::new();
+    if let Some(token) = &cli.auth {
+        config = config.with_auth_token(token.clone());
+    }
+    if let Some(secs) = cli.timeout {
+        config = config.with_timeout(secs);
+    }
+    config
+}
+
 /// Build a transport from the global args. `card` doesn't need this (it uses the
-/// plain `fetch_agent_card` HTTP GET); everything else drives the `Transport` port.
+/// plain `fetch_agent_card_with` HTTP GET); everything else drives the
+/// `Transport` port.
 async fn build_transport(cli: &Cli, url: &str) -> anyhow::Result<Arc<dyn Transport>> {
+    let config = client_config(cli);
     let transport: Box<dyn Transport> = match cli.transport {
-        TransportChoice::Auto => {
-            if cli.auth.is_some() || cli.timeout.is_some() {
-                tracing::warn!(
-                    "--auth/--timeout are ignored in `auto` transport mode; \
-                     use --transport connectrpc|jsonrpc to apply them"
-                );
-            }
-            a2a_rs::auto_connect(url)
-                .await
-                .context("auto-connecting to agent")?
-        }
+        TransportChoice::Auto => a2a_rs::auto_connect_with(url, &config)
+            .await
+            .context("auto-connecting to agent")?,
         TransportChoice::Connectrpc => {
             let mut client = match &cli.auth {
                 Some(token) => HttpClient::with_auth(url.to_string(), token.clone()),
@@ -309,20 +318,76 @@ fn is_settled(task: &Task) -> bool {
     task.status.state.is_settled()
 }
 
-/// Poll `get_task` until the task settles or the budget runs out.
+/// Wait for `task_id` to settle, or for `budget` to run out.
 ///
 /// The fallback for an agent that ignores `return_immediately` and answers
 /// asynchronously: it reports `working` with no reply attached, and without
 /// this a freshly scaffolded `llm` agent looks like it did nothing.
-async fn poll_until_settled(
+///
+/// Prefers the agent's event stream — it wakes on the agent's actual progress
+/// instead of on a timer, and an a2a-rs server closes the subscription the
+/// moment the task settles. Polling remains the fallback for a server with no
+/// streaming backend, or one whose stream drops before the task finishes.
+async fn wait_until_settled(
     transport: &dyn Transport,
     task_id: &str,
     history_length: Option<u32>,
     budget: Duration,
 ) -> anyhow::Result<Task> {
-    const INTERVAL: Duration = Duration::from_millis(250);
     let deadline = tokio::time::Instant::now() + budget;
-    let mut announced = false;
+    let _notice = WaitNotice::after(ANNOUNCE_AFTER, budget);
+
+    if let Ok(stream) = transport
+        .subscribe_to_task(task_id, history_length, None)
+        .await
+    {
+        watch_until_settled(stream, deadline).await;
+        // Re-read rather than trusting the last event: the stream may have
+        // ended on an error or a deadline, and only `get_task` honours
+        // `history_length` uniformly across transports.
+        let task = transport
+            .get_task(task_id, history_length)
+            .await
+            .context("reading task after subscription")?;
+        if is_settled(&task) || tokio::time::Instant::now() >= deadline {
+            return Ok(task);
+        }
+    }
+
+    poll_until_settled(transport, task_id, history_length, deadline).await
+}
+
+/// Drain a subscription until it reports a settled state, ends, errors, or runs
+/// past `deadline`. The caller decides what actually happened by re-reading the
+/// task, so every one of those is just "stop watching".
+async fn watch_until_settled(mut stream: EventStream, deadline: tokio::time::Instant) {
+    let drain = async {
+        while let Some(Ok(event)) = stream.next().await {
+            if event_settles(&event) {
+                break;
+            }
+        }
+    };
+    let _ = tokio::time::timeout_at(deadline, drain).await;
+}
+
+/// Whether an event says the agent has stopped working on the task.
+fn event_settles(event: &StreamEvent) -> bool {
+    match &event.item {
+        StreamItem::Task(task) => task.status.state.is_settled(),
+        StreamItem::StatusUpdate(update) => update.status.state.is_settled(),
+        StreamItem::ArtifactUpdate(_) => false,
+    }
+}
+
+/// Poll `get_task` until the task settles or `deadline` passes.
+async fn poll_until_settled(
+    transport: &dyn Transport,
+    task_id: &str,
+    history_length: Option<u32>,
+    deadline: tokio::time::Instant,
+) -> anyhow::Result<Task> {
+    const INTERVAL: Duration = Duration::from_millis(250);
 
     loop {
         let now = tokio::time::Instant::now();
@@ -334,16 +399,35 @@ async fn poll_until_settled(
         if is_settled(&task) || tokio::time::Instant::now() >= deadline {
             return Ok(task);
         }
-        // Straight to stderr rather than `tracing`: the default filter is `warn`,
-        // so a logged line would never reach the person waiting on the prompt —
-        // and the report on stdout has to stay greppable.
-        if !announced {
-            announced = true;
+    }
+}
+
+/// How long a wait may run before it is worth telling the person about.
+const ANNOUNCE_AFTER: Duration = Duration::from_millis(250);
+
+/// Tells whoever is at the prompt that we are waiting — but only once the wait
+/// is long enough to notice, so the common case of a fast agent prints nothing.
+///
+/// Straight to stderr rather than `tracing`: the default filter is `warn`, so a
+/// logged line would never reach them — and the report on stdout has to stay
+/// greppable.
+struct WaitNotice(tokio::task::JoinHandle<()>);
+
+impl WaitNotice {
+    fn after(delay: Duration, budget: Duration) -> Self {
+        Self(tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
             eprintln!(
                 "waiting up to {}s for the agent to reply (--no-wait to skip)...",
                 budget.as_secs()
             );
-        }
+        }))
+    }
+}
+
+impl Drop for WaitNotice {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 

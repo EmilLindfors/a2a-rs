@@ -16,22 +16,6 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
 
 ## 1. Client CLI (`a2acli`)
 
-- [ ] **Switch `a2acli send`'s fallback wait from polling to `subscribe_to_task`.**
-      Demoted, not resolved, by the blocking `SendMessage` work: against a
-      conformant server the poll loop no longer runs at all, since the task
-      comes back settled. What is left is the fallback for a server that ignores
-      `return_immediately` — and there, an event-driven wait is still the better
-      shape now that subscriptions end when the task settles.
-- [ ] **Thread `--auth` / `--timeout` through `auto` mode.** The negotiation
-      factories (`TransportFactory` in
-      `a2a-rs/src/adapter/transport/negotiation.rs`) build unauthenticated,
-      default-timeout clients, so credentials only apply with an explicit
-      `--transport`. Options: add a `ClientConfig` (token + timeout) to
-      `TransportFactory::create`, or a `connect_with` / `auto_connect_with`
-      variant.
-- [ ] **Add an `a2acli` integration test.** Spin up `examples/jsonrpc_server` and
-      drive the built binary through `card`/`send`/`get`/`cancel` (mirrors the
-      manual e2e). Complements `a2a-rs/tests/jsonrpc_client_interop_test.rs`.
 - [ ] *(Optional)* **`list` command** — the `Transport` port already has
       `list_tasks`; expose it (`a2acli list [--state …] [--limit …]`).
       Push-notification-config commands are also on the port but outside the
