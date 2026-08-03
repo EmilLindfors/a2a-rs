@@ -14,7 +14,10 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use a2a_rs::domain::{A2AError, AgentCard, Message, SendCompletion, Task, TaskStateExt};
+use a2a_rs::domain::{
+    A2AError, AgentCard, ListTasksParams, ListTasksResult, Message, SendCompletion, Task,
+    TaskState, TaskStateExt,
+};
 use a2a_rs::{
     ClientConfig, HttpClient, JsonRpcClient, RetryPolicy, StreamEvent, StreamItem, Transport,
     subscribe_resilient,
@@ -76,6 +79,38 @@ enum TransportChoice {
     Jsonrpc,
 }
 
+/// A task state as a person spells it, mapped to the wire's enum.
+///
+/// A `ValueEnum` rather than a parsed string so `--state nonsense` is rejected
+/// by the argument parser with the valid values listed, instead of becoming a
+/// filter that silently matches nothing.
+#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
+enum StateArg {
+    Submitted,
+    Working,
+    InputRequired,
+    AuthRequired,
+    Completed,
+    Canceled,
+    Failed,
+    Rejected,
+}
+
+impl From<StateArg> for TaskState {
+    fn from(arg: StateArg) -> Self {
+        match arg {
+            StateArg::Submitted => TaskState::Submitted,
+            StateArg::Working => TaskState::Working,
+            StateArg::InputRequired => TaskState::InputRequired,
+            StateArg::AuthRequired => TaskState::AuthRequired,
+            StateArg::Completed => TaskState::Completed,
+            StateArg::Canceled => TaskState::Canceled,
+            StateArg::Failed => TaskState::Failed,
+            StateArg::Rejected => TaskState::Rejected,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Fetch and print the agent card.
@@ -83,7 +118,7 @@ enum Command {
 
     /// Send a text message to a task (a task id is generated when omitted).
     Send {
-        /// The message text.
+        /// The message text, or `-` to read it from stdin.
         text: String,
         /// Target task id. Generated (uuid) if not provided.
         #[arg(long)]
@@ -120,6 +155,19 @@ enum Command {
     Cancel {
         /// The task id.
         task_id: String,
+    },
+
+    /// List the agent's tasks.
+    List {
+        /// Only tasks in this state.
+        #[arg(long, value_enum)]
+        state: Option<StateArg>,
+        /// Maximum number of tasks to return.
+        #[arg(long, value_name = "N")]
+        limit: Option<i32>,
+        /// Only tasks in this context (conversation).
+        #[arg(long, value_name = "ID")]
+        context_id: Option<String>,
     },
 
     /// Subscribe to a task's update stream and print events as they arrive.
@@ -171,7 +219,7 @@ async fn main() -> anyhow::Result<()> {
             let task_id = task_id
                 .clone()
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-            let message = Message::user_text(text.clone(), uuid::Uuid::new_v4().to_string());
+            let message = Message::user_text(read_text(text)?, uuid::Uuid::new_v4().to_string());
             // `--no-wait` has to reach the server too. Asking a conformant agent
             // to block and then declining to wait for it just moves the wait
             // somewhere the flag cannot switch off.
@@ -203,12 +251,10 @@ async fn main() -> anyhow::Result<()> {
                 .await?;
             }
             emit_task(cli.json, &task)?;
-            if !cli.json && !is_settled(&task) {
-                println!();
-                println!("the agent is still working; follow it with:");
-                println!("  a2acli --url {url} stream {task_id}");
-                println!("  a2acli --url {url} get {task_id}");
+            if !cli.json {
+                print_next_step(&url, &task_id, &task);
             }
+            return finish(&task);
         }
 
         Command::Get {
@@ -221,8 +267,15 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("getting task")?;
             emit_task(cli.json, &task)?;
+            if !cli.json {
+                print_next_step(&url, task_id, &task);
+            }
+            return finish(&task);
         }
 
+        // No `finish` here: cancelling is the one command whose success is
+        // measured by the *request*, not the task's state. A canceled task is
+        // this command working, so reporting failure would be backwards.
         Command::Cancel { task_id } => {
             let transport = build_transport(&cli, &url).await?;
             let task = transport
@@ -230,6 +283,25 @@ async fn main() -> anyhow::Result<()> {
                 .await
                 .context("cancelling task")?;
             emit_task(cli.json, &task)?;
+        }
+
+        Command::List {
+            state,
+            limit,
+            context_id,
+        } => {
+            let transport = build_transport(&cli, &url).await?;
+            let params = ListTasksParams {
+                status: state.map(TaskState::from),
+                page_size: *limit,
+                context_id: context_id.clone(),
+                ..Default::default()
+            };
+            let result = transport
+                .list_tasks(&params)
+                .await
+                .context("listing tasks")?;
+            emit_task_list(cli.json, &result)?;
         }
 
         Command::Stream {
@@ -310,6 +382,72 @@ async fn build_transport(cli: &Cli, url: &str) -> anyhow::Result<Arc<dyn Transpo
         }
     };
     Ok(Arc::from(transport))
+}
+
+/// The message body: `-` means stdin, so a long prompt can be piped or kept in
+/// a file rather than fought through shell quoting.
+fn read_text(text: &str) -> anyhow::Result<String> {
+    use std::io::Read;
+
+    if text != "-" {
+        return Ok(text.to_string());
+    }
+    let mut buf = String::new();
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .context("reading the message from stdin")?;
+    // A trailing newline is an artefact of how the text arrived, not part of
+    // what the user meant to say.
+    Ok(buf.trim_end_matches(['\n', '\r']).to_string())
+}
+
+/// The command worked and the *agent* failed or rejected the task.
+///
+/// Distinct from `1` — the command itself failing — so a script can retry a
+/// timeout without retrying a refusal. Those need opposite responses, and one
+/// exit code cannot ask for both.
+const EXIT_TASK_FAILED: i32 = 2;
+
+/// Exit non-zero when the agent rejected or failed the task.
+///
+/// The request succeeding and the work succeeding are different facts, and a
+/// CLI that reports only the first turns `a2acli send … && deploy` into a
+/// deploy on a failed task. Only the agent's own verdicts count: a task still
+/// working is not a failure (the caller was told how to follow it), an
+/// interrupted one is a question (likewise), and `Canceled` is somebody getting
+/// what they asked for.
+fn finish(task: &Task) -> anyhow::Result<()> {
+    let state = &task.status.state;
+    if *state == TaskState::Failed || *state == TaskState::Rejected {
+        let label = task_state_label(&serde_json::to_value(task)?);
+        eprintln!("a2acli: the agent {label} this task");
+        // The task was already printed to stdout; make sure it is out before
+        // exiting past the normal end of `main`.
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        std::process::exit(EXIT_TASK_FAILED);
+    }
+    Ok(())
+}
+
+/// Say what to do next, when there is anything to do.
+///
+/// The three cases are genuinely different and the CLI used to answer only one
+/// of them. A task still running is followed with `stream`/`get`. A task in an
+/// *interrupted* state is waiting on **you** — and since those states count as
+/// settled, the CLI previously printed the state and fell silent, which reads
+/// like the agent gave up rather than asked a question. A finished task needs
+/// no advice at all.
+fn print_next_step(url: &str, task_id: &str, task: &Task) {
+    if task.status.state.is_interrupted() {
+        println!();
+        println!("the agent is waiting for you; answer on the same task with:");
+        println!("  a2acli --url {url} send --task-id {task_id} \"your reply\"");
+    } else if !is_settled(task) {
+        println!();
+        println!("the agent is still working; follow it with:");
+        println!("  a2acli --url {url} stream {task_id}");
+        println!("  a2acli --url {url} get {task_id}");
+    }
 }
 
 /// Whether the agent has stopped making progress on its own — either finished,
@@ -507,6 +645,54 @@ fn emit_task(json: bool, task: &Task) -> anyhow::Result<()> {
         println!("{body}");
     }
     Ok(())
+}
+
+/// One line per task, newest concerns first: id, state, and the opening of
+/// whatever was last said on it — enough to recognise the task you meant.
+fn emit_task_list(json: bool, result: &ListTasksResult) -> anyhow::Result<()> {
+    let value = serde_json::to_value(result)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
+
+    let Some(tasks) = array_field(&value, "tasks") else {
+        println!("no tasks");
+        return Ok(());
+    };
+    for task in tasks {
+        let summary = task
+            .get("status")
+            .and_then(|status| status.get("message"))
+            .and_then(parts_text)
+            .map(|text| first_line(&text))
+            .unwrap_or_default();
+        println!(
+            "{:<38} {:<15} {}",
+            or_dash(str_field(task, "id")),
+            task_state_label(task),
+            summary,
+        );
+    }
+    // `totalSize` is the server's count of everything matching, which is not
+    // the same as what fitted on this page — say both rather than imply one.
+    if let Some(total) = value.get("totalSize").and_then(Value::as_i64)
+        && total > tasks.len() as i64
+    {
+        println!("({} of {total} shown; raise --limit for more)", tasks.len());
+    }
+    Ok(())
+}
+
+/// The first line of `text`, elided if it is long — a list stays a list only if
+/// each entry is one row.
+fn first_line(text: &str) -> String {
+    const WIDTH: usize = 60;
+    let line = text.lines().next().unwrap_or_default().trim();
+    match line.char_indices().nth(WIDTH) {
+        Some((cut, _)) => format!("{}…", &line[..cut]),
+        None => line.to_string(),
+    }
 }
 
 fn emit_event(json: bool, event: &StreamEvent) -> anyhow::Result<()> {

@@ -33,6 +33,7 @@ use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, AsyncTaskLifecycl
 
 const AGENT_NAME: &str = "e2e-agent";
 const LATE_REPLY: &str = "answered after thinking";
+const FIXED_REPLY: &str = "which currency should I use?";
 /// Long enough that the CLI reliably attaches before the agent finishes, short
 /// enough that a full test run stays quick.
 const THINKING_TIME: Duration = Duration::from_millis(400);
@@ -96,6 +97,37 @@ impl AsyncMessageHandler for LateHandler {
         });
 
         Ok(acknowledgement)
+    }
+}
+
+/// An agent that settles straight into one state, whatever it is asked.
+///
+/// The echo responder can only ever succeed, so the outcomes that actually need
+/// the CLI to say something — the agent refusing the work, or asking a question
+/// back — are unreachable without this.
+#[derive(Clone)]
+struct FixedHandler {
+    storage: InMemoryTaskStorage,
+    state: TaskState,
+}
+
+#[async_trait]
+impl AsyncMessageHandler for FixedHandler {
+    async fn process_message(
+        &self,
+        task_id: &str,
+        _message: &Message,
+        _session_id: Option<&str>,
+    ) -> Result<Task, A2AError> {
+        let id: TaskId = task_id.parse()?;
+        let context: ContextId = "e2e".parse()?;
+        if !self.storage.exists(&id).await? {
+            self.storage.create(&id, &context).await?;
+        }
+        let reply = Message::agent_text(FIXED_REPLY.to_string(), "fixed-reply".to_string());
+        self.storage
+            .update_status(&id, self.state, Some(reply))
+            .await
     }
 }
 
@@ -208,6 +240,9 @@ impl AsyncStreamingHandler for BlindOnceStreaming {
 enum Agent {
     /// Answers synchronously — the conformant case, where `send` never waits.
     Echo,
+    /// Settles synchronously into a fixed state, for the outcomes an echo
+    /// cannot produce: refusing the work, or asking a question back.
+    Answers(TaskState),
     /// Acknowledges and settles later, with subscriptions available.
     Late(Duration),
     /// Acknowledges and settles later, with **no** streaming backend at all, so
@@ -243,6 +278,16 @@ async fn spawn_agent(agent: Agent, card_token: Option<&'static str>) -> Harness 
                 streaming.clone(),
                 storage.push_notifier(),
             ),
+            storage.clone(),
+            storage.clone(),
+            info,
+        )
+        .with_streaming_handler(streaming.clone()),
+        Agent::Answers(state) => JsonRpcAdapter::new(
+            FixedHandler {
+                storage: storage.clone(),
+                state,
+            },
             storage.clone(),
             storage.clone(),
             info,
@@ -320,9 +365,31 @@ async fn spawn_agent(agent: Agent, card_token: Option<&'static str>) -> Harness 
 // Driving the binary
 // ---------------------------------------------------------------------------
 
-/// Run the built `a2acli` against `base` and return (stdout, stderr, success).
-async fn a2acli(base: &str, args: &[&str]) -> (String, String, bool) {
-    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_a2acli"))
+/// What one run of the binary produced.
+struct Run {
+    stdout: String,
+    stderr: String,
+    /// `None` if the process was killed by a signal rather than exiting.
+    code: Option<i32>,
+}
+
+impl Run {
+    fn ok(&self) -> bool {
+        self.code == Some(0)
+    }
+}
+
+/// Run the built `a2acli` against `base`.
+async fn a2acli(base: &str, args: &[&str]) -> Run {
+    a2acli_stdin(base, args, None).await
+}
+
+/// As [`a2acli`], optionally feeding `stdin` to the child.
+async fn a2acli_stdin(base: &str, args: &[&str], stdin: Option<&str>) -> Run {
+    use std::process::Stdio;
+
+    let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_a2acli"));
+    command
         .arg("--url")
         .arg(base)
         .args(args)
@@ -330,25 +397,46 @@ async fn a2acli(base: &str, args: &[&str]) -> (String, String, bool) {
         // developer's own shell must not decide what the test is testing.
         .env_remove("A2A_URL")
         .env_remove("A2A_AUTH_TOKEN")
-        .output()
-        .await
-        .expect("a2acli should be runnable");
+        .stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
-    (
-        String::from_utf8_lossy(&output.stdout).into_owned(),
-        String::from_utf8_lossy(&output.stderr).into_owned(),
-        output.status.success(),
-    )
+    let mut child = command.spawn().expect("a2acli should be runnable");
+    if let Some(input) = stdin {
+        use tokio::io::AsyncWriteExt;
+        let mut pipe = child.stdin.take().expect("stdin was piped");
+        pipe.write_all(input.as_bytes()).await.unwrap();
+        // Dropping the handle closes the pipe; without it the child blocks on a
+        // read that never returns EOF.
+        drop(pipe);
+    }
+    let output = child
+        .wait_with_output()
+        .await
+        .expect("a2acli should finish");
+
+    Run {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        code: output.status.code(),
+    }
 }
 
 /// Run the CLI and assert it succeeded, returning stdout.
 async fn run(base: &str, args: &[&str]) -> String {
-    let (stdout, stderr, ok) = a2acli(base, args).await;
+    let run = a2acli(base, args).await;
     assert!(
-        ok,
-        "a2acli {args:?} failed\nstdout: {stdout}\nstderr: {stderr}"
+        run.ok(),
+        "a2acli {args:?} exited {:?}\nstdout: {}\nstderr: {}",
+        run.code,
+        run.stdout,
+        run.stderr
     );
-    stdout
+    run.stdout
 }
 
 /// Run the CLI with `--json` and parse what it printed.
@@ -516,17 +604,161 @@ async fn send_gives_up_gracefully_when_the_agent_never_answers() {
 async fn auth_token_reaches_the_card_endpoint() {
     let agent = spawn_agent(Agent::Echo, Some("s3cret")).await;
 
-    let (_, _, ok) = a2acli(&agent.base, &["card"]).await;
-    assert!(!ok, "a guarded card must not be readable without a token");
+    let unauthenticated = a2acli(&agent.base, &["card"]).await;
+    assert!(
+        !unauthenticated.ok(),
+        "a guarded card must not be readable without a token"
+    );
 
     let card = run_json(&agent.base, &["card", "--auth", "s3cret"]).await;
     assert_eq!(card["name"], AGENT_NAME);
 }
 
+/// An agent that fails the task must fail the command. Otherwise
+/// `a2acli send … && deploy` deploys on a failed task.
+#[tokio::test]
+async fn a_failed_task_exits_non_zero() {
+    let agent = spawn_agent(Agent::Answers(TaskState::Failed), None).await;
+
+    let sent = a2acli(&agent.base, &["send", "do it", "--task-id", "t-failed"]).await;
+    // Exit 2, not 1: the command worked and the agent said no. A script that
+    // retries a timeout must not also retry a refusal.
+    assert_eq!(
+        sent.code,
+        Some(2),
+        "stdout: {}\nstderr: {}",
+        sent.stdout,
+        sent.stderr
+    );
+    assert!(
+        sent.stdout.contains("failed"),
+        "the task is still reported in full: {}",
+        sent.stdout
+    );
+    assert!(
+        sent.stderr.contains("failed"),
+        "and the reason is on stderr: {}",
+        sent.stderr
+    );
+
+    // `get` agrees — the verdict is the task's, not the send's.
+    let got = a2acli(&agent.base, &["get", "t-failed"]).await;
+    assert_eq!(got.code, Some(2), "get on a failed task must report it too");
+}
+
+/// A refusal is the agent's verdict too, and reads differently from a failure.
+#[tokio::test]
+async fn a_rejected_task_exits_non_zero() {
+    let agent = spawn_agent(Agent::Answers(TaskState::Rejected), None).await;
+
+    let sent = a2acli(&agent.base, &["send", "do it", "--task-id", "t-rejected"]).await;
+    assert_eq!(sent.code, Some(2), "stderr: {}", sent.stderr);
+}
+
+/// An interrupted task is the agent asking *you* a question. It counts as
+/// settled, so the CLI used to print the state and fall silent — which reads
+/// like the agent gave up rather than asked something.
+#[tokio::test]
+async fn an_interrupted_task_says_how_to_answer() {
+    let agent = spawn_agent(Agent::Answers(TaskState::InputRequired), None).await;
+
+    let stdout = run(
+        &agent.base,
+        &["send", "book a flight", "--task-id", "t-ask"],
+    )
+    .await;
+    assert!(stdout.contains("input-required"), "send output: {stdout}");
+    assert!(
+        stdout.contains(FIXED_REPLY),
+        "the agent's question must be shown: {stdout}"
+    );
+    assert!(
+        stdout.contains("waiting for you") && stdout.contains("--task-id t-ask"),
+        "the next step is another send on the same task: {stdout}"
+    );
+    // Being asked a question is not a failure.
+    let asked = a2acli(
+        &agent.base,
+        &["send", "book a flight", "--task-id", "t-ask2"],
+    )
+    .await;
+    assert!(asked.ok(), "an interrupted task must still exit 0");
+}
+
+/// `list` is how you find a task whose id you no longer have.
+#[tokio::test]
+async fn list_finds_tasks_and_filters_by_state() {
+    let agent = spawn_agent(Agent::Echo, None).await;
+    for id in ["t-list-a", "t-list-b"] {
+        run(&agent.base, &["send", "hello", "--task-id", id]).await;
+    }
+
+    let listed = run(&agent.base, &["list"]).await;
+    assert!(listed.contains("t-list-a"), "list output: {listed}");
+    assert!(listed.contains("t-list-b"), "list output: {listed}");
+
+    let completed = run_json(&agent.base, &["list", "--state", "completed"]).await;
+    let tasks = completed["tasks"].as_array().expect("tasks array");
+    assert!(!tasks.is_empty(), "echoed tasks are completed: {completed}");
+
+    // A state nothing is in returns an empty list rather than everything.
+    let working = run_json(&agent.base, &["list", "--state", "working"]).await;
+    assert!(
+        working["tasks"].as_array().is_none_or(|t| t.is_empty()),
+        "no task should be working: {working}"
+    );
+}
+
+/// A state the enum does not know is rejected by the parser, with the valid
+/// values listed — not turned into a filter that silently matches nothing.
+#[tokio::test]
+async fn list_rejects_an_unknown_state() {
+    let agent = spawn_agent(Agent::Echo, None).await;
+
+    let listed = a2acli(&agent.base, &["list", "--state", "nonsense"]).await;
+    assert!(!listed.ok(), "an unknown state must be an error");
+    assert!(
+        listed.stderr.contains("completed"),
+        "valid values listed: {}",
+        listed.stderr
+    );
+}
+
+/// `send -` takes the message from stdin, so a long prompt need not be fought
+/// through shell quoting.
+#[tokio::test]
+async fn send_reads_the_message_from_stdin() {
+    let agent = spawn_agent(Agent::Echo, None).await;
+
+    let sent = a2acli_stdin(
+        &agent.base,
+        &["send", "-", "--task-id", "t-stdin", "--json"],
+        Some("piped in from a file\n"),
+    )
+    .await;
+    assert!(
+        sent.ok(),
+        "stdin send failed\nstdout: {}\nstderr: {}",
+        sent.stdout,
+        sent.stderr
+    );
+
+    let stdout = sent.stdout;
+    let task: Value = serde_json::from_str(&stdout).expect("json");
+    assert_eq!(task["id"], "t-stdin");
+    // The echo agent replies with what it was sent, so the text round-trips —
+    // and the trailing newline the shell added is not part of the message.
+    assert!(
+        stdout.contains("piped in from a file") && !stdout.contains("from a file\\n"),
+        "stdin text should arrive without its trailing newline: {stdout}"
+    );
+}
+
 /// A bad URL fails loudly instead of hanging or exiting 0.
 #[tokio::test]
 async fn malformed_url_is_a_hard_error() {
-    let (_, stderr, ok) = a2acli("not-a-url", &["send", "hello"]).await;
-    assert!(!ok, "a malformed url must be an error");
-    assert!(!stderr.is_empty(), "the failure must say something");
+    let run = a2acli("not-a-url", &["send", "hello"]).await;
+    // Exit 1, not 2: the command failed, so no agent ever rendered a verdict.
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert!(!run.stderr.is_empty(), "the failure must say something");
 }

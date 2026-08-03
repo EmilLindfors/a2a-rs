@@ -5,7 +5,7 @@ Open work across the workspace, roughly in the order it is worth doing.
 Companion docs: `CHANGELOG.md` records what shipped, `NOTES.md` the decisions
 behind it and the hazards worth not rediscovering.
 
-Sections 1–6 are actionable now. Sections 7–9 are deferred themes: real work,
+Sections 1–5 are actionable now. Sections 6–8 are deferred themes: real work,
 but not scheduled — each needs its own pass rather than a slot in the current
 one.
 
@@ -14,14 +14,7 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
 
 ---
 
-## 1. Client CLI (`a2acli`)
-
-- [ ] *(Optional)* **`list` command** — the `Transport` port already has
-      `list_tasks`; expose it (`a2acli list [--state …] [--limit …]`).
-      Push-notification-config commands are also on the port but outside the
-      roadmap's `card/send/stream/get/cancel` scope.
-
-## 2. Platform — runtime and delegation
+## 1. Platform — runtime and delegation
 
 - [ ] **Per-agent images** (`image` on `AgentSpec` or a `[runtime]` config
       block). The escape hatch that keeps the declarative layer from being a toy:
@@ -52,13 +45,13 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
       `axum8` dev-dep alias as a stopgap; bump the frontend when `askama_axum`
       allows.
 
-## 3. Platform extraction — before the provider work
+## 2. Platform extraction — before the provider work
 
 Move `a2a-agents`, `a2a-agents-common`, and the Terraform provider into
 `a2a-agents-platform`, depending only on **published** `a2a-rs` / `a2a-mcp` /
 `a2a-ap2` (no path deps back), keeping the protocol crates clean.
 
-Extract *before* the provider rework (§4), not after: a Terraform provider with
+Extract *before* the provider rework (§3), not after: a Terraform provider with
 its own Go toolchain, Go CI, and TF acceptance tests does not belong in the
 protocol repo, and the provider work is where the Go surface gets serious —
 extracting afterwards means moving a much larger, freshly-churning surface. The
@@ -76,7 +69,7 @@ One PR, pre-1.0 "break cleanly" posture:
       `Cargo.toml`; point `README.md` / `CLAUDE.md` at the new repo. Keep
       `a2a-rs`, `a2a-ap2`, `a2a-client`, `a2a-mcp`, `a2acli` here.
 
-## 4. Terraform provider ⏸ (parked)
+## 3. Terraform provider ⏸ (parked)
 
 Parked behind the standalone track and the extraction — see `NOTES.md` for why.
 The design below still holds for when it resumes.
@@ -113,7 +106,7 @@ config fields, so the provider cannot express most agents even when correct.
       real HCL, assert an agent answers. Every layer is tested in isolation and
       the seams are exactly where the failures have been.
 
-## 5. Interop and CI
+## 4. Interop and CI
 
 - [ ] **Retire the legacy `MessageSendConfiguration.blocking`**
       (`domain/core/task.rs`) — the v0.x spelling of `return_immediately`, still
@@ -133,7 +126,7 @@ config fields, so the provider cannot express most agents even when correct.
       number is unproven again, and a `dtolnay/rust-toolchain@1.96` job is what
       makes it real.
 
-## 6. Docs
+## 5. Docs
 
 - [ ] `terraform-provider-a2aagent/README.md` still describes the provider as the
       source of truth for agent definitions. Fix when the provider resumes — or
@@ -141,7 +134,7 @@ config fields, so the provider cannot express most agents even when correct.
 
 ---
 
-## 7. Protocol and core (`a2a-rs`) — deferred themes
+## 6. Protocol and core (`a2a-rs`) — deferred themes
 
 Real work, unscheduled. Each reshapes a surface and warrants its own pass.
 
@@ -167,7 +160,7 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
       model can request and verify payments; tests and error handling for the
       flows.
 
-## 8. Blocked on upstream
+## 7. Blocked on upstream
 
 - [ ] **`aws-lc-sys` breaks any new `cross` target.** `cross` is used only for
       `aarch64-unknown-linux-gnu` today (native cargo elsewhere) and that works,
@@ -194,7 +187,7 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
         — sidestepping the provider question. Needs a reproducible `cross`
         environment to validate.
 
-## 9. Nice to have
+## 8. Nice to have
 
 - [ ] **Single bidirectional showcase** — fold `AgentToMcpBridge` (re-expose the
       agent *as* MCP tools) into `complex_agent`. Already covered standalone by

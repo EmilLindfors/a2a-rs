@@ -44,9 +44,13 @@ that guards its RPC endpoints usually guards its card too.
 a2acli card                                   # fetch & print the agent card
 a2acli send "hello"                           # send to a fresh (uuid) task id
 a2acli send "hello" --task-id t1              # send to a specific task
+a2acli send - < prompt.txt                    # read the message from stdin
 a2acli send "hello" --no-wait                 # don't wait for the reply
 a2acli send "hello" --wait-timeout 120        # wait longer than the 30s default
 a2acli get t1                                 # fetch a task by id
+a2acli list                                   # list the agent's tasks
+a2acli list --state input-required            # …only ones waiting on you
+a2acli list --limit 10 --context-id c1        # …paged, or scoped to one conversation
 a2acli cancel t1                              # cancel a task
 a2acli stream t1                              # subscribe to task updates
 a2acli stream t1 --resilient                  # reconnect with backoff on disconnect
@@ -63,8 +67,38 @@ if the budget runs out it prints the task as it stands plus how to follow it.
 `--no-wait` opts out of both halves — it tells the server not to block and skips
 the client-side wait — returning the acknowledgement immediately.
 
+When the agent stops and hands the conversation back — `input-required` or
+`auth-required` — `send` and `get` print what it asked and the command that
+answers it, on the same task:
+
+```
+task t1
+  state:   input-required
+
+Which currency should I use?
+
+the agent is waiting for you; answer on the same task with:
+  a2acli --url http://localhost:8137 send --task-id t1 "your reply"
+```
+
 Add `--json` to any command for machine-readable output (JSON object for
-`card`/`get`/`send`/`cancel`; one JSON envelope per line for `stream`).
+`card`/`get`/`send`/`cancel`/`list`; one JSON envelope per line for `stream`).
+
+## Exit codes
+
+| Code | Meaning |
+|---|---|
+| `0` | The command worked. A task still running, or waiting on you, counts — the output says what to do next. |
+| `1` | The command failed: bad arguments, agent unreachable, transport error. |
+| `2` | The command worked and the **agent** failed or rejected the task. |
+
+`2` is separate from `1` on purpose: a timeout is worth retrying and a refusal
+is not, and one exit code cannot ask for both. `cancel` is the exception — a
+canceled task is that command succeeding, so it exits `0`.
+
+```sh
+a2acli send "ship it" && ./deploy.sh    # only deploys if the agent finished the task
+```
 
 ## Interop harness
 
