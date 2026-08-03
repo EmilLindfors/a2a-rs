@@ -120,6 +120,10 @@ use std::sync::Arc;
 
 use a2a_rs::domain::A2AError;
 use a2a_rs::{HttpClient, RetryPolicy, StreamEvent, Transport, subscribe_resilient};
+
+/// Re-exported so callers can configure [`WebA2AClient::auto_connect_with`]
+/// without also depending on `a2a-rs` directly.
+pub use a2a_rs::ClientConfig;
 use futures::Stream;
 
 /// Web-friendly A2A client that wraps both HTTP and WebSocket clients.
@@ -225,10 +229,36 @@ impl WebA2AClient {
     /// # }
     /// ```
     pub async fn auto_connect(base_url: &str) -> Result<Self> {
-        // Delegates to the shared `a2a_rs::auto_connect` (URL-validate → negotiate
-        // → direct-client fallback); the CLI and this web client are siblings on
-        // that one entry point.
-        let transport = a2a_rs::auto_connect(base_url).await?;
+        Self::auto_connect_with(base_url, &ClientConfig::default()).await
+    }
+
+    /// As [`auto_connect`](Self::auto_connect), with credentials and a request
+    /// timeout.
+    ///
+    /// The card-driven path is the one that needs this most: negotiation has to
+    /// fetch the agent card before it can pick a transport, and an agent that
+    /// authenticates its RPC endpoints usually authenticates its card too.
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// use a2a_client::{ClientConfig, WebA2AClient};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> anyhow::Result<()> {
+    /// let client = WebA2AClient::auto_connect_with(
+    ///     "http://localhost:8080",
+    ///     &ClientConfig::new().with_auth_token("token"),
+    /// )
+    /// .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn auto_connect_with(base_url: &str, config: &ClientConfig) -> Result<Self> {
+        // Delegates to the shared `a2a_rs::auto_connect_with` (URL-validate →
+        // negotiate → direct-client fallback); the CLI and this web client are
+        // siblings on that one entry point.
+        let transport = a2a_rs::auto_connect_with(base_url, config).await?;
         Ok(Self {
             transport: Arc::from(transport),
         })

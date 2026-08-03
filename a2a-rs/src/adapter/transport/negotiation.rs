@@ -9,6 +9,11 @@
 //! This is composition-at-the-edge: the application assembles a negotiator with
 //! exactly the transports it compiled in, then calls [`connect`] (or
 //! [`TransportNegotiator::negotiate`]) to obtain a ready `Box<dyn Transport>`.
+//!
+//! A [`ClientConfig`] carries the settings that are not derivable from the card —
+//! credentials and request timeout — through negotiation, so a negotiated client
+//! is configured exactly like a hand-built one. Without it, authentication would
+//! only be reachable by bypassing negotiation entirely.
 
 use async_trait::async_trait;
 
@@ -19,6 +24,66 @@ use crate::domain::PROTOCOL_BINDING_JSONRPC;
 use crate::domain::{A2AError, AgentCard, AgentInterface};
 use crate::port::Transport;
 
+/// Client-side connection settings applied to every transport built during
+/// negotiation, and to the agent-card fetch that precedes it.
+///
+/// The agent card describes *where and how* to reach an agent; this describes
+/// what the caller brings to the call. Both are needed to build a usable client,
+/// and only the card comes off the wire.
+#[derive(Clone, Default)]
+pub struct ClientConfig {
+    auth_token: Option<String>,
+    timeout_secs: Option<u64>,
+}
+
+/// Redacts the token. A derived `Debug` would print the credential verbatim,
+/// and this type is exactly the thing a caller reaches for when tracing why a
+/// connection did not authenticate — so the one line most likely to be written
+/// is the one that must not carry the secret.
+impl std::fmt::Debug for ClientConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientConfig")
+            .field(
+                "auth_token",
+                match &self.auth_token {
+                    Some(_) => &"<redacted>",
+                    None => &"None",
+                },
+            )
+            .field("timeout_secs", &self.timeout_secs)
+            .finish()
+    }
+}
+
+impl ClientConfig {
+    /// Unauthenticated, transport-default timeout.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Send `token` as an HTTP `Authorization: Bearer` credential.
+    pub fn with_auth_token(mut self, token: impl Into<String>) -> Self {
+        self.auth_token = Some(token.into());
+        self
+    }
+
+    /// Bound each request to `secs` seconds.
+    pub fn with_timeout(mut self, secs: u64) -> Self {
+        self.timeout_secs = Some(secs);
+        self
+    }
+
+    /// The bearer token, when one was set.
+    pub fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
+    }
+
+    /// The per-request timeout in seconds, when one was set.
+    pub fn timeout_secs(&self) -> Option<u64> {
+        self.timeout_secs
+    }
+}
+
 /// Builds a [`Transport`] for a single wire protocol from an agent interface.
 #[async_trait]
 pub trait TransportFactory: Send + Sync {
@@ -26,13 +91,49 @@ pub trait TransportFactory: Send + Sync {
     /// (e.g. `"JSONRPC"`, `"CONNECTRPC"`).
     fn protocol(&self) -> &str;
 
-    /// Construct a transport for `iface`. Returning `Err` lets the negotiator
-    /// fall through to the next compatible interface/factory.
+    /// Construct a transport for `iface`, configured with `config`. Returning
+    /// `Err` lets the negotiator fall through to the next compatible
+    /// interface/factory.
     async fn create(
         &self,
         card: &AgentCard,
         iface: &AgentInterface,
+        config: &ClientConfig,
     ) -> Result<Box<dyn Transport>, A2AError>;
+}
+
+/// Build a JSON-RPC client on `url` with `config` applied.
+#[cfg(feature = "jsonrpc-client")]
+fn jsonrpc_client(url: String, config: &ClientConfig) -> super::jsonrpc_client::JsonRpcClient {
+    use super::jsonrpc_client::JsonRpcClient;
+
+    let mut client = match config.auth_token() {
+        Some(token) => JsonRpcClient::with_auth(url, token.to_string()),
+        None => JsonRpcClient::new(url),
+    };
+    if let Some(secs) = config.timeout_secs() {
+        client = client.with_timeout(secs);
+    }
+    client
+}
+
+/// Build a ConnectRPC client on `url` with `config` applied, reporting a URL
+/// `http::Uri` cannot represent rather than panicking on it.
+#[cfg(feature = "http-client")]
+fn connect_rpc_client(
+    url: String,
+    config: &ClientConfig,
+) -> Result<super::http::HttpClient, A2AError> {
+    use super::http::HttpClient;
+
+    let mut client = match config.auth_token() {
+        Some(token) => HttpClient::try_with_auth(url, token.to_string())?,
+        None => HttpClient::try_new(url)?,
+    };
+    if let Some(secs) = config.timeout_secs() {
+        client = client.with_timeout(secs);
+    }
+    Ok(client)
 }
 
 /// Factory for the wire-compatible JSON-RPC 2.0 transport.
@@ -50,10 +151,9 @@ impl TransportFactory for JsonRpcTransportFactory {
         &self,
         _card: &AgentCard,
         iface: &AgentInterface,
+        config: &ClientConfig,
     ) -> Result<Box<dyn Transport>, A2AError> {
-        Ok(Box::new(super::jsonrpc_client::JsonRpcClient::new(
-            iface.url.clone(),
-        )))
+        Ok(Box::new(jsonrpc_client(iface.url.clone(), config)))
     }
 }
 
@@ -72,13 +172,12 @@ impl TransportFactory for ConnectRpcTransportFactory {
         &self,
         _card: &AgentCard,
         iface: &AgentInterface,
+        config: &ClientConfig,
     ) -> Result<Box<dyn Transport>, A2AError> {
-        // `HttpClient::new` panics on an unparseable URL; validate first so a bad
-        // interface is a recoverable negotiation miss, not a crash.
-        iface.url.parse::<http::Uri>().map_err(|e| {
-            A2AError::InvalidParams(format!("invalid interface url {}: {e}", iface.url))
-        })?;
-        Ok(Box::new(super::http::HttpClient::new(iface.url.clone())))
+        // A URL the ConnectRPC client cannot represent is a recoverable
+        // negotiation miss — the negotiator falls through to the next
+        // interface — rather than a crash.
+        Ok(Box::new(connect_rpc_client(iface.url.clone(), config)?))
     }
 }
 
@@ -107,14 +206,24 @@ impl TransportNegotiator {
     }
 
     /// Pick and construct the first transport that matches a card interface,
-    /// ranked by client preference (registration order).
+    /// ranked by client preference (registration order), with default settings.
     pub async fn negotiate(&self, card: &AgentCard) -> Result<Box<dyn Transport>, A2AError> {
+        self.negotiate_with(card, &ClientConfig::default()).await
+    }
+
+    /// As [`negotiate`](Self::negotiate), configuring the chosen transport with
+    /// `config`.
+    pub async fn negotiate_with(
+        &self,
+        card: &AgentCard,
+        config: &ClientConfig,
+    ) -> Result<Box<dyn Transport>, A2AError> {
         for factory in &self.factories {
             for iface in &card.supported_interfaces {
                 if iface.protocol_binding == factory.protocol()
                     && version_compatible(&iface.protocol_version)
                 {
-                    match factory.create(card, iface).await {
+                    match factory.create(card, iface, config).await {
                         Ok(transport) => return Ok(transport),
                         Err(_err) => continue,
                     }
@@ -167,8 +276,23 @@ pub async fn connect(
     base_url: &str,
     negotiator: &TransportNegotiator,
 ) -> Result<Box<dyn Transport>, A2AError> {
-    let card = fetch_agent_card(base_url).await?;
-    negotiator.negotiate(&card).await
+    connect_with(base_url, negotiator, &ClientConfig::default()).await
+}
+
+/// As [`connect`], applying `config` to both the card fetch and the negotiated
+/// transport.
+///
+/// The card fetch carries the credentials too: an agent that authenticates its
+/// RPC endpoints usually authenticates the card endpoint as well, and a fetch
+/// that 401s would otherwise sink the whole negotiation.
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+pub async fn connect_with(
+    base_url: &str,
+    negotiator: &TransportNegotiator,
+    config: &ClientConfig,
+) -> Result<Box<dyn Transport>, A2AError> {
+    let card = fetch_agent_card_with(base_url, config).await?;
+    negotiator.negotiate_with(&card, config).await
 }
 
 /// Validate `base_url`, negotiate a transport from the agent card, and fall back
@@ -183,47 +307,78 @@ pub async fn connect(
 /// ConnectRPC transport, using JSON-RPC 2.0 when ConnectRPC isn't compiled in.
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 pub async fn auto_connect(base_url: &str) -> Result<Box<dyn Transport>, A2AError> {
+    auto_connect_with(base_url, &ClientConfig::default()).await
+}
+
+/// As [`auto_connect`], applying `config` to the card fetch, the negotiated
+/// transport, **and** the direct-client fallback.
+///
+/// This is the entry point a CLI or a web client wants whenever credentials are
+/// in play: every path out of it yields a configured client, so `--auth` behaves
+/// the same whether the card negotiated or the fallback fired.
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+pub async fn auto_connect_with(
+    base_url: &str,
+    config: &ClientConfig,
+) -> Result<Box<dyn Transport>, A2AError> {
     // Validate URL format up front so a malformed URL is a hard error rather
     // than a silent fallback to a client that will fail on first request.
     reqwest::Url::parse(base_url)
         .map_err(|e| A2AError::InvalidParams(format!("invalid url {base_url}: {e}")))?;
 
-    match connect(base_url, &default_registry()).await {
+    match connect_with(base_url, &default_registry(), config).await {
         Ok(transport) => Ok(transport),
         // Card fetch / negotiation failed — fall back to a direct client.
-        Err(_) => Ok(direct_transport(base_url)),
+        Err(_) => direct_transport(base_url, config),
     }
 }
 
 /// Build a direct client on `base_url`, preferring ConnectRPC when compiled in.
+///
+/// Fallible because `reqwest::Url` — which [`auto_connect_with`] validates with
+/// — is *more* permissive than the `http::Uri` the ConnectRPC client needs:
+/// `http://münchen.de` parses as the former and not the latter. Building
+/// infallibly here turned that gap into a panic on the fallback path, which is
+/// the path a bad URL is most likely to reach in the first place.
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
-fn direct_transport(base_url: &str) -> Box<dyn Transport> {
+fn direct_transport(base_url: &str, config: &ClientConfig) -> Result<Box<dyn Transport>, A2AError> {
     #[cfg(feature = "http-client")]
     {
-        Box::new(super::http::HttpClient::new(base_url.to_string()))
+        Ok(Box::new(connect_rpc_client(base_url.to_string(), config)?))
     }
     #[cfg(all(not(feature = "http-client"), feature = "jsonrpc-client"))]
     {
-        Box::new(super::jsonrpc_client::JsonRpcClient::new(
-            base_url.to_string(),
-        ))
+        Ok(Box::new(jsonrpc_client(base_url.to_string(), config)))
     }
 }
 
 /// Fetch an [`AgentCard`] from the agent's well-known endpoint (plain HTTP GET).
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 pub async fn fetch_agent_card(base_url: &str) -> Result<AgentCard, A2AError> {
+    fetch_agent_card_with(base_url, &ClientConfig::default()).await
+}
+
+/// As [`fetch_agent_card`], sending `config`'s credentials and honouring its
+/// timeout — for agents that guard the card endpoint too.
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+pub async fn fetch_agent_card_with(
+    base_url: &str,
+    config: &ClientConfig,
+) -> Result<AgentCard, A2AError> {
     use crate::adapter::error::HttpClientError;
 
     let client = reqwest::Client::new();
     let base = base_url.trim_end_matches('/');
     for path in [".well-known/agent-card.json", "agent-card"] {
         let url = format!("{base}/{path}");
-        let resp = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(HttpClientError::Reqwest)?;
+        let mut request = client.get(&url);
+        if let Some(token) = config.auth_token() {
+            request = request.bearer_auth(token);
+        }
+        if let Some(secs) = config.timeout_secs() {
+            request = request.timeout(std::time::Duration::from_secs(secs));
+        }
+        let resp = request.send().await.map_err(HttpClientError::Reqwest)?;
         if resp.status().is_success() {
             return resp
                 .json::<AgentCard>()
@@ -245,6 +400,38 @@ mod tests {
         assert!(version_compatible("1.0"));
         assert!(version_compatible("")); // unspecified accepted
         assert!(!version_compatible("2.0"));
+    }
+
+    /// A `Debug` line must not carry the credential. `ClientConfig` is what a
+    /// caller reaches for when tracing an authentication failure, so the most
+    /// likely line to be logged is the one that would have leaked the token.
+    #[test]
+    fn debug_redacts_the_token() {
+        let rendered = format!("{:?}", ClientConfig::new().with_auth_token("s3cret"));
+        assert!(!rendered.contains("s3cret"), "token leaked: {rendered}");
+        assert!(rendered.contains("redacted"), "{rendered}");
+
+        // …and says so only when there is one to hide.
+        let rendered = format!("{:?}", ClientConfig::new());
+        assert!(!rendered.contains("redacted"), "{rendered}");
+    }
+
+    /// `reqwest::Url` accepts an IDN host and normalizes it to punycode;
+    /// `http::Uri` rejects the raw bytes. `auto_connect_with` validates with the
+    /// former and the fallback built with the latter, so a URL that had just
+    /// been declared valid panicked one line later.
+    #[cfg(feature = "http-client")]
+    #[tokio::test]
+    async fn idn_url_is_an_error_not_a_panic() {
+        assert!(
+            reqwest::Url::parse("http://münchen.de").is_ok(),
+            "premise: the up-front validation accepts this"
+        );
+        match auto_connect("http://münchen.de").await {
+            Err(A2AError::InvalidParams(_)) => {}
+            Err(other) => panic!("wrong error: {other:?}"),
+            Ok(_) => panic!("expected an error for a url http::Uri cannot represent"),
+        }
     }
 
     #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
