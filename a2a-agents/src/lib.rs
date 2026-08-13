@@ -118,8 +118,9 @@ pub use handlers::tools::{
 };
 
 pub use registry::{
-    AgentId, AgentRegistry, CardSource, CardSourceError, DiscoveredPeer, HttpCardSource,
-    InMemoryAgentRegistry, InMemoryCardSource, RegisteredAgent, RegistryError,
+    AgentId, AgentRegistry, CardRefresher, CardSource, CardSourceError, DEFAULT_REFRESH_INTERVAL,
+    DiscoveredPeer, HttpCardSource, InMemoryAgentRegistry, InMemoryCardSource, Liveness,
+    RefreshReport, RegisteredAgent, RegistryError,
 };
 
 pub use runtime::{

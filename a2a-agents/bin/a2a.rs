@@ -27,9 +27,10 @@ use a2a_agents::core::{
 use a2a_agents::core::{HandlerType, LlmHandlerConfig};
 use a2a_agents::utils::slugify;
 use a2a_agents::{
-    AgentId, AgentRegistry, AgentRuntime, ContainerHardening, ContainerRuntime, ControlPlane,
-    ControlPlaneAuth, ControlPlaneClient, ControlPlaneClientError, EnvAllowlist, HttpCardSource,
-    InMemoryAgentRegistry, ListFilter, LocalProcessRuntime, Recovered, control_plane_router,
+    AgentId, AgentRegistry, AgentRuntime, CardRefresher, ContainerHardening, ContainerRuntime,
+    ControlPlane, ControlPlaneAuth, ControlPlaneClient, ControlPlaneClientError, EnvAllowlist,
+    HttpCardSource, InMemoryAgentRegistry, ListFilter, LocalProcessRuntime, Recovered,
+    control_plane_router,
 };
 use a2a_agents_common::llm::{
     LlmProvider, LlmSettings, PROVIDER_ENV_VARS, provider_from_env, provider_from_settings,
@@ -1327,7 +1328,7 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
     };
     let cp = Arc::new(ControlPlane::new(
         runtime,
-        registry,
+        registry.clone(),
         Arc::new(HttpCardSource::new()),
     ));
 
@@ -1356,6 +1357,12 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
              `--runtime container` for a control plane that can be bounced."
         ),
     }
+
+    // Discovery is written on deploy and recovery and was never revisited, so an
+    // agent that died stayed the answer to a skill lookup and kept being handed
+    // work. This re-reads each registered agent's card on an interval and ranks
+    // the ones that stopped answering behind the ones that did.
+    tokio::spawn(CardRefresher::new(registry, Arc::new(HttpCardSource::new())).run());
 
     let router = control_plane_router(cp, config_dir, auth);
 
@@ -1501,6 +1508,12 @@ async fn run_agents(config_paths: Vec<String>) -> anyhow::Result<()> {
     }
 
     print_run_banner(&config_paths);
+
+    // Phase 1's cards come from the configs, not from running agents, so at this
+    // point every entry is `Unknown` — registered, never seen. This probes them
+    // as they come up, and keeps probing: in a fleet, a member that dies would
+    // otherwise stay the answer to a skill lookup for as long as the others run.
+    tokio::spawn(CardRefresher::new(registry.clone(), Arc::new(HttpCardSource::new())).run());
 
     // Phase 2: build and run each agent; LLM handlers resolve registry refs.
     let mut agents: JoinSet<Result<(), String>> = JoinSet::new();

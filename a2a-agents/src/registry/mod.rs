@@ -19,9 +19,11 @@
 
 mod card_source;
 mod peer;
+mod refresh;
 
 pub use card_source::{CardSource, CardSourceError, HttpCardSource, InMemoryCardSource};
 pub use peer::DiscoveredPeer;
+pub use refresh::{CardRefresher, DEFAULT_REFRESH_INTERVAL, RefreshReport};
 
 use std::collections::HashMap;
 use std::fmt;
@@ -85,6 +87,34 @@ impl FromStr for AgentId {
     }
 }
 
+/// What the registry last observed about a registered agent.
+///
+/// Three states rather than a `reachable` flag, because "we looked and it
+/// answered" and "we have not looked" are different facts and only the first is
+/// evidence — the same split as [`Recovered`](crate::Recovered). Collapsing them
+/// would make a freshly registered agent indistinguishable from a dead one, or
+/// a dead one from an unprobed one, depending which way the default fell.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Liveness {
+    /// Registered, never probed. What [`AgentRegistry::register`] leaves behind:
+    /// a config-derived card says nothing about whether the agent is up.
+    #[default]
+    Unknown,
+    /// Its card was readable the last time we looked.
+    Live,
+    /// The last card fetch failed. Still registered — the entry is the record
+    /// that this agent exists — but ranked behind anything that answered.
+    Unreachable,
+}
+
+impl Liveness {
+    /// Whether this agent should be preferred when several provide a skill.
+    /// Unprobed counts: not having looked is not evidence against it.
+    fn is_promising(self) -> bool {
+        !matches!(self, Liveness::Unreachable)
+    }
+}
+
 /// An agent known to the registry: its discovery metadata ([`AgentCard`]) plus
 /// the endpoint to dial.
 ///
@@ -99,6 +129,8 @@ pub struct RegisteredAgent {
     pub card: AgentCard,
     /// Dialable base URL for the agent's A2A endpoint.
     pub endpoint: String,
+    /// What the last liveness probe found. See [`CardRefresher`].
+    pub liveness: Liveness,
 }
 
 /// Errors a registry operation can return.
@@ -115,9 +147,15 @@ pub enum RegistryError {
 #[async_trait]
 pub trait AgentRegistry: Send + Sync {
     /// Register (or replace) an agent. The id is derived from the card's name;
-    /// re-registering the same name upserts (last-writer-wins), which keeps a
-    /// future card-refresh loop idempotent.
+    /// re-registering the same name upserts (last-writer-wins).
+    ///
+    /// Liveness resets to [`Liveness::Unknown`]: a re-registration is a new
+    /// claim about where the agent is, and what was probed was the old one.
     async fn register(&self, card: AgentCard, endpoint: String) -> Result<AgentId, RegistryError>;
+
+    /// Record what a liveness probe found. Returns [`RegistryError::NotFound`]
+    /// if the agent was deregistered while the probe was in flight.
+    async fn mark(&self, id: &AgentId, liveness: Liveness) -> Result<(), RegistryError>;
 
     /// Remove an agent. Returns [`RegistryError::NotFound`] if it was not
     /// registered.
@@ -128,6 +166,12 @@ pub trait AgentRegistry: Send + Sync {
 
     /// Find every agent whose card advertises a matching skill. A skill matches
     /// when its `id` or any of its `tags` equals `skill`, case-insensitively.
+    ///
+    /// Agents last seen [`Unreachable`](Liveness::Unreachable) are ordered
+    /// last, not dropped: a caller taking the first match then gets a live peer
+    /// when one exists, and when none does it still gets an entry — so the
+    /// failure it reports is "could not connect to X" rather than the untrue
+    /// "nobody provides this skill".
     async fn find_by_skill(&self, skill: &str) -> Result<Vec<RegisteredAgent>, RegistryError>;
 
     /// List every registered agent.
@@ -169,9 +213,20 @@ impl AgentRegistry for InMemoryAgentRegistry {
             id: id.clone(),
             card,
             endpoint,
+            liveness: Liveness::Unknown,
         };
         self.agents.write().await.insert(id.clone(), entry);
         Ok(id)
+    }
+
+    async fn mark(&self, id: &AgentId, liveness: Liveness) -> Result<(), RegistryError> {
+        match self.agents.write().await.get_mut(id) {
+            Some(agent) => {
+                agent.liveness = liveness;
+                Ok(())
+            }
+            None => Err(RegistryError::NotFound(id.clone())),
+        }
     }
 
     async fn deregister(&self, id: &AgentId) -> Result<(), RegistryError> {
@@ -188,14 +243,18 @@ impl AgentRegistry for InMemoryAgentRegistry {
     }
 
     async fn find_by_skill(&self, skill: &str) -> Result<Vec<RegisteredAgent>, RegistryError> {
-        Ok(self
+        let mut matches: Vec<RegisteredAgent> = self
             .agents
             .read()
             .await
             .values()
             .filter(|agent| card_has_skill(&agent.card, skill))
             .cloned()
-            .collect())
+            .collect();
+        // A stable sort on one boolean key: it moves the unreachable to the
+        // back and leaves everything else where it was.
+        matches.sort_by_key(|agent| !agent.liveness.is_promising());
+        Ok(matches)
     }
 
     async fn list(&self) -> Result<Vec<RegisteredAgent>, RegistryError> {

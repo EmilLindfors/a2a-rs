@@ -67,12 +67,14 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
       is synchronous, which is what stops it asking; either it becomes async or
       a `DiscoveredPeer` caches the card it fetched while dialing and the source
       reads that.
-- [ ] **Card-fetch refresh loop** — re-poll `/.well-known/agent-card.json` for
-      liveness. Registry entries are written once (at `a2a run` startup, or by
-      `ControlPlane::deploy`/`recover`) and never revisited, so an agent that
-      died stays discoverable and keeps being handed work. `register` upserts,
-      so the loop is idempotent by construction; what it needs deciding is what
-      a failed fetch *means* — `NOTES.md` says hide, never discard.
+- [ ] **Let the refresh loop adopt the card it fetched.** `CardRefresher` probes
+      liveness and throws the card away, so a skill added to a running agent is
+      invisible until something re-registers it. Blocked on the rename hazard:
+      `register` derives the id from `card.name`, so adopting a renamed card
+      creates a second entry and orphans the first. Needs an update-in-place on
+      `AgentRegistry` that keeps the id and replaces the card — at which point
+      "the name changed" becomes a case to decide rather than a silent
+      duplicate.
 - [ ] **Persistent `AgentRegistry` adapter**, for what recovery-by-derivation
       cannot cover: agents registered by something other than this runtime, and
       discovery shared across control-plane processes. Both speculative today —

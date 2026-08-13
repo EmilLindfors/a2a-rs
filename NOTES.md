@@ -181,6 +181,20 @@ matches, or the dial failed) is news, while an error *during* a delegation means
 the peer took the work and we lost it, which is a broken run. Two different
 types, so a call site cannot blur them by accident.
 
+**A dead peer is ranked, not removed.** The refresh loop could have
+deregistered an agent that stopped answering, and that reads fine until the
+lookup happens: `find_by_skill` would return nothing, and the orchestrator would
+report "no agent advertises this skill" — untrue, and it sends whoever is
+debugging to the wrong place. Ordering the unreachable last gives a caller
+taking the first match a live peer whenever one exists, and when none does it
+still gets an entry, so what comes back is "could not connect to X". Same shape
+as `a2a ps`: filter the view, keep the record.
+
+`Liveness` has three states because two would have to pick a default, and both
+defaults are wrong — a freshly registered agent reading `Live` is a claim nobody
+checked, and reading `Unreachable` demotes an agent for not having been probed
+yet. Same reasoning as `Recovered::{Adopted, Ephemeral}`.
+
 **Registry recovery derives from the runtime; it is not a database.**
 `ControlPlane::recover` rebuilds discovery at startup from what the runtime is
 still running plus a card fetch. This was the cheaper of the two options and the
