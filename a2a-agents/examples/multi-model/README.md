@@ -99,11 +99,13 @@ a2acli send --url http://127.0.0.1:8090 "Summarize these Q3 numbers: 12, 40, 38,
 ## ⚠️ Gotchas to keep in mind
 
 1. **`OPENROUTER_MODEL` is global.** `resolve_llm` prefers each agent's `[llm]`,
-   but a member whose `[llm]` is missing or invalid falls back to
-   `provider_from_env()`, which reads the *process-wide* `OPENROUTER_MODEL`.
-   The whole fleet shares one process environment, so a single stray env var
-   quietly moves every such member onto the same model. **Pin `model` in every
-   agent's `[llm]`; do not drive a fleet from `OPENROUTER_MODEL`.**
+   but a member with no `[llm]` block — or one that names no `model` — reads
+   the *process-wide* `OPENROUTER_MODEL`. The whole fleet shares one process
+   environment, so a single stray env var moves every such member onto the same
+   model. **Pin `model` in every agent's `[llm]`; do not drive a fleet from
+   `OPENROUTER_MODEL`.** (An `[llm]` block that cannot be built — unknown
+   provider, no key anywhere — now stops the run instead of falling back to the
+   environment.)
 
 2. **Reasoning is per model, and it costs money — set it.** All three models
    here support reasoning, and asking a flash model to think hard about a

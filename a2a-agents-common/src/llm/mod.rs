@@ -8,8 +8,46 @@ pub mod openai;
 pub mod provider;
 pub mod tool_call;
 
-pub use provider::{LlmSettings, provider_from_env, provider_from_settings};
+pub use provider::{
+    LlmConfigError, LlmSettings, PROVIDER_ENV_VARS, SUPPORTED_PROVIDERS, SelectedLlm,
+    provider_from_env, provider_from_settings,
+};
 pub use tool_call::{PartialToolCall, ToolCallAccumulator};
+
+/// The environment, as this crate reads it when building a provider.
+///
+/// Passed in rather than read directly so the selection rules can be tested
+/// without mutating the process environment, which would race other tests.
+#[derive(Clone, Copy)]
+pub(crate) struct Env<'a>(&'a dyn Fn(&str) -> Option<String>);
+
+impl<'a> Env<'a> {
+    /// A stand-in environment. Only tests need one; production reads
+    /// [`Env::os`].
+    #[cfg(test)]
+    pub(crate) fn new(lookup: &'a dyn Fn(&str) -> Option<String>) -> Self {
+        Self(lookup)
+    }
+
+    /// The process environment.
+    pub(crate) fn os() -> Env<'static> {
+        const LOOKUP: &dyn Fn(&str) -> Option<String> = &os_lookup;
+        Env(LOOKUP)
+    }
+
+    /// A variable set to whitespace reads as unset. `.env` files leave those
+    /// behind, and an empty `OPENROUTER_API_KEY` would otherwise select a
+    /// provider that cannot authenticate.
+    pub(crate) fn get(&self, key: &str) -> Option<String> {
+        (self.0)(key)
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+    }
+}
+
+fn os_lookup(key: &str) -> Option<String> {
+    std::env::var(key).ok()
+}
 
 /// Represents an error returned by an LLM provider.
 #[derive(Debug, thiserror::Error)]

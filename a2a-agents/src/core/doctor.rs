@@ -11,6 +11,8 @@
 //! machine (binding a port, searching `PATH`, reading the environment) stays in
 //! the binary where the I/O belongs. `a2a doctor` is the two halves joined.
 
+use a2a_agents_common::llm::LlmSettings;
+
 use crate::core::config::AgentConfig;
 use crate::core::config::HandlerType;
 
@@ -43,16 +45,31 @@ pub enum Requirement {
         /// The command as configured.
         command: String,
     },
-    /// The `llm` handler with no `[llm].api_key`, so a provider has to come from
-    /// the environment. Without one the agent runs and answers with a
-    /// deterministic fallback instead of a model.
-    LlmProviderFromEnv,
+    /// The `llm` handler needs a working provider. Without one the agent runs
+    /// and answers with a deterministic fallback instead of a model; with a
+    /// broken one (`a2a run` refuses to start) it does not run at all.
+    ///
+    /// Carries where the provider comes from so the check can build it the way
+    /// `a2a run` does, rather than guessing from the presence of a variable.
+    LlmProvider(LlmSource),
     /// A handler name no built-in provides. The runner falls back to echo, which
     /// means a config that looks configured behaves like a stub.
     UnknownHandler {
         /// The configured `handler.type`.
         name: String,
     },
+}
+
+/// Where an `llm` handler's provider comes from — the two arms of `a2a run`'s
+/// own resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmSource {
+    /// Built from the config's `[llm]` block. It may still read the environment
+    /// for anything the block leaves out, including the API key.
+    Config(LlmSettings),
+    /// No `[llm]` block at all, so the provider is selected from the
+    /// environment (OpenRouter → Gemini → OpenAI).
+    Environment,
 }
 
 /// Everything `config` needs from its host, in report order.
@@ -86,17 +103,10 @@ pub fn requirements(config: &AgentConfig) -> Vec<Requirement> {
 
     match config.handler_type() {
         HandlerType::Llm => {
-            // A key in the config satisfies the provider on its own; anything
-            // else (including `provider = "openrouter"` with no key) falls
-            // through to the environment.
-            let key_in_config = config
-                .llm
-                .as_ref()
-                .and_then(|llm| llm.api_key.as_deref())
-                .is_some_and(|key| !key.trim().is_empty());
-            if !key_in_config {
-                requirements.push(Requirement::LlmProviderFromEnv);
-            }
+            requirements.push(Requirement::LlmProvider(match config.llm.as_ref() {
+                Some(llm) => LlmSource::Config(llm.into()),
+                None => LlmSource::Environment,
+            }))
         }
         HandlerType::Custom(name) => requirements.push(Requirement::UnknownHandler { name }),
         // The reimbursement agent is a sample behind an opt-in feature, so
@@ -227,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn an_llm_agent_needs_a_provider_from_the_environment() {
+    fn an_llm_agent_without_a_config_block_needs_the_environment() {
         let config = config(
             r#"
             [agent]
@@ -238,13 +248,13 @@ mod tests {
             type = "llm"
             "#,
         );
-        assert!(requirements(&config).contains(&Requirement::LlmProviderFromEnv));
+        assert!(requirements(&config).contains(&Requirement::LlmProvider(LlmSource::Environment)));
     }
 
-    /// A key in the config is the provider; the environment is not consulted, so
-    /// warning about it would be noise.
+    /// The settings are carried through so the check builds the same provider
+    /// `a2a run` will, instead of inferring one from which variables are set.
     #[test]
-    fn a_configured_api_key_satisfies_the_provider() {
+    fn an_llm_block_is_carried_into_the_requirement() {
         let config = config(
             r#"
             [agent]
@@ -256,27 +266,18 @@ mod tests {
             [llm]
             provider = "openai"
             api_key = "sk-configured"
+            model = "gpt-5"
             "#,
         );
-        assert!(!requirements(&config).contains(&Requirement::LlmProviderFromEnv));
-    }
-
-    #[test]
-    fn an_empty_configured_key_still_needs_the_environment() {
-        let config = config(
-            r#"
-            [agent]
-            name = "Chat"
-            [server]
-            http_port = 8080
-            [handler]
-            type = "llm"
-            [llm]
-            provider = "openrouter"
-            api_key = "  "
-            "#,
+        let expected = LlmSettings {
+            provider: "openai".into(),
+            api_key: Some("sk-configured".into()),
+            model: Some("gpt-5".into()),
+            ..Default::default()
+        };
+        assert!(
+            requirements(&config).contains(&Requirement::LlmProvider(LlmSource::Config(expected)))
         );
-        assert!(requirements(&config).contains(&Requirement::LlmProviderFromEnv));
     }
 
     /// The silent-wrong case worth naming: an unknown handler falls back to

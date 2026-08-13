@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING — a broken LLM provider stops the agent instead of degrading it (`a2a-agents-common`, `a2a-agents`)**: `provider_from_env` returns `Result<Option<SelectedLlm>, LlmConfigError>` and `provider_from_settings` returns `Result<SelectedLlm, LlmConfigError>`, separating "nothing is configured" from "what is configured does not work". Both used to collapse into `None` (or, for a bad `[llm]` block, into a fallback to the environment), so a mistyped provider, a missing key, or a typo'd `OPENROUTER_REASONING` produced an agent that started clean and answered every message from its non-LLM stub.
+  - `a2a run` now fails to start on an unusable provider, naming the setting. `Ok(None)` — nothing configured at all — still runs the deterministic fallback.
+  - A failing provider no longer falls through to the next one in the cascade: a broken `OPENROUTER_API_KEY` must not silently promote whatever else the environment holds.
+  - `a2a doctor` builds the provider the same way `a2a run` does (`Requirement::LlmProvider(LlmSource)` carries the config's `[llm]` settings), instead of inferring a verdict from which variables are set. It reports an unusable provider as a problem, a missing one as a warning, and names the resolved provider and model when it works.
+  - `provider_from_settings` fills anything the config omits from that provider's own environment variables — key, model, base URL. Previously only `openrouter` looked: a `[llm] provider = "gemini"` block with its key in `GEMINI_API_KEY` built an empty key and failed at the endpoint, after `doctor` had reported the key as found.
+  - `SelectedLlm` carries the resolved model, so `a2a run` logs provider *and* model for env-selected providers (it only did so for TOML-configured ones).
+  - A variable set to whitespace now reads as unset everywhere, which is what a commented-out line in a `.env` file leaves behind.
+
 ### Added
 - **`[llm] reasoning` (`a2a-agents`, `a2a-agents-common`)**: how hard a model should think is now the config's decision — `reasoning = "off" | "low" | "medium" | "high"`, or a token budget (`reasoning = 1000`). It sits beside `model` because that is what it belongs to: a flash model answering in one line and a frontier model doing analysis want different answers, and the *handler* serving them cannot tell which it was pointed at. Omitted, nothing goes on the wire and the model's own default stands. A request may still override it (`LlmRequest::reasoning`), which is how `complex_agent` streams thinking whatever the config says. `Reasoning` owns its own string form, so `[llm] reasoning`, `OPENROUTER_REASONING`, and the error message that lists the valid values all come from one parser; a misspelt level fails at load rather than quietly costing money. Reaches the wire on `openrouter` today — other providers log the setting they are dropping instead of pretending to honour it.
 

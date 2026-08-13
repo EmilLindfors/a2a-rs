@@ -21,7 +21,7 @@ use a2a_agents::agents::reimbursement::ReimbursementHandler;
 use a2a_agents::core::builder::AutoStorage;
 use a2a_agents::core::config::LlmConfig;
 use a2a_agents::core::{
-    AgentBuilder, AgentConfig, AgentTemplate, FleetConfig, Requirement, fleet_conflicts,
+    AgentBuilder, AgentConfig, AgentTemplate, FleetConfig, LlmSource, Requirement, fleet_conflicts,
     fleet_header, member_block, member_path, requirements,
 };
 use a2a_agents::core::{HandlerType, LlmHandlerConfig};
@@ -31,7 +31,9 @@ use a2a_agents::{
     ControlPlaneAuth, ControlPlaneClient, ControlPlaneClientError, EnvAllowlist, HttpCardSource,
     InMemoryAgentRegistry, ListFilter, LocalProcessRuntime, Recovered, control_plane_router,
 };
-use a2a_agents_common::llm::{LlmProvider, LlmSettings, provider_from_env, provider_from_settings};
+use a2a_agents_common::llm::{
+    LlmProvider, LlmSettings, PROVIDER_ENV_VARS, provider_from_env, provider_from_settings,
+};
 
 #[cfg(feature = "mcp-server")]
 use a2a_agents::core::config::RemoteAgentTarget;
@@ -336,37 +338,31 @@ impl AsyncMessageHandler for EchoHandler {
     }
 }
 
-fn resolve_llm(llm_config: &Option<LlmConfig>) -> Option<Arc<dyn LlmProvider>> {
-    match llm_config {
-        Some(cfg) => {
-            info!(
-                "Loading LLM configuration from TOML (provider: {}, model: {}, reasoning: {})",
-                cfg.provider,
-                cfg.model.as_deref().unwrap_or("(env default)"),
-                match cfg.reasoning {
-                    Some(reasoning) => reasoning.to_string(),
-                    None => "(model default)".to_string(),
-                }
-            );
-            let settings = LlmSettings {
-                provider: cfg.provider.clone(),
-                api_key: cfg.api_key.clone(),
-                model: cfg.model.clone(),
-                base_url: cfg.base_url.clone(),
-                http_referer: cfg.http_referer.clone(),
-                x_title: cfg.x_title.clone(),
-                reasoning: cfg.reasoning,
-            };
-            match provider_from_settings(&settings) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    error!("invalid LLM configuration: {e}; falling back to env");
-                    provider_from_env()
-                }
-            }
-        }
-        None => provider_from_env(),
+/// Build the agent's LLM provider, or fail.
+///
+/// `Ok(None)` only when nothing is configured at all, which the handler answers
+/// with its non-LLM fallback. A provider that *is* configured and cannot be
+/// built stops startup: it used to fall back to the environment (and, before
+/// that, to nothing), so a mistyped provider or key produced an agent that
+/// served stub replies while looking healthy.
+fn resolve_llm(llm_config: &Option<LlmConfig>) -> anyhow::Result<Option<Arc<dyn LlmProvider>>> {
+    let selected = match llm_config {
+        Some(cfg) => Some(provider_from_settings(&LlmSettings::from(cfg))?),
+        None => provider_from_env()?,
+    };
+    match &selected {
+        Some(llm) => info!(
+            provider = llm.kind,
+            model = %llm.model,
+            selected_by = llm.selected_by,
+            reasoning = %llm
+                .reasoning
+                .map_or_else(|| "(model default)".to_string(), |r| r.to_string()),
+            "LLM provider"
+        ),
+        None => info!("no LLM configured — the handler will use its non-LLM fallback"),
     }
+    Ok(selected.map(|llm| llm.provider))
 }
 
 #[tokio::main]
@@ -984,28 +980,28 @@ impl Finding {
     }
 }
 
-/// Environment variables that give an agent a model, in the order
-/// [`provider_from_env`] prefers them.
+/// Describe an LLM provider the way `a2a run` would resolve it.
 ///
-/// Listed here rather than calling that function because constructing a provider
-/// *logs*, and this is CLI output. The verdict it produces is the same: each of
-/// its branches is gated on one of these being set.
-const LLM_KEY_VARS: [&str; 6] = [
-    "OPENROUTER_API_KEY",
-    "GEMINI_API_KEY",
-    "OPENAI_API_KEY",
-    "AI_API_KEY",
-    "OPENAI_API_BASE_URL",
-    "AI_API_BASE_URL",
-];
-
-/// The first configured LLM variable, if any.
-fn llm_env_var() -> Option<&'static str> {
-    LLM_KEY_VARS.into_iter().find(|var| {
-        std::env::var(var)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-    })
+/// Runs the same `provider_from_env` / `provider_from_settings` code as startup,
+/// so a setup that will refuse to start is reported here instead of being
+/// guessed at from which variables happen to be set.
+fn llm_finding(source: &LlmSource) -> Finding {
+    let selected = match source {
+        LlmSource::Config(settings) => provider_from_settings(settings).map(Some),
+        LlmSource::Environment => provider_from_env(),
+    };
+    match selected {
+        Ok(Some(llm)) => Finding::ok(format!(
+            "llm handler will use {} ({}, via {})",
+            llm.kind, llm.model, llm.selected_by
+        )),
+        Ok(None) => Finding::warn(format!(
+            "llm handler with no provider ({} unset) — it will answer with a \
+             deterministic fallback that lists its tools",
+            PROVIDER_ENV_VARS.join(", ")
+        )),
+        Err(e) => Finding::problem(format!("{e} — `a2a run` will refuse to start")),
+    }
 }
 
 /// Resolve `command` the way spawning it will: absolute/relative paths as given,
@@ -1057,22 +1053,28 @@ fn probe_bind(host: &str, port: u16) -> Result<(), std::io::Error> {
 /// whole output — from a run that also checks configs. A capability that is
 /// *absent* is only a warning in the bare case: with configs in hand, whether
 /// its absence matters is a question about them, and the per-config
-/// requirements answer it precisely ([`Requirement::LlmProviderFromEnv`] fires
-/// for `llm` handlers and not for `echo`). Warning unconditionally made an echo
+/// requirements answer it precisely ([`Requirement::LlmProvider`] fires for
+/// `llm` handlers and not for `echo`). Warning unconditionally made an echo
 /// agent on a keyless machine — CI, or any laptop that never exported a model
-/// key — report a warning about a provider it will never call, which is the
-/// false positive that teaches people to ignore the tool.
+/// key — report a warning about a provider it will never call, a false positive
+/// that teaches people to ignore the tool.
 fn environment_findings(bare: bool) -> Vec<Finding> {
     let mut findings = Vec::new();
 
-    match llm_env_var() {
-        Some(var) => findings.push(Finding::ok(format!("model provider: {var} is set"))),
-        None if bare => findings.push(Finding::warn(format!(
+    match provider_from_env() {
+        Ok(Some(llm)) => findings.push(Finding::ok(format!(
+            "model provider: {} is set ({}, {})",
+            llm.selected_by, llm.kind, llm.model
+        ))),
+        // Broken and absent are both judged against what the configs ask for;
+        // with no configs in hand, this report is the whole output.
+        Err(e) if bare => findings.push(Finding::problem(e.to_string())),
+        Ok(None) if bare => findings.push(Finding::warn(format!(
             "no model key in the environment ({}) — `llm` handlers fall back to a \
              deterministic reply",
-            LLM_KEY_VARS.join(", ")
+            PROVIDER_ENV_VARS.join(", ")
         ))),
-        None => {}
+        _ => {}
     }
 
     match ["docker", "podman"]
@@ -1144,13 +1146,7 @@ fn config_findings(path: &str) -> (Vec<Finding>, Option<AgentConfig>) {
                      start without its tools"
                 )),
             },
-            Requirement::LlmProviderFromEnv => match llm_env_var() {
-                Some(var) => Finding::ok(format!("llm handler will use {var}")),
-                None => Finding::warn(
-                    "llm handler with no key — it will answer with a deterministic \
-                     fallback that lists its tools",
-                ),
-            },
+            Requirement::LlmProvider(source) => llm_finding(&source),
             Requirement::UnknownHandler { name } => Finding::problem(format!(
                 "handler {name:?} is not built into this binary — the runner falls back \
                  to echo, so the agent will not do what this config says"
@@ -1558,7 +1554,7 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
         #[cfg(feature = "reimbursement-agent")]
         HandlerType::Reimbursement => {
             let storage = AutoStorage::from_config(&builder.config().server.storage).await?;
-            let llm_provider = resolve_llm(&builder.config().llm);
+            let llm_provider = resolve_llm(&builder.config().llm)?;
             let streaming = InMemoryStreamingHandler::new();
             let push = storage.push_notifier();
             let handler =
@@ -1627,7 +1623,7 @@ async fn run_llm_agent(
     use rmcp::transport::TokioChildProcess;
 
     let llm_cfg: LlmHandlerConfig = builder.config().handler.llm.clone().unwrap_or_default();
-    let llm_provider = resolve_llm(&builder.config().llm);
+    let llm_provider = resolve_llm(&builder.config().llm)?;
 
     // Assemble the tool sources the LLM loop can call: one per connected MCP
     // server (each spawned as a child process) plus one per configured remote

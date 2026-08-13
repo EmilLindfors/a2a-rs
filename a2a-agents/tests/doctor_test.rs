@@ -48,16 +48,8 @@ fn an_echo_agent_is_clear_without_a_model_key() {
 
     let (ok, out) = scratch.a2a_env(
         &["doctor", "--config", "weather.toml"],
-        // Every var `llm_env_var` consults, cleared: the shape of a machine that
-        // has never configured a model provider.
-        &[
-            "OPENROUTER_API_KEY",
-            "GEMINI_API_KEY",
-            "OPENAI_API_KEY",
-            "AI_API_KEY",
-            "OPENAI_API_BASE_URL",
-            "AI_API_BASE_URL",
-        ],
+        // A machine that has never configured a model provider.
+        &LLM_VARS,
     );
 
     assert!(ok, "an echo agent needs no model key:\n{out}");
@@ -68,6 +60,95 @@ fn an_echo_agent_is_clear_without_a_model_key() {
     assert!(
         !out.contains("no model key"),
         "the warning belongs to `llm` handlers, not to every run:\n{out}"
+    );
+}
+
+/// Every variable the provider cascade reads, for tests that need to describe a
+/// machine with no model provider configured.
+const LLM_VARS: [&str; 6] = [
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "AI_API_KEY",
+    "OPENAI_API_BASE_URL",
+    "AI_API_BASE_URL",
+];
+
+/// Write an `llm`-handler config with the given `[llm]` block (or none).
+fn llm_agent(scratch: &ScratchDir, file: &str, llm_block: &str) {
+    scratch.write(
+        file,
+        &format!(
+            r#"
+[agent]
+name = "Chat"
+
+[server]
+host = "127.0.0.1"
+http_port = {}
+
+[handler]
+type = "llm"
+{llm_block}
+"#,
+            free_port()
+        ),
+    );
+}
+
+/// A key that is set and unusable is not the same as no key: `a2a run` refuses
+/// to start on it, so `doctor` has to say so rather than warn about a fallback
+/// that will never be reached.
+#[test]
+fn a_broken_model_setting_is_a_problem() {
+    let scratch = ScratchDir::new("brokenkey");
+    llm_agent(&scratch, "chat.toml", "");
+
+    let (ok, out) = scratch.a2a_with_env(
+        &["doctor", "--config", "chat.toml"],
+        &[
+            ("OPENROUTER_API_KEY", "sk-or-test"),
+            ("OPENROUTER_REASONING", "verry-high"),
+        ],
+        &LLM_VARS,
+    );
+    assert!(!ok, "an unusable provider must fail the check:\n{out}");
+    assert!(out.contains("OPENROUTER_REASONING"), "{out}");
+    assert!(
+        out.contains("refuse to start"),
+        "the report must say what `a2a run` will do:\n{out}"
+    );
+}
+
+/// With no provider anywhere the agent still runs, answering from its
+/// deterministic fallback — a warning, not a problem.
+#[test]
+fn an_llm_agent_without_any_key_is_a_warning() {
+    let scratch = ScratchDir::new("nokeyllm");
+    llm_agent(&scratch, "chat.toml", "");
+
+    let (ok, out) = scratch.a2a_env(&["doctor", "--config", "chat.toml"], &LLM_VARS);
+    assert!(ok, "a keyless llm agent still runs:\n{out}");
+    assert!(out.contains("deterministic fallback"), "{out}");
+}
+
+/// A mistyped `provider` used to fall back to the environment, so the agent ran
+/// on whatever key happened to be exported — or on none, answering with a stub.
+#[test]
+fn a_mistyped_provider_is_a_problem() {
+    let scratch = ScratchDir::new("typo");
+    llm_agent(
+        &scratch,
+        "chat.toml",
+        "\n[llm]\nprovider = \"opnrouter\"\napi_key = \"sk-test\"\n",
+    );
+
+    let (ok, out) = scratch.a2a(&["doctor", "--config", "chat.toml"]);
+    assert!(!ok, "an unknown provider must fail the check:\n{out}");
+    assert!(out.contains("opnrouter"), "{out}");
+    assert!(
+        out.contains("openrouter"),
+        "the report must name the valid providers:\n{out}"
     );
 }
 

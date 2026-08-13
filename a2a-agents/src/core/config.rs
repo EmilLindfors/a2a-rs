@@ -3,7 +3,7 @@
 //! This module provides declarative configuration for A2A agents via TOML files.
 //! It supports environment variable interpolation and sensible defaults.
 
-use a2a_agents_common::llm::Reasoning;
+use a2a_agents_common::llm::{LlmSettings, Reasoning};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
@@ -285,6 +285,22 @@ pub struct LlmConfig {
     /// OpenRouter `X-Title` attribution header (ignored by other providers)
     #[serde(default)]
     pub x_title: Option<String>,
+}
+
+impl From<&LlmConfig> for LlmSettings {
+    /// Lives here so `a2a run` and `a2a doctor` build a provider from the same
+    /// values; two hand-written copies of this drift.
+    fn from(config: &LlmConfig) -> Self {
+        Self {
+            provider: config.provider.clone(),
+            api_key: config.api_key.clone(),
+            model: config.model.clone(),
+            base_url: config.base_url.clone(),
+            http_referer: config.http_referer.clone(),
+            x_title: config.x_title.clone(),
+            reasoning: config.reasoning,
+        }
+    }
 }
 
 /// Schema-only mirror of what `[llm] reasoning` accepts.

@@ -8,32 +8,41 @@
 //! - [`provider_from_env`] — env-driven selection (OpenRouter → Gemini → OpenAI).
 //! - [`provider_from_settings`] — config-driven selection from [`LlmSettings`].
 //!
+//! Both separate "nothing is configured" (`Ok(None)`) from "what is configured
+//! does not work" ([`LlmConfigError`]). These used to both return `None`, so a
+//! mistyped key started the agent anyway and it answered from its non-LLM
+//! fallback.
+//!
+//! Selection performs no I/O, so `a2a doctor` can run the same code as startup
+//! to decide what startup will do. The only output is a warning when a
+//! configured `reasoning` cannot reach the provider's wire.
+//!
 //! Settings are expressed with this crate's own [`LlmSettings`] type rather than
 //! a host's config struct so the helper takes no dependency on `a2a-agents`
 //! (which would be circular).
 
 use std::sync::Arc;
 
-use tracing::{info, warn};
-
 use super::{
-    LlmProvider, Reasoning,
-    gemini::{GeminiConfig, GeminiProvider},
-    openai::{OpenAiConfig, OpenAiProvider},
+    Env, LlmProvider, Reasoning,
+    gemini::{GEMINI_BASE_URL, GEMINI_DEFAULT_MODEL, GeminiConfig, GeminiProvider},
+    openai::{OPENROUTER_DEFAULT_MODEL, OpenAiConfig, OpenAiProvider},
 };
 
 /// Provider-agnostic LLM settings sourced from a host's configuration
 /// (TOML, CLI flags, etc.). Mirrors the fields a host typically exposes.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct LlmSettings {
     /// Provider selector: `"openrouter"`, `"openai"`, or `"gemini"`.
     pub provider: String,
-    /// API key. May be omitted for `"openrouter"`/`"openai"` if the matching
-    /// env var is set instead.
+    /// API key. When `None`, the provider's own environment variable is read
+    /// instead.
     pub api_key: Option<String>,
-    /// Model identifier. Provider-specific default applied when `None`.
+    /// Model identifier. Environment, then a provider-specific default, applied
+    /// when `None`.
     pub model: Option<String>,
-    /// Base URL override. Provider-specific default applied when `None`.
+    /// Base URL override. Environment, then a provider-specific default,
+    /// applied when `None`.
     pub base_url: Option<String>,
     /// OpenRouter `HTTP-Referer` attribution header (ignored by other providers).
     pub http_referer: Option<String>,
@@ -46,71 +55,184 @@ pub struct LlmSettings {
     pub reasoning: Option<Reasoning>,
 }
 
-fn env_set(key: &str) -> bool {
-    std::env::var(key)
-        .ok()
-        .map(|v| !v.trim().is_empty())
-        .unwrap_or(false)
+impl std::fmt::Debug for LlmSettings {
+    /// Hand-written to keep `api_key` out of the output. These settings travel
+    /// inside a `doctor` requirement, so anything that prints one would print
+    /// the key with it.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmSettings")
+            .field("provider", &self.provider)
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("http_referer", &self.http_referer)
+            .field("x_title", &self.x_title)
+            .field("reasoning", &self.reasoning)
+            .finish()
+    }
+}
+
+/// Every provider [`provider_from_settings`] can build, for the error message
+/// that lists them.
+pub const SUPPORTED_PROVIDERS: [&str; 3] = ["openrouter", "openai", "gemini"];
+
+/// Every environment variable that can select a provider, in the order
+/// [`provider_from_env`] prefers them. Public so a host can list them in a
+/// report instead of keeping its own copy.
+pub const PROVIDER_ENV_VARS: [&str; 6] = [
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "AI_API_KEY",
+    "OPENAI_API_BASE_URL",
+    "AI_API_BASE_URL",
+];
+
+/// How the config path names itself in an error, where the env path names the
+/// variable it read.
+const SELECTED_BY_CONFIG: &str = "`[llm] provider`";
+
+/// A provider is named but cannot be built.
+///
+/// Raised before any request is made, so a host can refuse to start instead of
+/// failing on the first message. Errors from calling a provider are
+/// [`LlmError`](super::LlmError).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum LlmConfigError {
+    /// A provider is named and its settings cannot be read: a missing key, a
+    /// malformed `OPENROUTER_REASONING`.
+    #[error("the {provider} provider is selected by {selected_by}, but is not usable: {detail}")]
+    Unusable {
+        /// Which provider was selected.
+        provider: &'static str,
+        /// What selected it — an environment variable, or `[llm] provider`.
+        selected_by: &'static str,
+        /// What is wrong with its settings.
+        detail: String,
+    },
+    /// [`LlmSettings::provider`] names something no adapter implements —
+    /// usually a typo.
+    #[error("unsupported LLM provider {name:?}; expected one of: {}", SUPPORTED_PROVIDERS.join(", "))]
+    Unsupported {
+        /// The provider string as configured.
+        name: String,
+    },
+}
+
+impl LlmConfigError {
+    fn unusable(
+        provider: &'static str,
+        selected_by: &'static str,
+        detail: impl Into<String>,
+    ) -> Self {
+        Self::Unusable {
+            provider,
+            selected_by,
+            detail: detail.into(),
+        }
+    }
+}
+
+/// A resolved provider plus what a startup line or `a2a doctor` needs to
+/// describe it.
+///
+/// [`model`](Self::model) is resolved here because a config often leaves it to
+/// the environment, and `OPENROUTER_MODEL` is per process: a fleet that omits
+/// it runs every agent on the same model.
+#[derive(Clone)]
+pub struct SelectedLlm {
+    /// The provider adapter, ready to use.
+    pub provider: Arc<dyn LlmProvider>,
+    /// Which adapter it is — one of [`SUPPORTED_PROVIDERS`].
+    pub kind: &'static str,
+    /// The model it will call, after config and environment defaults.
+    pub model: String,
+    /// What selected it: an environment variable name, or `[llm] provider`.
+    pub selected_by: &'static str,
+    /// What will be asked of the model's thinking on requests that don't ask
+    /// for their own. `None` sends nothing, including where the provider drops
+    /// the setting.
+    pub reasoning: Option<Reasoning>,
+}
+
+impl std::fmt::Debug for SelectedLlm {
+    /// Hand-written because `dyn LlmProvider` is not `Debug`.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SelectedLlm")
+            .field("kind", &self.kind)
+            .field("model", &self.model)
+            .field("selected_by", &self.selected_by)
+            .field("reasoning", &self.reasoning)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Select a provider from the environment.
 ///
-/// Preference order, each gated on a *present* key so an unconfigured agent
-/// degrades to its non-LLM fallback instead of silently picking a dead provider:
+/// Preference order, each gated on a *present* key:
 ///
 /// 1. **OpenRouter** when `OPENROUTER_API_KEY` is set.
 /// 2. **Gemini** when `GEMINI_API_KEY` is set.
 /// 3. **OpenAI-compatible** when any of `OPENAI_API_KEY`, `AI_API_KEY`,
 ///    `OPENAI_API_BASE_URL`, or `AI_API_BASE_URL` is set (covers local Ollama).
 ///
-/// Returns `None` when nothing is configured.
-pub fn provider_from_env() -> Option<Arc<dyn LlmProvider>> {
-    if env_set("OPENROUTER_API_KEY") {
-        match OpenAiConfig::openrouter_from_env() {
-            Ok(config) => {
-                info!(model = %config.model, "🤖 LLM: OpenRouter (tool-calling enabled)");
-                return Some(Arc::new(OpenAiProvider::new(config)));
-            }
-            Err(e) => warn!("OPENROUTER_API_KEY set but config failed: {e}"),
-        }
-    }
-
-    if env_set("GEMINI_API_KEY") {
-        match GeminiProvider::from_env() {
-            Ok(gemini) => {
-                info!("🤖 LLM: Gemini (tool-calling enabled)");
-                return Some(Arc::new(gemini));
-            }
-            Err(e) => warn!("GEMINI_API_KEY set but config failed: {e}"),
-        }
-    }
-
-    if env_set("OPENAI_API_KEY")
-        || env_set("AI_API_KEY")
-        || env_set("OPENAI_API_BASE_URL")
-        || env_set("AI_API_BASE_URL")
-    {
-        match OpenAiProvider::from_env() {
-            Ok(openai) => {
-                info!("🤖 LLM: OpenAI-compatible (tool-calling enabled)");
-                return Some(Arc::new(openai));
-            }
-            Err(e) => warn!("OpenAI config failed: {e}"),
-        }
-    }
-
-    info!("🤖 LLM: none configured — host should use its non-LLM fallback");
-    None
+/// `Ok(None)` means no variable names a provider; the host should use its
+/// non-LLM fallback. `Err` means one does and could not be built — a failing
+/// provider does not fall through to the next, since substituting a different
+/// model (and a different bill) for the one that was asked for is worse than
+/// failing.
+pub fn provider_from_env() -> Result<Option<SelectedLlm>, LlmConfigError> {
+    select_from_env(Env::os())
 }
 
-/// Say so when a configured [`LlmSettings::reasoning`] cannot reach the wire.
+fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> {
+    let [openrouter_key, gemini_key, openai_vars @ ..] = PROVIDER_ENV_VARS;
+
+    if env.get(openrouter_key).is_some() {
+        let config = OpenAiConfig::openrouter_from_lookup(env)
+            .map_err(|detail| LlmConfigError::unusable("openrouter", openrouter_key, detail))?;
+        return Ok(Some(SelectedLlm {
+            kind: "openrouter",
+            model: config.model.clone(),
+            selected_by: openrouter_key,
+            reasoning: config.reasoning,
+            provider: Arc::new(OpenAiProvider::new(config)),
+        }));
+    }
+
+    if env.get(gemini_key).is_some() {
+        let config = GeminiConfig::from_lookup(env)
+            .map_err(|detail| LlmConfigError::unusable("gemini", gemini_key, detail))?;
+        return Ok(Some(SelectedLlm {
+            kind: "gemini",
+            model: config.model.clone(),
+            selected_by: gemini_key,
+            reasoning: None,
+            provider: Arc::new(GeminiProvider::new(config)),
+        }));
+    }
+
+    if let Some(var) = openai_vars.into_iter().find(|var| env.get(var).is_some()) {
+        let config = OpenAiConfig::from_lookup(env);
+        return Ok(Some(SelectedLlm {
+            kind: "openai",
+            model: config.model.clone(),
+            selected_by: var,
+            reasoning: None,
+            provider: Arc::new(OpenAiProvider::new(config)),
+        }));
+    }
+
+    Ok(None)
+}
+
+/// Warn when a configured [`LlmSettings::reasoning`] cannot reach the wire.
 ///
-/// The setting costs money when it works, so a provider that cannot send it
-/// should say which one it is at startup — dropping it in silence is how the
-/// caller ends up believing a model is thinking when it is not.
+/// Reasoning tokens are billed, so a provider that drops the setting says so at
+/// startup rather than leaving the caller to infer it from the bill.
 fn warn_unsupported_reasoning(settings: &LlmSettings) {
     if let Some(reasoning) = settings.reasoning {
-        warn!(
+        tracing::warn!(
             provider = %settings.provider,
             %reasoning,
             "`reasoning` is only sent to the openrouter provider today; ignoring it"
@@ -120,69 +242,273 @@ fn warn_unsupported_reasoning(settings: &LlmSettings) {
 
 /// Build a provider from explicit [`LlmSettings`].
 ///
-/// Errors on an unknown provider string or a missing required API key (the
-/// `"openrouter"` key may instead come from `OPENROUTER_API_KEY`).
-pub fn provider_from_settings(settings: &LlmSettings) -> Result<Arc<dyn LlmProvider>, String> {
+/// Resolution order for every value: the config, then the provider's own
+/// environment variables, then a built-in default. So a `[llm]` block with no
+/// `api_key` reads the key from the environment, which is how the shipped
+/// examples are written. (Previously only `openrouter` did this; `gemini` used
+/// an empty key and `openai` used none, and both failed at the endpoint.)
+pub fn provider_from_settings(settings: &LlmSettings) -> Result<SelectedLlm, LlmConfigError> {
+    build_from_settings(settings, Env::os())
+}
+
+fn build_from_settings(
+    settings: &LlmSettings,
+    env: Env<'_>,
+) -> Result<SelectedLlm, LlmConfigError> {
+    /// Config first, then the environment. An empty or whitespace-only
+    /// configured value counts as absent.
+    fn or_env(configured: &Option<String>, env: Env<'_>, keys: &[&str]) -> Option<String> {
+        configured
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| keys.iter().find_map(|key| env.get(key)))
+    }
+
     match settings.provider.as_str() {
         "openrouter" => {
-            let api_key = settings
-                .api_key
-                .clone()
-                .or_else(|| std::env::var("OPENROUTER_API_KEY").ok())
-                .map(|k| k.trim().to_string())
-                .filter(|k| !k.is_empty())
-                .ok_or_else(|| {
-                    "openrouter provider requires api_key (config) or OPENROUTER_API_KEY (env)"
-                        .to_string()
+            let api_key =
+                or_env(&settings.api_key, env, &["OPENROUTER_API_KEY"]).ok_or_else(|| {
+                    LlmConfigError::unusable(
+                        "openrouter",
+                        SELECTED_BY_CONFIG,
+                        "no `api_key` in the config and OPENROUTER_API_KEY is not set",
+                    )
                 })?;
-            let model = settings
-                .model
-                .clone()
-                .unwrap_or_else(|| "z-ai/glm-4.6".to_string());
-            let config = OpenAiConfig::openrouter(
-                api_key,
-                model,
-                settings.base_url.clone(),
-                settings.http_referer.clone(),
-                settings.x_title.clone(),
-            );
-            Ok(Arc::new(OpenAiProvider::new(OpenAiConfig {
+            let model = or_env(&settings.model, env, &["OPENROUTER_MODEL"])
+                .unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_string());
+            let config = OpenAiConfig {
                 reasoning: settings.reasoning,
-                ..config
-            })))
+                ..OpenAiConfig::openrouter(
+                    api_key,
+                    model.clone(),
+                    or_env(&settings.base_url, env, &["OPENROUTER_API_BASE_URL"]),
+                    or_env(&settings.http_referer, env, &["OPENROUTER_HTTP_REFERER"]),
+                    or_env(&settings.x_title, env, &["OPENROUTER_X_TITLE"]),
+                )
+            };
+            Ok(SelectedLlm {
+                kind: "openrouter",
+                model,
+                selected_by: SELECTED_BY_CONFIG,
+                reasoning: settings.reasoning,
+                provider: Arc::new(OpenAiProvider::new(config)),
+            })
         }
         "openai" => {
             warn_unsupported_reasoning(settings);
+            // No key is a valid OpenAI-compatible setup (a local Ollama), so
+            // there is nothing to require here — and nothing to report either.
+            let model = or_env(&settings.model, env, &["OPENAI_MODEL", "AI_MODEL"])
+                .unwrap_or_else(|| "gpt-4o-mini".to_string());
             let config = OpenAiConfig {
-                base_url: settings
-                    .base_url
-                    .clone()
-                    .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
-                model: settings
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "gpt-4o-mini".to_string()),
-                api_key: settings.api_key.clone(),
+                base_url: or_env(
+                    &settings.base_url,
+                    env,
+                    &["OPENAI_API_BASE_URL", "AI_API_BASE_URL"],
+                )
+                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+                model: model.clone(),
+                api_key: or_env(&settings.api_key, env, &["OPENAI_API_KEY", "AI_API_KEY"]),
                 extra_headers: Vec::new(),
                 supports_reasoning: false,
                 reasoning: None,
             };
-            Ok(Arc::new(OpenAiProvider::new(config)))
+            Ok(SelectedLlm {
+                kind: "openai",
+                model,
+                selected_by: SELECTED_BY_CONFIG,
+                reasoning: None,
+                provider: Arc::new(OpenAiProvider::new(config)),
+            })
         }
         "gemini" => {
             warn_unsupported_reasoning(settings);
+            let model = or_env(&settings.model, env, &["GEMINI_MODEL"])
+                .unwrap_or_else(|| GEMINI_DEFAULT_MODEL.to_string());
             let config = GeminiConfig {
-                base_url: settings.base_url.clone().unwrap_or_else(|| {
-                    "https://generativelanguage.googleapis.com/v1beta/models".to_string()
-                }),
-                api_key: settings.api_key.clone().unwrap_or_default(),
-                model: settings
-                    .model
-                    .clone()
-                    .unwrap_or_else(|| "gemini-1.5-pro".to_string()),
+                base_url: or_env(&settings.base_url, env, &["GEMINI_API_BASE_URL"])
+                    .unwrap_or_else(|| GEMINI_BASE_URL.to_string()),
+                api_key: or_env(&settings.api_key, env, &["GEMINI_API_KEY"]).ok_or_else(|| {
+                    LlmConfigError::unusable(
+                        "gemini",
+                        SELECTED_BY_CONFIG,
+                        "no `api_key` in the config and GEMINI_API_KEY is not set",
+                    )
+                })?,
+                model: model.clone(),
             };
-            Ok(Arc::new(GeminiProvider::new(config)))
+            Ok(SelectedLlm {
+                kind: "gemini",
+                model,
+                selected_by: SELECTED_BY_CONFIG,
+                reasoning: None,
+                provider: Arc::new(GeminiProvider::new(config)),
+            })
         }
-        other => Err(format!("unsupported LLM provider: {other}")),
+        other => Err(LlmConfigError::Unsupported {
+            name: other.to_string(),
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::ReasoningEffort;
+
+    /// A fake environment. Mutating the real one would race the other tests in
+    /// this binary (`set_var` is `unsafe` in edition 2024 for that reason).
+    fn env_of(pairs: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> + use<> {
+        let pairs: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
+            .collect();
+        move |key| pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    #[test]
+    fn nothing_configured_is_not_a_failure() {
+        assert!(select_from_env(Env::new(&env_of(&[]))).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_key_selects_its_provider_and_reports_the_model() {
+        let selected = select_from_env(Env::new(&env_of(&[
+            ("OPENROUTER_API_KEY", "sk-or-test"),
+            ("OPENROUTER_MODEL", "minimax/minimax-m2"),
+        ])))
+        .expect("a usable key is not an error")
+        .expect("a key selects a provider");
+        assert_eq!(selected.kind, "openrouter");
+        assert_eq!(selected.selected_by, "OPENROUTER_API_KEY");
+        assert_eq!(selected.model, "minimax/minimax-m2");
+    }
+
+    /// A key that is set but unusable must not report as "unconfigured": the
+    /// host reads that as "use the non-LLM fallback" and the agent answers with
+    /// a stub.
+    #[test]
+    fn a_broken_setting_is_an_error_not_an_absence() {
+        let error = select_from_env(Env::new(&env_of(&[
+            ("OPENROUTER_API_KEY", "sk-or-test"),
+            ("OPENROUTER_REASONING", "verry-high"),
+        ])))
+        .expect_err("a malformed OPENROUTER_REASONING is a failure");
+        assert!(
+            matches!(&error, LlmConfigError::Unusable { provider, selected_by, .. }
+                if *provider == "openrouter" && *selected_by == "OPENROUTER_API_KEY"),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("OPENROUTER_REASONING"),
+            "{error}"
+        );
+    }
+
+    /// A broken first choice fails rather than falling through: the operator
+    /// asked for OpenRouter, and billing Gemini instead is not a fix.
+    #[test]
+    fn a_broken_provider_does_not_fall_through_to_the_next() {
+        let error = select_from_env(Env::new(&env_of(&[
+            ("OPENROUTER_API_KEY", "sk-or-test"),
+            ("OPENROUTER_REASONING", "verry-high"),
+            ("GEMINI_API_KEY", "gemini-key"),
+        ])))
+        .expect_err("the broken first choice wins over the working second");
+        assert!(error.to_string().contains("openrouter"), "{error}");
+    }
+
+    /// `.env` files leave whitespace-only values behind. Treating one as set
+    /// selects a provider that cannot authenticate.
+    #[test]
+    fn a_blank_key_does_not_select_a_provider() {
+        assert!(
+            select_from_env(Env::new(&env_of(&[("OPENROUTER_API_KEY", "   ")])))
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_base_url_alone_selects_the_openai_compatible_provider() {
+        let selected = select_from_env(Env::new(&env_of(&[(
+            "OPENAI_API_BASE_URL",
+            "http://localhost:11434/v1",
+        )])))
+        .unwrap()
+        .expect("a base URL is enough for a local server");
+        assert_eq!(selected.kind, "openai");
+        assert_eq!(selected.selected_by, "OPENAI_API_BASE_URL");
+    }
+
+    /// A config with no `api_key` reads the key from the environment. It used to
+    /// build an empty key, which failed only on the first message.
+    #[test]
+    fn settings_without_a_key_read_the_environment() {
+        let settings = LlmSettings {
+            provider: "gemini".to_string(),
+            ..Default::default()
+        };
+        let env = env_of(&[
+            ("GEMINI_API_KEY", "gemini-key"),
+            ("GEMINI_MODEL", "gemini-3-pro"),
+        ]);
+        let selected =
+            build_from_settings(&settings, Env::new(&env)).expect("the env supplies the key");
+        assert_eq!(selected.kind, "gemini");
+        assert_eq!(selected.model, "gemini-3-pro");
+
+        let error = build_from_settings(&settings, Env::new(&env_of(&[])))
+            .expect_err("no key anywhere is a failure, not an empty key");
+        assert!(error.to_string().contains("GEMINI_API_KEY"), "{error}");
+    }
+
+    #[test]
+    fn the_config_wins_over_the_environment() {
+        let settings = LlmSettings {
+            provider: "openrouter".to_string(),
+            api_key: Some("sk-or-config".to_string()),
+            model: Some("z-ai/glm-5.2".to_string()),
+            reasoning: Some(Reasoning::Effort(ReasoningEffort::Low)),
+            ..Default::default()
+        };
+        let selected = build_from_settings(
+            &settings,
+            Env::new(&env_of(&[("OPENROUTER_MODEL", "some/other-model")])),
+        )
+        .expect("a configured key needs no environment");
+        assert_eq!(selected.model, "z-ai/glm-5.2");
+        assert_eq!(selected.selected_by, SELECTED_BY_CONFIG);
+    }
+
+    /// The error lists the valid providers, since the usual cause is a typo.
+    /// These settings ride inside an `a2a doctor` requirement, and a report or a
+    /// test failure that prints one must not print the key.
+    #[test]
+    fn debug_output_redacts_the_api_key() {
+        let settings = LlmSettings {
+            provider: "openrouter".to_string(),
+            api_key: Some("sk-or-supersecret".to_string()),
+            ..Default::default()
+        };
+        let printed = format!("{settings:?}");
+        assert!(!printed.contains("supersecret"), "{printed}");
+        assert!(printed.contains("redacted"), "{printed}");
+    }
+
+    #[test]
+    fn an_unknown_provider_names_the_ones_that_exist() {
+        let settings = LlmSettings {
+            provider: "opnrouter".to_string(),
+            ..Default::default()
+        };
+        let error =
+            build_from_settings(&settings, Env::new(&env_of(&[]))).expect_err("no such provider");
+        assert!(matches!(&error, LlmConfigError::Unsupported { name } if name == "opnrouter"));
+        for provider in SUPPORTED_PROVIDERS {
+            assert!(error.to_string().contains(provider), "{error}");
+        }
     }
 }

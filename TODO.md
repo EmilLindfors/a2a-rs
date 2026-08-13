@@ -29,15 +29,6 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
       `Command::env_clear()` plus an explicit carry-over set, which is
       platform-fiddly (`PATH`, `SystemRoot`, temp dirs) — hence deferred, with
       the adapter documented as dev-only meanwhile. See `NOTES.md`.
-- [ ] **`provider_from_env` cannot tell "nothing configured" from "configured
-      and broken".** It returns `Option`, so a present-but-unusable setup — a
-      malformed key, now also a typo'd `OPENROUTER_REASONING` — warns once and
-      falls through to the non-LLM fallback, and the agent answers with the echo
-      stub. That is the "looks configured, behaves like a stub" failure this repo
-      treats as a bug elsewhere (`HandlerType::Custom`, which `a2a doctor`
-      reports as a problem). Returning `Result` and letting the binary refuse to
-      start is the honest shape; `a2a doctor` should read the same path so it
-      catches it before the agent runs.
 - [ ] **Reasoning for non-OpenRouter providers.** `[llm] reasoning` reaches the
       wire on `openrouter` only; `openai` and `gemini` log that they are
       dropping it. OpenAI takes `reasoning_effort` and Gemini a thinking budget,
@@ -45,7 +36,9 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
       from `Reasoning`, including what `Off` means where reasoning cannot be
       turned off. Until then `a2a doctor` could report a `reasoning` its provider
       will drop, which is cheaper than either mapping and catches the same
-      mistake before it is billed.
+      mistake before it is billed. `doctor` now builds the provider through
+      `provider_from_settings`, so it already emits that `warn!` on stderr —
+      what is missing is making it a `Finding` in the report.
 - [ ] **Feed non-text parts to the model.** `extract_text` (`handlers/llm.rs`)
       joins text parts and drops the rest, so a file or data part reaches a
       multimodal model as silence — `examples/multi-model/` points MiniMax M3 at

@@ -106,6 +106,24 @@ every captured agent log had escape codes baked in.
 
 ## Choices that had a real alternative
 
+**A configured LLM provider that cannot be built stops the run.** The
+alternative was what it did before: warn, fall back to the non-LLM handler, keep
+serving. That is worse for the case it actually covers — a typo.
+`OPENROUTER_REASONING=hgih` or `provider = "opnrouter"` is not a request to run
+without a model, it is the same request with a mistake in it, and the agent that
+came up answered every message with a stub while reporting healthy. Two things
+follow from the split:
+
+- Nothing configured at all still runs the fallback. That is a setup someone
+  chose (CI, a demo with no keys), not a mistake, so it stays `Ok(None)`.
+- A failing provider does not fall through to the next in the cascade. A broken
+  `OPENROUTER_API_KEY` promoting whatever else is exported changes which model
+  answers and what it costs.
+
+`a2a doctor` calls `provider_from_settings` / `provider_from_env` rather than
+checking which variables are set, so its verdict is the run's verdict. The same
+applies to anything else `doctor` checks: run the code, don't re-derive it.
+
 **Reasoning is configured in `[llm]`, beside the model — not in
 `[handler.llm]`.** The obvious place was the handler's own options, next to
 `system_prompt` and `max_tool_rounds`, and it is the wrong one: how hard to think

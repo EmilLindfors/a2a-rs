@@ -611,18 +611,24 @@ fn parse_two_numbers(text: &str) -> Option<(f64, f64)> {
     }
 }
 
-fn load_llm() -> Option<Arc<dyn LlmProvider>> {
+fn load_llm() -> anyhow::Result<Option<Arc<dyn LlmProvider>>> {
     // Explicit opt-out. Without it, the deterministic path is only reachable by
     // *not having* a key — including one this binary loaded from a `.env` file
     // at startup — so the no-network branch could not be demoed or tested on a
     // developer machine that is set up for the LLM one.
     if std::env::var("A2A_NO_LLM").is_ok_and(|value| !matches!(value.trim(), "" | "0")) {
         tracing::info!("A2A_NO_LLM set — using the rule-based router, no model calls");
-        return None;
+        return Ok(None);
     }
     // Centralized selection (OpenRouter → Gemini → OpenAI). With no key set this
-    // returns None and the handler falls back to the rule-based router.
-    a2a_agents_common::llm::provider_from_env()
+    // returns None and the handler falls back to the rule-based router; a key
+    // that is set and unusable is an error, not a silent fallback.
+    Ok(
+        a2a_agents_common::llm::provider_from_env()?.map(|selected| {
+            tracing::info!(provider = selected.kind, model = %selected.model, "LLM");
+            selected.provider
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -673,7 +679,7 @@ async fn main() -> anyhow::Result<()> {
         streaming.clone(),
         storage.push_notifier(),
         bridge,
-        load_llm(),
+        load_llm()?,
     );
 
     // (e) Assemble from TOML and run. `with_streaming` is the new builder hook

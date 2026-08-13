@@ -33,7 +33,10 @@ async fn main() -> anyhow::Result<()> {
 
     let builder = AgentBuilder::from_file(&config_path)?;
     let llm_cfg = builder.config().handler.llm.clone().unwrap_or_default();
-    let llm = a2a_agents_common::llm::provider_from_env();
+    let llm = a2a_agents_common::llm::provider_from_env()?.map(|selected| {
+        println!("Using {} ({})", selected.kind, selected.model);
+        selected.provider
+    });
 
     let storage = InMemoryTaskStorage::new();
     let streaming = InMemoryStreamingHandler::new();

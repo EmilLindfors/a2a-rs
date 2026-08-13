@@ -40,7 +40,7 @@ pub use config::{
     HandlerType, LlmHandlerConfig, McpClientConfig, McpServerConfig, McpServerConnection,
     RemoteAgentConfig, ServerConfig, StorageConfig, referenced_env_vars,
 };
-pub use doctor::{Requirement, requirements};
+pub use doctor::{LlmSource, Requirement, requirements};
 pub use fleet::{
     FleetConfig, FleetConflict, FleetMember, fleet_conflicts, fleet_header, member_block,
     member_path,

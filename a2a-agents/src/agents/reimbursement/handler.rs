@@ -139,9 +139,18 @@ impl ReimbursementHandler {
         streaming: impl a2a_rs::port::AsyncStreamingHandler + 'static,
         push_notifier: impl a2a_rs::port::AsyncPushNotifier + 'static,
     ) -> Self {
-        // Initialize an AI client from the environment (OpenRouter → Gemini →
-        // OpenAI). `None` disables conversational features.
-        let llm_provider = a2a_agents_common::llm::provider_from_env();
+        // An AI client from the environment (OpenRouter → Gemini → OpenAI); no
+        // provider disables conversational features. A provider that is
+        // configured and broken is reported here and treated as absent, since
+        // this constructor cannot fail — `a2a run` builds the provider itself
+        // (`resolve_llm`) and refuses to start instead.
+        let llm_provider = match a2a_agents_common::llm::provider_from_env() {
+            Ok(selected) => selected.map(|llm| llm.provider),
+            Err(e) => {
+                tracing::error!("{e}; continuing without conversational features");
+                None
+            }
+        };
 
         Self::with_llm(task_lifecycle, streaming, push_notifier, llm_provider)
     }

@@ -1,9 +1,8 @@
-use super::{LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
+use super::{Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
-use std::env;
 use tracing::{debug, error, info, warn};
 
 /// Configuration for the Gemini AI client
@@ -14,21 +13,31 @@ pub struct GeminiConfig {
     pub api_key: String,
 }
 
+/// Default base URL for the Gemini generative-language API.
+pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+
+/// Model used when neither a config nor `GEMINI_MODEL` names one. Shared by
+/// both paths so they cannot default differently.
+pub const GEMINI_DEFAULT_MODEL: &str = "gemini-1.5-pro";
+
 impl GeminiConfig {
     pub fn from_env() -> Result<Self, String> {
-        let base_url = env::var("GEMINI_API_BASE_URL").unwrap_or_else(|_| {
-            "https://generativelanguage.googleapis.com/v1beta/models".to_string()
-        });
+        Self::from_lookup(Env::os())
+    }
 
-        let model = env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-1.5-pro".to_string());
-
-        let api_key = env::var("GEMINI_API_KEY")
-            .map_err(|_| "GEMINI_API_KEY environment variable is required".to_string())?;
-
+    /// Read a Gemini config from `env`. The key is required; there is no
+    /// keyless Gemini endpoint.
+    pub(crate) fn from_lookup(env: Env<'_>) -> Result<Self, String> {
         Ok(Self {
-            base_url,
-            model,
-            api_key,
+            base_url: env
+                .get("GEMINI_API_BASE_URL")
+                .unwrap_or_else(|| GEMINI_BASE_URL.to_string()),
+            model: env
+                .get("GEMINI_MODEL")
+                .unwrap_or_else(|| GEMINI_DEFAULT_MODEL.to_string()),
+            api_key: env
+                .get("GEMINI_API_KEY")
+                .ok_or_else(|| "GEMINI_API_KEY environment variable is required".to_string())?,
         })
     }
 }
