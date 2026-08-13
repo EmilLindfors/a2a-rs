@@ -129,27 +129,109 @@ impl ReasoningEffort {
     }
 }
 
-/// Opt-in reasoning controls for reasoning-capable models (e.g. GLM via
-/// OpenRouter). When set on an [`LlmRequest`], a supporting provider returns its
-/// thinking on a separate channel (surfaced as [`LlmResponse::reasoning`] /
-/// [`LlmStreamEvent::Reasoning`]). Providers that don't support it ignore this.
-#[derive(Debug, Clone, Default)]
-pub struct ReasoningConfig {
-    /// Reasoning effort. Mutually exclusive with `max_tokens` on most providers.
-    pub effort: Option<ReasoningEffort>,
-    /// Hard cap on reasoning tokens.
-    pub max_tokens: Option<u32>,
-    /// Let the model reason internally but omit the reasoning from the response.
-    pub exclude: bool,
+/// What to ask a reasoning-capable model to do with its thinking.
+///
+/// This is a *request*, not a capability: `Some(_)` says what the caller wants
+/// and `None` says nothing at all, leaving the model's own default alone.
+/// Whether the endpoint can carry it is the provider's business — a provider
+/// that cannot say this on the wire drops it rather than making every caller
+/// ask first.
+///
+/// Where the model does honour it, its thinking comes back on a separate channel
+/// ([`LlmResponse::reasoning`] / [`LlmStreamEvent::Reasoning`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reasoning {
+    /// Don't think — for models that let reasoning be turned off. The one
+    /// setting a small, fast model usually wants, and the one an effort-only
+    /// knob cannot express.
+    Off,
+    /// Think at one of the provider's named effort levels.
+    Effort(ReasoningEffort),
+    /// Think within a hard budget of reasoning tokens.
+    Budget(u32),
 }
 
-impl ReasoningConfig {
-    /// Request reasoning at the given effort level.
-    pub fn effort(effort: ReasoningEffort) -> Self {
-        Self {
-            effort: Some(effort),
-            ..Default::default()
+/// What a host's config or environment may spell, listed once so the parser,
+/// the error message, and the docs cannot drift apart.
+const REASONING_EXPECTED: &str =
+    r#""off", "low", "medium", "high", or a number of reasoning tokens"#;
+
+impl std::str::FromStr for Reasoning {
+    type Err = String;
+
+    /// Parses the tokens a host config or `OPENROUTER_REASONING` accepts:
+    /// `off`, `low`, `medium`, `high`, or a plain token budget (`2000`).
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.trim() {
+            "off" => Ok(Reasoning::Off),
+            "low" => Ok(Reasoning::Effort(ReasoningEffort::Low)),
+            "medium" => Ok(Reasoning::Effort(ReasoningEffort::Medium)),
+            "high" => Ok(Reasoning::Effort(ReasoningEffort::High)),
+            budget => budget
+                .parse()
+                .map(Reasoning::Budget)
+                .map_err(|_| format!("expected {REASONING_EXPECTED}; got {s:?}")),
         }
+    }
+}
+
+impl std::fmt::Display for Reasoning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Reasoning::Off => f.write_str("off"),
+            Reasoning::Effort(effort) => f.write_str(effort.as_str()),
+            Reasoning::Budget(tokens) => write!(f, "{tokens}"),
+        }
+    }
+}
+
+impl Serialize for Reasoning {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            // A budget round-trips as the number it was written as; the levels
+            // as their token. Both are what a host config spells.
+            Reasoning::Budget(tokens) => serializer.serialize_u32(*tokens),
+            level => serializer.serialize_str(&level.to_string()),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Reasoning {
+    /// Accepts a level (`"high"`) or a token budget (`2000`) — one parser for
+    /// every host, so a bad value is refused the same way with the same message
+    /// wherever it was written.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{Error, Unexpected, Visitor};
+
+        struct ReasoningVisitor;
+
+        impl Visitor<'_> for ReasoningVisitor {
+            type Value = Reasoning;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(REASONING_EXPECTED)
+            }
+
+            fn visit_str<E: Error>(self, value: &str) -> Result<Reasoning, E> {
+                value
+                    .parse()
+                    .map_err(|_| E::invalid_value(Unexpected::Str(value), &self))
+            }
+
+            fn visit_u64<E: Error>(self, value: u64) -> Result<Reasoning, E> {
+                u32::try_from(value)
+                    .map(Reasoning::Budget)
+                    .map_err(|_| E::invalid_value(Unexpected::Unsigned(value), &self))
+            }
+
+            fn visit_i64<E: Error>(self, value: i64) -> Result<Reasoning, E> {
+                u32::try_from(value)
+                    .map(Reasoning::Budget)
+                    .map_err(|_| E::invalid_value(Unexpected::Signed(value), &self))
+            }
+        }
+
+        deserializer.deserialize_any(ReasoningVisitor)
     }
 }
 
@@ -161,8 +243,9 @@ pub struct LlmRequest {
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
     pub force_json: bool,
-    /// Opt-in reasoning controls; `None` leaves provider defaults untouched.
-    pub reasoning: Option<ReasoningConfig>,
+    /// What this request asks of a reasoning model; `None` defers to whatever
+    /// default the provider was configured with, and then to the model's own.
+    pub reasoning: Option<Reasoning>,
 }
 
 impl LlmRequest {
@@ -177,8 +260,8 @@ impl LlmRequest {
         }
     }
 
-    pub fn reasoning(mut self, config: ReasoningConfig) -> Self {
-        self.reasoning = Some(config);
+    pub fn reasoning(mut self, reasoning: Reasoning) -> Self {
+        self.reasoning = Some(reasoning);
         self
     }
 
@@ -240,12 +323,4 @@ pub trait LlmProvider: Send + Sync {
         &self,
         request: LlmRequest,
     ) -> Result<BoxStream<'static, Result<LlmStreamEvent, LlmError>>, LlmError>;
-
-    /// Whether this provider surfaces a separate reasoning channel for
-    /// reasoning-capable models, so callers can opt into [`ReasoningConfig`]
-    /// instead of sniffing the environment. Defaults to `false`; providers that
-    /// support it (e.g. OpenRouter) override this.
-    fn supports_reasoning(&self) -> bool {
-        false
-    }
 }

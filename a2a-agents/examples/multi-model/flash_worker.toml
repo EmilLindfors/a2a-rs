@@ -1,0 +1,52 @@
+# DeepSeek V4 Flash worker — cheapest, fastest, best for high-volume lookups.
+#
+# Model: deepseek/deepseek-v4-flash-0731 (in $0.08/M, out $0.18/M, 1M ctx)
+# Skill: weather-lookup. The orchestrator finds THIS agent by skill.
+#
+# Note the top-level [llm] block: it pins the provider + model so this agent
+# ALWAYS uses DeepSeek Flash regardless of OPENROUTER_MODEL in the shared env.
+# The API key is shared via OPENROUTER_API_KEY (not written into config).
+
+[agent]
+name = "Flash Worker"
+description = "Fast, cheap weather and factual lookups."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8081
+
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "weather-lookup"
+name = "Weather lookup"
+description = "Look up current and forecast weather for a location."
+keywords = ["weather", "forecast", "temperature"]
+examples = ["What's the weather in Oslo tomorrow?"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[handler]
+type = "llm"
+
+[handler.llm]
+system_prompt = "You are a fast weather specialist. Answer concisely and factually."
+max_tool_rounds = 2
+
+# Top-level [llm] — provider + model for THIS agent. API key comes from env.
+#
+# `reasoning = "off"` is the point of a flash worker: a one-line weather answer
+# is not worth a thinking budget, and this model will happily spend its whole
+# response on one if asked. Levels are off/low/medium/high, or a token cap
+# (`reasoning = 500`). Omit the key entirely and the model's own default stands.
+[llm]
+provider = "openrouter"
+model = "deepseek/deepseek-v4-flash-0731"
+reasoning = "off"
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true

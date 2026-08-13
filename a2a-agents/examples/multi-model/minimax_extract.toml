@@ -1,0 +1,45 @@
+# MiniMax M3 worker — multimodal input (text/image/video) for rich content.
+#
+# Model: minimax/minimax-m3 (in $0.30/M, out $1.20/M, 1M ctx) — accepts
+#       multimodal input, good for turning raw assets into structured text.
+# Skill: content-extraction. Pinned via [llm].
+
+[agent]
+name = "MiniMax Extract"
+description = "Extract and structure content from text and media."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8083
+
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "content-extraction"
+name = "Content extraction"
+description = "Extract key facts, entities, and structure from raw content."
+keywords = ["extract", "parse", "facts", "content"]
+examples = ["Extract the key dates from this text", "Pull the main points from the description"]
+input_formats = ["text", "image", "video"]
+output_formats = ["text"]
+
+[handler]
+type = "llm"
+
+[handler.llm]
+system_prompt = "You are an extraction specialist. Pull out the key facts and structure, then answer concisely."
+max_tool_rounds = 2
+
+[llm]
+provider = "openrouter"
+model = "minimax/minimax-m3"
+# The middle setting: extraction benefits from a little thinking, but a cap keeps
+# it from dwarfing the answer. A bare number is a reasoning-token budget.
+reasoning = 1000
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true

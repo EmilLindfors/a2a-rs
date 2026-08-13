@@ -1,0 +1,66 @@
+# Orchestrator — routes requests to the three specialist workers by SKILL.
+#
+# The orchestrator itself runs on its own model (DeepSeek Flash is fine for
+# routing), and each worker runs on a different model:
+#   - Flash Worker    -> deepseek/deepseek-v4-flash-0731  (weather-lookup)
+#   - GLM Analyst     -> z-ai/glm-5.2                      (data-analysis)
+#   - MiniMax Extract -> minimax/minimax-m3                (content-extraction)
+#
+# Each [[handler.llm.agents]] entry becomes an `ask_<slug>` tool. The peer is
+# resolved by skill against the shared in-memory registry (same process via
+# `a2a up -f fleet.toml`), so no URLs needed.
+
+[agent]
+name = "Orchestrator"
+description = "Routes requests to specialist A2A agents running on different LLM models."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8090
+
+[server.storage]
+type = "inmemory"
+
+[[skills]]
+id = "route"
+name = "Route"
+description = "Understand a request and delegate to the right specialist agent."
+keywords = ["route", "delegate", "orchestrate"]
+examples = ["Ask about tomorrow's weather", "Summarize this data", "Extract the key dates from this text"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[handler]
+type = "llm"
+
+[handler.llm]
+system_prompt = "You are an orchestrator. Match each request to the specialist tool that fits best (weather, data analysis, or content extraction), call it, and relay its answer. Otherwise answer directly and concisely."
+max_tool_rounds = 4
+
+[[handler.llm.agents]]
+name = "Flash Worker"
+skill = "weather-lookup"
+description = "Fast, cheap weather and factual lookups. Use for weather, forecast, or temperature questions."
+
+[[handler.llm.agents]]
+name = "GLM Analyst"
+skill = "data-analysis"
+description = "Structured data analysis and summarization. Use for analyzing numbers, reports, or trends."
+
+[[handler.llm.agents]]
+name = "MiniMax Extract"
+skill = "content-extraction"
+description = "Extract and structure key facts from raw content. Use for pulling out dates, entities, or main points from text or media."
+
+# The router's own model.
+[llm]
+provider = "openrouter"
+model = "deepseek/deepseek-v4-flash-0731"
+# Routing is a tool choice, not a research problem — think a little, then call.
+reasoning = "low"
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true

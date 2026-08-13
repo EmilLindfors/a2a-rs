@@ -29,6 +29,37 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
       `Command::env_clear()` plus an explicit carry-over set, which is
       platform-fiddly (`PATH`, `SystemRoot`, temp dirs) — hence deferred, with
       the adapter documented as dev-only meanwhile. See `NOTES.md`.
+- [ ] **`provider_from_env` cannot tell "nothing configured" from "configured
+      and broken".** It returns `Option`, so a present-but-unusable setup — a
+      malformed key, now also a typo'd `OPENROUTER_REASONING` — warns once and
+      falls through to the non-LLM fallback, and the agent answers with the echo
+      stub. That is the "looks configured, behaves like a stub" failure this repo
+      treats as a bug elsewhere (`HandlerType::Custom`, which `a2a doctor`
+      reports as a problem). Returning `Result` and letting the binary refuse to
+      start is the honest shape; `a2a doctor` should read the same path so it
+      catches it before the agent runs.
+- [ ] **Reasoning for non-OpenRouter providers.** `[llm] reasoning` reaches the
+      wire on `openrouter` only; `openai` and `gemini` log that they are
+      dropping it. OpenAI takes `reasoning_effort` and Gemini a thinking budget,
+      so both are expressible — each needs its own request field and a mapping
+      from `Reasoning`, including what `Off` means where reasoning cannot be
+      turned off. Until then `a2a doctor` could report a `reasoning` its provider
+      will drop, which is cheaper than either mapping and catches the same
+      mistake before it is billed.
+- [ ] **Feed non-text parts to the model.** `extract_text` (`handlers/llm.rs`)
+      joins text parts and drops the rest, so a file or data part reaches a
+      multimodal model as silence — `examples/multi-model/` points MiniMax M3 at
+      text only for exactly this reason. Needs a mapping from `Part` to whatever
+      the provider's content array wants, and a decision for providers that have
+      no such array.
+- [ ] **`LlmHandler::new` takes seven positional arguments**, five of them
+      collaborators the call site has to keep in the right order. The types
+      differ, so nothing is silently swappable today — the cost is that a reader
+      cannot tell what `2` or the third `Arc` is without the signature, and every
+      new knob has to argue against making it eight. That pressure is what sent
+      `[llm] reasoning` to the provider instead, which was the better home
+      anyway; the next one may not be so lucky. `bon` is already a dependency;
+      a `#[builder]` here costs three call sites.
 - [ ] **Stream a delegated agent's tokens through** instead of polling to a
       terminal state: prefer `subscribe_to_task`, fall back to the current
       bounded `get_task` poll (`A2aAgentToolSource::invoke`).

@@ -15,7 +15,7 @@
 
 mod common;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use common::{ScratchDir, a2a};
 
@@ -184,12 +184,41 @@ config = "weather.toml"
     assert!(out.contains("naem"), "{out}");
 }
 
-/// The shipped example is the first fleet most people will run; if it drifts
-/// from the schema or its members move, that has to fail here rather than in
-/// someone's terminal.
+/// A shipped fleet is the first one most people run; if one drifts from the
+/// schema or a member moves, that has to fail here rather than in someone's
+/// terminal. Discovered rather than listed, so an example added later is covered
+/// without anyone remembering to add it — the failure mode a hard-coded list has
+/// is that it silently stops being the whole set.
 #[test]
-fn the_shipped_example_fleet_validates() {
+fn every_shipped_example_fleet_validates() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let (ok, out) = a2a(crate_dir, &["validate", "--fleet", "examples/fleet.toml"]);
-    assert!(ok, "examples/fleet.toml must validate:\n{out}");
+    let fleets = shipped_fleets(&crate_dir.join("examples"));
+    assert!(
+        fleets.len() >= 2,
+        "expected to discover the shipped fleets, found {fleets:?}"
+    );
+
+    for fleet in &fleets {
+        let arg = fleet.to_string_lossy();
+        let (ok, out) = a2a(crate_dir, &["validate", "--fleet", &arg]);
+        assert!(ok, "{arg} must validate:\n{out}");
+    }
+}
+
+/// Every `fleet.toml` under `examples/`, as paths relative to the crate root.
+fn shipped_fleets(examples: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut dirs = vec![examples.to_path_buf()];
+    while let Some(dir) = dirs.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read examples dir") {
+            let path = entry.expect("read dir entry").path();
+            if path.is_dir() {
+                dirs.push(path);
+            } else if path.file_name().is_some_and(|n| n == "fleet.toml") {
+                found.push(Path::new("examples").join(path.strip_prefix(examples).unwrap()));
+            }
+        }
+    }
+    found.sort();
+    found
 }

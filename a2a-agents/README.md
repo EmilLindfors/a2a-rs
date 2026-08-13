@@ -392,6 +392,33 @@ The `llm` feature is independent of MCP: an LLM agent that only delegates to pee
 A2A agents builds without pulling in `rmcp`. Add `mcp-server` as well to also
 feed it the tools of connected MCP servers.
 
+#### Picking the model (`[llm]`)
+
+A top-level `[llm]` block pins the provider and model for **this** agent, which
+is what lets a fleet run each agent on a different one — the env vars are
+process-wide, so a fleet driven from `OPENROUTER_MODEL` collapses onto a single
+model:
+
+```toml
+[llm]
+provider = "openrouter"           # openrouter | openai | gemini
+model = "z-ai/glm-4.6"
+reasoning = "off"                 # off | low | medium | high, or a token budget: 1000
+# api_key = "${OPENROUTER_API_KEY}"   # optional; the env key is used when absent
+```
+
+`reasoning` says how hard the model should think, and it belongs here because
+that is a property of the model you pointed at: a flash model answering in one
+line and a frontier model doing analysis want different answers, and the handler
+serving them cannot tell which it got. Omit it and nothing is sent — the model's
+own default stands (a reasoning model still reasons). It reaches the wire on
+`openrouter` today; other providers log that they are dropping it rather than
+pretending. Code can override it per request with `LlmRequest::reasoning`.
+
+Beware the trap it exists to close: a small model asked for high effort can spend
+its whole response budget thinking and return **nothing**. That fails the task
+with the reason rather than completing it empty — see `examples/multi-model/`.
+
 ### Agent-as-tool delegation
 
 List peer agents under `[[handler.llm.agents]]` and each is exposed to the model

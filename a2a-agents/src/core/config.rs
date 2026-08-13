@@ -3,6 +3,7 @@
 //! This module provides declarative configuration for A2A agents via TOML files.
 //! It supports environment variable interpolation and sensible defaults.
 
+use a2a_agents_common::llm::Reasoning;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use thiserror::Error;
@@ -265,6 +266,17 @@ pub struct LlmConfig {
     pub api_key: Option<String>,
     /// Model to use
     pub model: Option<String>,
+    /// What to ask this model to do with its thinking: `"off"`, `"low"`,
+    /// `"medium"`, `"high"`, or a token budget (`reasoning = 2000`).
+    ///
+    /// Omitted, nothing is sent and the model's own default stands — a
+    /// reasoning model still reasons. It sits beside `model` because that is
+    /// what it belongs to: a flash model answering in one line and a frontier
+    /// model doing analysis want different answers, and the agent's *handler*
+    /// has no way to know which it was pointed at. OpenRouter only today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "schema", schemars(with = "Option<ReasoningSchema>"))]
+    pub reasoning: Option<Reasoning>,
     /// Base URL (for providers like openai that support local LLMs like ollama)
     pub base_url: Option<String>,
     /// OpenRouter `HTTP-Referer` attribution header (ignored by other providers)
@@ -273,6 +285,34 @@ pub struct LlmConfig {
     /// OpenRouter `X-Title` attribution header (ignored by other providers)
     #[serde(default)]
     pub x_title: Option<String>,
+}
+
+/// Schema-only mirror of what `[llm] reasoning` accepts.
+///
+/// [`Reasoning`] carries its own TOML surface (one parser, one error message),
+/// but it lives in `a2a-agents-common`, which has no `schemars` dependency —
+/// so the JSON Schema export needs a type to point `schemars(with = …)` at.
+/// `reasoning_schema_matches_the_parser` keeps this honest.
+#[cfg(feature = "schema")]
+#[derive(JsonSchema)]
+#[serde(untagged)]
+pub enum ReasoningSchema {
+    /// A named level, `"off"` included — the setting a small fast model usually
+    /// wants, and the one an effort-only knob cannot express.
+    Level(ReasoningLevelSchema),
+    /// A hard cap on reasoning tokens.
+    Budget(u32),
+}
+
+/// The named levels of [`ReasoningSchema`].
+#[cfg(feature = "schema")]
+#[derive(JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ReasoningLevelSchema {
+    Off,
+    Low,
+    Medium,
+    High,
 }
 
 impl AgentConfig {
@@ -936,6 +976,8 @@ fn expand_env_vars_inner(content: &str, unset: &mut Vec<String>) -> String {
 
 #[cfg(test)]
 mod tests {
+    use a2a_agents_common::llm::ReasoningEffort;
+
     use super::*;
 
     /// A mistyped key must be an error, not a silent default. This is the worst
@@ -977,6 +1019,96 @@ mod tests {
             .expect_err("nested typo must be caught")
             .to_string();
         assert!(err.contains("sytsem_prompt"), "{err}");
+    }
+
+    fn llm_config(reasoning_line: &str) -> Result<Option<LlmConfig>, ConfigError> {
+        let toml = format!(
+            r#"
+            [agent]
+            name = "Thinker"
+
+            [llm]
+            provider = "openrouter"
+            model = "z-ai/glm-4.6"
+            {reasoning_line}
+        "#
+        );
+        AgentConfig::from_toml(&toml).map(|config| config.llm)
+    }
+
+    /// Both spellings of `[llm] reasoning` reach the same request knob, and each
+    /// TOML token is pinned to the variant it must produce — the tokens live
+    /// here while the wire lives in `a2a-agents-common`, so nothing but a test
+    /// holds the two together.
+    #[test]
+    fn reasoning_accepts_a_level_or_a_token_budget() {
+        for (line, expected) in [
+            (r#"reasoning = "off""#, Reasoning::Off),
+            (
+                r#"reasoning = "low""#,
+                Reasoning::Effort(ReasoningEffort::Low),
+            ),
+            (
+                r#"reasoning = "medium""#,
+                Reasoning::Effort(ReasoningEffort::Medium),
+            ),
+            (
+                r#"reasoning = "high""#,
+                Reasoning::Effort(ReasoningEffort::High),
+            ),
+            ("reasoning = 2000", Reasoning::Budget(2000)),
+        ] {
+            let llm = llm_config(line)
+                .unwrap_or_else(|e| panic!("`{line}` must parse: {e}"))
+                .expect("[llm] present");
+            assert_eq!(llm.reasoning, Some(expected), "for `{line}`");
+        }
+    }
+
+    /// The JSON Schema export describes `reasoning` through a mirror type, so
+    /// the mirror has to list exactly the levels the parser takes — a schema
+    /// that has drifted rejects configs the agent would have run.
+    #[cfg(feature = "schema")]
+    #[test]
+    fn reasoning_schema_matches_the_parser() {
+        let schema = serde_json::to_value(schemars::schema_for!(ReasoningLevelSchema))
+            .expect("schema serializes");
+        let levels = schema["enum"]
+            .as_array()
+            .expect("a string enum of levels")
+            .iter()
+            .map(|v| v.as_str().expect("string level").to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(levels, ["off", "low", "medium", "high"]);
+        for level in &levels {
+            level.parse::<Reasoning>().unwrap_or_else(|e| {
+                panic!("schema offers `{level}` but the parser refuses it: {e}")
+            });
+        }
+    }
+
+    /// Omitting it must mean "leave the model alone", not a default effort the
+    /// caller never asked for and pays for on every request.
+    #[test]
+    fn reasoning_is_absent_unless_asked_for() {
+        let llm = llm_config("").expect("parses").expect("[llm] present");
+        assert_eq!(llm.reasoning, None);
+    }
+
+    /// A misspelt level must fail at load. Silently ignoring it would leave the
+    /// agent thinking as hard as the model's default while the config claims
+    /// otherwise — the exact silence this setting exists to end.
+    #[test]
+    fn a_misspelt_reasoning_level_is_a_config_error() {
+        let err = llm_config(r#"reasoning = "hihg""#)
+            .expect_err("a bad level must not be ignored")
+            .to_string();
+        assert!(err.contains("reasoning"), "must name the field: {err}");
+        assert!(
+            err.contains(r#""off", "low", "medium", "high""#),
+            "must say what is accepted, not just that this was not: {err}"
+        );
     }
 
     #[test]
