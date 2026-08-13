@@ -53,9 +53,13 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
       `[llm] reasoning` to the provider instead, which was the better home
       anyway; the next one may not be so lucky. `bon` is already a dependency;
       a `#[builder]` here costs three call sites.
-- [ ] **Stream a delegated agent's tokens through** instead of polling to a
-      terminal state: prefer `subscribe_to_task`, fall back to the current
-      bounded `get_task` poll (`A2aAgentToolSource::invoke`).
+- [ ] **Relay a delegated agent's tokens to the orchestrator's own stream.**
+      The wait itself is a subscription now, so the peer's status updates
+      already arrive as they happen — but `ToolSource::invoke` returns
+      `Result<String>`, so they are drained and discarded, and a caller watching
+      the orchestrator sees nothing until the whole delegation is done. Needs a
+      way for a source to emit progress mid-invoke (the handler holds the
+      streaming port; the source does not).
 - [ ] **Resolve peers at call time** (a dynamic registry-backed `ToolSource`) so
       late joiners are reachable. A startup-only resolution pass goes stale by
       design once agents come and go under a control plane.

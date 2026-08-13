@@ -296,6 +296,15 @@ that branches on state (`a2acli` exits 2 on `failed`, delegation relays whatever
 it gets) read that as success. When a handler gives up, the giving up belongs in
 the state, not only in the text.
 
+**A tool result is prose, and the model is the only thing that can branch on
+it.** Delegation returned the peer's status message whatever state its task
+ended in, so a `failed` peer ("I could not find that invoice") was relayed as an
+answer. There is no state field to fix this in — `ToolSource::invoke` returns a
+string that goes straight into the conversation — so the outcome has to be *in*
+the prose: a completed task's reply goes back bare, everything else is
+introduced by what happened to it. Anywhere a caller's only channel is text,
+the text has to carry what a state field would have.
+
 The general form is a return type that cannot say it: `Result<String, _>` has
 one slot for success and one for a *broken run*, and "the model finished but
 delivered nothing" is neither. Both cases here — the empty completion and the
