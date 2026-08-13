@@ -44,8 +44,8 @@ use std::sync::Arc;
 
 use a2a_agents::core::AgentBuilder;
 use a2a_agents_common::llm::{
-    ChatMessage, LlmProvider, LlmRequest, LlmStreamEvent, MessageRole, ReasoningConfig,
-    ReasoningEffort, ToolCall, ToolCallAccumulator, ToolDefinition,
+    ChatMessage, LlmProvider, LlmRequest, LlmStreamEvent, MessageRole, Reasoning, ReasoningEffort,
+    ToolCall, ToolCallAccumulator, ToolDefinition,
 };
 use a2a_mcp::McpToA2ABridge;
 use a2a_rs::Artifact;
@@ -327,19 +327,16 @@ impl ResearchAssistantHandler {
             ChatMessage::system(SYSTEM_PROMPT),
             ChatMessage::user(user_text),
         ];
-        // GLM and other OpenRouter reasoning models only return their thinking on
-        // a separate channel when asked. Gate on the same signal
-        // `provider_from_env` uses to pick OpenRouter, so a plain-OpenAI run
-        // never sends the (OpenRouter-specific) `reasoning` param.
-        let reasoning_enabled = std::env::var("OPENROUTER_API_KEY").is_ok();
-
         for round in 0..MAX_TOOL_ROUNDS {
-            let mut request = LlmRequest::new(messages.clone()).temperature(0.2);
+            // This example exists to *show* the thinking, so it asks for it on
+            // every request. Asking is safe anywhere: a provider whose endpoint
+            // has no reasoning parameter sends the request without it, so a
+            // plain-OpenAI or Ollama run still answers — no env sniffing needed.
+            let mut request = LlmRequest::new(messages.clone())
+                .temperature(0.2)
+                .reasoning(Reasoning::Effort(ReasoningEffort::High));
             if !tools.is_empty() {
                 request = request.tools(tools.clone());
-            }
-            if reasoning_enabled {
-                request = request.reasoning(ReasoningConfig::effort(ReasoningEffort::High));
             }
 
             let mut stream = llm

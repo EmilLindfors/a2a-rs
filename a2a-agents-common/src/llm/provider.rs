@@ -17,7 +17,7 @@ use std::sync::Arc;
 use tracing::{info, warn};
 
 use super::{
-    LlmProvider,
+    LlmProvider, Reasoning,
     gemini::{GeminiConfig, GeminiProvider},
     openai::{OpenAiConfig, OpenAiProvider},
 };
@@ -39,6 +39,11 @@ pub struct LlmSettings {
     pub http_referer: Option<String>,
     /// OpenRouter `X-Title` attribution header (ignored by other providers).
     pub x_title: Option<String>,
+    /// What to ask this model to do with its thinking, for every request that
+    /// doesn't ask for its own. `None` leaves the model's default alone.
+    /// OpenRouter only today; set for another provider it is reported and
+    /// dropped rather than paid for.
+    pub reasoning: Option<Reasoning>,
 }
 
 fn env_set(key: &str) -> bool {
@@ -98,6 +103,21 @@ pub fn provider_from_env() -> Option<Arc<dyn LlmProvider>> {
     None
 }
 
+/// Say so when a configured [`LlmSettings::reasoning`] cannot reach the wire.
+///
+/// The setting costs money when it works, so a provider that cannot send it
+/// should say which one it is at startup — dropping it in silence is how the
+/// caller ends up believing a model is thinking when it is not.
+fn warn_unsupported_reasoning(settings: &LlmSettings) {
+    if let Some(reasoning) = settings.reasoning {
+        warn!(
+            provider = %settings.provider,
+            %reasoning,
+            "`reasoning` is only sent to the openrouter provider today; ignoring it"
+        );
+    }
+}
+
 /// Build a provider from explicit [`LlmSettings`].
 ///
 /// Errors on an unknown provider string or a missing required API key (the
@@ -126,9 +146,13 @@ pub fn provider_from_settings(settings: &LlmSettings) -> Result<Arc<dyn LlmProvi
                 settings.http_referer.clone(),
                 settings.x_title.clone(),
             );
-            Ok(Arc::new(OpenAiProvider::new(config)))
+            Ok(Arc::new(OpenAiProvider::new(OpenAiConfig {
+                reasoning: settings.reasoning,
+                ..config
+            })))
         }
         "openai" => {
+            warn_unsupported_reasoning(settings);
             let config = OpenAiConfig {
                 base_url: settings
                     .base_url
@@ -141,10 +165,12 @@ pub fn provider_from_settings(settings: &LlmSettings) -> Result<Arc<dyn LlmProvi
                 api_key: settings.api_key.clone(),
                 extra_headers: Vec::new(),
                 supports_reasoning: false,
+                reasoning: None,
             };
             Ok(Arc::new(OpenAiProvider::new(config)))
         }
         "gemini" => {
+            warn_unsupported_reasoning(settings);
             let config = GeminiConfig {
                 base_url: settings.base_url.clone().unwrap_or_else(|| {
                     "https://generativelanguage.googleapis.com/v1beta/models".to_string()

@@ -175,6 +175,19 @@ system_prompt = "You are a concise, helpful assistant running as an A2A agent."
 # How many model <-> tool round-trips before giving up.
 max_tool_rounds = 4
 
+# Pin the provider and model for THIS agent instead of taking whatever the
+# environment offers — the env vars are process-wide, so a fleet driven from
+# OPENROUTER_MODEL runs every member on the same model.
+#
+# [llm]
+# provider = "openrouter"
+# model = "z-ai/glm-4.6"
+# How hard this model should think: off | low | medium | high, or a token
+# budget (reasoning = 1000). Omitted, the model's own default stands. Worth
+# setting: a small model asked to think hard can spend its whole response
+# budget on it and answer nothing.
+# reasoning = "low"
+
 [features]
 streaming = true
 push_notifications = false

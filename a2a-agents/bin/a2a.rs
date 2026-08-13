@@ -340,8 +340,13 @@ fn resolve_llm(llm_config: &Option<LlmConfig>) -> Option<Arc<dyn LlmProvider>> {
     match llm_config {
         Some(cfg) => {
             info!(
-                "Loading LLM configuration from TOML (provider: {})",
-                cfg.provider
+                "Loading LLM configuration from TOML (provider: {}, model: {}, reasoning: {})",
+                cfg.provider,
+                cfg.model.as_deref().unwrap_or("(env default)"),
+                match cfg.reasoning {
+                    Some(reasoning) => reasoning.to_string(),
+                    None => "(model default)".to_string(),
+                }
             );
             let settings = LlmSettings {
                 provider: cfg.provider.clone(),
@@ -350,6 +355,7 @@ fn resolve_llm(llm_config: &Option<LlmConfig>) -> Option<Arc<dyn LlmProvider>> {
                 base_url: cfg.base_url.clone(),
                 http_referer: cfg.http_referer.clone(),
                 x_title: cfg.x_title.clone(),
+                reasoning: cfg.reasoning,
             };
             match provider_from_settings(&settings) {
                 Ok(p) => Some(p),

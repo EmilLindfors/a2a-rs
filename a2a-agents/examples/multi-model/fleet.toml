@@ -1,0 +1,27 @@
+# Multi-model fleet: three agents, three different OpenRouter models, one process.
+#
+# Each member pins its own model in a top-level [llm] block, so they do NOT
+# collide on a shared OPENROUTER_MODEL. Only OPENROUTER_API_KEY is shared.
+#
+#   a2a validate --fleet examples/multi-model/fleet.toml
+#   a2a up       -f      examples/multi-model/fleet.toml
+#
+# Models:
+#   Flash Worker    8081  deepseek/deepseek-v4-flash-0731  (weather-lookup)
+#   GLM Analyst     8082  z-ai/glm-5.2                      (data-analysis)
+#   MiniMax Extract 8083  minimax/minimax-m3                (content-extraction)
+#   Orchestrator    8090  deepseek/deepseek-v4-flash-0731   (routes by skill)
+
+name = "Multi-Model Showcase"
+
+[[agents]]
+config = "flash_worker.toml"
+
+[[agents]]
+config = "glm_analyst.toml"
+
+[[agents]]
+config = "minimax_extract.toml"
+
+[[agents]]
+config = "orchestrator.toml"

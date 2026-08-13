@@ -106,6 +106,42 @@ every captured agent log had escape codes baked in.
 
 ## Choices that had a real alternative
 
+**Reasoning is configured in `[llm]`, beside the model — not in
+`[handler.llm]`.** The obvious place was the handler's own options, next to
+`system_prompt` and `max_tool_rounds`, and it is the wrong one: how hard to think
+is priced like the model and only makes sense against a particular model, while
+the handler serves whichever model it is handed. Putting it beside `model` also
+makes it reach *every* caller of the provider — the generic handler, a custom
+Rust handler, the MCP bridge — instead of only the one handler that remembered
+to read the field. A request may still override it (`LlmRequest::reasoning`), so
+a caller with a reason (`complex_agent` streams its thinking on purpose) is not
+overruled by config.
+
+The related deletion: `LlmProvider::supports_reasoning` is gone. It answered
+"does this *endpoint* speak the reasoning parameter", and every caller used it
+as "should this *model* think", which is how `LlmHandler` came to bill high
+effort on a flash model and `complex_agent` came to sniff `OPENROUTER_API_KEY`
+from the environment. A capability that only the adapter can answer belongs
+inside the adapter: callers now ask for what they want, and a provider whose
+endpoint has no such field sends the request without it. Asking is therefore
+always safe, which is the property that removes the sniffing.
+
+**Giving up is `failed`, not `input-required`.** The alternative was real: the
+model gathered tool results before running out of rounds, so "I got partway, a
+human could unblock me" describes what happened. It is still the wrong state.
+`input-required` is a promise that the caller has something to supply, and here
+the agent asked no question — a conformant client would prompt its user, and
+that reply restarts the same run against the same budget, which is a loop rather
+than a recovery. The knob that actually unblocks it (`max_tool_rounds`, or
+`[llm] reasoning` for the empty-answer sibling) belongs to whoever configured the
+agent, not to whoever is talking to it. Same test as `EchoResponder`'s `Working`:
+would a caller acting on this state be acting correctly?
+
+The partial work rides along in the message rather than being replaced by an
+apology — a failed task's most useful content is whatever the model did produce,
+and for the empty-answer case the reasoning is the *only* thing produced, billed
+and otherwise seen by nobody who was not streaming.
+
 **Fleet file, not a directory or glob.** A directory has no name, no order, and
 no place to grow per-member options, and it silently picks up whatever gets
 dropped next to it — including the fleet file itself. The file redefines nothing
@@ -224,6 +260,39 @@ a container build on a pinned builder image). The number now lives once in
 `[workspace.package]` and is set to the toolchain we actually build and test
 with, not the bare minimum, so it is a claim we exercise. It stops being proven
 the day stable moves past it; that is when an MSRV CI job earns its place.
+
+**An empty text part is indistinguishable from a file part on the wire.** proto3
+omits a default value, so `Part::text("")` serializes as `{}` and a client
+renders it as `[non-text content]` — a line about binary data the agent never
+produced. Anything that builds a part from a computed string has to decide what
+an empty one *means* before sending it; `LlmHandler` decided it means failure,
+because a task that finishes with nothing to show is a failed task whatever the
+transport thinks. The class is wider than that one call site: the same silence
+awaits any artifact, status message, or tool result assembled from a string that
+can come back empty.
+
+**A settled-looking task can still be reporting failure in prose.** The same
+handler ended a tool-budget overrun with `Ok("I could not converge on an
+answer…")` — `completed`, with a sentence saying it did not work. Every caller
+that branches on state (`a2acli` exits 2 on `failed`, delegation relays whatever
+it gets) read that as success. When a handler gives up, the giving up belongs in
+the state, not only in the text.
+
+The general form is a return type that cannot say it: `Result<String, _>` has
+one slot for success and one for a *broken run*, and "the model finished but
+delivered nothing" is neither. Both cases here — the empty completion and the
+budget overrun — were the same missing third outcome, which is why they are now
+one `Answer::{Given, GaveUp}` rather than two ad-hoc patches. When a handler's
+outcome type has fewer variants than its real outcomes, the surplus one gets
+encoded in prose, and prose is what no caller can branch on.
+
+**Asking a model to think is a request, never a guarantee.** `Reasoning::Off`
+sends OpenRouter's `enabled: false`; a model with no way to turn reasoning off
+may ignore it, and reasoning tokens are billed even when the text is not
+returned. Verified accepted on `deepseek-v4-flash`, `minimax-m3`, and `glm-5.2`
+on 2026-08-13 — which is evidence about those three models on that day, not a
+property of the setting. Treat the config as "what we asked for" and the bill as
+the source of truth.
 
 **A proto3 `bool` makes the spec's default the one you have to write code for.**
 `SendMessageConfiguration.return_immediately` defaults to `false`, and `false`

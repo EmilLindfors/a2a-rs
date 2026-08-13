@@ -1,4 +1,4 @@
-use super::{LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
+use super::{LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
@@ -16,10 +16,15 @@ pub struct OpenAiConfig {
     /// the OpenAI-compatible adapter carries e.g. OpenRouter's `HTTP-Referer` /
     /// `X-Title` attribution headers without knowing what they mean.
     pub extra_headers: Vec<(String, String)>,
-    /// Whether this endpoint surfaces a separate reasoning channel (true for
-    /// OpenRouter, false for plain OpenAI / local servers). Drives
-    /// [`LlmProvider::supports_reasoning`].
+    /// Whether this endpoint speaks OpenRouter's `reasoning` request object
+    /// (true for OpenRouter, false for plain OpenAI / local servers, which
+    /// reject unknown parameters). Requests that ask for reasoning are sent
+    /// without it elsewhere — the wire dialect is the adapter's business, not
+    /// something every caller should have to ask about first.
     pub supports_reasoning: bool,
+    /// Reasoning applied to requests that don't ask for their own — the model's
+    /// setting, configured where the model is. `None` sends nothing.
+    pub reasoning: Option<Reasoning>,
 }
 
 /// Default base URL for the OpenRouter API (OpenAI-compatible surface).
@@ -53,6 +58,7 @@ impl OpenAiConfig {
             api_key,
             extra_headers: Vec::new(),
             supports_reasoning: false,
+            reasoning: None,
         })
     }
 
@@ -81,6 +87,7 @@ impl OpenAiConfig {
             api_key: Some(api_key),
             extra_headers,
             supports_reasoning: true,
+            reasoning: None,
         }
     }
 
@@ -89,7 +96,10 @@ impl OpenAiConfig {
     /// `OPENROUTER_API_KEY` is required; the rest fall back to defaults:
     /// `OPENROUTER_MODEL` (`z-ai/glm-4.6`), `OPENROUTER_API_BASE_URL`
     /// ([`OPENROUTER_BASE_URL`]), plus optional `OPENROUTER_HTTP_REFERER` /
-    /// `OPENROUTER_X_TITLE` attribution headers.
+    /// `OPENROUTER_X_TITLE` attribution headers and `OPENROUTER_REASONING`
+    /// (`off`, `low`, `medium`, `high`, or a token budget — see [`Reasoning`]).
+    /// An unreadable `OPENROUTER_REASONING` is an error rather than a default,
+    /// because the value costs money in both directions.
     pub fn openrouter_from_env() -> Result<Self, String> {
         let api_key = env::var("OPENROUTER_API_KEY")
             .ok()
@@ -101,14 +111,19 @@ impl OpenAiConfig {
         let base_url = env::var("OPENROUTER_API_BASE_URL").ok();
         let http_referer = env::var("OPENROUTER_HTTP_REFERER").ok();
         let x_title = env::var("OPENROUTER_X_TITLE").ok();
+        let reasoning = match env::var("OPENROUTER_REASONING") {
+            Ok(value) => Some(
+                value
+                    .parse::<Reasoning>()
+                    .map_err(|e| format!("OPENROUTER_REASONING: {e}"))?,
+            ),
+            Err(_) => None,
+        };
 
-        Ok(Self::openrouter(
-            api_key,
-            model,
-            base_url,
-            http_referer,
-            x_title,
-        ))
+        Ok(Self {
+            reasoning,
+            ..Self::openrouter(api_key, model, base_url, http_referer, x_title)
+        })
     }
 }
 
@@ -132,8 +147,10 @@ struct OpenAiChatRequest {
     tools: Option<Vec<OpenAiTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
-    /// OpenRouter's unified reasoning control. Only sent when the caller opts in
-    /// (skipped otherwise so plain OpenAI requests are unaffected).
+    /// OpenRouter's unified reasoning control, as resolved by
+    /// [`OpenAiProvider::reasoning_for`] — the request's own setting, else the
+    /// configured model default, and never for an endpoint that has no such
+    /// field.
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenRouterReasoning>,
 }
@@ -143,21 +160,23 @@ struct OpenAiChatRequest {
 #[derive(Debug, Serialize)]
 struct OpenRouterReasoning {
     #[serde(skip_serializing_if = "Option::is_none")]
-    effort: Option<String>,
+    effort: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    exclude: bool,
     enabled: bool,
 }
 
-impl From<super::ReasoningConfig> for OpenRouterReasoning {
-    fn from(c: super::ReasoningConfig) -> Self {
+impl From<Reasoning> for OpenRouterReasoning {
+    fn from(reasoning: Reasoning) -> Self {
+        let (effort, max_tokens, enabled) = match reasoning {
+            Reasoning::Off => (None, None, false),
+            Reasoning::Effort(effort) => (Some(effort.as_str()), None, true),
+            Reasoning::Budget(max_tokens) => (None, Some(max_tokens), true),
+        };
         Self {
-            effort: c.effort.map(|e| e.as_str().to_string()),
-            max_tokens: c.max_tokens,
-            exclude: c.exclude,
-            enabled: true,
+            effort,
+            max_tokens,
+            enabled,
         }
     }
 }
@@ -271,16 +290,32 @@ impl OpenAiProvider {
         let config = OpenAiConfig::from_env()?;
         Ok(Self::new(config))
     }
+
+    /// What to put in the request's `reasoning` field, if anything.
+    ///
+    /// The request wins over the configured default, and an endpoint that does
+    /// not speak the parameter carries neither — sending it to plain OpenAI
+    /// fails the whole call, so a caller asking for reasoning it cannot have
+    /// gets an answer, not an error.
+    fn reasoning_for(&self, request: &LlmRequest) -> Option<OpenRouterReasoning> {
+        let reasoning = request.reasoning.or(self.config.reasoning)?;
+        if !self.config.supports_reasoning {
+            debug!(
+                base_url = %self.config.base_url,
+                %reasoning,
+                "endpoint does not accept a reasoning parameter; sending the request without it"
+            );
+            return None;
+        }
+        Some(reasoning.into())
+    }
 }
 
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
-    fn supports_reasoning(&self) -> bool {
-        self.config.supports_reasoning
-    }
-
     async fn chat_completion(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
         let url = format!("{}/chat/completions", self.config.base_url);
+        let reasoning = self.reasoning_for(&request);
 
         let response_format = if request.force_json {
             Some(ResponseFormat {
@@ -343,7 +378,7 @@ impl LlmProvider for OpenAiProvider {
             response_format,
             tools,
             stream: None,
-            reasoning: request.reasoning.map(Into::into),
+            reasoning,
         };
 
         debug!(
@@ -427,6 +462,7 @@ impl LlmProvider for OpenAiProvider {
         request: LlmRequest,
     ) -> Result<BoxStream<'static, Result<super::LlmStreamEvent, LlmError>>, LlmError> {
         let url = format!("{}/chat/completions", self.config.base_url);
+        let reasoning = self.reasoning_for(&request);
 
         let response_format = if request.force_json {
             Some(ResponseFormat {
@@ -489,7 +525,7 @@ impl LlmProvider for OpenAiProvider {
             response_format,
             tools,
             stream: Some(true),
-            reasoning: request.reasoning.map(Into::into),
+            reasoning,
         };
 
         debug!(
@@ -615,5 +651,83 @@ impl LlmProvider for OpenAiProvider {
         };
 
         Ok(Box::pin(stream))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::llm::{ChatMessage, Reasoning, ReasoningEffort};
+
+    fn provider(supports_reasoning: bool, reasoning: Option<Reasoning>) -> OpenAiProvider {
+        OpenAiProvider::new(OpenAiConfig {
+            base_url: "http://localhost/v1".to_string(),
+            model: "test-model".to_string(),
+            api_key: None,
+            extra_headers: Vec::new(),
+            supports_reasoning,
+            reasoning,
+        })
+    }
+
+    fn request(reasoning: Option<Reasoning>) -> LlmRequest {
+        let request = LlmRequest::new(vec![ChatMessage::user("hi")]);
+        match reasoning {
+            Some(reasoning) => request.reasoning(reasoning),
+            None => request,
+        }
+    }
+
+    fn wire(reasoning: Option<OpenRouterReasoning>) -> serde_json::Value {
+        serde_json::to_value(reasoning).expect("serializes")
+    }
+
+    /// The configured model's setting applies to every request that doesn't
+    /// speak for itself — that is what makes `[llm] reasoning` a property of the
+    /// model rather than something each handler has to remember to pass.
+    #[test]
+    fn the_configured_reasoning_applies_when_a_request_asks_for_nothing() {
+        let sent = provider(true, Some(Reasoning::Off)).reasoning_for(&request(None));
+        assert_eq!(wire(sent), serde_json::json!({ "enabled": false }));
+    }
+
+    /// …and a request that does ask overrides it, so a caller with a reason
+    /// (`complex_agent` streaming its thinking) is not overruled by config.
+    #[test]
+    fn a_request_overrides_the_configured_reasoning() {
+        let sent = provider(true, Some(Reasoning::Off))
+            .reasoning_for(&request(Some(Reasoning::Effort(ReasoningEffort::High))));
+        assert_eq!(
+            wire(sent),
+            serde_json::json!({ "effort": "high", "enabled": true })
+        );
+    }
+
+    #[test]
+    fn a_budget_is_sent_as_a_reasoning_token_cap() {
+        let sent = provider(true, None).reasoning_for(&request(Some(Reasoning::Budget(2000))));
+        assert_eq!(
+            wire(sent),
+            serde_json::json!({ "max_tokens": 2000, "enabled": true })
+        );
+    }
+
+    /// Plain OpenAI and local servers reject unknown parameters, so a request
+    /// carrying reasoning must still be *answerable* there: the adapter drops
+    /// the parameter rather than failing the call or making every caller check
+    /// first.
+    #[test]
+    fn an_endpoint_without_the_parameter_sends_the_request_without_it() {
+        let sent = provider(false, Some(Reasoning::Effort(ReasoningEffort::High)))
+            .reasoning_for(&request(Some(Reasoning::Budget(2000))));
+        assert!(
+            sent.is_none(),
+            "nothing may be sent to an endpoint that has no such field"
+        );
+    }
+
+    #[test]
+    fn nothing_is_sent_when_nobody_asked() {
+        assert!(provider(true, None).reasoning_for(&request(None)).is_none());
     }
 }
