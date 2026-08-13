@@ -40,7 +40,9 @@ use a2a_agents::core::config::RemoteAgentTarget;
 #[cfg(feature = "mcp-server")]
 use a2a_agents::handlers::tools::ToolSource;
 #[cfg(feature = "mcp-server")]
-use a2a_agents::{A2aAgentToolSource, LlmHandler, McpToolSource, UnusedInner};
+use a2a_agents::{
+    A2aAgentToolSource, DiscoveredPeer, LlmHandler, McpToolSource, PeerResolver, UnusedInner,
+};
 #[cfg(feature = "mcp-server")]
 use a2a_rs::domain::AgentCard;
 use a2a_rs::{
@@ -1611,6 +1613,20 @@ fn description_from_card(name: &str, card: &AgentCard) -> String {
     }
 }
 
+/// A tool description for a peer whose card could not be read at startup —
+/// which, now that a tool stays advertised through a peer being absent, is a
+/// normal state rather than a failure. Says what the config asked for, so the
+/// model still knows when to reach for the tool.
+#[cfg(feature = "mcp-server")]
+fn describe_target(name: &str, target: &RemoteAgentTarget<'_>) -> String {
+    match target {
+        RemoteAgentTarget::Skill(skill) => format!(
+            "Delegate a request to the '{name}' A2A agent, which provides the '{skill}' skill."
+        ),
+        other => format!("Delegate a request to the '{name}' A2A agent ({other})."),
+    }
+}
+
 #[cfg(feature = "mcp-server")]
 async fn run_llm_agent(
     builder: AgentBuilder,
@@ -1674,97 +1690,66 @@ async fn run_llm_agent(
             }
         };
 
-        // Resolve the reference to a dialable endpoint, carrying the discovered
-        // card when resolved via the registry so the tool description needs no
-        // second card fetch.
-        let resolved: Option<(String, Option<AgentCard>)> = match target {
-            RemoteAgentTarget::Url(url) => Some((url.to_string(), None)),
-            RemoteAgentTarget::AgentId(id) => match registry.get(&AgentId::from(id)).await {
-                Ok(Some(found)) => Some((found.endpoint, Some(found.card))),
-                Ok(None) => {
-                    warn!(
-                        "remote agent '{}': no agent with id '{}' in registry",
-                        agent.name, id
-                    );
-                    None
-                }
-                Err(e) => {
-                    warn!(
-                        "remote agent '{}': registry lookup failed: {}",
-                        agent.name, e
-                    );
-                    None
-                }
-            },
-            RemoteAgentTarget::Skill(skill) => match registry.find_by_skill(skill).await {
-                Ok(mut matches) if !matches.is_empty() => {
-                    if matches.len() > 1 {
+        // The peer is *located* per call, not here: a startup pass makes this
+        // agent blind to anything deployed after it, and keeps dialing the old
+        // address of a peer that moved. What startup still does is look for a
+        // card to describe the tool with, since `tool_defs` cannot go and ask.
+        let (peer, resolved_card): (Arc<dyn PeerResolver>, Option<AgentCard>) = match target {
+            RemoteAgentTarget::Url(url) => (
+                Arc::new(DiscoveredPeer::at(url)),
+                a2a_rs::fetch_agent_card(url).await.ok(),
+            ),
+            RemoteAgentTarget::AgentId(id) => {
+                let id = AgentId::from(id);
+                let card = match registry.get(&id).await {
+                    Ok(found) => found.map(|found| found.card),
+                    Err(e) => {
                         warn!(
-                            "remote agent '{}': {} agents advertise skill '{}'; using the first",
-                            agent.name,
-                            matches.len(),
-                            skill
+                            "remote agent '{}': registry lookup failed: {}",
+                            agent.name, e
                         );
-                    }
-                    let found = matches.remove(0);
-                    Some((found.endpoint, Some(found.card)))
-                }
-                Ok(_) => {
-                    warn!(
-                        "remote agent '{}': no agent advertises skill '{}'",
-                        agent.name, skill
-                    );
-                    None
-                }
-                Err(e) => {
-                    warn!(
-                        "remote agent '{}': registry lookup failed: {}",
-                        agent.name, e
-                    );
-                    None
-                }
-            },
-        };
-
-        let Some((endpoint, resolved_card)) = resolved else {
-            continue;
-        };
-
-        match a2a_rs::auto_connect(&endpoint).await {
-            Ok(transport) => {
-                let description = match &agent.description {
-                    Some(d) => d.clone(),
-                    None => {
-                        // Prefer the card resolved from the registry; else fetch
-                        // it from the endpoint; else a generic hint.
-                        let card = match resolved_card {
-                            Some(c) => Some(c),
-                            None => a2a_rs::fetch_agent_card(&endpoint).await.ok(),
-                        };
-                        match card {
-                            Some(c) => description_from_card(&agent.name, &c),
-                            None => format!(
-                                "Delegate a request to the '{}' A2A agent at {}.",
-                                agent.name, endpoint
-                            ),
-                        }
+                        None
                     }
                 };
-                let source =
-                    A2aAgentToolSource::new(&agent.name, description, Arc::from(transport));
-                info!(
-                    "exposing remote agent '{}' ({}) as tool '{}'",
-                    agent.name,
-                    endpoint,
-                    source.tool_name()
-                );
-                sources.push(Arc::new(source));
+                (Arc::new(DiscoveredPeer::by_id(registry.clone(), id)), card)
             }
-            Err(e) => warn!(
-                "could not connect to remote agent {} at {}: {}",
-                agent.name, endpoint, e
-            ),
-        }
+            RemoteAgentTarget::Skill(skill) => {
+                let card = match registry.find_by_skill(skill).await {
+                    Ok(mut matches) if !matches.is_empty() => Some(matches.remove(0).card),
+                    Ok(_) => None,
+                    Err(e) => {
+                        warn!(
+                            "remote agent '{}': registry lookup failed: {}",
+                            agent.name, e
+                        );
+                        None
+                    }
+                };
+                (
+                    Arc::new(DiscoveredPeer::by_skill(registry.clone(), skill)),
+                    card,
+                )
+            }
+        };
+
+        let description = match (&agent.description, resolved_card) {
+            (Some(configured), _) => configured.clone(),
+            (None, Some(card)) => description_from_card(&agent.name, &card),
+            // No card to read: the peer has not registered or is not up yet,
+            // which is exactly the case this tool now stays advertised for. Say
+            // what the config asked for, so the model still knows when to reach
+            // for it.
+            (None, None) => describe_target(&agent.name, &target),
+        };
+
+        let source = A2aAgentToolSource::resolving(&agent.name, description, peer);
+        info!(
+            "exposing remote agent '{}' ({}) as tool '{}'",
+            agent.name,
+            target,
+            source.tool_name()
+        );
+        sources.push(Arc::new(source));
     }
 
     let storage = InMemoryTaskStorage::new();

@@ -18,8 +18,10 @@
 //! finds still running.
 
 mod card_source;
+mod peer;
 
 pub use card_source::{CardSource, CardSourceError, HttpCardSource, InMemoryCardSource};
+pub use peer::DiscoveredPeer;
 
 use std::collections::HashMap;
 use std::fmt;

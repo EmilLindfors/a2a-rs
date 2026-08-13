@@ -60,11 +60,19 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
       the orchestrator sees nothing until the whole delegation is done. Needs a
       way for a source to emit progress mid-invoke (the handler holds the
       streaming port; the source does not).
-- [ ] **Resolve peers at call time** (a dynamic registry-backed `ToolSource`) so
-      late joiners are reachable. A startup-only resolution pass goes stale by
-      design once agents come and go under a control plane.
+- [ ] **Refresh a delegation tool's description when its peer arrives.** The
+      *endpoint* is resolved per call now, but the description shown to the
+      model is fixed at startup, so a peer that registers later is described by
+      the config's skill name rather than by its card. `ToolSource::tool_defs`
+      is synchronous, which is what stops it asking; either it becomes async or
+      a `DiscoveredPeer` caches the card it fetched while dialing and the source
+      reads that.
 - [ ] **Card-fetch refresh loop** — re-poll `/.well-known/agent-card.json` for
-      liveness.
+      liveness. Registry entries are written once (at `a2a run` startup, or by
+      `ControlPlane::deploy`/`recover`) and never revisited, so an agent that
+      died stays discoverable and keeps being handed work. `register` upserts,
+      so the loop is idempotent by construction; what it needs deciding is what
+      a failed fetch *means* — `NOTES.md` says hide, never discard.
 - [ ] **Persistent `AgentRegistry` adapter**, for what recovery-by-derivation
       cannot cover: agents registered by something other than this runtime, and
       discovery shared across control-plane processes. Both speculative today —

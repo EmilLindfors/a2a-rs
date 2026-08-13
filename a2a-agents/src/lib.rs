@@ -113,11 +113,13 @@ pub mod agents;
 pub use core::{AgentBuilder, AgentConfig, AgentServer, BuildError, ConfigError, ServerError};
 pub use traits::{AgentPlugin, SkillDefinition};
 
-pub use handlers::tools::{A2aAgentToolSource, ToolSource};
+pub use handlers::tools::{
+    A2aAgentToolSource, ConnectedPeer, PeerResolver, PeerUnavailable, ToolSource,
+};
 
 pub use registry::{
-    AgentId, AgentRegistry, CardSource, CardSourceError, HttpCardSource, InMemoryAgentRegistry,
-    InMemoryCardSource, RegisteredAgent, RegistryError,
+    AgentId, AgentRegistry, CardSource, CardSourceError, DiscoveredPeer, HttpCardSource,
+    InMemoryAgentRegistry, InMemoryCardSource, RegisteredAgent, RegistryError,
 };
 
 pub use runtime::{

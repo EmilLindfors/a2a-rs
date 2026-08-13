@@ -14,17 +14,20 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
+use axum8::{Json, routing::get};
 use futures::Stream;
 
-use a2a_agents::A2aAgentToolSource;
 use a2a_agents::handlers::tools::ToolSource;
+use a2a_agents::{
+    A2aAgentToolSource, AgentRegistry, DiscoveredPeer, InMemoryAgentRegistry, PeerResolver,
+};
 use a2a_agents_common::llm::ToolCall;
 
 use a2a_rs::adapter::business::{EchoResponder, Responder, ResponderMessageHandler};
 use a2a_rs::adapter::{JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router};
 use a2a_rs::domain::{
-    A2AError, ContextId, Message, Part, Role, Task, TaskArtifactUpdateEvent, TaskId, TaskState,
-    TaskStatus, TaskStatusUpdateEvent,
+    A2AError, AgentCard, AgentInterface, AgentSkill, ContextId, Message, Part, Role, Task,
+    TaskArtifactUpdateEvent, TaskId, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
 use a2a_rs::port::streaming_handler::{SeqEvent, Subscriber};
 use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, AsyncTaskLifecycle};
@@ -346,7 +349,29 @@ async fn spawn_peer(peer: Peer) -> Harness {
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let app = jsonrpc_router(adapter);
+
+    // A real agent publishes a card, and transport negotiation is how a peer
+    // located through the registry gets dialed at all — without one, the
+    // fallback picks ConnectRPC and never reaches this JSON-RPC agent.
+    let card = AgentCard {
+        name: "echo".to_string(),
+        version: "1.0.0".to_string(),
+        supported_interfaces: vec![AgentInterface {
+            url: base.clone(),
+            protocol_binding: "JSONRPC".to_string(),
+            protocol_version: "1.0".to_string(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let app = jsonrpc_router(adapter).route(
+        "/.well-known/agent-card.json",
+        get(move || {
+            let card = card.clone();
+            async move { Json(card) }
+        }),
+    );
+
     tokio::spawn(async move {
         axum8::serve(listener, app).await.unwrap();
     });
@@ -471,6 +496,54 @@ async fn an_interrupted_peer_ends_the_wait_and_says_so() {
         reply.contains(FIXED_REPLY),
         "the question itself is missing: {reply}"
     );
+}
+
+/// An orchestrator that came up before its peer must still reach it.
+///
+/// Peers used to be resolved once at startup, so an agent that had not
+/// registered yet was skipped and its tool was never advertised — the model
+/// could not call it for the rest of the process's life, however long the peer
+/// was up by then. Resolving per call fixes that, and until the peer arrives the
+/// tool answers with what is wrong rather than failing the orchestrator's task.
+#[tokio::test]
+async fn a_peer_that_registers_later_is_reachable() {
+    let registry: Arc<dyn AgentRegistry> = Arc::new(InMemoryAgentRegistry::new());
+    let peer_resolver: Arc<dyn PeerResolver> =
+        Arc::new(DiscoveredPeer::by_skill(registry.clone(), "echoing"));
+    let source =
+        A2aAgentToolSource::resolving("echo", "Echoes the input back.".to_string(), peer_resolver);
+
+    // Advertised regardless: the model has to be able to call it at all before
+    // it can be told the peer is missing.
+    assert!(source.has_tool("ask_echo"));
+    let unavailable = source
+        .invoke("local-orchestrator-task", &tool_call("hello"))
+        .await
+        .expect("a missing peer is news for the model, not a broken run");
+    assert!(
+        unavailable.contains("not reachable") && unavailable.contains("echoing"),
+        "the model must be told which reference found nothing: {unavailable}"
+    );
+
+    // The peer comes up and registers, after this orchestrator was assembled.
+    let late = spawn_peer(Peer::Echo).await;
+    let mut card = AgentCard {
+        name: "echo".to_string(),
+        ..Default::default()
+    };
+    card.skills = vec![AgentSkill::new(
+        "echoing".to_string(),
+        "Echoing".to_string(),
+        "Repeats what it is told".to_string(),
+        vec![],
+    )];
+    registry.register(card, late.base.clone()).await.unwrap();
+
+    let reply = source
+        .invoke("local-orchestrator-task", &tool_call("hello world"))
+        .await
+        .expect("the late joiner should now be delegated to");
+    assert_eq!(reply, "Echo: hello world");
 }
 
 /// A peer that failed says so in its state, and its message reads exactly like

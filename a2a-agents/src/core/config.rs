@@ -170,6 +170,18 @@ pub enum RemoteAgentTarget<'a> {
     AgentId(&'a str),
 }
 
+impl std::fmt::Display for RemoteAgentTarget<'_> {
+    /// How the peer was named, for a log line that has to say which reference
+    /// resolved (or did not).
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Url(url) => write!(f, "{url}"),
+            Self::Skill(skill) => write!(f, "skill '{skill}'"),
+            Self::AgentId(id) => write!(f, "agent id '{id}'"),
+        }
+    }
+}
+
 impl RemoteAgentConfig {
     /// Resolve the peer reference, enforcing that **exactly one** of `url`,
     /// `skill`, or `agent_id` is set (parse, don't validate). A missing or

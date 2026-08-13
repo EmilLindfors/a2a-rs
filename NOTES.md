@@ -167,6 +167,20 @@ about an agent; `AgentConfig` stays the source of truth. Its real payoff is the
 checks that only exist *between* members (shared port, colliding registry id),
 run before anything binds.
 
+**A delegation tool stays advertised through its peer being absent.** The
+alternative was what it did before: resolve every peer at startup and drop the
+entry when the lookup or the dial failed. That makes the model's toolset a
+snapshot of one instant, and under a control plane the instant is the wrong one
+— an orchestrator deployed first sees no peers at all and never looks again. So
+the reference is resolved per call, the tool is advertised regardless, and being
+unable to reach the peer is a tool *result* the model can route around rather
+than an error that fails the orchestrator's task.
+
+`PeerUnavailable` exists to keep that line drawn: never reached it (nothing
+matches, or the dial failed) is news, while an error *during* a delegation means
+the peer took the work and we lost it, which is a broken run. Two different
+types, so a call site cannot blur them by accident.
+
 **Registry recovery derives from the runtime; it is not a database.**
 `ControlPlane::recover` rebuilds discovery at startup from what the runtime is
 still running plus a card fetch. This was the cheaper of the two options and the
