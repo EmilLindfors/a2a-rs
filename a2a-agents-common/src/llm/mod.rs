@@ -9,8 +9,8 @@ pub mod provider;
 pub mod tool_call;
 
 pub use provider::{
-    LlmConfigError, LlmSettings, PROVIDER_ENV_VARS, SUPPORTED_PROVIDERS, SelectedLlm,
-    provider_from_env, provider_from_settings,
+    LlmConfigError, LlmSettings, PROVIDER_ENV_VARS, ReasoningPlan, SUPPORTED_PROVIDERS,
+    SelectedLlm, provider_from_env, provider_from_settings,
 };
 pub use tool_call::{PartialToolCall, ToolCallAccumulator};
 

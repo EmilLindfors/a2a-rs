@@ -30,15 +30,24 @@ The pre-release CLI audit of 2026-07-26 is closed; what it found shipped on
       platform-fiddly (`PATH`, `SystemRoot`, temp dirs) — hence deferred, with
       the adapter documented as dev-only meanwhile. See `NOTES.md`.
 - [ ] **Reasoning for non-OpenRouter providers.** `[llm] reasoning` reaches the
-      wire on `openrouter` only; `openai` and `gemini` log that they are
-      dropping it. OpenAI takes `reasoning_effort` and Gemini a thinking budget,
-      so both are expressible — each needs its own request field and a mapping
-      from `Reasoning`, including what `Off` means where reasoning cannot be
-      turned off. Until then `a2a doctor` could report a `reasoning` its provider
-      will drop, which is cheaper than either mapping and catches the same
-      mistake before it is billed. `doctor` now builds the provider through
-      `provider_from_settings`, so it already emits that `warn!` on stderr —
-      what is missing is making it a `Finding` in the report.
+      wire on `openrouter` only. The drop is now reported — `SelectedLlm`
+      carries a `ReasoningPlan` and `a2a doctor` warns on
+      `ReasoningPlan::Unsupported` — so the mistake is caught before it is
+      billed; what is left is actually sending it. Both mappings turn on a
+      question about the *model*, not the provider, which is why neither is a
+      small change:
+      - **OpenAI** takes `reasoning_effort`, and models that do not reason
+        reject the parameter outright. The default model here is `gpt-4o-mini`,
+        so sending it on provider kind alone breaks the common case; it needs to
+        know whether the configured model reasons, i.e. a model-name list that
+        goes stale with every release. `Budget` has no field at all.
+      - **Gemini** takes a thinking budget under `generationConfig.thinkingConfig`,
+        but the spelling differs by model generation (2.5's `thinkingBudget`
+        against 3's `thinkingLevel`, which are mutually exclusive) and the
+        minimum is model-dependent — `Off` is expressible on Flash and not on
+        Pro. `Effort` has no direct field.
+      Whatever shape this takes, `ReasoningPlan` is where it lands: a mapping
+      that covers some models and not others has to keep saying which is which.
 - [ ] **Feed non-text parts to the model.** `extract_text` (`handlers/llm.rs`)
       joins text parts and drops the rest, so a file or data part reaches a
       multimodal model as silence — `examples/multi-model/` points MiniMax M3 at

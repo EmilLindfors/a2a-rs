@@ -358,9 +358,7 @@ fn resolve_llm(llm_config: &Option<LlmConfig>) -> anyhow::Result<Option<Arc<dyn 
             provider = llm.kind,
             model = %llm.model,
             selected_by = llm.selected_by,
-            reasoning = %llm
-                .reasoning
-                .map_or_else(|| "(model default)".to_string(), |r| r.to_string()),
+            reasoning = %llm.reasoning,
             "LLM provider"
         ),
         None => info!("no LLM configured — the handler will use its non-LLM fallback"),
@@ -988,22 +986,38 @@ impl Finding {
 /// Runs the same `provider_from_env` / `provider_from_settings` code as startup,
 /// so a setup that will refuse to start is reported here instead of being
 /// guessed at from which variables happen to be set.
-fn llm_finding(source: &LlmSource) -> Finding {
+///
+/// A second finding follows when the provider will discard a configured
+/// `reasoning`. That is a warning and not a problem: the agent runs, on the
+/// model's own thinking default rather than the one the config paid for.
+fn llm_findings(source: &LlmSource) -> Vec<Finding> {
     let selected = match source {
         LlmSource::Config(settings) => provider_from_settings(settings).map(Some),
         LlmSource::Environment => provider_from_env(),
     };
     match selected {
-        Ok(Some(llm)) => Finding::ok(format!(
-            "llm handler will use {} ({}, via {})",
-            llm.kind, llm.model, llm.selected_by
-        )),
-        Ok(None) => Finding::warn(format!(
+        Ok(Some(llm)) => {
+            let mut findings = vec![Finding::ok(format!(
+                "llm handler will use {} ({}, via {})",
+                llm.kind, llm.model, llm.selected_by
+            ))];
+            if let Some(dropped) = llm.reasoning.unsupported() {
+                findings.push(Finding::warn(format!(
+                    "`[llm] reasoning = \"{dropped}\"` is set, but the {} provider has no \
+                     field to send it in — the model will think at its own default",
+                    llm.kind
+                )));
+            }
+            findings
+        }
+        Ok(None) => vec![Finding::warn(format!(
             "llm handler with no provider ({} unset) — it will answer with a \
              deterministic fallback that lists its tools",
             PROVIDER_ENV_VARS.join(", ")
-        )),
-        Err(e) => Finding::problem(format!("{e} — `a2a run` will refuse to start")),
+        ))],
+        Err(e) => vec![Finding::problem(format!(
+            "{e} — `a2a run` will refuse to start"
+        ))],
     }
 }
 
@@ -1132,29 +1146,33 @@ fn config_findings(path: &str) -> (Vec<Finding>, Option<AgentConfig>) {
     }
 
     for requirement in requirements(&config) {
-        findings.push(match requirement {
+        match requirement {
+            // The only requirement that can report more than one thing about
+            // itself: a provider that resolves, and a setting it will discard.
+            Requirement::LlmProvider(source) => findings.extend(llm_findings(&source)),
             Requirement::HttpBind { host, port } | Requirement::McpHttpBind { host, port } => {
-                match probe_bind(&host, port) {
+                findings.push(match probe_bind(&host, port) {
                     Ok(()) => Finding::ok(format!("{host}:{port} is free")),
                     Err(e) => Finding::problem(format!("cannot bind {host}:{port}: {e}")),
-                }
+                })
             }
-            Requirement::McpCommand { server, command } => match find_on_path(&command) {
-                Some(found) => Finding::ok(format!(
-                    "MCP server {server:?}: `{command}` found ({})",
-                    found.display()
-                )),
-                None => Finding::problem(format!(
-                    "MCP server {server:?}: `{command}` is not on PATH — the agent will \
-                     start without its tools"
-                )),
-            },
-            Requirement::LlmProvider(source) => llm_finding(&source),
-            Requirement::UnknownHandler { name } => Finding::problem(format!(
+            Requirement::McpCommand { server, command } => {
+                findings.push(match find_on_path(&command) {
+                    Some(found) => Finding::ok(format!(
+                        "MCP server {server:?}: `{command}` found ({})",
+                        found.display()
+                    )),
+                    None => Finding::problem(format!(
+                        "MCP server {server:?}: `{command}` is not on PATH — the agent will \
+                         start without its tools"
+                    )),
+                })
+            }
+            Requirement::UnknownHandler { name } => findings.push(Finding::problem(format!(
                 "handler {name:?} is not built into this binary — the runner falls back \
                  to echo, so the agent will not do what this config says"
-            )),
-        });
+            ))),
+        }
     }
 
     (findings, Some(config))

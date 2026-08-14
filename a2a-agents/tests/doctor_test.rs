@@ -132,6 +132,46 @@ fn an_llm_agent_without_any_key_is_a_warning() {
     assert!(out.contains("deterministic fallback"), "{out}");
 }
 
+/// `reasoning` reaches the wire on `openrouter` only. Everywhere else it is
+/// dropped, and the run works — on the model's own thinking default, at a cost
+/// the config did not choose. A warning, since the agent answers either way.
+#[test]
+fn a_reasoning_the_provider_cannot_send_is_a_warning() {
+    let scratch = ScratchDir::new("reasoning");
+    llm_agent(
+        &scratch,
+        "chat.toml",
+        "\n[llm]\nprovider = \"gemini\"\napi_key = \"test-key\"\nreasoning = \"high\"\n",
+    );
+
+    let (ok, out) = scratch.a2a_env(&["doctor", "--config", "chat.toml"], &LLM_VARS);
+    assert!(ok, "a dropped reasoning still runs:\n{out}");
+    assert!(out.contains("reasoning"), "{out}");
+    assert!(
+        out.contains("gemini"),
+        "the report must name the provider that drops it:\n{out}"
+    );
+}
+
+/// The same setting on the provider that *can* send it says nothing, so the
+/// warning above stays worth reading.
+#[test]
+fn a_reasoning_the_provider_sends_is_not_reported() {
+    let scratch = ScratchDir::new("reasoningok");
+    llm_agent(
+        &scratch,
+        "chat.toml",
+        "\n[llm]\nprovider = \"openrouter\"\napi_key = \"sk-test\"\nreasoning = \"high\"\n",
+    );
+
+    let (ok, out) = scratch.a2a_env(&["doctor", "--config", "chat.toml"], &LLM_VARS);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("all clear"),
+        "openrouter carries `reasoning`, so there is nothing to warn about:\n{out}"
+    );
+}
+
 /// A mistyped `provider` used to fall back to the environment, so the agent ran
 /// on whatever key happened to be exported — or on none, answering with a stub.
 #[test]

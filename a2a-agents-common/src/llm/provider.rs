@@ -50,8 +50,8 @@ pub struct LlmSettings {
     pub x_title: Option<String>,
     /// What to ask this model to do with its thinking, for every request that
     /// doesn't ask for its own. `None` leaves the model's default alone.
-    /// OpenRouter only today; set for another provider it is reported and
-    /// dropped rather than paid for.
+    /// OpenRouter only today; elsewhere it is dropped, and the resulting
+    /// [`SelectedLlm::reasoning`] says so as [`ReasoningPlan::Unsupported`].
     pub reasoning: Option<Reasoning>,
 }
 
@@ -133,6 +133,70 @@ impl LlmConfigError {
     }
 }
 
+/// What a configured [`Reasoning`] will do on the provider that was selected.
+///
+/// Reasoning tokens are billed, so "asked for, and this provider has nowhere to
+/// put it" has to be tellable from "never asked for". Both used to resolve to
+/// the same `None` on [`SelectedLlm`], which left `a2a doctor` unable to report
+/// a setting the run would quietly discard.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReasoningPlan {
+    /// Nothing was configured; the model's own default stands.
+    #[default]
+    Unset,
+    /// Configured, and this provider puts it on the wire.
+    Sent(Reasoning),
+    /// Configured, and this provider has no field that carries it. Dropped.
+    Unsupported(Reasoning),
+}
+
+impl ReasoningPlan {
+    /// The plan for a provider that can carry whatever was configured.
+    pub fn carried(reasoning: Option<Reasoning>) -> Self {
+        reasoning.map_or(Self::Unset, Self::Sent)
+    }
+
+    /// The plan for a provider with no reasoning field.
+    pub fn dropped(reasoning: Option<Reasoning>) -> Self {
+        reasoning.map_or(Self::Unset, Self::Unsupported)
+    }
+
+    /// What reaches the wire, if anything. A dropped setting reads as nothing
+    /// here, because nothing is what gets sent.
+    pub fn sent(self) -> Option<Reasoning> {
+        match self {
+            Self::Sent(reasoning) => Some(reasoning),
+            Self::Unset | Self::Unsupported(_) => None,
+        }
+    }
+
+    /// What was configured, whether or not it will be sent.
+    pub fn requested(self) -> Option<Reasoning> {
+        match self {
+            Self::Unset => None,
+            Self::Sent(reasoning) | Self::Unsupported(reasoning) => Some(reasoning),
+        }
+    }
+
+    /// What this provider was asked for and will not send.
+    pub fn unsupported(self) -> Option<Reasoning> {
+        match self {
+            Self::Unsupported(reasoning) => Some(reasoning),
+            Self::Unset | Self::Sent(_) => None,
+        }
+    }
+}
+
+impl std::fmt::Display for ReasoningPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unset => f.write_str("(model default)"),
+            Self::Sent(reasoning) => write!(f, "{reasoning}"),
+            Self::Unsupported(reasoning) => write!(f, "{reasoning} (dropped)"),
+        }
+    }
+}
+
 /// A resolved provider plus what a startup line or `a2a doctor` needs to
 /// describe it.
 ///
@@ -150,9 +214,8 @@ pub struct SelectedLlm {
     /// What selected it: an environment variable name, or `[llm] provider`.
     pub selected_by: &'static str,
     /// What will be asked of the model's thinking on requests that don't ask
-    /// for their own. `None` sends nothing, including where the provider drops
-    /// the setting.
-    pub reasoning: Option<Reasoning>,
+    /// for their own, and whether this provider can ask it at all.
+    pub reasoning: ReasoningPlan,
 }
 
 impl std::fmt::Debug for SelectedLlm {
@@ -195,7 +258,7 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
             kind: "openrouter",
             model: config.model.clone(),
             selected_by: openrouter_key,
-            reasoning: config.reasoning,
+            reasoning: ReasoningPlan::carried(config.reasoning),
             provider: Arc::new(OpenAiProvider::new(config)),
         }));
     }
@@ -207,7 +270,7 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
             kind: "gemini",
             model: config.model.clone(),
             selected_by: gemini_key,
-            reasoning: None,
+            reasoning: ReasoningPlan::Unset,
             provider: Arc::new(GeminiProvider::new(config)),
         }));
     }
@@ -218,7 +281,7 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
             kind: "openai",
             model: config.model.clone(),
             selected_by: var,
-            reasoning: None,
+            reasoning: ReasoningPlan::Unset,
             provider: Arc::new(OpenAiProvider::new(config)),
         }));
     }
@@ -229,7 +292,8 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
 /// Warn when a configured [`LlmSettings::reasoning`] cannot reach the wire.
 ///
 /// Reasoning tokens are billed, so a provider that drops the setting says so at
-/// startup rather than leaving the caller to infer it from the bill.
+/// startup rather than leaving the caller to infer it from the bill. `a2a run`
+/// has only this log line; a report reads [`SelectedLlm::reasoning`] instead.
 fn warn_unsupported_reasoning(settings: &LlmSettings) {
     if let Some(reasoning) = settings.reasoning {
         tracing::warn!(
@@ -292,7 +356,7 @@ fn build_from_settings(
                 kind: "openrouter",
                 model,
                 selected_by: SELECTED_BY_CONFIG,
-                reasoning: settings.reasoning,
+                reasoning: ReasoningPlan::carried(settings.reasoning),
                 provider: Arc::new(OpenAiProvider::new(config)),
             })
         }
@@ -319,7 +383,7 @@ fn build_from_settings(
                 kind: "openai",
                 model,
                 selected_by: SELECTED_BY_CONFIG,
-                reasoning: None,
+                reasoning: ReasoningPlan::dropped(settings.reasoning),
                 provider: Arc::new(OpenAiProvider::new(config)),
             })
         }
@@ -343,7 +407,7 @@ fn build_from_settings(
                 kind: "gemini",
                 model,
                 selected_by: SELECTED_BY_CONFIG,
-                reasoning: None,
+                reasoning: ReasoningPlan::dropped(settings.reasoning),
                 provider: Arc::new(GeminiProvider::new(config)),
             })
         }
@@ -481,6 +545,54 @@ mod tests {
         .expect("a configured key needs no environment");
         assert_eq!(selected.model, "z-ai/glm-5.2");
         assert_eq!(selected.selected_by, SELECTED_BY_CONFIG);
+        assert_eq!(
+            selected.reasoning,
+            ReasoningPlan::Sent(Reasoning::Effort(ReasoningEffort::Low))
+        );
+    }
+
+    /// A provider with no reasoning field reports what it discarded. This used
+    /// to resolve to the same `None` as "nobody asked", so `a2a doctor` could
+    /// only repeat which variables were set and the setting was found out about
+    /// on the bill.
+    #[test]
+    fn a_provider_that_cannot_send_reasoning_reports_what_it_dropped() {
+        for provider in ["openai", "gemini"] {
+            let settings = LlmSettings {
+                provider: provider.to_string(),
+                api_key: Some("key".to_string()),
+                reasoning: Some(Reasoning::Effort(ReasoningEffort::High)),
+                ..Default::default()
+            };
+            let selected = build_from_settings(&settings, Env::new(&env_of(&[]))).unwrap();
+            assert_eq!(
+                selected.reasoning,
+                ReasoningPlan::Unsupported(Reasoning::Effort(ReasoningEffort::High)),
+                "for {provider}"
+            );
+            assert_eq!(selected.reasoning.sent(), None, "for {provider}");
+            assert_eq!(
+                selected.reasoning.requested(),
+                Some(Reasoning::Effort(ReasoningEffort::High)),
+                "for {provider}"
+            );
+        }
+    }
+
+    /// Nothing configured stays nothing. A plan that reported a drop here would
+    /// have `doctor` warning about a setting no config contains.
+    #[test]
+    fn no_reasoning_configured_is_not_a_drop() {
+        for provider in SUPPORTED_PROVIDERS {
+            let settings = LlmSettings {
+                provider: provider.to_string(),
+                api_key: Some("key".to_string()),
+                ..Default::default()
+            };
+            let selected = build_from_settings(&settings, Env::new(&env_of(&[]))).unwrap();
+            assert_eq!(selected.reasoning, ReasoningPlan::Unset, "for {provider}");
+            assert_eq!(selected.reasoning.unsupported(), None, "for {provider}");
+        }
     }
 
     /// The error lists the valid providers, since the usual cause is a typo.

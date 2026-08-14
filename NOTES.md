@@ -144,6 +144,22 @@ inside the adapter: callers now ask for what they want, and a provider whose
 endpoint has no such field sends the request without it. Asking is therefore
 always safe, which is the property that removes the sniffing.
 
+**A dropped `reasoning` is a value, not a log line.** `SelectedLlm.reasoning` is
+`ReasoningPlan { Unset, Sent(_), Unsupported(_) }` rather than
+`Option<Reasoning>`, because a provider that discards the setting and a config
+that never set it used to arrive as the same `None` — leaving `a2a doctor` with
+nothing to report and the difference showing up on the bill. `a2a run` still
+warns; a report reads the field.
+
+Sending `reasoning` on OpenAI and Gemini stayed open for a reason worth keeping:
+both mappings are questions about the **model**, not the provider. OpenAI's
+`reasoning_effort` is rejected outright by models that do not reason, and the
+default here is `gpt-4o-mini`, so dispatching on provider kind breaks the common
+case; Gemini's thinking budget is spelled differently across model generations
+and its minimum is model-dependent, so `Off` is expressible on some models and
+not others. Either way the adapter needs a model-name list, which goes stale
+with every release — that is the cost to weigh, not the request field.
+
 **Giving up is `failed`, not `input-required`.** The alternative was real: the
 model gathered tool results before running out of rounds, so "I got partway, a
 human could unblock me" describes what happened. It is still the wrong state.
