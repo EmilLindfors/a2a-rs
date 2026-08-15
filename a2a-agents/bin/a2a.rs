@@ -35,6 +35,7 @@ use a2a_agents::{
 use a2a_agents_common::llm::{
     LlmSettings, PROVIDER_ENV_VARS, SelectedLlm, provider_from_env, provider_from_settings,
 };
+use a2a_rs::port::RequestContext;
 
 #[cfg(feature = "mcp-server")]
 use a2a_agents::core::config::RemoteAgentTarget;
@@ -317,7 +318,7 @@ impl AsyncMessageHandler for EchoHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let text = message
             .parts

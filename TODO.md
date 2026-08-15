@@ -30,21 +30,21 @@ retrieval tier.
 
 What is left, roughly in the order it is worth doing.
 
-**Blocking `mode = "context"` for anyone using auth:**
-
-- [ ] **Thread the authenticated principal to the message handler.**
-      `AsyncMessageHandler::process_message` receives no principal, so
-      `LlmHandler::caller()` returns `None` and the owner check in
-      `AsyncConversationStore` has nothing to compare against — every caller
-      looks identical. `AgentConfig::validate` therefore refuses
-      `mode = "context"` together with `[server.auth]`. The store side is done
-      and tested on both adapters; what is missing is the principal reaching it,
-      which is multi-tenancy option (b) in §7 and the reason that item moved from
-      deferred to blocking. `LlmHandler::caller()` is the single place that
-      changes on this side.
+The principal now reaches the handler (`port::RequestContext`, 2026-08-15), so
+`mode = "context"` works alongside `[server.auth]` and a context belongs to
+whoever started it. That was the blocker; what follows is not.
 
 **Correctness and operability:**
 
+- [ ] **Only `jwt` gives a principal id that outlives the credential.**
+      `JwtAuthenticator` uses the token's `sub`, so a refresh keeps the same
+      identity. `BearerTokenAuthenticator` and `ApiKeyAuthenticator` use the
+      credential itself, and `OAuth2Authenticator` uses `oauth2:{access_token}` —
+      which rotates on every refresh, so a conversation owned under OAuth2 stops
+      being readable by the same user. It is documented (`a2a-agents/README.md`)
+      and it is still wrong: OAuth2 should carry the subject from introspection
+      or userinfo, not the bearer string. Bearer and API key have nothing else to
+      use and are honestly credential-scoped.
 - [ ] **`a2a doctor` says nothing about context configuration.** An agent with
       `mode = "context"` and `[server.storage] type = "memory"` loses every
       conversation on restart, and the control plane restarts agents on purpose.
@@ -320,7 +320,10 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
       - **(b) per-request `tenant` parameter** threaded through every port
         method, plus transport extraction and storage scoping. Matches the
         official SDK exactly; largest diff, touches every call site in every
-        crate.
+        crate. Cheaper than it was on the message path: `RequestContext` already
+        travels from the transport to the message handler, and a `tenant` field
+        on it costs no new parameter. The task, notification and storage ports
+        still take none.
 - [ ] **Durable streaming resumption.** The replay buffer is in-memory and
       bounded (256 events/task); past it, resume falls back to the initial
       snapshot. A sqlx-backed event log would make resumption survive restarts.

@@ -157,9 +157,11 @@ where
         message: &Message,
         session_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError> {
-        self.handler
-            .process_message(task_id, message, session_id)
-            .await
+        // An MCP tool call authenticates to the MCP server, not to the A2A
+        // agent, so there is no A2A principal to name here.
+        let ctx =
+            a2a_rs::port::RequestContext::anonymous().with_session(session_id.unwrap_or_default());
+        self.handler.process_message(task_id, message, &ctx).await
     }
 
     async fn subscribe(

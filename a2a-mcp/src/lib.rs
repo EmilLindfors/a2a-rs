@@ -52,7 +52,7 @@
 //! ```no_run
 //! use a2a_mcp::{create_tool_call_message, McpToA2ABridge};
 //! use a2a_rs::domain::{error::A2AError, Message, Task};
-//! use a2a_rs::port::AsyncMessageHandler;
+//! use a2a_rs::port::{AsyncMessageHandler, RequestContext};
 //! use async_trait::async_trait;
 //! use rmcp::{transport::stdio, ServiceExt};
 //!
@@ -67,7 +67,7 @@
 //!         &self,
 //!         _task_id: &str,
 //!         _message: &Message,
-//!         _session_id: Option<&str>,
+//!         _ctx: &RequestContext,
 //!     ) -> Result<Task, A2AError> {
 //!         unimplemented!("your business logic here")
 //!     }
@@ -87,7 +87,9 @@
 //!     // Build a tool-call message. The envelope rides in metadata, not text:
 //!     //   metadata["a2a_rs_tool_call"] = { "name": "...", "arguments": {...} }
 //!     let tool_msg = create_tool_call_message("add", serde_json::json!({"a": 5, "b": 7}));
-//!     let _result = bridge.process_message("task-1", &tool_msg, None).await?;
+//!     let _result = bridge
+//!         .process_message("task-1", &tool_msg, &RequestContext::anonymous())
+//!         .await?;
 //!     Ok(())
 //! }
 //! ```

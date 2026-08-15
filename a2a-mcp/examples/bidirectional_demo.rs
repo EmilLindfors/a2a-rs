@@ -41,12 +41,13 @@ use a2a_rs::{
         transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
     },
     domain::{Message, Part, Role, Task, TaskState, TaskStatus, error::A2AError},
-    port::AsyncMessageHandler,
+    port::{AsyncMessageHandler, RequestContext},
     services::AgentInfoProvider,
 };
 use async_trait::async_trait;
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*,
+    service::RequestContext as McpRequestContext,
 };
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -96,7 +97,7 @@ impl ServerHandler for CalcServer {
     fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _ctx: RequestContext<RoleServer>,
+        _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         async move {
             Ok(ListToolsResult {
@@ -112,7 +113,7 @@ impl ServerHandler for CalcServer {
         CallToolRequestParams {
             name, arguments, ..
         }: CallToolRequestParams,
-        _ctx: RequestContext<RoleServer>,
+        _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
             if name != "add" {
@@ -155,14 +156,14 @@ impl AsyncMessageHandler for EchoHandler {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let inner = ResponderMessageHandler::echo(
             (*self.storage).clone(),
             self.streaming.clone(),
             self.storage.push_notifier(),
         );
-        let mut task = inner.process_message(task_id, message, session_id).await?;
+        let mut task = inner.process_message(task_id, message, ctx).await?;
 
         let echoed = extract_text(message);
         let response = Message::builder()
@@ -194,19 +195,14 @@ impl AsyncMessageHandler for MathHandler {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let text = extract_text(message);
         if let Some((a, b)) = parse_add(&text) {
             let tool_msg = create_tool_call_message("add", json!({ "a": a, "b": b }));
-            return self
-                .bridge
-                .process_message(task_id, &tool_msg, session_id)
-                .await;
+            return self.bridge.process_message(task_id, &tool_msg, ctx).await;
         }
-        self.bridge
-            .process_message(task_id, message, session_id)
-            .await
+        self.bridge.process_message(task_id, message, ctx).await
     }
 }
 

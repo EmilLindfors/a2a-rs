@@ -56,11 +56,13 @@ use a2a_rs::domain::{
 };
 use a2a_rs::port::{
     AsyncMessageHandler, AsyncPushNotifier, AsyncStreamingHandler, AsyncTaskLifecycle,
+    RequestContext,
 };
 use a2a_rs::{InMemoryStreamingHandler, InMemoryTaskStorage};
 use async_trait::async_trait;
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*,
+    service::RequestContext as McpRequestContext,
 };
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -131,7 +133,7 @@ impl ServerHandler for ToolServer {
     fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _ctx: RequestContext<RoleServer>,
+        _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         async move {
             Ok(ListToolsResult {
@@ -147,7 +149,7 @@ impl ServerHandler for ToolServer {
         CallToolRequestParams {
             name, arguments, ..
         }: CallToolRequestParams,
-        _ctx: RequestContext<RoleServer>,
+        _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
             let args = arguments.unwrap_or_default();
@@ -202,7 +204,7 @@ impl AsyncMessageHandler for UnusedInner {
         &self,
         _task_id: &str,
         _message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         Err(A2AError::UnsupportedOperation(
             "inner handler is not used in the complex_agent example".to_string(),
@@ -507,7 +509,7 @@ impl AsyncMessageHandler for ResearchAssistantHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse()?;
 

@@ -33,7 +33,7 @@ use crate::domain::{
 };
 use crate::port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier,
-    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery, SeqEvent,
+    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery, RequestContext, SeqEvent,
 };
 use crate::services::server::AgentInfoProvider;
 
@@ -211,7 +211,7 @@ impl TaskService {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
         opts: SendOptions,
     ) -> Result<Task, A2AError> {
         if let Some(mut push_config) = opts.push_config {
@@ -236,7 +236,7 @@ impl TaskService {
 
         let mut task = self
             .message_handler
-            .process_message(task_id, message, session_id)
+            .process_message(task_id, message, ctx)
             .await?;
 
         if let Some(updates) = updates
@@ -302,7 +302,7 @@ impl TaskService {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
         push_config: Option<TaskPushNotificationConfig>,
         history_limit: Option<u32>,
     ) -> Result<(Task, UpdateStream), A2AError> {
@@ -321,7 +321,7 @@ impl TaskService {
 
         let mut task = self
             .message_handler
-            .process_message(task_id, message, session_id)
+            .process_message(task_id, message, ctx)
             .await?;
 
         if let Some(limit) = history_limit {

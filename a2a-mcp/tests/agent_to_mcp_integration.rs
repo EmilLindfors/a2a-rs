@@ -205,7 +205,7 @@ impl AsyncMessageHandler for CountingHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &a2a_rs::port::RequestContext,
     ) -> Result<Task, A2AError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
 
@@ -363,7 +363,7 @@ impl AsyncMessageHandler for MockStreamingHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &a2a_rs::port::RequestContext,
     ) -> Result<Task, A2AError> {
         let text = message
             .parts
@@ -907,7 +907,7 @@ async fn test_list_resources_and_read_resource() {
             &self,
             task_id: &str,
             _message: &Message,
-            _session_id: Option<&str>,
+            _ctx: &a2a_rs::port::RequestContext,
         ) -> Result<Task, A2AError> {
             let artifact = Artifact {
                 artifact_id: "report-123".to_string(),

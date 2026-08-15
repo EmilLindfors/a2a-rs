@@ -369,34 +369,37 @@ mod http_auth {
         }
     }
 
-    /// Authentication middleware for Axum
+    /// Authentication middleware for Axum.
+    ///
+    /// On success the [`AuthPrincipal`] is inserted into the request extensions,
+    /// which is how it reaches the transport adapter and from there the message
+    /// handler. Dropping it here is what made every caller look identical to a
+    /// handler keeping per-caller state.
     pub async fn http_auth_middleware(
         State(state): State<AuthState>,
-        req: Request<axum::body::Body>,
+        mut req: Request<axum::body::Body>,
         next: Next,
     ) -> Result<Response, StatusCode> {
-        let headers = req.headers();
-
-        // Try to extract auth context using available extractors
+        // The first extractor that finds credentials decides the request; the
+        // rest are not consulted. Resolved before touching the extensions so the
+        // borrow of the headers is done with by then.
+        let mut outcome = None;
         for extractor in &state.extractors {
-            if let Some(context) = extractor.extract_from_headers(headers).await {
-                // Try to authenticate with the extracted context
-                match state.authenticator.authenticate(&context).await {
-                    Ok(_principal) => {
-                        // Authentication successful, we could add the principal to request extensions
-                        // For now, just proceed with the request
-                        return Ok(next.run(req).await);
-                    }
-                    Err(_) => {
-                        // This extractor found credentials but they were invalid
-                        return Err(StatusCode::UNAUTHORIZED);
-                    }
-                }
+            if let Some(context) = extractor.extract_from_headers(req.headers()).await {
+                outcome = Some(state.authenticator.authenticate(&context).await);
+                break;
             }
         }
 
-        // No valid authentication context found
-        Err(StatusCode::UNAUTHORIZED)
+        match outcome {
+            Some(Ok(principal)) => {
+                req.extensions_mut().insert(principal);
+                Ok(next.run(req).await)
+            }
+            // Credentials were presented and rejected, or none were presented at
+            // all. Both are 401.
+            Some(Err(_)) | None => Err(StatusCode::UNAUTHORIZED),
+        }
     }
 
     /// Helper function to apply authentication middleware to a router

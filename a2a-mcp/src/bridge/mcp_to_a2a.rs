@@ -7,7 +7,7 @@ use crate::{
 use a2a_agents_common::llm::{ToolCall, ToolDefinition};
 use a2a_rs::{
     domain::{Message, Part, Role, Task, TaskState, TaskStatus},
-    port::AsyncMessageHandler,
+    port::{AsyncMessageHandler, RequestContext},
 };
 use async_trait::async_trait;
 use rmcp::{
@@ -502,7 +502,7 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> std::result::Result<Task, a2a_rs::domain::error::A2AError> {
         // Check if this is a tool call request
         if let Some(McpToolCall {
@@ -631,7 +631,7 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
             // Not a tool or prompt call, delegate to inner handler
             debug!("Message is not a tool or prompt call, delegating to inner handler");
             self.inner_handler
-                .process_message(task_id, message, session_id)
+                .process_message(task_id, message, ctx)
                 .await
         }
     }
@@ -1086,7 +1086,7 @@ mod tests {
             &self,
             task_id: &str,
             message: &Message,
-            _session_id: Option<&str>,
+            _ctx: &RequestContext,
         ) -> std::result::Result<Task, a2a_rs::domain::error::A2AError> {
             Ok(Task::builder()
                 .id(task_id.to_string())

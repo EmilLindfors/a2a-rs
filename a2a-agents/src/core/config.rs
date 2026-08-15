@@ -568,25 +568,6 @@ impl AgentConfig {
             }
         }
 
-        // Carrying a conversation across turns makes `context_id` a capability:
-        // whoever presents one reads what was said in it. The store enforces an
-        // owner, but no authenticated principal reaches the message handler yet,
-        // so on an authenticated agent every caller would look identical and the
-        // check could not separate them. Refuse the combination rather than
-        // serve it and look like it is enforcing something.
-        if let Some(llm) = self.handler.llm.as_ref()
-            && llm.context.mode == ContextMode::Context
-            && self.server.auth != AuthConfig::None
-        {
-            return Err(ConfigError::ValidationError(
-                "`[handler.llm.context] mode = \"context\"` cannot be used with `[server.auth]` \
-                 yet: conversations are shared per context id, and the handler receives no \
-                 authenticated principal to tell two callers apart. Use `mode = \"task\"`, which \
-                 is scoped to one task, or run this agent without authentication."
-                    .to_string(),
-            ));
-        }
-
         // A blank image would reach the engine as an empty argument, which fails
         // as an unreadable `docker create` error rather than as the config
         // mistake it is.

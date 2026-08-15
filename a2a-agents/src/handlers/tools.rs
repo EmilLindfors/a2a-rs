@@ -390,7 +390,7 @@ mod mcp {
     use super::*;
     use a2a_mcp::McpToA2ABridge;
     use a2a_rs::domain::Task;
-    use a2a_rs::port::AsyncMessageHandler;
+    use a2a_rs::port::{AsyncMessageHandler, RequestContext};
 
     /// Filler inner handler for [`McpToA2ABridge`], which is generic over an
     /// `AsyncMessageHandler` it would delegate non-tool messages to. The LLM
@@ -404,7 +404,7 @@ mod mcp {
             &self,
             _task_id: &str,
             _message: &Message,
-            _session_id: Option<&str>,
+            _ctx: &RequestContext,
         ) -> Result<Task, A2AError> {
             Err(A2AError::UnsupportedOperation(
                 "the generic LLM handler does not delegate to the MCP bridge".to_string(),

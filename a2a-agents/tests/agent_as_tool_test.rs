@@ -29,6 +29,7 @@ use a2a_rs::domain::{
     A2AError, AgentCard, AgentInterface, AgentSkill, ContextId, Message, Part, Role, Task,
     TaskArtifactUpdateEvent, TaskId, TaskState, TaskStatus, TaskStatusUpdateEvent,
 };
+use a2a_rs::port::RequestContext;
 use a2a_rs::port::streaming_handler::{SeqEvent, Subscriber};
 use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, AsyncTaskLifecycle};
 use a2a_rs::{InMemoryStreamingHandler, InMemoryTaskStorage, JsonRpcClient, Transport};
@@ -87,7 +88,7 @@ impl AsyncMessageHandler for LateHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse()?;
         let context: ContextId = "delegation".parse()?;
@@ -143,7 +144,7 @@ impl AsyncMessageHandler for FixedHandler {
         &self,
         task_id: &str,
         _message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse()?;
         let context: ContextId = "delegation".parse()?;

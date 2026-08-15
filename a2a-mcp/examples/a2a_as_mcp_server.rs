@@ -21,7 +21,7 @@ use a2a_rs::{
         transport::{connectrpc::ConnectRpcAdapter, http::HttpClient},
     },
     domain::{Message, Part, Role, Task, TaskState, TaskStatus, error::A2AError},
-    port::AsyncMessageHandler,
+    port::{AsyncMessageHandler, RequestContext},
     services::AgentInfoProvider,
 };
 use async_trait::async_trait;
@@ -48,7 +48,7 @@ impl AsyncMessageHandler for EchoHandler {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         // Delegate to ResponderMessageHandler for proper storage semantics, then
         // synthesize an echo response on top of whatever it returned.
@@ -57,7 +57,7 @@ impl AsyncMessageHandler for EchoHandler {
             self.streaming.clone(),
             self.storage.push_notifier(),
         );
-        let mut task = inner.process_message(task_id, message, session_id).await?;
+        let mut task = inner.process_message(task_id, message, ctx).await?;
 
         let echoed = message
             .parts

@@ -29,7 +29,9 @@ use a2a_rs::domain::{
     A2AError, ContextId, Message, SendCompletion, Task, TaskId, TaskState, TaskStatus,
     TaskStatusUpdateEvent,
 };
-use a2a_rs::port::{AsyncMessageHandler, AsyncStreamingHandler, AsyncTaskLifecycle};
+use a2a_rs::port::{
+    AsyncMessageHandler, AsyncStreamingHandler, AsyncTaskLifecycle, RequestContext,
+};
 
 // ---------------------------------------------------------------------------
 // An agent that accepts now and finishes later
@@ -55,12 +57,12 @@ impl AsyncMessageHandler for AsyncAgent {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse()?;
-        let ctx: ContextId = session_id.unwrap_or("ctx").parse()?;
+        let ctx_id: ContextId = ctx.session_id().unwrap_or("ctx").parse()?;
         if !self.storage.exists(&id).await? {
-            self.storage.create(&id, &ctx).await?;
+            self.storage.create(&id, &ctx_id).await?;
         }
         let task = self
             .storage
@@ -137,7 +139,12 @@ async fn send_message_waits_for_an_async_agent_by_default() {
     let service = service_for(Some(TaskState::Completed), Duration::from_millis(150));
 
     let task = service
-        .send_message("t-default", &message(), None, SendOptions::default())
+        .send_message(
+            "t-default",
+            &message(),
+            &RequestContext::anonymous(),
+            SendOptions::default(),
+        )
         .await
         .expect("send");
 
@@ -155,7 +162,12 @@ async fn an_interrupted_state_ends_the_wait() {
     let service = service_for(Some(TaskState::InputRequired), Duration::from_millis(150));
 
     let task = service
-        .send_message("t-input", &message(), None, SendOptions::default())
+        .send_message(
+            "t-input",
+            &message(),
+            &RequestContext::anonymous(),
+            SendOptions::default(),
+        )
         .await
         .expect("send");
 
@@ -175,7 +187,7 @@ async fn return_immediately_does_not_wait() {
         .send_message(
             "t-immediate",
             &message(),
-            None,
+            &RequestContext::anonymous(),
             SendOptions {
                 completion: SendCompletion::WhenCreated,
                 ..Default::default()
@@ -203,7 +215,12 @@ async fn the_wait_is_bounded_when_the_agent_never_settles() {
 
     let started = Instant::now();
     let task = service
-        .send_message("t-hang", &message(), None, SendOptions::default())
+        .send_message(
+            "t-hang",
+            &message(),
+            &RequestContext::anonymous(),
+            SendOptions::default(),
+        )
         .await
         .expect("send must return, not error");
     let elapsed = started.elapsed();
@@ -274,7 +291,12 @@ async fn the_default_wait_expires_before_the_default_client_timeout() {
     // advanced by the paused clock.
     let started = tokio::time::Instant::now();
     let task = service_for(None, Duration::ZERO)
-        .send_message("t-default-bound", &message(), None, SendOptions::default())
+        .send_message(
+            "t-default-bound",
+            &message(),
+            &RequestContext::anonymous(),
+            SendOptions::default(),
+        )
         .await
         .expect("send");
     let waited = started.elapsed();

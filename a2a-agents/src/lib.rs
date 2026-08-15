@@ -45,7 +45,7 @@
 //!
 //! ```rust
 //! use a2a_agents::traits::{AgentPlugin, SkillDefinition};
-//! use a2a_rs::port::AsyncMessageHandler;
+//! use a2a_rs::port::{AsyncMessageHandler, RequestContext};
 //! use a2a_rs::domain::{A2AError, Message, Task};
 //! use async_trait::async_trait;
 //!
@@ -64,7 +64,7 @@
 //!         &self,
 //!         _task_id: &str,
 //!         _message: &Message,
-//!         _session_id: Option<&str>,
+//!         _ctx: &RequestContext,
 //!     ) -> Result<Task, A2AError> {
 //!         todo!()
 //!     }

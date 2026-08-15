@@ -225,7 +225,7 @@ impl AsyncMessageHandler for NoOpHandler {
         &self,
         task_id: &str,
         _message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &a2a_rs::port::RequestContext,
     ) -> Result<Task, a2a_rs::domain::error::A2AError> {
         Ok(Task::builder()
             .id(task_id.to_string())
@@ -368,7 +368,11 @@ async fn test_mcp_to_a2a_prompts() {
     // Call the prompt via bridge
     let prompt_call_msg = create_prompt_call_message("test_prompt", serde_json::json!({}));
     let task = bridge
-        .process_message("task-prompt-1", &prompt_call_msg, None)
+        .process_message(
+            "task-prompt-1",
+            &prompt_call_msg,
+            &a2a_rs::port::RequestContext::anonymous(),
+        )
         .await
         .unwrap();
 
@@ -417,7 +421,11 @@ async fn test_mcp_to_a2a_progress_streaming() {
     let tool_call_msg =
         create_tool_call_message("calculator", serde_json::json!({ "expression": "2 + 2" }));
     let task = bridge
-        .process_message("task-calc-1", &tool_call_msg, None)
+        .process_message(
+            "task-calc-1",
+            &tool_call_msg,
+            &a2a_rs::port::RequestContext::anonymous(),
+        )
         .await
         .unwrap();
 

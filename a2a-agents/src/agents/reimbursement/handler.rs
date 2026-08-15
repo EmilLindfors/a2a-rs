@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use a2a_rs::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
 use a2a_rs::domain::{A2AError, ContextId, Message, Part, Role, Task, TaskId, TaskState, part};
+use a2a_rs::port::RequestContext;
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
 use super::types::*;
@@ -1474,14 +1475,14 @@ impl AsyncMessageHandler for ReimbursementHandler {
     #[instrument(skip(self, message), fields(
         task_id = %task_id,
         message_id = %message.message_id,
-        session_id = ?_session_id,
+        session_id = ?ctx.session_id(),
         parts_count = message.parts.len()
     ))]
     async fn process_message(
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         error!(
             "🚨 HANDLER CALLED: Processing reimbursement request for task_id={}",

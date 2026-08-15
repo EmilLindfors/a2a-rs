@@ -30,7 +30,10 @@ use async_trait::async_trait;
 use crate::{
     application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast},
     domain::{A2AError, ContextId, Message, Part, Role, Task, TaskId, TaskState},
-    port::{AsyncMessageHandler, AsyncPushNotifier, AsyncStreamingHandler, AsyncTaskLifecycle},
+    port::{
+        AsyncMessageHandler, AsyncPushNotifier, AsyncStreamingHandler, AsyncTaskLifecycle,
+        RequestContext,
+    },
 };
 
 /// The business decision behind a message handler: given the incoming `message`
@@ -164,13 +167,13 @@ impl AsyncMessageHandler for ResponderMessageHandler {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse()?;
 
         // Create the task on first contact.
         if !self.task_lifecycle.exists(&id).await? {
-            let context_id: ContextId = session_id.unwrap_or("default").parse()?;
+            let context_id: ContextId = ctx.session_id().unwrap_or("default").parse()?;
             self.task_lifecycle.create(&id, &context_id).await?;
         }
 
@@ -226,7 +229,10 @@ mod tests {
         let handler = ResponderMessageHandler::new(storage, streaming, push, FixedResponder);
 
         let message = Message::user_text("anything".to_string(), "m1".to_string());
-        let task = handler.process_message("t1", &message, None).await.unwrap();
+        let task = handler
+            .process_message("t1", &message, &RequestContext::anonymous())
+            .await
+            .unwrap();
 
         // The responder chose the terminal state...
         assert_eq!(task.status.state, TaskState::Completed);
@@ -252,7 +258,10 @@ mod tests {
         let handler = ResponderMessageHandler::echo(storage, streaming, push);
 
         let message = Message::user_text("ping".to_string(), "m1".to_string());
-        let task = handler.process_message("t1", &message, None).await.unwrap();
+        let task = handler
+            .process_message("t1", &message, &RequestContext::anonymous())
+            .await
+            .unwrap();
 
         assert_eq!(task.status.state, TaskState::Completed);
         assert!(task.status.state.is_terminal());

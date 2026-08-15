@@ -12,6 +12,24 @@ The agent builder supports multiple authentication schemes that can be configure
 4. **JWT** - JSON Web Token authentication with HMAC or RSA
 5. **OAuth2** - OAuth2 authentication (authorization code or client credentials flow)
 
+## Who the caller is
+
+A successful authentication produces a **principal**, and the principal's id
+reaches the message handler — it is what
+`[handler.llm.context] mode = "context"` uses to decide whose conversation a
+`contextId` refers to. Each scheme names the caller differently:
+
+| Scheme | Principal id | Stable across a credential change? |
+|---|---|---|
+| `none` | *(no principal)* | — |
+| `bearer` | the token | No |
+| `api_key` | the key | No |
+| `jwt` | the `sub` claim | **Yes** |
+| `oauth2` / `oidc` | `oauth2:{access_token}` | No — rotates on refresh |
+
+Only `jwt` identifies a *user* rather than a *credential*. If anything downstream
+keys state on the caller, that is the scheme to use.
+
 ## Configuration Format
 
 All authentication is configured in the `[server.auth]` section of your TOML file.

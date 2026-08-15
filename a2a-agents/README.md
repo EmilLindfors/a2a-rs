@@ -466,13 +466,24 @@ answered are never trimmed — if those alone exceed the budget the task fails
 naming `max_input_tokens`, because silently dropping half of a question produces
 a confident answer to something nobody asked.
 
-**`mode = "context"` cannot yet be combined with `[server.auth]`.** A `contextId`
-is supplied by the caller, so once conversations are read back it decides which
-conversation you get — and no authenticated principal reaches the message
-handler yet to tell two callers apart. The storage layer records and enforces an
-owner per context, but with nothing to compare against it cannot separate them,
-so the config is rejected at startup rather than served as if it were enforcing
-something. Use `mode = "task"`, or run the agent without authentication.
+**With `[server.auth]` set, a conversation belongs to whoever started it.** A
+`contextId` is supplied by the caller, so once conversations are read back it
+decides which conversation you get. The store claims a context for the
+authenticated principal on first use and refuses a later read by anyone else —
+a `ContextAccessDenied` error, which reaches the caller as ConnectRPC
+`permission_denied` (HTTP 403) or JSON-RPC `CONTEXT_ACCESS_DENIED`. The
+principal comes from the same authenticator that guards the endpoint, so this
+follows whatever `[server.auth]` is configured; on an agent with no
+authentication there is no principal, contexts are unowned, and any caller
+holding a `contextId` can read it.
+
+Which identity that is depends on the scheme, and only `jwt` gives a stable one.
+`jwt` uses the token's `sub` claim, so a refreshed token is the same principal.
+`bearer` and `api_key` use the credential itself — everyone sharing a token
+shares their conversations, and rotating the token orphans them. `oauth2` uses
+the access token, which rotates on every refresh, so a long conversation under
+OAuth2 will lose access to itself. Use `jwt` if you want conversations to
+outlive a credential.
 
 ### Agent-as-tool delegation
 

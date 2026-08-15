@@ -19,7 +19,7 @@ use a2a_rs::{
     },
     port::{
         AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-        AsyncTaskQuery, streaming_handler::Subscriber,
+        AsyncTaskQuery, RequestContext, streaming_handler::Subscriber,
     },
 };
 
@@ -81,7 +81,7 @@ impl AsyncMessageHandler for SimpleAgentHandler {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         // Create a message handler and delegate, sharing the streaming handler so
         // the echo handler's broadcasts reach this handler's subscribers.
@@ -90,9 +90,7 @@ impl AsyncMessageHandler for SimpleAgentHandler {
             self.streaming.clone(),
             self.storage.push_notifier(),
         );
-        message_handler
-            .process_message(task_id, message, session_id)
-            .await
+        message_handler.process_message(task_id, message, ctx).await
     }
 }
 

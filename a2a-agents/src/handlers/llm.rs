@@ -14,7 +14,7 @@ use a2a_rs::domain::{
 };
 use a2a_rs::port::{
     AsyncConversationStore, AsyncConversationStoreExt, AsyncMessageHandler, AsyncPushNotifier,
-    AsyncStreamingHandler, AsyncTaskLifecycle,
+    AsyncStreamingHandler, AsyncTaskLifecycle, RequestContext,
 };
 use async_trait::async_trait;
 use buffa::MessageField;
@@ -157,6 +157,7 @@ impl LlmHandler {
         &self,
         task_id: &TaskId,
         context_id: &str,
+        caller: Option<&str>,
     ) -> Result<Conversation, A2AError> {
         let limit = load_limit(self.context.keep_recent_turns);
 
@@ -184,9 +185,7 @@ impl LlmHandler {
             }
             ContextMode::Context => {
                 let id: ContextId = context_id.parse()?;
-                self.conversations
-                    .load(&id, self.caller(), Some(limit))
-                    .await
+                self.conversations.load(&id, caller, Some(limit)).await
             }
         };
 
@@ -200,18 +199,6 @@ impl LlmHandler {
                 Ok(Conversation::default())
             }
         }
-    }
-
-    /// The authenticated principal this turn is acting as.
-    ///
-    /// Always `None`: no principal reaches [`AsyncMessageHandler`], so there is
-    /// nothing here to pass. Named as a method rather than inlined so the one
-    /// place that has to change when the principal is threaded through is
-    /// findable. `AgentBuilder` refuses `mode = "context"` on an agent with
-    /// authentication configured, precisely because this cannot yet tell two
-    /// callers apart.
-    fn caller(&self) -> Option<&str> {
-        None
     }
 
     async fn stream_artifact(
@@ -275,6 +262,7 @@ impl LlmHandler {
         llm: &dyn LlmProvider,
         task_id: &str,
         context_id: &str,
+        caller: Option<&str>,
         conversation: &Conversation,
     ) {
         // Only the part before the recent window is folded. Summarizing the
@@ -325,7 +313,7 @@ impl LlmHandler {
         // that does not describe them.
         if let Err(e) = self
             .conversations
-            .compact_through(&id, self.caller(), &older, summary, self.model.clone())
+            .compact_through(&id, caller, &older, summary, self.model.clone())
             .await
         {
             tracing::warn!("recording the summary for {context_id} failed: {e}");
@@ -337,6 +325,7 @@ impl LlmHandler {
         llm: &dyn LlmProvider,
         task_id: &str,
         context_id: &str,
+        caller: Option<&str>,
         user_text: &str,
         conversation: Conversation,
     ) -> Result<Answer, A2AError> {
@@ -377,7 +366,7 @@ impl LlmHandler {
                     // fit after two.
                     if !compacted && self.context.mode.reads_history() {
                         compacted = true;
-                        self.compact_conversation(llm, task_id, context_id, &conversation)
+                        self.compact_conversation(llm, task_id, context_id, caller, &conversation)
                             .await;
                     }
                 }
@@ -591,26 +580,32 @@ impl AsyncMessageHandler for LlmHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse()?;
 
         if !self.lifecycle.exists(&id).await? {
-            let raw_ctx = if message.context_id.is_empty() {
+            let raw_context = if message.context_id.is_empty() {
                 uuid::Uuid::new_v4().to_string()
             } else {
                 message.context_id.clone()
             };
-            let ctx: ContextId = raw_ctx.parse()?;
-            self.lifecycle.create(&id, &ctx).await?;
+            let context: ContextId = raw_context.parse()?;
+            self.lifecycle.create(&id, &context).await?;
         }
         let context_id = self.lifecycle.get(&id, Some(1)).await?.context_id.clone();
+
+        // Owned because the answer is produced on a spawned task, which outlives
+        // this borrow of the request.
+        let caller = ctx.caller().map(str::to_string);
 
         // Loaded *before* this message is recorded. `update_and_broadcast` puts
         // it on the conversation log, so a load afterwards returns it as history
         // too and the model is handed the same question twice — once as the last
         // turn and once as the thing to answer.
-        let conversation = self.load_conversation(&id, &context_id).await?;
+        let conversation = self
+            .load_conversation(&id, &context_id, caller.as_deref())
+            .await?;
 
         let working = self
             .update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
@@ -631,6 +626,7 @@ impl AsyncMessageHandler for LlmHandler {
                             llm.as_ref(),
                             &task_id,
                             &context_id,
+                            caller.as_deref(),
                             &user_text,
                             conversation,
                         )
@@ -941,6 +937,22 @@ mod tests {
     }
 
     async fn say(handler: &LlmHandler, task_id: &str, context_id: &str, text: &str) -> Task {
+        say_as(handler, task_id, context_id, text, None)
+            .await
+            .unwrap()
+    }
+
+    /// [`say`], as a named principal — the shape an authenticated agent sees.
+    ///
+    /// Returns the error rather than unwrapping, because a refusal is one of the
+    /// outcomes under test.
+    async fn say_as(
+        handler: &LlmHandler,
+        task_id: &str,
+        context_id: &str,
+        text: &str,
+        caller: Option<&str>,
+    ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse().unwrap();
         let message = Message::builder()
             .role(Role::User)
@@ -948,14 +960,17 @@ mod tests {
             .message_id(uuid::Uuid::new_v4().to_string())
             .context_id(context_id.to_string())
             .build();
-        handler
-            .process_message(task_id, &message, None)
-            .await
-            .unwrap();
+        let ctx = RequestContext::anonymous()
+            .with_session(context_id)
+            .with_principal(
+                caller
+                    .map(|id| a2a_rs::port::AuthPrincipal::new(id.to_string(), "test".to_string())),
+            );
+        handler.process_message(task_id, &message, &ctx).await?;
         for _ in 0..200 {
             let task = handler.lifecycle.get(&id, None).await.unwrap();
             if state_of(&task).is_terminal() {
-                return task;
+                return Ok(task);
             }
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
@@ -1001,7 +1016,7 @@ mod tests {
             .message_id("m1".to_string())
             .build();
         handler
-            .process_message(task_id, &message, None)
+            .process_message(task_id, &message, &RequestContext::anonymous())
             .await
             .unwrap();
 
@@ -1201,6 +1216,73 @@ mod tests {
             sent_texts(&provider, 1),
             vec!["hei"],
             "nothing from context 'one' may appear in context 'two'"
+        );
+    }
+
+    /// A `contextId` is supplied by the caller, so on an authenticated agent it
+    /// decides which conversation you get. The store claims the context for
+    /// whoever first read it; this is the end of that check that only works once
+    /// the principal reaches the handler.
+    #[tokio::test]
+    async fn a_second_caller_is_refused_the_first_ones_conversation() {
+        let (handler, _) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("ok".to_string())]),
+            Vec::new(),
+            context_config(ContextMode::Context),
+        );
+
+        say_as(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "shared",
+            "my bank balance is 12",
+            Some("alice"),
+        )
+        .await
+        .expect("the first caller claims the context");
+
+        let denied = say_as(
+            &handler,
+            "22222222-2222-2222-2222-222222222222",
+            "shared",
+            "what did I just say",
+            Some("bob"),
+        )
+        .await
+        .expect_err("a context owned by alice must not answer bob");
+
+        assert!(
+            matches!(denied, A2AError::ContextAccessDenied { .. }),
+            "expected a refusal, got {denied:?}"
+        );
+    }
+
+    /// The same caller coming back is the ordinary case and must still work —
+    /// the check is on identity, not on having been seen before.
+    #[tokio::test]
+    async fn the_same_caller_keeps_reading_their_own_conversation() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("Oslo".to_string())]),
+            Vec::new(),
+            context_config(ContextMode::Context),
+        );
+
+        for (task_id, text) in [
+            (
+                "11111111-1111-1111-1111-111111111111",
+                "what is the capital",
+            ),
+            ("22222222-2222-2222-2222-222222222222", "and the population"),
+        ] {
+            say_as(&handler, task_id, "alices-ctx", text, Some("alice"))
+                .await
+                .expect("alice owns this context");
+        }
+
+        let second = sent_texts(&provider, 1);
+        assert!(
+            second.contains(&"what is the capital".to_string()),
+            "alice's own history must carry across: {second:?}"
         );
     }
 

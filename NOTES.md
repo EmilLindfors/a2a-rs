@@ -171,6 +171,23 @@ conversation into your prompt. Hence `contexts.owner`, taken from the
 `Authenticator` principal and checked on load. This is what pulled the deferred
 multi-tenancy theme forward, and it is not optional to defer again.
 
+**The caller travels in one value, not one more parameter.** Getting the
+principal from the auth middleware to the message handler meant changing
+`AsyncMessageHandler::process_message`, which already took `session_id:
+Option<&str>` that almost nobody read. A fourth positional argument was the
+smaller diff and the worse signature; `port::RequestContext` replaces the
+`session_id` parameter and carries both facts. Two reasons it is a struct: the
+things a handler wants to know about *who is asking* arrive together and grow
+together — `tenant` is the next one, and it costs no signature change now — and
+a bare `Option<&str>` next to another `Option<&str>` is the shape where an
+argument silently lands in the wrong slot.
+
+The principal itself rides in the HTTP request extensions between the middleware
+and the transport adapter, because that is the only channel `connectrpc` gives a
+tower layer (it moves `parts.extensions` onto its `Context` verbatim). Note the
+name collides with `rmcp::service::RequestContext`; `a2a-mcp` aliases one of the
+two wherever both are in scope.
+
 **An agent's own image is started with no command; the base image is not.** Both
 get the same mount (`/etc/agent.toml`), the same `A2A_CONFIG` naming it, `HOST`,
 the published port and the allow-listed variables. The difference is that

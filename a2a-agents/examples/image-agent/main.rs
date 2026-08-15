@@ -20,7 +20,7 @@ use std::env;
 use a2a_agents::core::{AgentBuilder, BuildError};
 use a2a_rs::{
     domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
-    port::AsyncMessageHandler,
+    port::{AsyncMessageHandler, RequestContext},
 };
 use async_trait::async_trait;
 use uuid::Uuid;
@@ -131,7 +131,7 @@ impl AsyncMessageHandler for ShippingQuoteHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let text = message
             .parts
