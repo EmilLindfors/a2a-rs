@@ -1,9 +1,8 @@
-use super::{LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
+use super::{Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
 use serde::{Deserialize, Serialize};
-use std::env;
 use tracing::{debug, error, info, warn};
 
 /// Configuration for the Gemini AI client
@@ -14,21 +13,31 @@ pub struct GeminiConfig {
     pub api_key: String,
 }
 
+/// Default base URL for the Gemini generative-language API.
+pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+
+/// Model used when neither a config nor `GEMINI_MODEL` names one. Shared by
+/// both paths so they cannot default differently.
+pub const GEMINI_DEFAULT_MODEL: &str = "gemini-1.5-pro";
+
 impl GeminiConfig {
     pub fn from_env() -> Result<Self, String> {
-        let base_url = env::var("GEMINI_API_BASE_URL").unwrap_or_else(|_| {
-            "https://generativelanguage.googleapis.com/v1beta/models".to_string()
-        });
+        Self::from_lookup(Env::os())
+    }
 
-        let model = env::var("GEMINI_MODEL").unwrap_or_else(|_| "gemini-1.5-pro".to_string());
-
-        let api_key = env::var("GEMINI_API_KEY")
-            .map_err(|_| "GEMINI_API_KEY environment variable is required".to_string())?;
-
+    /// Read a Gemini config from `env`. The key is required; there is no
+    /// keyless Gemini endpoint.
+    pub(crate) fn from_lookup(env: Env<'_>) -> Result<Self, String> {
         Ok(Self {
-            base_url,
-            model,
-            api_key,
+            base_url: env
+                .get("GEMINI_API_BASE_URL")
+                .unwrap_or_else(|| GEMINI_BASE_URL.to_string()),
+            model: env
+                .get("GEMINI_MODEL")
+                .unwrap_or_else(|| GEMINI_DEFAULT_MODEL.to_string()),
+            api_key: env
+                .get("GEMINI_API_KEY")
+                .ok_or_else(|| "GEMINI_API_KEY environment variable is required".to_string())?,
         })
     }
 }
@@ -105,6 +114,34 @@ struct GeminiGenerateContentResponse {
     candidates: Option<Vec<Candidate>>,
     #[serde(rename = "promptFeedback")]
     _prompt_feedback: Option<serde_json::Value>,
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+/// Gemini's `usageMetadata`. Present on the response and, while streaming, on
+/// every chunk — the last one carries the final counts, so a caller that keeps
+/// the newest wins.
+#[derive(Debug, Deserialize)]
+struct GeminiUsageMetadata {
+    #[serde(rename = "promptTokenCount")]
+    prompt_token_count: Option<u32>,
+    #[serde(rename = "candidatesTokenCount")]
+    candidates_token_count: Option<u32>,
+    #[serde(rename = "thoughtsTokenCount")]
+    thoughts_token_count: Option<u32>,
+    #[serde(rename = "totalTokenCount")]
+    total_token_count: Option<u32>,
+}
+
+impl From<GeminiUsageMetadata> for super::TokenUsage {
+    fn from(usage: GeminiUsageMetadata) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_token_count,
+            completion_tokens: usage.candidates_token_count,
+            reasoning_tokens: usage.thoughts_token_count,
+            total_tokens: usage.total_token_count,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -299,7 +336,7 @@ impl LlmProvider for GeminiProvider {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             error!(status = %status, error = %error_text, "Gemini API returned error");
-            return Err(LlmError::ApiError(format!(
+            return Err(super::classify_api_error(format!(
                 "Gemini API error ({}): {}",
                 status, error_text
             )));
@@ -309,6 +346,8 @@ impl LlmProvider for GeminiProvider {
             error!(error = %e, "Failed to parse Gemini API response");
             LlmError::SerializationError(e.to_string())
         })?;
+
+        let usage = completion.usage_metadata.map(super::TokenUsage::from);
 
         let candidates = completion.candidates.ok_or_else(|| {
             warn!("No candidates in Gemini API response");
@@ -359,6 +398,7 @@ impl LlmProvider for GeminiProvider {
             content: message_content,
             tool_calls,
             reasoning: None,
+            usage,
         })
     }
 
@@ -511,7 +551,7 @@ impl LlmProvider for GeminiProvider {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             error!(status = %status, error = %error_text, "Gemini API returned error on stream");
-            return Err(LlmError::ApiError(format!(
+            return Err(super::classify_api_error(format!(
                 "Gemini stream error ({}): {}",
                 status, error_text
             )));
@@ -520,6 +560,11 @@ impl LlmProvider for GeminiProvider {
         let mut event_stream = response.bytes_stream().eventsource();
 
         let stream = async_stream::try_stream! {
+            // Gemini repeats `usageMetadata` on every chunk with running totals,
+            // so the last one seen is the answer. Held back and emitted once at
+            // the end rather than yielded per chunk.
+            let mut latest_usage: Option<super::TokenUsage> = None;
+
             while let Some(event_res) = event_stream.next().await {
                 let event = match event_res {
                     Ok(e) => e,
@@ -541,6 +586,13 @@ impl LlmProvider for GeminiProvider {
                         continue;
                     }
                 };
+
+                if let Some(usage) = chunk.usage_metadata {
+                    let usage = super::TokenUsage::from(usage);
+                    if !usage.is_empty() {
+                        latest_usage = Some(usage);
+                    }
+                }
 
                 if let Some(candidates) = chunk.candidates {
                     for candidate in candidates {
@@ -574,6 +626,10 @@ impl LlmProvider for GeminiProvider {
                         }
                     }
                 }
+            }
+
+            if let Some(usage) = latest_usage {
+                yield super::LlmStreamEvent::Usage(usage);
             }
         };
 

@@ -24,7 +24,7 @@ regex = "1.10"
 chrono = { workspace = true }
 
 # LLM support
-reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"] }
+reqwest = { workspace = true, features = ["json", "stream"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
 futures = { workspace = true }

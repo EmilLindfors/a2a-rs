@@ -45,7 +45,7 @@
 //!
 //! ```rust
 //! use a2a_agents::traits::{AgentPlugin, SkillDefinition};
-//! use a2a_rs::port::AsyncMessageHandler;
+//! use a2a_rs::port::{AsyncMessageHandler, RequestContext};
 //! use a2a_rs::domain::{A2AError, Message, Task};
 //! use async_trait::async_trait;
 //!
@@ -64,7 +64,7 @@
 //!         &self,
 //!         _task_id: &str,
 //!         _message: &Message,
-//!         _session_id: Option<&str>,
+//!         _ctx: &RequestContext,
 //!     ) -> Result<Task, A2AError> {
 //!         todo!()
 //!     }
@@ -113,11 +113,14 @@ pub mod agents;
 pub use core::{AgentBuilder, AgentConfig, AgentServer, BuildError, ConfigError, ServerError};
 pub use traits::{AgentPlugin, SkillDefinition};
 
-pub use handlers::tools::{A2aAgentToolSource, ToolSource};
+pub use handlers::tools::{
+    A2aAgentToolSource, ConnectedPeer, PeerResolver, PeerUnavailable, ToolSource,
+};
 
 pub use registry::{
-    AgentId, AgentRegistry, CardSource, CardSourceError, HttpCardSource, InMemoryAgentRegistry,
-    InMemoryCardSource, RegisteredAgent, RegistryError,
+    AgentId, AgentRegistry, CardRefresher, CardSource, CardSourceError, DEFAULT_REFRESH_INTERVAL,
+    DiscoveredPeer, HttpCardSource, InMemoryAgentRegistry, InMemoryCardSource, Liveness,
+    RefreshReport, RegisteredAgent, RegistryError,
 };
 
 pub use runtime::{

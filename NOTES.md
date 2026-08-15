@@ -106,6 +106,140 @@ every captured agent log had escape codes baked in.
 
 ## Choices that had a real alternative
 
+**Conversation memory lives in the protocol, not in the handler.** (2026-08-14)
+
+The alternative was a `HashMap<ContextId, Vec<ChatMessage>>` on `LlmHandler`:
+faster, and it keeps the tool-call rounds. It loses on the platform this repo
+actually ships. `a2a control-plane` recovers its fleet on startup, so agents get
+restarted on purpose — in-process conversation state would reset silently on
+every bounce, and would be per-replica the moment anyone runs two. Reconstructing
+from `task_history` on each turn keeps the handler stateless, makes sqlx storage
+give durable conversations for free, and makes restart and replica behaviour
+correct by construction.
+
+The cost is real and accepted: only A2A `Message`s round-trip, so tool-call
+rounds are lost between turns. Tool results are the bulk of the tokens and are
+re-derivable; the assistant's conclusion from them is in the history.
+
+The design follows Google ADK rather than being invented here. ADK is A2A's
+reference companion, and its `Session` *is* `context_id` by construction, so the
+mapping is protocol-native: ADK's event log is `task_history`, `Session.state`
+is a per-context scratchpad, `MemoryService` is the deferred retrieval tier.
+Four invariants are common to ADK, LangGraph checkpointers, and the OpenAI
+Responses API, and none of them is worth re-deriving:
+
+1. The log is append-only and never rewritten. Compaction appends a summary and
+   advances a watermark.
+2. The prompt is a projection, recomputed every turn, never the source of truth.
+3. Tool results are evicted before turns are. Anthropic shipped this as
+   first-class server-side context editing.
+4. Compaction triggers on tokens, not turn count.
+
+**`load` returns the digest and the tail together.** Splitting the conversation
+into an `AsyncContextHistory` port and an `AsyncContextDigest` port reads
+tidier and is wrong: a digest written between the two reads leaves either a gap
+or duplicated turns in the prompt, and nothing in the type system says the two
+reads have to agree. One method makes the transaction boundary expressible, so
+the split stays collapsed even though it puts two nouns behind one port.
+
+**Digests append and carry a watermark rather than updating in place.** Two
+concurrent turns in one context can both decide to compact. Both digests land,
+`load` takes the highest `covers_through_seq`, and the loser is duplicated work
+rather than corruption. Update-in-place would need a lock across an LLM call to
+get the same property.
+
+**The load window has to be wider than the window compaction may not touch.**
+`keep_recent_turns` means two things that pull against each other: how much of a
+conversation is read back for a prompt, and how much of it compaction is
+forbidden to summarize. Using the one number for both is a deadlock — the load
+returns exactly the protected window, so there is never anything older to fold
+and compaction can never fire. Hence `LOAD_WINDOWS`: a load reaches back several
+windows, and only what falls outside the last `keep_recent_turns` is summarized.
+In steady state the digest watermark bounds the read long before the limit does;
+the limit is the backstop for a conversation that has not compacted yet.
+
+The related trap is the watermark. A digest has to cover exactly what was
+summarized, not everything that was loaded — otherwise the recent turns sit
+behind a summary that does not describe them, and they vanish from the next
+prompt while appearing to have been preserved.
+
+**Wiring conversation memory makes `context_id` an authorization boundary.**
+Worth stating because it changes what an existing field means. Nothing reads by
+context today, so a guessed `context_id` gets you nothing; once a handler
+projects a conversation from it, presenting someone else's id reads their
+conversation into your prompt. Hence `contexts.owner`, taken from the
+`Authenticator` principal and checked on load. This is what pulled the deferred
+multi-tenancy theme forward, and it is not optional to defer again.
+
+**The caller travels in one value, not one more parameter.** Getting the
+principal from the auth middleware to the message handler meant changing
+`AsyncMessageHandler::process_message`, which already took `session_id:
+Option<&str>` that almost nobody read. A fourth positional argument was the
+smaller diff and the worse signature; `port::RequestContext` replaces the
+`session_id` parameter and carries both facts. Two reasons it is a struct: the
+things a handler wants to know about *who is asking* arrive together and grow
+together — `tenant` is the next one, and it costs no signature change now — and
+a bare `Option<&str>` next to another `Option<&str>` is the shape where an
+argument silently lands in the wrong slot.
+
+The principal itself rides in the HTTP request extensions between the middleware
+and the transport adapter, because that is the only channel `connectrpc` gives a
+tower layer (it moves `parts.extensions` onto its `Context` verbatim). Note the
+name collides with `rmcp::service::RequestContext`; `a2a-mcp` aliases one of the
+two wherever both are in scope.
+
+**An agent's own image is started with no command; the base image is not.** Both
+get the same mount (`/etc/agent.toml`), the same `A2A_CONFIG` naming it, `HOST`,
+the published port and the allow-listed variables. The difference is that
+`ContainerRuntime` appends `run --config /etc/agent.toml` only for the base
+image, because that argv belongs to *this* project's binary. The alternative —
+one argv for every image — makes "accepts `a2a run --config`" part of the
+contract, which is a constraint on someone else's `ENTRYPOINT` that buys nothing
+and fails at run time, inside a container, rather than at deploy time.
+`A2A_CONFIG` exists so an image need not hard-code the mount path.
+
+**A runtime that cannot honour an image refuses the deploy.** `LocalProcessRuntime`
+returns `RuntimeError::Unsupported` for a spec carrying an image instead of
+spawning `a2a run` on the config. The fallback is worse than it looks: for an
+agent whose handler happens to be built in, it provisions something that starts,
+answers, and passes its health probe while being a different agent than the one
+deployed — the failure the whole `Recovered::Ephemeral` / `logs`-`Unsupported`
+line of reasoning exists to avoid. Same rule as those: say "I cannot", never
+answer with something else.
+
+**An unknown handler is a hard error now that images exist.** `a2a run` used to
+fall back to echo. That was defensible only while there was nothing else to
+offer; with `[runtime] image` there is a real answer, so the error names it. Note
+what this fixed: the fallback made a config with a typo'd handler name behave
+exactly like a config that asked for echo, and the only difference was one
+`warn!` on a stream supervisors do not read.
+
+**`doctor` stops at the image.** A config naming an image gets its port checks
+and nothing else — no handler verdict, no model provider, no MCP command probe.
+Those questions are all about a binary this machine does not have and cannot
+look inside; answering them from *this* build produces confident statements
+about something that will not run. This is the same rule as running the code
+rather than re-deriving it: when the code is in an image, all doctor can report
+is which image.
+
+**A configured LLM provider that cannot be built stops the run.** The
+alternative was what it did before: warn, fall back to the non-LLM handler, keep
+serving. That is worse for the case it actually covers — a typo.
+`OPENROUTER_REASONING=hgih` or `provider = "opnrouter"` is not a request to run
+without a model, it is the same request with a mistake in it, and the agent that
+came up answered every message with a stub while reporting healthy. Two things
+follow from the split:
+
+- Nothing configured at all still runs the fallback. That is a setup someone
+  chose (CI, a demo with no keys), not a mistake, so it stays `Ok(None)`.
+- A failing provider does not fall through to the next in the cascade. A broken
+  `OPENROUTER_API_KEY` promoting whatever else is exported changes which model
+  answers and what it costs.
+
+`a2a doctor` calls `provider_from_settings` / `provider_from_env` rather than
+checking which variables are set, so its verdict is the run's verdict. The same
+applies to anything else `doctor` checks: run the code, don't re-derive it.
+
 **Reasoning is configured in `[llm]`, beside the model — not in
 `[handler.llm]`.** The obvious place was the handler's own options, next to
 `system_prompt` and `max_tool_rounds`, and it is the wrong one: how hard to think
@@ -125,6 +259,22 @@ from the environment. A capability that only the adapter can answer belongs
 inside the adapter: callers now ask for what they want, and a provider whose
 endpoint has no such field sends the request without it. Asking is therefore
 always safe, which is the property that removes the sniffing.
+
+**A dropped `reasoning` is a value, not a log line.** `SelectedLlm.reasoning` is
+`ReasoningPlan { Unset, Sent(_), Unsupported(_) }` rather than
+`Option<Reasoning>`, because a provider that discards the setting and a config
+that never set it used to arrive as the same `None` — leaving `a2a doctor` with
+nothing to report and the difference showing up on the bill. `a2a run` still
+warns; a report reads the field.
+
+Sending `reasoning` on OpenAI and Gemini stayed open for a reason worth keeping:
+both mappings are questions about the **model**, not the provider. OpenAI's
+`reasoning_effort` is rejected outright by models that do not reason, and the
+default here is `gpt-4o-mini`, so dispatching on provider kind breaks the common
+case; Gemini's thinking budget is spelled differently across model generations
+and its minimum is model-dependent, so `Off` is expressible on some models and
+not others. Either way the adapter needs a model-name list, which goes stale
+with every release — that is the cost to weigh, not the request field.
 
 **Giving up is `failed`, not `input-required`.** The alternative was real: the
 model gathered tool results before running out of rounds, so "I got partway, a
@@ -148,6 +298,34 @@ dropped next to it — including the fleet file itself. The file redefines nothi
 about an agent; `AgentConfig` stays the source of truth. Its real payoff is the
 checks that only exist *between* members (shared port, colliding registry id),
 run before anything binds.
+
+**A delegation tool stays advertised through its peer being absent.** The
+alternative was what it did before: resolve every peer at startup and drop the
+entry when the lookup or the dial failed. That makes the model's toolset a
+snapshot of one instant, and under a control plane the instant is the wrong one
+— an orchestrator deployed first sees no peers at all and never looks again. So
+the reference is resolved per call, the tool is advertised regardless, and being
+unable to reach the peer is a tool *result* the model can route around rather
+than an error that fails the orchestrator's task.
+
+`PeerUnavailable` exists to keep that line drawn: never reached it (nothing
+matches, or the dial failed) is news, while an error *during* a delegation means
+the peer took the work and we lost it, which is a broken run. Two different
+types, so a call site cannot blur them by accident.
+
+**A dead peer is ranked, not removed.** The refresh loop could have
+deregistered an agent that stopped answering, and that reads fine until the
+lookup happens: `find_by_skill` would return nothing, and the orchestrator would
+report "no agent advertises this skill" — untrue, and it sends whoever is
+debugging to the wrong place. Ordering the unreachable last gives a caller
+taking the first match a live peer whenever one exists, and when none does it
+still gets an entry, so what comes back is "could not connect to X". Same shape
+as `a2a ps`: filter the view, keep the record.
+
+`Liveness` has three states because two would have to pick a default, and both
+defaults are wrong — a freshly registered agent reading `Live` is a claim nobody
+checked, and reading `Unreachable` demotes an agent for not having been probed
+yet. Same reasoning as `Recovered::{Adopted, Ephemeral}`.
 
 **Registry recovery derives from the runtime; it is not a database.**
 `ControlPlane::recover` rebuilds discovery at startup from what the runtime is
@@ -278,6 +456,15 @@ that branches on state (`a2acli` exits 2 on `failed`, delegation relays whatever
 it gets) read that as success. When a handler gives up, the giving up belongs in
 the state, not only in the text.
 
+**A tool result is prose, and the model is the only thing that can branch on
+it.** Delegation returned the peer's status message whatever state its task
+ended in, so a `failed` peer ("I could not find that invoice") was relayed as an
+answer. There is no state field to fix this in — `ToolSource::invoke` returns a
+string that goes straight into the conversation — so the outcome has to be *in*
+the prose: a completed task's reply goes back bare, everything else is
+introduced by what happened to it. Anywhere a caller's only channel is text,
+the text has to carry what a state field would have.
+
 The general form is a return type that cannot say it: `Result<String, _>` has
 one slot for success and one for a *broken run*, and "the model finished but
 delivered nothing" is neither. Both cases here — the empty completion and the
@@ -370,6 +557,33 @@ an explicit fallback filter.
 **Docker's `.dockerignore` uses Go's `filepath.Match`, where `target/` with a
 trailing slash excludes nothing.** The first version of that file made no
 difference at all. Write patterns without trailing slashes.
+
+**rustls ignores `SSL_CERT_FILE`, so a TLS-intercepting proxy breaks every
+outbound call and nothing outside the binary can fix it.** With reqwest's
+`rustls-tls` alone the trust anchors are the compiled-in webpki roots; the
+environment variables every other tool honours (`SSL_CERT_FILE`,
+`REQUESTS_CA_BUNDLE`) do nothing. Found in a Docker Sandbox that re-signed all
+egress with a per-machine "Docker Sandboxes Proxy CA": every LLM call died as
+`error sending request for url (...)` with no cause attached, indistinguishable
+from the network being down, while `curl` in the same shell worked — which is the
+tell, since curl reads the OS store. The workspace `reqwest` dependency now
+enables `rustls-tls-native-roots` alongside `rustls-tls`; reqwest's two root
+stores are **additive**, so webpki stays the floor and the OS store adds whatever
+CA the operator installed.
+
+Worth knowing how narrow the reproduction was: interception is a *policy*, not a
+property of sandboxing. `sbx` v0.38 under the `balanced` policy tunnels allowed
+hosts, so agents see real certificates and even the unfixed binary works; the
+old bundled v0.12 plugin intercepted everything. The fix is not really about
+Docker Sandboxes at all — a corporate MITM gateway is the common case, and it
+fails the same way.
+
+**A `Network error` variant that drops the source is a debugging dead end.**
+The proxy-CA failure above reported only `error sending request for url (...)`.
+`reqwest::Error`'s `Display` deliberately omits the source chain, so the
+certificate error underneath was invisible; diagnosing it needed the *sandbox's*
+network log to prove the request had reached the proxy at all. Anywhere a
+`reqwest::Error` is wrapped, walk `std::error::Error::source()` into the message.
 
 ---
 

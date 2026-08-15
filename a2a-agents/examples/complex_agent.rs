@@ -56,11 +56,13 @@ use a2a_rs::domain::{
 };
 use a2a_rs::port::{
     AsyncMessageHandler, AsyncPushNotifier, AsyncStreamingHandler, AsyncTaskLifecycle,
+    RequestContext,
 };
 use a2a_rs::{InMemoryStreamingHandler, InMemoryTaskStorage};
 use async_trait::async_trait;
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*,
+    service::RequestContext as McpRequestContext,
 };
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -131,7 +133,7 @@ impl ServerHandler for ToolServer {
     fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _ctx: RequestContext<RoleServer>,
+        _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         async move {
             Ok(ListToolsResult {
@@ -147,7 +149,7 @@ impl ServerHandler for ToolServer {
         CallToolRequestParams {
             name, arguments, ..
         }: CallToolRequestParams,
-        _ctx: RequestContext<RoleServer>,
+        _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
             let args = arguments.unwrap_or_default();
@@ -202,7 +204,7 @@ impl AsyncMessageHandler for UnusedInner {
         &self,
         _task_id: &str,
         _message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         Err(A2AError::UnsupportedOperation(
             "inner handler is not used in the complex_agent example".to_string(),
@@ -379,6 +381,12 @@ impl ResearchAssistantHandler {
                     LlmStreamEvent::ToolCall(call) => {
                         calls.finalize(call);
                     }
+                    // What the round cost, as the provider counted it. Logged
+                    // rather than streamed: it is an operator's number, not part
+                    // of the answer.
+                    LlmStreamEvent::Usage(usage) => {
+                        tracing::info!("📊 usage: {usage}");
+                    }
                 }
             }
 
@@ -501,7 +509,7 @@ impl AsyncMessageHandler for ResearchAssistantHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse()?;
 
@@ -611,18 +619,24 @@ fn parse_two_numbers(text: &str) -> Option<(f64, f64)> {
     }
 }
 
-fn load_llm() -> Option<Arc<dyn LlmProvider>> {
+fn load_llm() -> anyhow::Result<Option<Arc<dyn LlmProvider>>> {
     // Explicit opt-out. Without it, the deterministic path is only reachable by
     // *not having* a key — including one this binary loaded from a `.env` file
     // at startup — so the no-network branch could not be demoed or tested on a
     // developer machine that is set up for the LLM one.
     if std::env::var("A2A_NO_LLM").is_ok_and(|value| !matches!(value.trim(), "" | "0")) {
         tracing::info!("A2A_NO_LLM set — using the rule-based router, no model calls");
-        return None;
+        return Ok(None);
     }
     // Centralized selection (OpenRouter → Gemini → OpenAI). With no key set this
-    // returns None and the handler falls back to the rule-based router.
-    a2a_agents_common::llm::provider_from_env()
+    // returns None and the handler falls back to the rule-based router; a key
+    // that is set and unusable is an error, not a silent fallback.
+    Ok(
+        a2a_agents_common::llm::provider_from_env()?.map(|selected| {
+            tracing::info!(provider = selected.kind, model = %selected.model, "LLM");
+            selected.provider
+        }),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -673,7 +687,7 @@ async fn main() -> anyhow::Result<()> {
         streaming.clone(),
         storage.push_notifier(),
         bridge,
-        load_llm(),
+        load_llm()?,
     );
 
     // (e) Assemble from TOML and run. `with_streaming` is the new builder hook

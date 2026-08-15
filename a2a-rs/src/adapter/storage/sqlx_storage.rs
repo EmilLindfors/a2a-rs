@@ -24,13 +24,13 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
-    A2AError, ContextId, Message, Task, TaskId, TaskPushNotificationConfig, TaskState,
-    TaskStateExt, TaskStatus, VersionedTask,
+    A2AError, ContextId, Conversation, Digest, Message, Seq, SequencedMessage, Task, TaskId,
+    TaskPushNotificationConfig, TaskState, TaskStateExt, TaskStatus, VersionedTask,
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
-    AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle, AsyncTaskQuery,
-    AsyncTaskVersioning,
+    AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle,
+    AsyncTaskQuery, AsyncTaskVersioning,
 };
 
 #[cfg(feature = "sqlx-storage")]
@@ -188,6 +188,41 @@ impl SqlxTaskStorage {
             }
         }
 
+        // 004 is the same shape as 003. The backfill runs only when the column
+        // was just added: on an already-migrated database it would rewrite every
+        // history row to the value it already holds.
+        match sqlx::query(include_str!(
+            "../../../migrations/004_task_history_context.sql"
+        ))
+        .execute(pool)
+        .await
+        {
+            Ok(_) => {
+                sqlx::query(
+                    "UPDATE task_history SET context_id = \
+                     (SELECT context_id FROM tasks WHERE tasks.id = task_history.task_id)",
+                )
+                .execute(pool)
+                .await
+                .map_err(|e| {
+                    A2AError::DatabaseError(format!("Migration 004 backfill failed: {e}"))
+                })?;
+            }
+            Err(e) => {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(A2AError::DatabaseError(format!(
+                        "Migration 004 failed: {msg}"
+                    )));
+                }
+            }
+        }
+
+        sqlx::query(include_str!("../../../migrations/005_context_memory.sql"))
+            .execute(pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Migration 005 failed: {}", e)))?;
+
         Ok(())
     }
 
@@ -301,13 +336,26 @@ impl SqlxTaskStorage {
         task_id: &str,
         limit: Option<u32>,
     ) -> Result<Vec<Message>, A2AError> {
+        // Ordered by `id`, not `timestamp`: the timestamp default is
+        // `datetime('now')`, which SQLite resolves to the second, so rows written
+        // in the same second have no defined relative order. `id` is the
+        // autoincrement insertion order and is what the conversation log means by
+        // sequence.
+        //
+        // `message IS NOT NULL` is inside the query rather than a filter on the
+        // rows, so `limit` counts messages. Filtering afterwards made
+        // `history_length = 5` return fewer than five whenever a status
+        // transition carried no message.
         let query_str = if let Some(limit) = limit {
             format!(
-                "SELECT timestamp, status_state, message FROM task_history WHERE task_id = ? ORDER BY timestamp DESC LIMIT {}",
+                "SELECT id, status_state, message FROM task_history \
+                 WHERE task_id = ? AND message IS NOT NULL ORDER BY id DESC LIMIT {}",
                 limit
             )
         } else {
-            "SELECT timestamp, status_state, message FROM task_history WHERE task_id = ? ORDER BY timestamp DESC".to_string()
+            "SELECT id, status_state, message FROM task_history \
+             WHERE task_id = ? AND message IS NOT NULL ORDER BY id DESC"
+                .to_string()
         };
 
         let query = sqlx::query(&query_str);
@@ -364,15 +412,70 @@ impl SqlxTaskStorage {
             None
         };
 
-        sqlx::query("INSERT INTO task_history (task_id, status_state, message) VALUES (?, ?, ?)")
-            .bind(task_id)
-            .bind(state_str)
-            .bind(message_json)
-            .execute(&self.pool)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to add task history: {}", e)))?;
+        // `context_id` is denormalized from `tasks` at insert rather than joined
+        // at read: a task's context never changes, and rebuilding a conversation
+        // for the model is the hottest read there is.
+        sqlx::query(
+            "INSERT INTO task_history (task_id, context_id, status_state, message) \
+             VALUES (?, (SELECT context_id FROM tasks WHERE id = ?), ?, ?)",
+        )
+        .bind(task_id)
+        .bind(task_id)
+        .bind(state_str)
+        .bind(message_json)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| A2AError::DatabaseError(format!("Failed to add task history: {}", e)))?;
 
         Ok(())
+    }
+
+    /// Register `context_id` as a conversation, claiming it for `owner` if it is
+    /// new.
+    ///
+    /// Ownership is first-write: whoever starts a context owns it, and a `None`
+    /// owner leaves it unowned and readable by anyone, which is what an agent
+    /// running without an authenticator wants. `INSERT OR IGNORE` means a second
+    /// caller cannot take over an existing context by writing to it.
+    async fn ensure_context(&self, context_id: &str, owner: Option<&str>) -> Result<(), A2AError> {
+        sqlx::query("INSERT OR IGNORE INTO contexts (id, owner) VALUES (?, ?)")
+            .bind(context_id)
+            .bind(owner)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to register context: {}", e)))?;
+        Ok(())
+    }
+
+    /// Refuse a caller that is not this context's owner.
+    ///
+    /// An unowned context (`owner IS NULL`) is open, and a context with no row at
+    /// all has nothing to protect yet.
+    async fn check_context_owner(
+        &self,
+        context_id: &str,
+        caller: Option<&str>,
+    ) -> Result<(), A2AError> {
+        let row = sqlx::query("SELECT owner FROM contexts WHERE id = ?")
+            .bind(context_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to read context owner: {}", e)))?;
+
+        let Some(row) = row else {
+            return Ok(());
+        };
+        let owner: Option<String> = row
+            .try_get("owner")
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to get context owner: {}", e)))?;
+
+        match owner {
+            None => Ok(()),
+            Some(owner) if Some(owner.as_str()) == caller => Ok(()),
+            Some(_) => Err(A2AError::ContextAccessDenied {
+                context_id: context_id.to_string(),
+            }),
+        }
     }
 
     /// Hand out this store's push-notification registry as an
@@ -1007,5 +1110,130 @@ impl Clone for SqlxTaskStorage {
             pool: self.pool.clone(),
             push_notification_registry: self.push_notification_registry.clone(),
         }
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+#[async_trait]
+impl AsyncConversationStore for SqlxTaskStorage {
+    async fn load(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Conversation, A2AError> {
+        let context_id = context_id.as_str();
+        // Claims on read: a handler loads history at the top of every turn, so
+        // the first turn is what establishes who owns the conversation.
+        // Claiming only on compaction would leave a context readable by anyone
+        // until it first grew long enough to summarize.
+        self.ensure_context(context_id, caller).await?;
+        self.check_context_owner(context_id, caller).await?;
+
+        // Highest watermark rather than newest row: two turns of one
+        // conversation can compact concurrently and land out of order, and the
+        // digest covering more is the one to read from.
+        let digest_row = sqlx::query(
+            "SELECT covers_through_seq, summary, replaced_messages, model              FROM context_digests WHERE context_id = ?              ORDER BY covers_through_seq DESC LIMIT 1",
+        )
+        .bind(context_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| A2AError::DatabaseError(format!("Failed to load context digest: {}", e)))?;
+
+        let digest = match digest_row {
+            Some(row) => {
+                let covers_through: i64 = row.try_get("covers_through_seq").map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to get digest watermark: {}", e))
+                })?;
+                let summary: String = row.try_get("summary").map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to get digest summary: {}", e))
+                })?;
+                let replaced_messages: i64 = row.try_get("replaced_messages").map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to get digest message count: {}", e))
+                })?;
+                let model: String = row.try_get("model").map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to get digest model: {}", e))
+                })?;
+                Some(Digest {
+                    covers_through: Seq::new(covers_through.max(0) as u64),
+                    summary,
+                    replaced_messages: replaced_messages.max(0) as u32,
+                    model,
+                })
+            }
+            None => None,
+        };
+
+        let watermark = digest
+            .as_ref()
+            .map(|digest| digest.covers_through.get())
+            .unwrap_or(0) as i64;
+
+        // Ordered by `id`, which is the sequence number. Limiting keeps the
+        // newest — the older end is what a summary stands in for, so dropping
+        // the recent half would leave the model the least relevant part.
+        // Hence DESC plus a reverse, rather than an offset the caller cannot
+        // compute without first counting the rows.
+        let query = match limit {
+            Some(limit) => format!(
+                "SELECT id, message FROM task_history                  WHERE context_id = ? AND id > ? AND message IS NOT NULL                  ORDER BY id DESC LIMIT {}",
+                limit
+            ),
+            None => "SELECT id, message FROM task_history                      WHERE context_id = ? AND id > ? AND message IS NOT NULL                      ORDER BY id DESC"
+                .to_string(),
+        };
+
+        let rows = sqlx::query(&query)
+            .bind(context_id)
+            .bind(watermark)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to load conversation: {}", e)))?;
+
+        let mut tail = Vec::with_capacity(rows.len());
+        for row in rows {
+            let seq: i64 = row.try_get("id").map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to get history sequence: {}", e))
+            })?;
+            let message_json: String = row.try_get("message").map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to get history message: {}", e))
+            })?;
+            let message: Message = serde_json::from_str(&message_json).map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to parse history message: {}", e))
+            })?;
+            tail.push(SequencedMessage {
+                seq: Seq::new(seq.max(0) as u64),
+                message,
+            });
+        }
+        tail.reverse();
+
+        Ok(Conversation { digest, tail })
+    }
+
+    async fn compact(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+        digest: Digest,
+    ) -> Result<(), A2AError> {
+        let context_id = context_id.as_str();
+        self.ensure_context(context_id, caller).await?;
+        self.check_context_owner(context_id, caller).await?;
+
+        sqlx::query(
+            "INSERT INTO context_digests              (context_id, covers_through_seq, summary, replaced_messages, model)              VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(context_id)
+        .bind(digest.covers_through.get() as i64)
+        .bind(&digest.summary)
+        .bind(digest.replaced_messages as i64)
+        .bind(&digest.model)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| A2AError::DatabaseError(format!("Failed to append context digest: {}", e)))?;
+
+        Ok(())
     }
 }

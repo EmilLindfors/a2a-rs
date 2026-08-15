@@ -16,12 +16,16 @@ use super::{
 use crate::core::{AgentConfig, StorageConfig};
 use crate::registry::AgentId;
 
-/// Default base image (one image, config injected per agent). Override with
-/// [`ContainerRuntime::with_image`].
+/// Default base image, for agents that do not name one of their own. Override
+/// with [`ContainerRuntime::with_base_image`].
 const DEFAULT_IMAGE: &str = "a2a-agents:latest";
 
 /// Where the agent's TOML is mounted inside the container.
 const CONTAINER_CONFIG_PATH: &str = "/etc/agent.toml";
+
+/// Environment variable naming the mounted config, so an agent's own image can
+/// find it without hard-coding [`CONTAINER_CONFIG_PATH`].
+const CONFIG_PATH_ENV: &str = "A2A_CONFIG";
 
 /// Label carrying the [`AgentId`]. `<engine> ps --filter label=a2a-agent` is
 /// this adapter's durable store: it is what makes the engine, not this process's
@@ -41,6 +45,16 @@ const LABEL_PORT: &str = "a2a-port";
 /// One container per agent, named `a2a-agent-<id>`. The engine is the source of
 /// truth for liveness (`inspect`); the in-memory map only remembers each agent's
 /// published port so health can probe its card.
+///
+/// **Images:** an agent runs from the base image
+/// ([`with_base_image`](Self::with_base_image)) unless its config names its own
+/// with `[runtime] image`, which is how an agent whose handler no TOML can
+/// express gets deployed like any other. Either way the container gets the same
+/// contract — the config bind-mounted at `/etc/agent.toml` and named by
+/// `A2A_CONFIG`, `HOST=0.0.0.0`, the configured port published, and the
+/// allowlisted variables passed through — but only the base image is given a
+/// command (`a2a run --config …`). An agent's own image boots by its own
+/// `ENTRYPOINT`.
 ///
 /// **Binding:** the in-container agent must bind `0.0.0.0` to be reachable
 /// through the published port. The base image sets `HOST=0.0.0.0` and this
@@ -75,7 +89,8 @@ const LABEL_PORT: &str = "a2a-port";
 #[derive(Clone)]
 pub struct ContainerRuntime {
     engine: String,
-    image: String,
+    /// Image for agents that do not name one of their own.
+    base_image: String,
     /// Which host env vars a deployed config may reference. Deny-all by default.
     allowed_env: EnvAllowlist,
     /// What the engine is asked to enforce on each agent.
@@ -85,7 +100,7 @@ pub struct ContainerRuntime {
 }
 
 impl ContainerRuntime {
-    /// Use `docker` with the default image.
+    /// Use `docker` with the default base image.
     pub fn new() -> Self {
         Self::with_engine("docker")
     }
@@ -94,7 +109,7 @@ impl ContainerRuntime {
     pub fn with_engine(engine: impl Into<String>) -> Self {
         Self {
             engine: engine.into(),
-            image: DEFAULT_IMAGE.to_string(),
+            base_image: DEFAULT_IMAGE.to_string(),
             allowed_env: EnvAllowlist::deny_all(),
             hardening: ContainerHardening::default(),
             agents: Arc::new(Mutex::new(HashMap::new())),
@@ -109,8 +124,11 @@ impl ContainerRuntime {
     }
 
     /// Override the base image (default [`DEFAULT_IMAGE`]).
-    pub fn with_image(mut self, image: impl Into<String>) -> Self {
-        self.image = image.into();
+    ///
+    /// This is the image for agents that do not name one. An agent whose config
+    /// sets `[runtime] image` runs from that instead, whatever this is set to.
+    pub fn with_base_image(mut self, image: impl Into<String>) -> Self {
+        self.base_image = image.into();
         self
     }
 
@@ -278,9 +296,53 @@ fn needs_writable_rootfs(config: &AgentConfig) -> bool {
     !matches!(config.server.storage, StorageConfig::InMemory)
 }
 
+/// Which image runs an agent, and therefore how it is booted.
+///
+/// The two differ in one thing only: whether this adapter appends a command.
+/// The base image is *this* project's binary, so the argv that starts it is
+/// known here; someone else's image is not, so its own `ENTRYPOINT`/`CMD` has to
+/// decide, and everything it needs arrives as the mount and the environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AgentImage<'a> {
+    /// The platform's own image, started with `a2a run --config <mount>`.
+    Base(&'a str),
+    /// The agent's own image (`[runtime] image`), started as it defines itself.
+    Own(&'a str),
+}
+
+impl<'a> AgentImage<'a> {
+    /// Pick the image for one agent: its own where it named one, else the
+    /// runtime's base.
+    fn resolve(spec_image: Option<&'a str>, base: &'a str) -> Self {
+        match spec_image {
+            Some(image) => AgentImage::Own(image),
+            None => AgentImage::Base(base),
+        }
+    }
+
+    /// The image reference, for the `create` argv.
+    fn reference(&self) -> &'a str {
+        match self {
+            AgentImage::Base(image) | AgentImage::Own(image) => image,
+        }
+    }
+
+    /// The command appended after the image — empty for an agent's own image.
+    fn command(&self) -> Vec<String> {
+        match self {
+            AgentImage::Base(_) => vec![
+                "run".to_string(),
+                "--config".to_string(),
+                CONTAINER_CONFIG_PATH.to_string(),
+            ],
+            AgentImage::Own(_) => Vec::new(),
+        }
+    }
+}
+
 /// Everything [`create_args`] needs to build one agent's `create` argv.
 struct CreateParams<'a> {
-    image: &'a str,
+    image: AgentImage<'a>,
     id: &'a AgentId,
     port: u16,
     config_path: &'a Path,
@@ -293,8 +355,12 @@ struct CreateParams<'a> {
 
 /// Build the `docker create` argv that runs an agent: publish its port, apply
 /// the hardening policy, inject the config as a read-only mount, bind all
-/// interfaces, pass through the env vars the config references, and run
-/// `a2a run --config /etc/agent.toml`.
+/// interfaces, and pass through the env vars the config references.
+///
+/// That set is the contract every agent image gets, whoever built it: the config
+/// at [`CONTAINER_CONFIG_PATH`] and named by [`CONFIG_PATH_ENV`], `HOST`, the
+/// published port, and the allowed variables. Only the base image also gets a
+/// command ([`AgentImage::command`]).
 ///
 /// `env_refs` are passed as value-less `-e VAR` flags: the engine CLI reads
 /// each value from its own environment (this process's), so secret values never
@@ -319,6 +385,8 @@ fn create_args(params: CreateParams<'_>) -> Vec<String> {
         format!("{port}:{port}"),
         "-e".to_string(),
         "HOST=0.0.0.0".to_string(),
+        "-e".to_string(),
+        format!("{CONFIG_PATH_ENV}={CONTAINER_CONFIG_PATH}"),
     ];
     for var in env_refs {
         args.push("-e".to_string());
@@ -335,11 +403,9 @@ fn create_args(params: CreateParams<'_>) -> Vec<String> {
         format!("{LABEL_AGENT}={id}"),
         "--label".to_string(),
         format!("{LABEL_PORT}={port}"),
-        image.to_string(),
-        "run".to_string(),
-        "--config".to_string(),
-        CONTAINER_CONFIG_PATH.to_string(),
+        image.reference().to_string(),
     ]);
+    args.extend(image.command());
     args
 }
 
@@ -471,7 +537,7 @@ impl AgentRuntime for ContainerRuntime {
         run_engine(
             &self.engine,
             &create_args(CreateParams {
-                image: &self.image,
+                image: AgentImage::resolve(spec.image.as_deref(), &self.base_image),
                 id: &id,
                 port,
                 config_path: &spec.config_path,
@@ -621,8 +687,27 @@ mod tests {
         hardening: &ContainerHardening,
         writable_rootfs_needed: bool,
     ) -> Vec<String> {
+        image_args_for(
+            AgentImage::Base("a2a-agents:latest"),
+            id,
+            port,
+            env_refs,
+            hardening,
+            writable_rootfs_needed,
+        )
+    }
+
+    /// As [`args_for`], for the tests that vary which image runs the agent.
+    fn image_args_for(
+        image: AgentImage<'_>,
+        id: &AgentId,
+        port: u16,
+        env_refs: &[String],
+        hardening: &ContainerHardening,
+        writable_rootfs_needed: bool,
+    ) -> Vec<String> {
         create_args(CreateParams {
-            image: "a2a-agents:latest",
+            image,
             id,
             port,
             config_path: Path::new("/cfg/echo.toml"),
@@ -647,6 +732,8 @@ mod tests {
                 "8080:8080",
                 "-e",
                 "HOST=0.0.0.0",
+                "-e",
+                "A2A_CONFIG=/etc/agent.toml",
                 "-v",
                 "/cfg/echo.toml:/etc/agent.toml:ro",
                 "--label",
@@ -658,6 +745,73 @@ mod tests {
                 "--config",
                 "/etc/agent.toml",
             ]
+        );
+    }
+
+    /// An agent's own image is run as it defines itself. Appending the base
+    /// image's `run --config …` would override its `CMD` with an argv from a
+    /// binary it has no reason to contain.
+    #[test]
+    fn an_agents_own_image_is_started_without_a_command() {
+        let id = AgentId::from_name("Billing Agent");
+        let args = image_args_for(
+            AgentImage::Own("ghcr.io/acme/billing:1.4"),
+            &id,
+            8080,
+            &[],
+            &ContainerHardening::none(),
+            false,
+        );
+
+        assert_eq!(
+            args.last().map(String::as_str),
+            Some("ghcr.io/acme/billing:1.4")
+        );
+        assert!(
+            !args.iter().any(|a| a == "run" || a == "--config"),
+            "someone else's image must boot by its own ENTRYPOINT: {args:?}"
+        );
+    }
+
+    /// Everything an image needs to find its config arrives the same way for
+    /// both — the mount plus the variable naming it — since an image that is not
+    /// this project's binary cannot be assumed to know the path.
+    #[test]
+    fn every_image_gets_the_same_config_contract() {
+        let id = AgentId::from_name("Billing Agent");
+        let hardening = ContainerHardening::none();
+        for image in [
+            AgentImage::Base("a2a-agents:latest"),
+            AgentImage::Own("ghcr.io/acme/billing:1.4"),
+        ] {
+            let args = image_args_for(image, &id, 8080, &[], &hardening, false);
+            assert!(
+                args.iter().any(|a| a == "A2A_CONFIG=/etc/agent.toml"),
+                "{image:?} must be told where its config is: {args:?}"
+            );
+            assert!(
+                args.iter()
+                    .any(|a| a == "/cfg/echo.toml:/etc/agent.toml:ro"),
+                "{image:?} must have its config mounted: {args:?}"
+            );
+            assert!(
+                args.iter().any(|a| a == "HOST=0.0.0.0"),
+                "{image:?} must be told to bind all interfaces: {args:?}"
+            );
+        }
+    }
+
+    /// The agent's own image wins over whatever base the runtime was built with;
+    /// an agent that named none gets that base.
+    #[test]
+    fn a_spec_image_overrides_the_runtimes_base() {
+        assert_eq!(
+            AgentImage::resolve(Some("ghcr.io/acme/billing:1.4"), "a2a-agents:latest"),
+            AgentImage::Own("ghcr.io/acme/billing:1.4")
+        );
+        assert_eq!(
+            AgentImage::resolve(None, "a2a-agents:latest"),
+            AgentImage::Base("a2a-agents:latest")
         );
     }
 
@@ -746,11 +900,14 @@ billing-agent\t8081
             &ContainerHardening::default(),
             false,
         );
-        // Value-less `-e VAR` flags, right after the adapter-owned HOST, so
+        // Value-less `-e VAR` flags, right after the adapter-owned variables, so
         // secret values never appear in the argv.
-        let host_pos = args.iter().position(|a| a == "HOST=0.0.0.0").unwrap();
+        let owned = args
+            .iter()
+            .position(|a| a == "A2A_CONFIG=/etc/agent.toml")
+            .unwrap();
         assert_eq!(
-            &args[host_pos + 1..host_pos + 5],
+            &args[owned + 1..owned + 5],
             ["-e", "API_TOKEN", "-e", "OPENROUTER_API_KEY"]
         );
         assert!(!args.iter().any(|a| a.contains('=') && a.contains("TOKEN")));

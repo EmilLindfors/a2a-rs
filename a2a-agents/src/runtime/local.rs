@@ -46,6 +46,12 @@ enum ProcState {
 /// Cheap to `clone` (shares one map). Children are spawned with `kill_on_drop`,
 /// so dropping the runtime tears down everything it started.
 ///
+/// An agent whose config names its own image (`[runtime] image`) is refused with
+/// [`RuntimeError::Unsupported`]: there is no image to run here, and starting
+/// the config under this binary instead would serve a different agent than the
+/// one that was deployed. Those belong on
+/// [`ContainerRuntime`](super::ContainerRuntime).
+///
 /// # Logs
 ///
 /// By default a child **inherits** this process's stdout/stderr, so its output
@@ -158,6 +164,20 @@ async fn log_stdio(dir: &Path, id: &AgentId) -> Result<(Stdio, Stdio), std::io::
 #[async_trait]
 impl AgentRuntime for LocalProcessRuntime {
     async fn provision(&self, spec: AgentSpec) -> Result<AgentId, RuntimeError> {
+        // An agent that named an image is not this binary, and running the
+        // config here anyway would start something that answers, passes its
+        // health probe, and is not the agent that was deployed.
+        if let Some(image) = &spec.image {
+            return Err(RuntimeError::Unsupported {
+                operation: "custom image",
+                reason: format!(
+                    "agent '{}' runs from image '{image}', which this runtime cannot pull \
+                     — deploy it on a container runtime (`a2a control-plane --runtime container`)",
+                    spec.id
+                ),
+            });
+        }
+
         // Vet the raw config before it is ever expanded — see `EnvAllowlist::check`.
         let content = tokio::fs::read_to_string(&spec.config_path)
             .await
@@ -345,6 +365,7 @@ mod tests {
             id: AgentId::from_name("Quiet"),
             config_path: PathBuf::from("quiet.toml"),
             endpoint: "http://127.0.0.1:8080".to_string(),
+            image: None,
         };
         // Provision directly: the file-reading `provision` would need a config
         // on disk, and this is about the log seam.
@@ -366,6 +387,33 @@ mod tests {
         );
         // The message has to point somewhere.
         assert!(err.to_string().contains("--log-dir"), "{err}");
+    }
+
+    /// An agent that brings its own image cannot run here, and saying so is the
+    /// whole value: provisioning it as a child `a2a run` would start the config
+    /// under the *wrong* binary — an agent that comes up healthy and is not the
+    /// one that was deployed.
+    #[tokio::test]
+    async fn an_agent_with_its_own_image_is_refused() {
+        let runtime = LocalProcessRuntime::with_exe("a2a");
+        let err = runtime
+            .provision(AgentSpec {
+                id: AgentId::from_name("Billing"),
+                config_path: PathBuf::from("billing.toml"),
+                endpoint: "http://127.0.0.1:8080".to_string(),
+                image: Some("ghcr.io/acme/billing:1.4".to_string()),
+            })
+            .await
+            .expect_err("a local process cannot be someone else's image");
+
+        assert!(
+            matches!(&err, RuntimeError::Unsupported { operation, .. } if *operation == "custom image"),
+            "got: {err}"
+        );
+        // Names the image it could not run, and where it can be run instead.
+        let message = err.to_string();
+        assert!(message.contains("ghcr.io/acme/billing:1.4"), "{message}");
+        assert!(message.contains("container"), "{message}");
     }
 
     #[tokio::test]

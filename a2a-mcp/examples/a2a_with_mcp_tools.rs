@@ -13,11 +13,12 @@ use std::sync::Arc;
 use a2a_mcp::{McpToA2ABridge, create_tool_call_message};
 use a2a_rs::{
     domain::{Message, Part, Role, Task, TaskState, TaskStatus, error::A2AError},
-    port::AsyncMessageHandler,
+    port::{AsyncMessageHandler, RequestContext},
 };
 use async_trait::async_trait;
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*, service::RequestContext,
+    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt, model::*,
+    service::RequestContext as McpRequestContext,
 };
 use serde_json::json;
 use tracing_subscriber::EnvFilter;
@@ -32,7 +33,7 @@ impl AsyncMessageHandler for EchoHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let echoed = message
             .parts
@@ -94,7 +95,7 @@ impl ServerHandler for CalcServer {
     fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
-        _ctx: RequestContext<RoleServer>,
+        _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         async move {
             Ok(ListToolsResult {
@@ -110,7 +111,7 @@ impl ServerHandler for CalcServer {
         CallToolRequestParams {
             name, arguments, ..
         }: CallToolRequestParams,
-        _ctx: RequestContext<RoleServer>,
+        _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         async move {
             if name != "add" {
@@ -166,7 +167,9 @@ async fn main() -> anyhow::Result<()> {
         .message_id(uuid::Uuid::new_v4().to_string())
         .build();
 
-    let echoed = bridge.process_message("task-echo", &plain, None).await?;
+    let echoed = bridge
+        .process_message("task-echo", &plain, &RequestContext::anonymous())
+        .await?;
     println!("Plain message → state {:?}", echoed.status.state);
     for m in &echoed.history {
         for part in &m.parts {
@@ -178,7 +181,9 @@ async fn main() -> anyhow::Result<()> {
 
     // 2. Tool-call message (metadata-driven) → routed to MCP server.
     let tool_msg = create_tool_call_message("add", json!({ "a": 5, "b": 7 }));
-    let tool_result = bridge.process_message("task-add", &tool_msg, None).await?;
+    let tool_result = bridge
+        .process_message("task-add", &tool_msg, &RequestContext::anonymous())
+        .await?;
     println!(
         "\nTool call add(5,7) → state {:?}",
         tool_result.status.state

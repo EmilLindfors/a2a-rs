@@ -50,7 +50,7 @@ tracing-subscriber = { workspace = true }
 regex = "1.10"  # Used for text parsing and config env var expansion
 
 # AI integration (OpenAI-compatible API)
-reqwest = { workspace = true, features = ["json", "rustls-tls"] }
+reqwest = { workspace = true, features = ["json"] }
 
 # OAuth2 support (optional, for auth feature)
 oauth2 = { version = "5.0", optional = true }
@@ -96,7 +96,7 @@ mcp-server = ["dep:a2a-mcp", "dep:rmcp"]
 # processes), discover their tools, and invoke them while serving A2A requests.
 # Build an `McpClientManager` from `[features.mcp_client]` config with
 # `McpClientManager::connect`, hand it to your handler, and reach tools through
-# the `McpToolsExt` trait. See `examples/mcp_client_agent.rs`.
+# the `McpToolsExt` trait. `bin/mcp_echo_server.rs` is a server to try it against.
 mcp-client = ["dep:rmcp"]
 
 [[bin]]
@@ -120,73 +120,20 @@ name = "mcp_echo_server"
 path = "bin/mcp_echo_server.rs"
 required-features = ["mcp-client"]
 
-# Examples built on the reimbursement sample. Declared explicitly so they are
-# skipped when its (opt-in) feature is off, rather than failing the build of
-# every target for want of a module that was configured out.
-[[example]]
-name = "test_handler"
-path = "examples/test_handler.rs"
-required-features = ["reimbursement-agent"]
+# Four examples, each for one path through the platform. The declarative paths
+# (fleets, control plane, per-agent models) are config-only and live in
+# `examples/fleet/`; these are the ones with code.
 
-[[example]]
-name = "test_metadata"
-path = "examples/test_metadata.rs"
-required-features = ["reimbursement-agent"]
-
-[[example]]
-name = "test_metrics"
-path = "examples/test_metrics.rs"
-required-features = ["reimbursement-agent"]
-
-[[example]]
-name = "test_config_demo"
-path = "examples/test_config_demo.rs"
-required-features = ["reimbursement-agent", "sqlx"]
-
-[[example]]
-name = "test_sqlx_storage"
-path = "examples/test_sqlx_storage.rs"
-required-features = ["reimbursement-agent", "sqlx"]
-
+# The custom-handler quick start: a handler, a config, ~30 lines of wiring.
 [[example]]
 name = "minimal_agent"
 path = "examples/minimal_agent.rs"
 
+# The same handler, packaged as its own container image and deployed through the
+# control plane — the escape hatch when TOML cannot express what an agent does.
 [[example]]
-name = "reimbursement_builder"
-path = "examples/reimbursement_builder.rs"
-required-features = ["reimbursement-agent", "sqlx"]
-
-[[example]]
-name = "auto_storage_agent"
-path = "examples/auto_storage_agent.rs"
-
-[[example]]
-name = "auto_storage_sqlx"
-path = "examples/auto_storage_sqlx.rs"
-required-features = ["sqlx"]
-
-[[example]]
-name = "ap2_merchant_agent"
-path = "examples/ap2_merchant_agent.rs"
-required-features = ["ap2"]
-
-[[example]]
-name = "mcp_server_agent"
-path = "examples/mcp_server_agent.rs"
-required-features = ["mcp-server"]
-
-[[example]]
-name = "mcp_http_agent"
-path = "examples/mcp_http_agent.rs"
-required-features = ["mcp-server"]
-
-# Agent that acts as an MCP *client*: connects to an MCP server (the bundled
-# mcp_echo_server) from TOML config and calls its tools while serving A2A.
-[[example]]
-name = "mcp_client_agent"
-path = "examples/mcp_client_agent.rs"
-required-features = ["mcp-client"]
+name = "image-agent"
+path = "examples/image-agent/main.rs"
 
 # Kitchen-sink example: TOML config + optional LLM tool-calling + MCP tool
 # consumption (McpToA2ABridge) + live SSE streaming + native task lifecycle.
@@ -195,16 +142,13 @@ name = "complex_agent"
 path = "examples/complex_agent.rs"
 required-features = ["mcp-server"]
 
-# TOML-only LLM-driven agent: no Rust code, drives the generic `llm` handler
-# registered in the `a2a` binary. Proves the config-as-artifact path.
+# The reimbursement sample agent, driven through the builder. Declared with its
+# features so it is skipped when the (opt-in) sample is configured out, rather
+# than failing the build of every target for want of a module that is not there.
 [[example]]
-name = "llm_agent"
-path = "examples/llm_agent.rs"
-required-features = ["llm"]
-[[example]]
-name = "print_schema"
-path = "examples/print_schema.rs"
-required-features = ["schema"]
+name = "reimbursement_builder"
+path = "examples/reimbursement_builder.rs"
+required-features = ["reimbursement-agent", "sqlx"]
 
 [dev-dependencies]
 # Pull in the JSON-RPC server + client transports so integration tests can stand

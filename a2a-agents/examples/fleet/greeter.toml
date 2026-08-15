@@ -1,0 +1,36 @@
+# Greeter — the simplest member of the fleet. See README.md.
+#
+# An `echo` handler: no model, no API key, no external service. Every command in
+# the walkthrough runs against this agent whether or not the machine has a model
+# key, which is what keeps the platform half of the README reproducible.
+
+[agent]
+name = "Greeter"
+description = "Greets whoever writes to it."
+version = "0.1.0"
+
+[server]
+# 127.0.0.1 keeps the agent off the network while you try this. The container
+# image sets HOST=0.0.0.0; omit `host` entirely to inherit that.
+host = "127.0.0.1"
+http_port = 8081
+
+[server.storage]
+type = "inmemory"
+
+[handler]
+type = "echo"
+
+[[skills]]
+id = "greet"
+name = "Greet"
+description = "Return a greeting."
+keywords = ["greet", "hello"]
+examples = ["Say hello"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true

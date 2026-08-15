@@ -64,6 +64,19 @@ impl ScratchDir {
     pub fn a2a_env(&self, args: &[&str], unset: &[&str]) -> (bool, String) {
         a2a_env(&self.path, args, unset)
     }
+
+    /// Run the `a2a` binary here with `set` applied on top of `unset`.
+    ///
+    /// Same reason the vars go on the child rather than on this process: the
+    /// other tests in this binary run on threads beside it.
+    pub fn a2a_with_env(
+        &self,
+        args: &[&str],
+        set: &[(&str, &str)],
+        unset: &[&str],
+    ) -> (bool, String) {
+        a2a_with_env(&self.path, args, set, unset)
+    }
 }
 
 impl Drop for ScratchDir {
@@ -83,10 +96,24 @@ pub fn a2a(dir: &Path, args: &[&str]) -> (bool, String) {
 
 /// As [`a2a`], with `unset` removed from the child's environment.
 pub fn a2a_env(dir: &Path, args: &[&str], unset: &[&str]) -> (bool, String) {
+    a2a_with_env(dir, args, &[], unset)
+}
+
+/// As [`a2a`], with `unset` removed and `set` applied to the child's
+/// environment.
+pub fn a2a_with_env(
+    dir: &Path,
+    args: &[&str],
+    set: &[(&str, &str)],
+    unset: &[&str],
+) -> (bool, String) {
     let mut command = Command::new(env!("CARGO_BIN_EXE_a2a"));
     command.current_dir(dir).args(args);
     for var in unset {
         command.env_remove(var);
+    }
+    for (var, value) in set {
+        command.env(var, value);
     }
     let out = command.output().expect("run a2a binary");
     let mut combined = String::from_utf8_lossy(&out.stdout).into_owned();

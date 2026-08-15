@@ -1,5 +1,6 @@
 //! Domain models for the A2A protocol
 
+pub mod conversation;
 pub mod core;
 pub mod error;
 pub mod error_details;
@@ -12,6 +13,7 @@ mod tests;
 pub mod validation;
 
 // Re-export key types for convenience
+pub use conversation::{Conversation, Digest, Seq, SequencedMessage};
 pub use core::{
     AgentCapabilities, AgentCard, AgentCardBuilder, AgentCardSignature, AgentExtension,
     AgentInterface, AgentProvider, AgentSkill, Artifact, AuthorizationCodeOAuthFlow,

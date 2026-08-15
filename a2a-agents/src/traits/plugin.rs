@@ -41,7 +41,7 @@ pub struct SkillDefinition {
 ///
 /// ```rust
 /// use a2a_agents::traits::{AgentPlugin, SkillDefinition};
-/// use a2a_rs::port::AsyncMessageHandler;
+/// use a2a_rs::port::{AsyncMessageHandler, RequestContext};
 /// use a2a_rs::domain::{A2AError, Message, Task};
 /// use async_trait::async_trait;
 ///
@@ -78,7 +78,7 @@ pub struct SkillDefinition {
 ///         &self,
 ///         task_id: &str,
 ///         message: &Message,
-///         session_id: Option<&str>,
+///         ctx: &RequestContext,
 ///     ) -> Result<Task, A2AError> {
 ///         // Implementation
 ///         todo!()

@@ -48,16 +48,8 @@ fn an_echo_agent_is_clear_without_a_model_key() {
 
     let (ok, out) = scratch.a2a_env(
         &["doctor", "--config", "weather.toml"],
-        // Every var `llm_env_var` consults, cleared: the shape of a machine that
-        // has never configured a model provider.
-        &[
-            "OPENROUTER_API_KEY",
-            "GEMINI_API_KEY",
-            "OPENAI_API_KEY",
-            "AI_API_KEY",
-            "OPENAI_API_BASE_URL",
-            "AI_API_BASE_URL",
-        ],
+        // A machine that has never configured a model provider.
+        &LLM_VARS,
     );
 
     assert!(ok, "an echo agent needs no model key:\n{out}");
@@ -68,6 +60,135 @@ fn an_echo_agent_is_clear_without_a_model_key() {
     assert!(
         !out.contains("no model key"),
         "the warning belongs to `llm` handlers, not to every run:\n{out}"
+    );
+}
+
+/// Every variable the provider cascade reads, for tests that need to describe a
+/// machine with no model provider configured.
+const LLM_VARS: [&str; 6] = [
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "OPENAI_API_KEY",
+    "AI_API_KEY",
+    "OPENAI_API_BASE_URL",
+    "AI_API_BASE_URL",
+];
+
+/// Write an `llm`-handler config with the given `[llm]` block (or none).
+fn llm_agent(scratch: &ScratchDir, file: &str, llm_block: &str) {
+    scratch.write(
+        file,
+        &format!(
+            r#"
+[agent]
+name = "Chat"
+
+[server]
+host = "127.0.0.1"
+http_port = {}
+
+[handler]
+type = "llm"
+{llm_block}
+"#,
+            free_port()
+        ),
+    );
+}
+
+/// A key that is set and unusable is not the same as no key: `a2a run` refuses
+/// to start on it, so `doctor` has to say so rather than warn about a fallback
+/// that will never be reached.
+#[test]
+fn a_broken_model_setting_is_a_problem() {
+    let scratch = ScratchDir::new("brokenkey");
+    llm_agent(&scratch, "chat.toml", "");
+
+    let (ok, out) = scratch.a2a_with_env(
+        &["doctor", "--config", "chat.toml"],
+        &[
+            ("OPENROUTER_API_KEY", "sk-or-test"),
+            ("OPENROUTER_REASONING", "verry-high"),
+        ],
+        &LLM_VARS,
+    );
+    assert!(!ok, "an unusable provider must fail the check:\n{out}");
+    assert!(out.contains("OPENROUTER_REASONING"), "{out}");
+    assert!(
+        out.contains("refuse to start"),
+        "the report must say what `a2a run` will do:\n{out}"
+    );
+}
+
+/// With no provider anywhere the agent still runs, answering from its
+/// deterministic fallback — a warning, not a problem.
+#[test]
+fn an_llm_agent_without_any_key_is_a_warning() {
+    let scratch = ScratchDir::new("nokeyllm");
+    llm_agent(&scratch, "chat.toml", "");
+
+    let (ok, out) = scratch.a2a_env(&["doctor", "--config", "chat.toml"], &LLM_VARS);
+    assert!(ok, "a keyless llm agent still runs:\n{out}");
+    assert!(out.contains("deterministic fallback"), "{out}");
+}
+
+/// `reasoning` reaches the wire on `openrouter` only. Everywhere else it is
+/// dropped, and the run works — on the model's own thinking default, at a cost
+/// the config did not choose. A warning, since the agent answers either way.
+#[test]
+fn a_reasoning_the_provider_cannot_send_is_a_warning() {
+    let scratch = ScratchDir::new("reasoning");
+    llm_agent(
+        &scratch,
+        "chat.toml",
+        "\n[llm]\nprovider = \"gemini\"\napi_key = \"test-key\"\nreasoning = \"high\"\n",
+    );
+
+    let (ok, out) = scratch.a2a_env(&["doctor", "--config", "chat.toml"], &LLM_VARS);
+    assert!(ok, "a dropped reasoning still runs:\n{out}");
+    assert!(out.contains("reasoning"), "{out}");
+    assert!(
+        out.contains("gemini"),
+        "the report must name the provider that drops it:\n{out}"
+    );
+}
+
+/// The same setting on the provider that *can* send it says nothing, so the
+/// warning above stays worth reading.
+#[test]
+fn a_reasoning_the_provider_sends_is_not_reported() {
+    let scratch = ScratchDir::new("reasoningok");
+    llm_agent(
+        &scratch,
+        "chat.toml",
+        "\n[llm]\nprovider = \"openrouter\"\napi_key = \"sk-test\"\nreasoning = \"high\"\n",
+    );
+
+    let (ok, out) = scratch.a2a_env(&["doctor", "--config", "chat.toml"], &LLM_VARS);
+    assert!(ok, "{out}");
+    assert!(
+        out.contains("all clear"),
+        "openrouter carries `reasoning`, so there is nothing to warn about:\n{out}"
+    );
+}
+
+/// A mistyped `provider` used to fall back to the environment, so the agent ran
+/// on whatever key happened to be exported — or on none, answering with a stub.
+#[test]
+fn a_mistyped_provider_is_a_problem() {
+    let scratch = ScratchDir::new("typo");
+    llm_agent(
+        &scratch,
+        "chat.toml",
+        "\n[llm]\nprovider = \"opnrouter\"\napi_key = \"sk-test\"\n",
+    );
+
+    let (ok, out) = scratch.a2a(&["doctor", "--config", "chat.toml"]);
+    assert!(!ok, "an unknown provider must fail the check:\n{out}");
+    assert!(out.contains("opnrouter"), "{out}");
+    assert!(
+        out.contains("openrouter"),
+        "the report must name the valid providers:\n{out}"
     );
 }
 
@@ -122,8 +243,8 @@ command = "a2a-definitely-not-installed"
     assert!(out.contains("filesystem"), "{out}");
 }
 
-/// An unknown handler falls back to echo at runtime, so the agent answers —
-/// just not the way the config says. Silent-wrong, hence a problem.
+/// A handler name this binary does not have stops `a2a run` outright, so the
+/// config cannot run as written. Better caught here than at start-up.
 #[test]
 fn an_unknown_handler_is_a_problem() {
     let scratch = ScratchDir::new("handler");
@@ -148,6 +269,43 @@ type = "weather"
     let (ok, out) = scratch.a2a(&["doctor", "--config", "custom.toml"]);
     assert!(!ok, "an unknown handler must fail the check:\n{out}");
     assert!(out.contains("weather"), "{out}");
+}
+
+/// The same config with an image behind it is the supported way to ship a
+/// handler no TOML can express, so it has to come back clear — and the report
+/// has to say the image is where the answers are, because this machine cannot
+/// look inside it.
+#[test]
+fn an_agent_with_its_own_image_is_all_clear() {
+    let scratch = ScratchDir::new("image");
+    scratch.write(
+        "custom.toml",
+        &format!(
+            r#"
+[agent]
+name = "Custom"
+
+[server]
+host = "127.0.0.1"
+http_port = {}
+
+[handler]
+type = "weather"
+
+[runtime]
+image = "ghcr.io/acme/weather:2.0"
+"#,
+            free_port()
+        ),
+    );
+
+    let (ok, out) = scratch.a2a(&["doctor", "--config", "custom.toml"]);
+    assert!(
+        ok,
+        "an image supplies the handler, so this is runnable:\n{out}"
+    );
+    assert!(out.contains("ghcr.io/acme/weather:2.0"), "{out}");
+    assert!(out.contains("all clear"), "{out}");
 }
 
 /// Each config can be perfectly fine on its own and still not run alongside the

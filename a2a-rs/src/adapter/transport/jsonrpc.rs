@@ -61,7 +61,8 @@ use crate::{
     },
     port::{
         AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-        AsyncTaskQuery, CallContext, CallInterceptor, CallSide, run_after, run_before,
+        AsyncTaskQuery, AuthPrincipal, CallContext, CallInterceptor, CallSide, RequestContext,
+        run_after, run_before,
     },
     services::server::AgentInfoProvider,
 };
@@ -183,9 +184,15 @@ impl JsonRpcAdapter {
     /// Handle a single non-streaming JSON-RPC request, producing a response
     /// envelope. Streaming methods are handled by the SSE path in the router and
     /// must not reach here.
-    pub async fn handle_unary(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+    pub async fn handle_unary(
+        &self,
+        req: JsonRpcRequest,
+        caller: Option<AuthPrincipal>,
+    ) -> JsonRpcResponse {
         let id = req.id.clone();
-        let result = self.dispatch_intercepted(&req.method, req.params).await;
+        let result = self
+            .dispatch_intercepted(&req.method, req.params, caller)
+            .await;
         match result {
             Ok(value) => JsonRpcResponse::ok(id, value),
             Err(e) => JsonRpcResponse::err(id, a2a_to_jsonrpc(&e)),
@@ -200,28 +207,34 @@ impl JsonRpcAdapter {
         &self,
         method: &str,
         params: Option<Value>,
+        caller: Option<AuthPrincipal>,
     ) -> Result<Value, A2AError> {
         if self.interceptors.is_empty() {
-            return self.dispatch_unary(method, params).await;
+            return self.dispatch_unary(method, params, caller).await;
         }
         let ctx = CallContext::new(method, CallSide::Server);
         if let Err(e) = run_before(&self.interceptors, &ctx).await {
             run_after(&self.interceptors, &ctx, Err(&e)).await;
             return Err(e);
         }
-        let result = self.dispatch_unary(method, params).await;
+        let result = self.dispatch_unary(method, params, caller).await;
         run_after(&self.interceptors, &ctx, result.as_ref().map(|_| ())).await;
         result
     }
 
     /// Route a unary method name + `params` to the service and return the wire
     /// `result` value. Reused by both JSON-RPC and REST.
-    async fn dispatch_unary(&self, method: &str, params: Option<Value>) -> Result<Value, A2AError> {
+    async fn dispatch_unary(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        caller: Option<AuthPrincipal>,
+    ) -> Result<Value, A2AError> {
         match method {
             methods::GET_TASK => self.get_task(params).await,
             methods::LIST_TASKS => self.list_tasks(params).await,
             methods::CANCEL_TASK => self.cancel_task(params).await,
-            methods::SEND_MESSAGE => self.send_message(params).await,
+            methods::SEND_MESSAGE => self.send_message(params, caller).await,
             methods::CREATE_PUSH_CONFIG => self.create_push_config(params).await,
             methods::GET_PUSH_CONFIG => self.get_push_config(params).await,
             methods::LIST_PUSH_CONFIGS => self.list_push_configs(params).await,
@@ -264,11 +277,15 @@ impl JsonRpcAdapter {
         to_value(&task)
     }
 
-    async fn send_message(&self, params: Option<Value>) -> Result<Value, A2AError> {
-        let (task_id, message, session_id, opts) = decode_send_message(parse_params(params)?)?;
+    async fn send_message(
+        &self,
+        params: Option<Value>,
+        caller: Option<AuthPrincipal>,
+    ) -> Result<Value, A2AError> {
+        let (task_id, message, ctx, opts) = decode_send_message(parse_params(params)?, caller)?;
         let task = self
             .service
-            .send_message(&task_id, &message, session_id.as_deref(), opts)
+            .send_message(&task_id, &message, &ctx, opts)
             .await?;
         let response = SendMessageResponse {
             payload: Some(send_message_response::Payload::Task(Box::new(task))),
@@ -334,16 +351,21 @@ impl JsonRpcAdapter {
         method: &str,
         params: Option<Value>,
         from_event_id: Option<u64>,
+        caller: Option<AuthPrincipal>,
     ) -> Result<StreamResponseStream, A2AError> {
         if self.interceptors.is_empty() {
-            return self.open_stream_inner(method, params, from_event_id).await;
+            return self
+                .open_stream_inner(method, params, from_event_id, caller)
+                .await;
         }
         let ctx = CallContext::new(method, CallSide::Server);
         if let Err(e) = run_before(&self.interceptors, &ctx).await {
             run_after(&self.interceptors, &ctx, Err(&e)).await;
             return Err(e);
         }
-        let result = self.open_stream_inner(method, params, from_event_id).await;
+        let result = self
+            .open_stream_inner(method, params, from_event_id, caller)
+            .await;
         run_after(&self.interceptors, &ctx, result.as_ref().map(|_| ())).await;
         result
     }
@@ -359,19 +381,20 @@ impl JsonRpcAdapter {
         method: &str,
         params: Option<Value>,
         from_event_id: Option<u64>,
+        caller: Option<AuthPrincipal>,
     ) -> Result<StreamResponseStream, A2AError> {
         match method {
             methods::SEND_STREAMING_MESSAGE => {
                 // As in the Connect adapter, `completion` does not apply to a
                 // streaming call: the stream is the wait.
-                let (task_id, message, session_id, opts) =
-                    decode_send_message(parse_params(params)?)?;
+                let (task_id, message, ctx, opts) =
+                    decode_send_message(parse_params(params)?, caller)?;
                 let (task, updates) = self
                     .service
                     .send_streaming_message(
                         &task_id,
                         &message,
-                        session_id.as_deref(),
+                        &ctx,
                         opts.push_config,
                         opts.history_limit,
                     )
@@ -402,9 +425,28 @@ pub fn jsonrpc_router(adapter: Arc<JsonRpcAdapter>) -> Router {
         .with_state(adapter)
 }
 
+/// The principal the auth middleware attached to the request, if any.
+///
+/// An extractor rather than `Option<Extension<AuthPrincipal>>` at each call site
+/// so an unauthenticated server — where nothing put a principal in the
+/// extensions — is an ordinary `None` rather than a rejection.
+struct Caller(Option<AuthPrincipal>);
+
+impl<S: Send + Sync> axum::extract::FromRequestParts<S> for Caller {
+    type Rejection = Infallible;
+
+    async fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        _state: &S,
+    ) -> Result<Self, Self::Rejection> {
+        Ok(Self(parts.extensions.get::<AuthPrincipal>().cloned()))
+    }
+}
+
 async fn jsonrpc_handler(
     State(adapter): State<Arc<JsonRpcAdapter>>,
     headers: HeaderMap,
+    Caller(caller): Caller,
     body: Bytes,
 ) -> Response {
     let req: JsonRpcRequest = match serde_json::from_slice(&body) {
@@ -438,14 +480,14 @@ async fn jsonrpc_handler(
         let id = req.id.clone();
         let from_event_id = parse_last_event_id(&headers);
         match adapter
-            .open_stream(&req.method, req.params, from_event_id)
+            .open_stream(&req.method, req.params, from_event_id, caller)
             .await
         {
             Ok(stream) => jsonrpc_sse(id, stream).into_response(),
             Err(e) => Json(JsonRpcResponse::err(id, a2a_to_jsonrpc(&e))).into_response(),
         }
     } else {
-        Json(adapter.handle_unary(req).await).into_response()
+        Json(adapter.handle_unary(req, caller).await).into_response()
     }
 }
 
@@ -521,30 +563,37 @@ fn a2a_to_http(err: &A2AError) -> Response {
         A2AError::InvalidParams(_) | A2AError::ValidationError { .. } => StatusCode::BAD_REQUEST,
         A2AError::UnsupportedOperation(_) => StatusCode::NOT_IMPLEMENTED,
         A2AError::AuthenticatedExtendedCardNotConfigured => StatusCode::PRECONDITION_FAILED,
+        A2AError::ContextAccessDenied { .. } => StatusCode::FORBIDDEN,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     };
     (status, Json(a2a_to_jsonrpc(err))).into_response()
 }
 
-async fn rest_send_message(State(a): State<Arc<JsonRpcAdapter>>, body: Bytes) -> Response {
+async fn rest_send_message(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
+    body: Bytes,
+) -> Response {
     rest_result(
-        a.dispatch_intercepted(methods::SEND_MESSAGE, parse_body(&body))
+        a.dispatch_intercepted(methods::SEND_MESSAGE, parse_body(&body), caller)
             .await,
     )
 }
 
 async fn rest_list_tasks(
     State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
     rest_result(
-        a.dispatch_intercepted(methods::LIST_TASKS, Some(query_to_list_request(&q)))
+        a.dispatch_intercepted(methods::LIST_TASKS, Some(query_to_list_request(&q)), caller)
             .await,
     )
 }
 
 async fn rest_get_task(
     State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
     Path(id): Path<String>,
     Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> Response {
@@ -552,21 +601,30 @@ async fn rest_get_task(
     if let Some(h) = q.get("historyLength").and_then(|s| s.parse::<i64>().ok()) {
         req["historyLength"] = h.into();
     }
-    rest_result(a.dispatch_intercepted(methods::GET_TASK, Some(req)).await)
+    rest_result(
+        a.dispatch_intercepted(methods::GET_TASK, Some(req), caller)
+            .await,
+    )
 }
 
 async fn rest_cancel_task(
     State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
     Path(id): Path<String>,
 ) -> Response {
     rest_result(
-        a.dispatch_intercepted(methods::CANCEL_TASK, Some(serde_json::json!({ "id": id })))
-            .await,
+        a.dispatch_intercepted(
+            methods::CANCEL_TASK,
+            Some(serde_json::json!({ "id": id })),
+            caller,
+        )
+        .await,
     )
 }
 
 async fn rest_create_push_config(
     State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
     Path(id): Path<String>,
     body: Bytes,
 ) -> Response {
@@ -574,19 +632,21 @@ async fn rest_create_push_config(
     let mut config = parse_body(&body).unwrap_or_else(|| serde_json::json!({}));
     config["taskId"] = id.into();
     rest_result(
-        a.dispatch_intercepted(methods::CREATE_PUSH_CONFIG, Some(config))
+        a.dispatch_intercepted(methods::CREATE_PUSH_CONFIG, Some(config), caller)
             .await,
     )
 }
 
 async fn rest_list_push_configs(
     State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
     Path(id): Path<String>,
 ) -> Response {
     rest_result(
         a.dispatch_intercepted(
             methods::LIST_PUSH_CONFIGS,
             Some(serde_json::json!({ "taskId": id })),
+            caller,
         )
         .await,
     )
@@ -594,12 +654,14 @@ async fn rest_list_push_configs(
 
 async fn rest_get_push_config(
     State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
     Path((id, cfg)): Path<(String, String)>,
 ) -> Response {
     rest_result(
         a.dispatch_intercepted(
             methods::GET_PUSH_CONFIG,
             Some(serde_json::json!({ "taskId": id, "id": cfg })),
+            caller,
         )
         .await,
     )
@@ -607,20 +669,25 @@ async fn rest_get_push_config(
 
 async fn rest_delete_push_config(
     State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
     Path((id, cfg)): Path<(String, String)>,
 ) -> Response {
     rest_result(
         a.dispatch_intercepted(
             methods::DELETE_PUSH_CONFIG,
             Some(serde_json::json!({ "taskId": id, "id": cfg })),
+            caller,
         )
         .await,
     )
 }
 
-async fn rest_extended_card(State(a): State<Arc<JsonRpcAdapter>>) -> Response {
+async fn rest_extended_card(
+    State(a): State<Arc<JsonRpcAdapter>>,
+    Caller(caller): Caller,
+) -> Response {
     rest_result(
-        a.dispatch_intercepted(methods::GET_EXTENDED_AGENT_CARD, None)
+        a.dispatch_intercepted(methods::GET_EXTENDED_AGENT_CARD, None, caller)
             .await,
     )
 }
@@ -628,6 +695,7 @@ async fn rest_extended_card(State(a): State<Arc<JsonRpcAdapter>>) -> Response {
 async fn rest_stream_message(
     State(a): State<Arc<JsonRpcAdapter>>,
     headers: HeaderMap,
+    Caller(caller): Caller,
     body: Bytes,
 ) -> Response {
     let from_event_id = parse_last_event_id(&headers);
@@ -636,6 +704,7 @@ async fn rest_stream_message(
             methods::SEND_STREAMING_MESSAGE,
             parse_body(&body),
             from_event_id,
+            caller,
         )
         .await
     {
@@ -647,6 +716,7 @@ async fn rest_stream_message(
 async fn rest_subscribe(
     State(a): State<Arc<JsonRpcAdapter>>,
     headers: HeaderMap,
+    Caller(caller): Caller,
     Path(id): Path<String>,
 ) -> Response {
     let from_event_id = parse_last_event_id(&headers);
@@ -655,6 +725,7 @@ async fn rest_subscribe(
             methods::SUBSCRIBE_TO_TASK,
             Some(serde_json::json!({ "id": id })),
             from_event_id,
+            caller,
         )
         .await
     {
@@ -725,16 +796,21 @@ fn to_value<T: Serialize>(value: &T) -> Result<Value, A2AError> {
 
 /// Decode a [`SendMessageRequest`] into the arguments [`TaskService::send_message`]
 /// expects. Mirrors the Connect adapter's `send_message` decode exactly.
-type SendArgs = (String, crate::domain::Message, Option<String>, SendOptions);
-fn decode_send_message(req: SendMessageRequest) -> Result<SendArgs, A2AError> {
+type SendArgs = (String, crate::domain::Message, RequestContext, SendOptions);
+fn decode_send_message(
+    req: SendMessageRequest,
+    caller: Option<AuthPrincipal>,
+) -> Result<SendArgs, A2AError> {
     let message = req
         .message
         .into_option()
         .ok_or_else(|| A2AError::InvalidParams("missing message".to_string()))?;
     let task_id = message.task_id.clone();
-    let session_id = (!message.context_id.is_empty()).then(|| message.context_id.clone());
+    let ctx = RequestContext::anonymous()
+        .with_session(message.context_id.clone())
+        .with_principal(caller);
     let opts = decode_send_config(req.configuration.into_option());
-    Ok((task_id, message, session_id, opts))
+    Ok((task_id, message, ctx, opts))
 }
 
 /// Build the SSE stream: initial task snapshot (if present) followed by the

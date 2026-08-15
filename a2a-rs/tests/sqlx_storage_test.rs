@@ -5,8 +5,8 @@ mod sqlx_tests {
     use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
     use a2a_rs::domain::TaskState;
     use a2a_rs::port::{
-        AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery,
-        AsyncTaskVersioning,
+        AsyncConversationStore, AsyncNotificationManager, AsyncStreamingHandler,
+        AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
     };
     use a2a_rs::{A2AError, TaskPushNotificationConfig};
     use std::sync::Arc;
@@ -27,6 +27,262 @@ mod sqlx_tests {
             .build();
 
         SqlxTaskStorage::new(&config.url).await
+    }
+
+    /// Everything the conversation tests need to say something.
+    fn said(text: &str) -> a2a_rs::domain::Message {
+        use a2a_rs::domain::{Message, Part, Role};
+        Message::builder()
+            .role(Role::User)
+            .parts(vec![Part::text(text.to_string())])
+            .message_id(Uuid::new_v4().to_string())
+            .build()
+    }
+
+    fn texts(conversation: &a2a_rs::domain::Conversation) -> Vec<String> {
+        use a2a_rs::domain::part;
+        conversation
+            .tail
+            .iter()
+            .flat_map(|entry| {
+                entry.message.parts.iter().filter_map(|p| match &p.content {
+                    Some(part::Content::Text(text)) => Some(text.clone()),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
+    /// The messages of every task in a context, in the order they were written.
+    /// This is the read `mode = "context"` makes on every turn, and it goes
+    /// through the denormalized `task_history.context_id` added by migration 004
+    /// rather than joining `tasks`.
+    #[tokio::test]
+    async fn a_context_reads_back_as_one_ordered_conversation()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        storage
+            .update_status(&tid("t1"), TaskState::Working, Some(said("what is it")))
+            .await?;
+        storage
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("Oslo")))
+            .await?;
+
+        // A second task in the same context: one turn per task is the shape a
+        // real conversation has.
+        storage.create(&tid("t2"), &cid("c1")).await?;
+        storage
+            .update_status(
+                &tid("t2"),
+                TaskState::Completed,
+                Some(said("and the population")),
+            )
+            .await?;
+
+        let conversation = storage.load(&cid("c1"), None, None).await?;
+        assert_eq!(
+            texts(&conversation),
+            vec!["what is it", "Oslo", "and the population"]
+        );
+        Ok(())
+    }
+
+    /// Ordering is by the history table's autoincrement id, not its timestamp.
+    /// `datetime('now')` is second-resolution, so rows written inside one second
+    /// used to come back in an arbitrary order — invisible while history was
+    /// read for display, and wrong turns in a prompt once it is not.
+    #[tokio::test]
+    async fn messages_written_in_the_same_second_keep_their_order()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        let written: Vec<String> = (0..20).map(|i| format!("message {i}")).collect();
+        for text in &written {
+            storage
+                .update_status(&tid("t1"), TaskState::Working, Some(said(text)))
+                .await?;
+        }
+
+        assert_eq!(texts(&storage.load(&cid("c1"), None, None).await?), written);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn conversations_do_not_leak_between_contexts() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let storage = create_test_storage().await?;
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        storage.create(&tid("t2"), &cid("c2")).await?;
+        storage
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("in one")))
+            .await?;
+        storage
+            .update_status(&tid("t2"), TaskState::Completed, Some(said("in two")))
+            .await?;
+
+        assert_eq!(
+            texts(&storage.load(&cid("c1"), None, None).await?),
+            vec!["in one"]
+        );
+        Ok(())
+    }
+
+    /// A digest hides everything at or below its watermark. Re-loading the
+    /// summarized part would double the tokens compaction exists to save.
+    #[tokio::test]
+    async fn a_digest_replaces_the_messages_it_covers() -> Result<(), Box<dyn std::error::Error>> {
+        use a2a_rs::domain::Digest;
+
+        let storage = create_test_storage().await?;
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        for text in ["one", "two", "three"] {
+            storage
+                .update_status(&tid("t1"), TaskState::Working, Some(said(text)))
+                .await?;
+        }
+
+        let before = storage.load(&cid("c1"), None, None).await?;
+        storage
+            .compact(
+                &cid("c1"),
+                None,
+                Digest {
+                    covers_through: before.tail[1].seq,
+                    summary: "they said one and two".to_string(),
+                    replaced_messages: 2,
+                    model: "test".to_string(),
+                },
+            )
+            .await?;
+
+        let after = storage.load(&cid("c1"), None, None).await?;
+        assert_eq!(after.summary(), Some("they said one and two"));
+        assert_eq!(texts(&after), vec!["three"]);
+        Ok(())
+    }
+
+    /// Two turns of one conversation can compact at once. Both rows land, and
+    /// the digest covering more wins — which is why `load` picks by watermark
+    /// rather than by the newest row.
+    #[tokio::test]
+    async fn concurrent_compaction_keeps_the_widest_digest()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use a2a_rs::domain::Digest;
+
+        let storage = create_test_storage().await?;
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        for text in ["one", "two", "three"] {
+            storage
+                .update_status(&tid("t1"), TaskState::Working, Some(said(text)))
+                .await?;
+        }
+        let loaded = storage.load(&cid("c1"), None, None).await?;
+
+        // Widest written first, so "newest row wins" would pick the narrow one
+        // and re-feed a message the summary already covers.
+        for (seq, summary) in [
+            (loaded.tail[2].seq, "covers all three"),
+            (loaded.tail[0].seq, "covers only the first"),
+        ] {
+            storage
+                .compact(
+                    &cid("c1"),
+                    None,
+                    Digest {
+                        covers_through: seq,
+                        summary: summary.to_string(),
+                        replaced_messages: 1,
+                        model: "test".to_string(),
+                    },
+                )
+                .await?;
+        }
+
+        let after = storage.load(&cid("c1"), None, None).await?;
+        assert_eq!(after.summary(), Some("covers all three"));
+        assert!(after.tail.is_empty(), "{:?}", texts(&after));
+        Ok(())
+    }
+
+    /// Limiting keeps the newest: the older end is what a summary stands in for.
+    #[tokio::test]
+    async fn limiting_a_conversation_keeps_the_most_recent_messages()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        for text in ["one", "two", "three", "four"] {
+            storage
+                .update_status(&tid("t1"), TaskState::Working, Some(said(text)))
+                .await?;
+        }
+
+        assert_eq!(
+            texts(&storage.load(&cid("c1"), None, Some(2)).await?),
+            vec!["three", "four"]
+        );
+        Ok(())
+    }
+
+    /// Handing a conversation back makes `context_id` a capability: whoever
+    /// holds one would otherwise read what was said in it. The first read
+    /// claims the context; a different principal is refused.
+    #[tokio::test]
+    async fn a_context_belongs_to_whoever_started_it() -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        storage
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("private")))
+            .await?;
+
+        storage.load(&cid("c1"), Some("alice"), None).await?;
+        assert_eq!(
+            texts(&storage.load(&cid("c1"), Some("alice"), None).await?),
+            vec!["private"]
+        );
+
+        let err = storage
+            .load(&cid("c1"), Some("mallory"), None)
+            .await
+            .expect_err("another principal must be refused");
+        assert!(
+            matches!(err, A2AError::ContextAccessDenied { .. }),
+            "{err:?}"
+        );
+        Ok(())
+    }
+
+    /// An agent with no authenticator has no principal to claim with, and its
+    /// conversations stay readable. Refusing here would break every
+    /// unauthenticated deployment.
+    #[tokio::test]
+    async fn an_unowned_context_stays_open() -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        storage
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("open")))
+            .await?;
+
+        storage.load(&cid("c1"), None, None).await?;
+        assert_eq!(
+            texts(&storage.load(&cid("c1"), Some("anyone"), None).await?),
+            vec!["open"]
+        );
+        Ok(())
+    }
+
+    /// The first turn of a conversation asks for history that does not exist.
+    #[tokio::test]
+    async fn an_unknown_context_is_empty_rather_than_an_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+        assert!(
+            storage
+                .load(&cid("never-seen"), None, None)
+                .await?
+                .is_empty()
+        );
+        Ok(())
     }
 
     #[tokio::test]

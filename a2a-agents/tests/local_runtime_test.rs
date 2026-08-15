@@ -177,6 +177,7 @@ async fn provision_rejects_env_refs_outside_the_allowlist() {
         id: a2a_agents::AgentId::from_name("Leaky Agent"),
         config_path: config.path.clone(),
         endpoint: format!("http://127.0.0.1:{port}"),
+        image: None,
     };
 
     // Deny-by-default: a runtime with no allowlist rejects the reference.

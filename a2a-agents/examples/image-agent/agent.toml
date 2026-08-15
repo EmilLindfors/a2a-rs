@@ -1,0 +1,42 @@
+# Shipping Quotes — an agent whose handler is Rust, deployed as an image.
+#
+# Read this alongside README.md in the same directory.
+
+[agent]
+name = "Shipping Quotes"
+description = "Prices a parcel from its weight and destination zone."
+
+# There is no `shipping-quote` handler built into `a2a`, and there is not going
+# to be one. Naming it here documents what the image serves; `[runtime]` below is
+# what makes the config deployable. Without that block, `a2a run` refuses to
+# start this agent rather than falling back to echo.
+[handler]
+type = "shipping-quote"
+
+# The image that supplies the handler. Build it with the Dockerfile beside this
+# file, from the *workspace root*:
+#
+#   docker build -t a2a-image-agent:latest -f a2a-agents/examples/image-agent/Dockerfile .
+[runtime]
+image = "a2a-image-agent:latest"
+
+[server]
+# `host` is omitted on purpose: the container sets HOST=0.0.0.0, and a config
+# hard-coding 127.0.0.1 would bind inside the container where the published port
+# cannot reach it. Outside a container this defaults to 127.0.0.1.
+http_port = 8300
+
+# In-memory storage writes nothing, which is what lets the container runtime give
+# this agent a read-only root filesystem. An `sqlx` agent gets a writable one.
+[server.storage]
+type = "inmemory"
+
+# Discovery uses the card built from *this* config, not one fetched from the
+# image — so a skill the image serves has to be declared here for peers to
+# resolve it.
+[[skills]]
+id = "shipping-quote"
+name = "Shipping quote"
+description = "Quote the cost of shipping a parcel by weight and zone."
+keywords = ["shipping", "quote", "postage", "delivery"]
+examples = ["quote 2.5kg to eu", "how much to send 800g domestic?"]

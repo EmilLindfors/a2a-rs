@@ -76,3 +76,51 @@ fn an_unloadable_config_fails_the_command() {
         "the failure must name the config:\n{out}"
     );
 }
+
+/// A handler name this binary does not have used to start an echo agent with a
+/// warning: it bound its port, served a card, answered requests, and did none of
+/// what its config said. Refusing is the only answer a supervisor can act on.
+#[test]
+fn a_handler_this_binary_does_not_have_fails_the_command() {
+    let scratch = ScratchDir::new("run_handler");
+    scratch.write(
+        "weather.toml",
+        &format!(
+            r#"
+[agent]
+name = "Weather"
+
+[server]
+host = "127.0.0.1"
+http_port = {}
+
+[handler]
+type = "weather"
+"#,
+            free_port()
+        ),
+    );
+
+    let (ok, out) = scratch.a2a(&["run", "--config", "weather.toml"]);
+
+    assert!(!ok, "an unservable handler must fail the run:\n{out}");
+    assert!(
+        out.contains("weather.toml") && out.contains("weather"),
+        "the failure must name the config and the handler:\n{out}"
+    );
+    // The way out, not just the refusal: this is the case per-agent images exist
+    // for, and an operator who has just been stopped needs to know that.
+    assert!(
+        out.contains("image"),
+        "the failure must point at the image escape hatch:\n{out}"
+    );
+}
+
+/// A port nothing is listening on, by taking one and giving it straight back.
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("bind ephemeral port")
+        .local_addr()
+        .expect("read local addr")
+        .port()
+}

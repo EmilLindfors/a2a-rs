@@ -11,6 +11,8 @@
 //! machine (binding a port, searching `PATH`, reading the environment) stays in
 //! the binary where the I/O belongs. `a2a doctor` is the two halves joined.
 
+use a2a_agents_common::llm::LlmSettings;
+
 use crate::core::config::AgentConfig;
 use crate::core::config::HandlerType;
 
@@ -43,16 +45,42 @@ pub enum Requirement {
         /// The command as configured.
         command: String,
     },
-    /// The `llm` handler with no `[llm].api_key`, so a provider has to come from
-    /// the environment. Without one the agent runs and answers with a
-    /// deterministic fallback instead of a model.
-    LlmProviderFromEnv,
-    /// A handler name no built-in provides. The runner falls back to echo, which
-    /// means a config that looks configured behaves like a stub.
+    /// The `llm` handler needs a working provider. Without one the agent runs
+    /// and answers with a deterministic fallback instead of a model; with a
+    /// broken one (`a2a run` refuses to start) it does not run at all.
+    ///
+    /// Carries where the provider comes from so the check can build it the way
+    /// `a2a run` does, rather than guessing from the presence of a variable.
+    LlmProvider(LlmSource),
+    /// A handler name no built-in provides, and no image to supply one. `a2a
+    /// run` refuses to start such an agent, so this is a config that cannot run
+    /// anywhere as written.
     UnknownHandler {
         /// The configured `handler.type`.
         name: String,
     },
+    /// The agent runs from its own image (`[runtime] image`), so its handler,
+    /// its model provider and its MCP commands are all inside that image.
+    ///
+    /// It replaces those requirements rather than adding to them: this machine
+    /// cannot see into an image, and reporting what *this* build would have
+    /// needed produces confident answers about a binary that will not run.
+    ContainerImage {
+        /// The configured image reference.
+        image: String,
+    },
+}
+
+/// Where an `llm` handler's provider comes from — the two arms of `a2a run`'s
+/// own resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LlmSource {
+    /// Built from the config's `[llm]` block. It may still read the environment
+    /// for anything the block leaves out, including the API key.
+    Config(LlmSettings),
+    /// No `[llm]` block at all, so the provider is selected from the
+    /// environment (OpenRouter → Gemini → OpenAI).
+    Environment,
 }
 
 /// Everything `config` needs from its host, in report order.
@@ -75,6 +103,17 @@ pub fn requirements(config: &AgentConfig) -> Vec<Requirement> {
         });
     }
 
+    // An agent with its own image stops here. What it needs beyond the ports it
+    // claims — a handler, a model key, an MCP command — lives inside that image,
+    // and the checks below would be answering for a binary that is not the one
+    // that will run.
+    if let Some(image) = config.image() {
+        requirements.push(Requirement::ContainerImage {
+            image: image.to_string(),
+        });
+        return requirements;
+    }
+
     if config.features.mcp_client.enabled {
         for server in &config.features.mcp_client.servers {
             requirements.push(Requirement::McpCommand {
@@ -86,23 +125,16 @@ pub fn requirements(config: &AgentConfig) -> Vec<Requirement> {
 
     match config.handler_type() {
         HandlerType::Llm => {
-            // A key in the config satisfies the provider on its own; anything
-            // else (including `provider = "openrouter"` with no key) falls
-            // through to the environment.
-            let key_in_config = config
-                .llm
-                .as_ref()
-                .and_then(|llm| llm.api_key.as_deref())
-                .is_some_and(|key| !key.trim().is_empty());
-            if !key_in_config {
-                requirements.push(Requirement::LlmProviderFromEnv);
-            }
+            requirements.push(Requirement::LlmProvider(match config.llm.as_ref() {
+                Some(llm) => LlmSource::Config(llm.into()),
+                None => LlmSource::Environment,
+            }))
         }
         HandlerType::Custom(name) => requirements.push(Requirement::UnknownHandler { name }),
         // The reimbursement agent is a sample behind an opt-in feature, so
         // whether it exists depends on how this binary was built. Unbuilt, the
-        // runner falls back to echo — a config that looks configured behaving
-        // like a stub is precisely what this check is for.
+        // runner refuses to start — a config that names a handler this binary
+        // does not have is precisely what this check is for.
         #[cfg(not(feature = "reimbursement-agent"))]
         HandlerType::Reimbursement => requirements.push(Requirement::UnknownHandler {
             name: "reimbursement".to_string(),
@@ -227,7 +259,7 @@ mod tests {
     }
 
     #[test]
-    fn an_llm_agent_needs_a_provider_from_the_environment() {
+    fn an_llm_agent_without_a_config_block_needs_the_environment() {
         let config = config(
             r#"
             [agent]
@@ -238,13 +270,13 @@ mod tests {
             type = "llm"
             "#,
         );
-        assert!(requirements(&config).contains(&Requirement::LlmProviderFromEnv));
+        assert!(requirements(&config).contains(&Requirement::LlmProvider(LlmSource::Environment)));
     }
 
-    /// A key in the config is the provider; the environment is not consulted, so
-    /// warning about it would be noise.
+    /// The settings are carried through so the check builds the same provider
+    /// `a2a run` will, instead of inferring one from which variables are set.
     #[test]
-    fn a_configured_api_key_satisfies_the_provider() {
+    fn an_llm_block_is_carried_into_the_requirement() {
         let config = config(
             r#"
             [agent]
@@ -256,31 +288,22 @@ mod tests {
             [llm]
             provider = "openai"
             api_key = "sk-configured"
+            model = "gpt-5"
             "#,
         );
-        assert!(!requirements(&config).contains(&Requirement::LlmProviderFromEnv));
-    }
-
-    #[test]
-    fn an_empty_configured_key_still_needs_the_environment() {
-        let config = config(
-            r#"
-            [agent]
-            name = "Chat"
-            [server]
-            http_port = 8080
-            [handler]
-            type = "llm"
-            [llm]
-            provider = "openrouter"
-            api_key = "  "
-            "#,
+        let expected = LlmSettings {
+            provider: "openai".into(),
+            api_key: Some("sk-configured".into()),
+            model: Some("gpt-5".into()),
+            ..Default::default()
+        };
+        assert!(
+            requirements(&config).contains(&Requirement::LlmProvider(LlmSource::Config(expected)))
         );
-        assert!(requirements(&config).contains(&Requirement::LlmProviderFromEnv));
     }
 
-    /// The silent-wrong case worth naming: an unknown handler falls back to
-    /// echo, so a configured-looking agent behaves like a stub.
+    /// A handler name this binary does not have, and no image to supply one:
+    /// nothing can run this config.
     #[test]
     fn an_unknown_handler_is_reported() {
         let config = config(
@@ -297,6 +320,71 @@ mod tests {
             requirements(&config).contains(&Requirement::UnknownHandler {
                 name: "weather".into()
             })
+        );
+    }
+
+    /// The same handler name, with an image behind it, is the supported way to
+    /// ship a handler no TOML can express — so it must stop being a problem.
+    #[test]
+    fn an_image_answers_for_the_handler_it_carries() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Custom"
+            [server]
+            host = "127.0.0.1"
+            http_port = 8080
+            [handler]
+            type = "weather"
+            [runtime]
+            image = "ghcr.io/acme/weather:2.0"
+            "#,
+        );
+        assert_eq!(
+            requirements(&config),
+            [
+                Requirement::HttpBind {
+                    host: "127.0.0.1".into(),
+                    port: 8080
+                },
+                Requirement::ContainerImage {
+                    image: "ghcr.io/acme/weather:2.0".into()
+                }
+            ]
+        );
+    }
+
+    /// What is inside the image is not this machine's to check. Reporting a
+    /// missing MCP command or model key would be a confident answer about a
+    /// binary that is not the one that will run.
+    #[test]
+    fn an_image_agents_needs_are_not_probed_here() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Custom"
+            [server]
+            http_port = 8080
+            [handler]
+            type = "llm"
+            [runtime]
+            image = "ghcr.io/acme/weather:2.0"
+
+            [features.mcp_client]
+            enabled = true
+
+            [[features.mcp_client.servers]]
+            name = "filesystem"
+            command = "definitely-not-installed"
+            "#,
+        );
+        let requirements = requirements(&config);
+        assert!(
+            !requirements.iter().any(|r| matches!(
+                r,
+                Requirement::McpCommand { .. } | Requirement::LlmProvider(_)
+            )),
+            "got: {requirements:?}"
         );
     }
 }

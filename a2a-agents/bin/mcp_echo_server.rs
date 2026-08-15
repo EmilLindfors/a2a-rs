@@ -1,9 +1,10 @@
 //! Minimal MCP **server** over stdio — a fixture for the `mcp-client` story.
 //!
 //! Exposes two tools, `echo` and `add`, over MCP's stdio transport. It exists
-//! so the [`mcp_client_agent`](../examples/mcp_client_agent.rs) example and the
-//! `mcp_client_test` integration test have a real MCP server to spawn as a
-//! child process — no external dependencies (npx, Node, …) required.
+//! so the `mcp_client_test` integration test has a real MCP server to spawn as
+//! a child process — no external dependencies (npx, Node, …) required, and no
+//! network. Point an agent's `[[features.mcp_client.servers]]` at it to try the
+//! client story by hand.
 //!
 //! Run it directly to poke at it with an MCP inspector:
 //!

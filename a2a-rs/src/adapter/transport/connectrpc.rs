@@ -33,7 +33,8 @@ use crate::{
     },
     port::{
         AsyncMessageHandler, AsyncNotificationManager, AsyncStreamingHandler, AsyncTaskLifecycle,
-        AsyncTaskQuery, SeqEvent, UpdateEvent, streaming_handler::Subscriber,
+        AsyncTaskQuery, AuthPrincipal, RequestContext, SeqEvent, UpdateEvent,
+        streaming_handler::Subscriber,
     },
     services::server::AgentInfoProvider,
 };
@@ -112,6 +113,19 @@ impl ConnectRpcAdapter {
     }
 }
 
+/// Build the inward-facing request context from a ConnectRPC call.
+///
+/// The principal comes from the HTTP request extensions, where the auth
+/// middleware ([`with_auth`](crate::adapter::auth::with_auth)) put it after
+/// authenticating the request — `connectrpc` moves `parts.extensions` onto its
+/// `Context` verbatim. An unauthenticated server has nothing there and the
+/// context names no caller.
+fn request_context(ctx: &::connectrpc::Context, context_id: &str) -> RequestContext {
+    RequestContext::anonymous()
+        .with_session(context_id)
+        .with_principal(ctx.extensions.get::<AuthPrincipal>().cloned())
+}
+
 /// Helper function to map A2AError to connectrpc::ConnectError
 fn map_err(e: A2AError) -> ::connectrpc::ConnectError {
     match e {
@@ -135,6 +149,13 @@ fn map_err(e: A2AError) -> ::connectrpc::ConnectError {
         A2AError::MethodNotFound(msg) => {
             ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Unimplemented, msg)
         }
+        // A context owned by someone else is a refusal, not a fault. Left to the
+        // catch-all it reported as `Internal`, which reads as a server bug and
+        // invites a retry that will be refused again.
+        A2AError::ContextAccessDenied { context_id } => ::connectrpc::ConnectError::new(
+            ::connectrpc::ErrorCode::PermissionDenied,
+            format!("context {context_id} belongs to another principal"),
+        ),
         _ => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Internal, e.to_string()),
     }
 }
@@ -215,15 +236,11 @@ impl A2aService for ConnectRpcAdapter {
         let config = req.configuration.into_option();
 
         let task_id = message.task_id.clone();
-        let session_id = if message.context_id.is_empty() {
-            None
-        } else {
-            Some(message.context_id.as_str())
-        };
+        let request_ctx = request_context(&ctx, &message.context_id);
 
         let task = self
             .service
-            .send_message(&task_id, &message, session_id, decode_send_config(config))
+            .send_message(&task_id, &message, &request_ctx, decode_send_config(config))
             .await
             .map_err(map_err)?;
 
@@ -262,11 +279,7 @@ impl A2aService for ConnectRpcAdapter {
         let config = req.configuration.into_option();
 
         let task_id = message.task_id.clone();
-        let session_id = if message.context_id.is_empty() {
-            None
-        } else {
-            Some(message.context_id.as_str())
-        };
+        let request_ctx = request_context(&ctx, &message.context_id);
 
         // `completion` is deliberately dropped here rather than passed along:
         // on a streaming call the stream itself is the wait, so blocking the
@@ -279,7 +292,7 @@ impl A2aService for ConnectRpcAdapter {
             .send_streaming_message(
                 &task_id,
                 &message,
-                session_id,
+                &request_ctx,
                 opts.push_config,
                 opts.history_limit,
             )
@@ -637,5 +650,39 @@ impl AsyncStreamingHandler for NoopStreamingHandler {
         Err(A2AError::UnsupportedOperation(
             "Streaming not supported by this processor".to_string(),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The one line that carries the caller on this transport. `connectrpc`
+    /// moves the HTTP request's extensions onto its `Context`, and the auth
+    /// middleware is what put an `AuthPrincipal` there; if this stops reading it
+    /// the agent goes back to seeing every caller as the same anonymous nobody,
+    /// which compiles and passes every other test.
+    #[test]
+    fn the_request_context_carries_the_principal_from_the_extensions() {
+        let mut extensions = ::http::Extensions::new();
+        extensions.insert(AuthPrincipal::new("alice".to_string(), "jwt".to_string()));
+        let ctx = ::connectrpc::Context::new(::http::HeaderMap::new()).with_extensions(extensions);
+
+        let request_ctx = request_context(&ctx, "ctx-1");
+
+        assert_eq!(request_ctx.caller(), Some("alice"));
+        assert_eq!(request_ctx.session_id(), Some("ctx-1"));
+    }
+
+    /// No middleware, no principal — and an unset wire `context_id` is no
+    /// session rather than an empty one.
+    #[test]
+    fn an_unauthenticated_call_names_nobody() {
+        let ctx = ::connectrpc::Context::new(::http::HeaderMap::new());
+
+        let request_ctx = request_context(&ctx, "");
+
+        assert_eq!(request_ctx.caller(), None);
+        assert_eq!(request_ctx.session_id(), None);
     }
 }

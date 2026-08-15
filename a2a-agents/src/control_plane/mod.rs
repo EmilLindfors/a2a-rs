@@ -204,6 +204,7 @@ impl ControlPlane {
             id,
             config_path,
             endpoint: config.agent_url(),
+            image: config.image().map(str::to_string),
         };
         let endpoint = spec.endpoint.clone();
 

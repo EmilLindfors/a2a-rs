@@ -53,10 +53,10 @@ fn send_message_params(task_id: &str) -> Value {
 #[tokio::test]
 async fn send_message_returns_task_union() {
     let resp = adapter()
-        .handle_unary(request(
-            methods::SEND_MESSAGE,
-            send_message_params("task-1"),
-        ))
+        .handle_unary(
+            request(methods::SEND_MESSAGE, send_message_params("task-1")),
+            None,
+        )
         .await;
     let value = serde_json::to_value(&resp).unwrap();
 
@@ -80,14 +80,14 @@ async fn send_message_returns_task_union() {
 #[tokio::test]
 async fn get_task_round_trips() {
     let a = adapter();
-    a.handle_unary(request(
-        methods::SEND_MESSAGE,
-        send_message_params("task-2"),
-    ))
+    a.handle_unary(
+        request(methods::SEND_MESSAGE, send_message_params("task-2")),
+        None,
+    )
     .await;
 
     let resp = a
-        .handle_unary(request(methods::GET_TASK, json!({ "id": "task-2" })))
+        .handle_unary(request(methods::GET_TASK, json!({ "id": "task-2" })), None)
         .await;
     let value = serde_json::to_value(&resp).unwrap();
     assert!(value.get("error").is_none(), "unexpected error: {value:?}");
@@ -111,7 +111,10 @@ async fn cancel_task_returns_canceled_state() {
         .unwrap();
 
     let resp = a
-        .handle_unary(request(methods::CANCEL_TASK, json!({ "id": "task-3" })))
+        .handle_unary(
+            request(methods::CANCEL_TASK, json!({ "id": "task-3" })),
+            None,
+        )
         .await;
     let value = serde_json::to_value(&resp).unwrap();
     assert!(value.get("error").is_none(), "unexpected error: {value:?}");
@@ -122,7 +125,7 @@ async fn cancel_task_returns_canceled_state() {
 #[tokio::test]
 async fn unknown_method_is_method_not_found() {
     let resp = adapter()
-        .handle_unary(request("NoSuchMethod", json!({})))
+        .handle_unary(request("NoSuchMethod", json!({})), None)
         .await;
     let value = serde_json::to_value(&resp).unwrap();
     assert!(value.get("result").is_none());
@@ -133,7 +136,10 @@ async fn unknown_method_is_method_not_found() {
 async fn invalid_params_is_invalid_params() {
     // `message` is required on SendMessageRequest's wire shape; an int is invalid.
     let resp = adapter()
-        .handle_unary(request(methods::SEND_MESSAGE, json!({ "message": 42 })))
+        .handle_unary(
+            request(methods::SEND_MESSAGE, json!({ "message": 42 })),
+            None,
+        )
         .await;
     let value = serde_json::to_value(&resp).unwrap();
     assert_eq!(value["error"]["code"], error_code::INVALID_PARAMS);
@@ -142,7 +148,7 @@ async fn invalid_params_is_invalid_params() {
 #[tokio::test]
 async fn missing_message_is_invalid_params() {
     let resp = adapter()
-        .handle_unary(request(methods::SEND_MESSAGE, json!({})))
+        .handle_unary(request(methods::SEND_MESSAGE, json!({})), None)
         .await;
     let value = serde_json::to_value(&resp).unwrap();
     assert_eq!(value["error"]["code"], error_code::INVALID_PARAMS);
@@ -151,7 +157,7 @@ async fn missing_message_is_invalid_params() {
 #[tokio::test]
 async fn get_missing_task_is_task_not_found() {
     let resp = adapter()
-        .handle_unary(request(methods::GET_TASK, json!({ "id": "nope" })))
+        .handle_unary(request(methods::GET_TASK, json!({ "id": "nope" })), None)
         .await;
     let value = serde_json::to_value(&resp).unwrap();
     assert_eq!(value["error"]["code"], error_code::TASK_NOT_FOUND);
@@ -160,14 +166,14 @@ async fn get_missing_task_is_task_not_found() {
 #[tokio::test]
 async fn list_tasks_returns_response_envelope() {
     let a = adapter();
-    a.handle_unary(request(
-        methods::SEND_MESSAGE,
-        send_message_params("task-4"),
-    ))
+    a.handle_unary(
+        request(methods::SEND_MESSAGE, send_message_params("task-4")),
+        None,
+    )
     .await;
 
     let resp = a
-        .handle_unary(request(methods::LIST_TASKS, json!({})))
+        .handle_unary(request(methods::LIST_TASKS, json!({})), None)
         .await;
     let value = serde_json::to_value(&resp).unwrap();
     assert!(value.get("error").is_none(), "unexpected error: {value:?}");
@@ -230,14 +236,14 @@ mod interceptors {
         let a = adapter().with_interceptor(counter.clone());
 
         // A successful call: after observes Ok.
-        a.handle_unary(request(
-            methods::SEND_MESSAGE,
-            super::send_message_params("ti-1"),
-        ))
+        a.handle_unary(
+            request(methods::SEND_MESSAGE, super::send_message_params("ti-1")),
+            None,
+        )
         .await;
         // A failing call (missing task): after observes Err.
         let resp = a
-            .handle_unary(request(methods::GET_TASK, json!({ "id": "ghost" })))
+            .handle_unary(request(methods::GET_TASK, json!({ "id": "ghost" })), None)
             .await;
         let value = serde_json::to_value(&resp).unwrap();
         assert!(value.get("error").is_some(), "expected an error: {value:?}");
@@ -255,7 +261,7 @@ mod interceptors {
             .with_interceptor(Counting::default());
 
         let resp = a
-            .handle_unary(request(methods::GET_TASK, json!({ "id": "task-x" })))
+            .handle_unary(request(methods::GET_TASK, json!({ "id": "task-x" })), None)
             .await;
         let value = serde_json::to_value(&resp).unwrap();
         // The short-circuit error surfaces as the JSON-RPC error, not a task.

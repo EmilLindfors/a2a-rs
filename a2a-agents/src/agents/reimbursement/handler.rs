@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use a2a_rs::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
 use a2a_rs::domain::{A2AError, ContextId, Message, Part, Role, Task, TaskId, TaskState, part};
+use a2a_rs::port::RequestContext;
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
 use super::types::*;
@@ -139,9 +140,18 @@ impl ReimbursementHandler {
         streaming: impl a2a_rs::port::AsyncStreamingHandler + 'static,
         push_notifier: impl a2a_rs::port::AsyncPushNotifier + 'static,
     ) -> Self {
-        // Initialize an AI client from the environment (OpenRouter → Gemini →
-        // OpenAI). `None` disables conversational features.
-        let llm_provider = a2a_agents_common::llm::provider_from_env();
+        // An AI client from the environment (OpenRouter → Gemini → OpenAI); no
+        // provider disables conversational features. A provider that is
+        // configured and broken is reported here and treated as absent, since
+        // this constructor cannot fail — `a2a run` builds the provider itself
+        // (`resolve_llm`) and refuses to start instead.
+        let llm_provider = match a2a_agents_common::llm::provider_from_env() {
+            Ok(selected) => selected.map(|llm| llm.provider),
+            Err(e) => {
+                tracing::error!("{e}; continuing without conversational features");
+                None
+            }
+        };
 
         Self::with_llm(task_lifecycle, streaming, push_notifier, llm_provider)
     }
@@ -560,6 +570,11 @@ Example response when asking for info:
                         .streaming
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
+                }
+                Ok(a2a_agents_common::llm::LlmStreamEvent::Usage(usage)) => {
+                    // Reported, not shown: this agent's artifacts are the answer
+                    // and its tool calls, and a token count is neither.
+                    info!("llm usage: {usage}");
                 }
                 Err(e) => {
                     tracing::error!("LLM Stream error: {}", e);
@@ -1460,14 +1475,14 @@ impl AsyncMessageHandler for ReimbursementHandler {
     #[instrument(skip(self, message), fields(
         task_id = %task_id,
         message_id = %message.message_id,
-        session_id = ?_session_id,
+        session_id = ?ctx.session_id(),
         parts_count = message.parts.len()
     ))]
     async fn process_message(
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         error!(
             "🚨 HANDLER CALLED: Processing reimbursement request for task_id={}",

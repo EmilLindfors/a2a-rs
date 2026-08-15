@@ -6,7 +6,7 @@ use a2a_rs::{
     domain::{
         A2AError, Message, Part, Role, SendCompletion, Task, TaskState, TaskStatusUpdateEvent,
     },
-    port::{AsyncMessageHandler, AsyncStreamingHandler},
+    port::{AsyncMessageHandler, AsyncStreamingHandler, RequestContext},
 };
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -25,7 +25,7 @@ impl AsyncMessageHandler for StreamingHandler {
         &self,
         task_id: &str,
         _message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let response = Message::builder()
             .role(Role::Agent)

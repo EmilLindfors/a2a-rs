@@ -28,6 +28,8 @@ pub const AUTHENTICATED_EXTENDED_CARD_NOT_CONFIGURED: i32 = -32007;
 pub const DATABASE_ERROR: i32 = -32100;
 /// Optimistic-concurrency version mismatch on a task mutation.
 pub const VERSION_CONFLICT: i32 = -32101;
+/// A caller asked for a conversation belonging to a different principal.
+pub const CONTEXT_ACCESS_DENIED: i32 = -32102;
 
 /// Error type for the A2A protocol operations
 #[derive(Error, Debug)]
@@ -88,6 +90,15 @@ pub enum A2AError {
     #[error("Database error: {0}")]
     DatabaseError(String),
 
+    /// The caller does not own this conversation.
+    ///
+    /// A `context_id` groups the tasks of one conversation, and reading it back
+    /// as prompt history means anyone holding the id can read what was said in
+    /// it. This is the refusal for a principal that is not the one that started
+    /// the context.
+    #[error("context {context_id} belongs to another principal")]
+    ContextAccessDenied { context_id: String },
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -120,6 +131,10 @@ impl A2AError {
             A2AError::ValidationError { .. } => (INVALID_PARAMS, "Validation error"),
             A2AError::VersionConflict { .. } => (VERSION_CONFLICT, "Task version conflict"),
             A2AError::DatabaseError(_) => (DATABASE_ERROR, "Database error"),
+            A2AError::ContextAccessDenied { .. } => (
+                CONTEXT_ACCESS_DENIED,
+                "Context belongs to another principal",
+            ),
             A2AError::Internal(_) => (INTERNAL_ERROR, "Internal error"),
             _ => (INTERNAL_ERROR, "Internal error"),
         };
@@ -153,6 +168,7 @@ impl A2AError {
             A2AError::ValidationError { .. } => "VALIDATION_ERROR",
             A2AError::VersionConflict { .. } => "VERSION_CONFLICT",
             A2AError::DatabaseError(_) => "DATABASE_ERROR",
+            A2AError::ContextAccessDenied { .. } => "CONTEXT_ACCESS_DENIED",
             A2AError::Io(_) => "IO_ERROR",
         }
     }

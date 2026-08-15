@@ -2,7 +2,7 @@ use a2a_agents::{AgentPlugin, SkillDefinition};
 use a2a_client::WebA2AClient;
 use a2a_rs::adapter::{ConnectRpcAdapter, HttpServer, InMemoryTaskStorage, SimpleAgentInfo};
 use a2a_rs::domain::{A2AError, ContextId, Message, SendCompletion, Task, TaskId, TaskState};
-use a2a_rs::port::AsyncMessageHandler;
+use a2a_rs::port::{AsyncMessageHandler, RequestContext};
 use async_trait::async_trait;
 use std::time::Duration;
 use tokio::sync::oneshot;
@@ -35,7 +35,7 @@ impl AsyncMessageHandler for EchoAgent {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         // Find text in message
         let mut text = String::new();

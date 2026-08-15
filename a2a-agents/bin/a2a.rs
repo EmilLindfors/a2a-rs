@@ -21,24 +21,30 @@ use a2a_agents::agents::reimbursement::ReimbursementHandler;
 use a2a_agents::core::builder::AutoStorage;
 use a2a_agents::core::config::LlmConfig;
 use a2a_agents::core::{
-    AgentBuilder, AgentConfig, AgentTemplate, FleetConfig, Requirement, fleet_conflicts,
+    AgentBuilder, AgentConfig, AgentTemplate, FleetConfig, LlmSource, Requirement, fleet_conflicts,
     fleet_header, member_block, member_path, requirements,
 };
 use a2a_agents::core::{HandlerType, LlmHandlerConfig};
 use a2a_agents::utils::slugify;
 use a2a_agents::{
-    AgentId, AgentRegistry, AgentRuntime, ContainerHardening, ContainerRuntime, ControlPlane,
-    ControlPlaneAuth, ControlPlaneClient, ControlPlaneClientError, EnvAllowlist, HttpCardSource,
-    InMemoryAgentRegistry, ListFilter, LocalProcessRuntime, Recovered, control_plane_router,
+    AgentId, AgentRegistry, AgentRuntime, CardRefresher, ContainerHardening, ContainerRuntime,
+    ControlPlane, ControlPlaneAuth, ControlPlaneClient, ControlPlaneClientError, EnvAllowlist,
+    HttpCardSource, InMemoryAgentRegistry, ListFilter, LocalProcessRuntime, Recovered,
+    control_plane_router,
 };
-use a2a_agents_common::llm::{LlmProvider, LlmSettings, provider_from_env, provider_from_settings};
+use a2a_agents_common::llm::{
+    LlmSettings, PROVIDER_ENV_VARS, SelectedLlm, provider_from_env, provider_from_settings,
+};
+use a2a_rs::port::RequestContext;
 
 #[cfg(feature = "mcp-server")]
 use a2a_agents::core::config::RemoteAgentTarget;
 #[cfg(feature = "mcp-server")]
 use a2a_agents::handlers::tools::ToolSource;
 #[cfg(feature = "mcp-server")]
-use a2a_agents::{A2aAgentToolSource, LlmHandler, McpToolSource, UnusedInner};
+use a2a_agents::{
+    A2aAgentToolSource, DiscoveredPeer, LlmHandler, McpToolSource, PeerResolver, UnusedInner,
+};
 #[cfg(feature = "mcp-server")]
 use a2a_rs::domain::AgentCard;
 use a2a_rs::{
@@ -179,7 +185,8 @@ enum Command {
         /// Container engine binary (only used with `--runtime container`).
         #[clap(long, default_value = "docker")]
         engine: String,
-        /// Base image (only used with `--runtime container`).
+        /// Base image for agents that do not name their own `[runtime] image`
+        /// (only used with `--runtime container`).
         #[clap(long, default_value = "a2a-agents:latest")]
         image: String,
         /// Bearer token callers must present. Prefer the
@@ -311,7 +318,7 @@ impl AsyncMessageHandler for EchoHandler {
         &self,
         task_id: &str,
         message: &Message,
-        _session_id: Option<&str>,
+        _ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let text = message
             .parts
@@ -336,37 +343,32 @@ impl AsyncMessageHandler for EchoHandler {
     }
 }
 
-fn resolve_llm(llm_config: &Option<LlmConfig>) -> Option<Arc<dyn LlmProvider>> {
-    match llm_config {
-        Some(cfg) => {
-            info!(
-                "Loading LLM configuration from TOML (provider: {}, model: {}, reasoning: {})",
-                cfg.provider,
-                cfg.model.as_deref().unwrap_or("(env default)"),
-                match cfg.reasoning {
-                    Some(reasoning) => reasoning.to_string(),
-                    None => "(model default)".to_string(),
-                }
-            );
-            let settings = LlmSettings {
-                provider: cfg.provider.clone(),
-                api_key: cfg.api_key.clone(),
-                model: cfg.model.clone(),
-                base_url: cfg.base_url.clone(),
-                http_referer: cfg.http_referer.clone(),
-                x_title: cfg.x_title.clone(),
-                reasoning: cfg.reasoning,
-            };
-            match provider_from_settings(&settings) {
-                Ok(p) => Some(p),
-                Err(e) => {
-                    error!("invalid LLM configuration: {e}; falling back to env");
-                    provider_from_env()
-                }
-            }
-        }
-        None => provider_from_env(),
+/// Build the agent's LLM provider, or fail.
+///
+/// `Ok(None)` only when nothing is configured at all, which the handler answers
+/// with its non-LLM fallback. A provider that *is* configured and cannot be
+/// built stops startup: it used to fall back to the environment (and, before
+/// that, to nothing), so a mistyped provider or key produced an agent that
+/// served stub replies while looking healthy.
+fn resolve_llm(llm_config: &Option<LlmConfig>) -> anyhow::Result<Option<SelectedLlm>> {
+    let selected = match llm_config {
+        Some(cfg) => Some(provider_from_settings(&LlmSettings::from(cfg))?),
+        None => provider_from_env()?,
+    };
+    match &selected {
+        Some(llm) => info!(
+            provider = llm.kind,
+            model = %llm.model,
+            selected_by = llm.selected_by,
+            reasoning = %llm.reasoning,
+            "LLM provider"
+        ),
+        None => info!("no LLM configured — the handler will use its non-LLM fallback"),
     }
+    // The whole selection, not just the provider: the resolved model name is
+    // recorded on every conversation summary, and `LlmProvider` cannot be asked
+    // for it.
+    Ok(selected)
 }
 
 #[tokio::main]
@@ -834,6 +836,11 @@ fn check_config(path: &str, strict_env: bool) -> (bool, Option<AgentConfig>) {
                 config.server.http_port,
                 config.skills.len()
             );
+            // Without this the handler above reads as one of this binary's,
+            // which for an image agent is the one thing it is not.
+            if let Some(image) = config.image() {
+                println!("        image {image}, which supplies that handler");
+            }
             if !unset.is_empty() {
                 let how = if strict_env {
                     "unset"
@@ -984,28 +991,44 @@ impl Finding {
     }
 }
 
-/// Environment variables that give an agent a model, in the order
-/// [`provider_from_env`] prefers them.
+/// Describe an LLM provider the way `a2a run` would resolve it.
 ///
-/// Listed here rather than calling that function because constructing a provider
-/// *logs*, and this is CLI output. The verdict it produces is the same: each of
-/// its branches is gated on one of these being set.
-const LLM_KEY_VARS: [&str; 6] = [
-    "OPENROUTER_API_KEY",
-    "GEMINI_API_KEY",
-    "OPENAI_API_KEY",
-    "AI_API_KEY",
-    "OPENAI_API_BASE_URL",
-    "AI_API_BASE_URL",
-];
-
-/// The first configured LLM variable, if any.
-fn llm_env_var() -> Option<&'static str> {
-    LLM_KEY_VARS.into_iter().find(|var| {
-        std::env::var(var)
-            .map(|value| !value.trim().is_empty())
-            .unwrap_or(false)
-    })
+/// Runs the same `provider_from_env` / `provider_from_settings` code as startup,
+/// so a setup that will refuse to start is reported here instead of being
+/// guessed at from which variables happen to be set.
+///
+/// A second finding follows when the provider will discard a configured
+/// `reasoning`. That is a warning and not a problem: the agent runs, on the
+/// model's own thinking default rather than the one the config paid for.
+fn llm_findings(source: &LlmSource) -> Vec<Finding> {
+    let selected = match source {
+        LlmSource::Config(settings) => provider_from_settings(settings).map(Some),
+        LlmSource::Environment => provider_from_env(),
+    };
+    match selected {
+        Ok(Some(llm)) => {
+            let mut findings = vec![Finding::ok(format!(
+                "llm handler will use {} ({}, via {})",
+                llm.kind, llm.model, llm.selected_by
+            ))];
+            if let Some(dropped) = llm.reasoning.unsupported() {
+                findings.push(Finding::warn(format!(
+                    "`[llm] reasoning = \"{dropped}\"` is set, but the {} provider has no \
+                     field to send it in — the model will think at its own default",
+                    llm.kind
+                )));
+            }
+            findings
+        }
+        Ok(None) => vec![Finding::warn(format!(
+            "llm handler with no provider ({} unset) — it will answer with a \
+             deterministic fallback that lists its tools",
+            PROVIDER_ENV_VARS.join(", ")
+        ))],
+        Err(e) => vec![Finding::problem(format!(
+            "{e} — `a2a run` will refuse to start"
+        ))],
+    }
 }
 
 /// Resolve `command` the way spawning it will: absolute/relative paths as given,
@@ -1057,22 +1080,28 @@ fn probe_bind(host: &str, port: u16) -> Result<(), std::io::Error> {
 /// whole output — from a run that also checks configs. A capability that is
 /// *absent* is only a warning in the bare case: with configs in hand, whether
 /// its absence matters is a question about them, and the per-config
-/// requirements answer it precisely ([`Requirement::LlmProviderFromEnv`] fires
-/// for `llm` handlers and not for `echo`). Warning unconditionally made an echo
+/// requirements answer it precisely ([`Requirement::LlmProvider`] fires for
+/// `llm` handlers and not for `echo`). Warning unconditionally made an echo
 /// agent on a keyless machine — CI, or any laptop that never exported a model
-/// key — report a warning about a provider it will never call, which is the
-/// false positive that teaches people to ignore the tool.
+/// key — report a warning about a provider it will never call, a false positive
+/// that teaches people to ignore the tool.
 fn environment_findings(bare: bool) -> Vec<Finding> {
     let mut findings = Vec::new();
 
-    match llm_env_var() {
-        Some(var) => findings.push(Finding::ok(format!("model provider: {var} is set"))),
-        None if bare => findings.push(Finding::warn(format!(
+    match provider_from_env() {
+        Ok(Some(llm)) => findings.push(Finding::ok(format!(
+            "model provider: {} is set ({}, {})",
+            llm.selected_by, llm.kind, llm.model
+        ))),
+        // Broken and absent are both judged against what the configs ask for;
+        // with no configs in hand, this report is the whole output.
+        Err(e) if bare => findings.push(Finding::problem(e.to_string())),
+        Ok(None) if bare => findings.push(Finding::warn(format!(
             "no model key in the environment ({}) — `llm` handlers fall back to a \
              deterministic reply",
-            LLM_KEY_VARS.join(", ")
+            PROVIDER_ENV_VARS.join(", ")
         ))),
-        None => {}
+        _ => {}
     }
 
     match ["docker", "podman"]
@@ -1127,35 +1156,37 @@ fn config_findings(path: &str) -> (Vec<Finding>, Option<AgentConfig>) {
     }
 
     for requirement in requirements(&config) {
-        findings.push(match requirement {
+        match requirement {
+            // The only requirement that can report more than one thing about
+            // itself: a provider that resolves, and a setting it will discard.
+            Requirement::LlmProvider(source) => findings.extend(llm_findings(&source)),
             Requirement::HttpBind { host, port } | Requirement::McpHttpBind { host, port } => {
-                match probe_bind(&host, port) {
+                findings.push(match probe_bind(&host, port) {
                     Ok(()) => Finding::ok(format!("{host}:{port} is free")),
                     Err(e) => Finding::problem(format!("cannot bind {host}:{port}: {e}")),
-                }
+                })
             }
-            Requirement::McpCommand { server, command } => match find_on_path(&command) {
-                Some(found) => Finding::ok(format!(
-                    "MCP server {server:?}: `{command}` found ({})",
-                    found.display()
-                )),
-                None => Finding::problem(format!(
-                    "MCP server {server:?}: `{command}` is not on PATH — the agent will \
-                     start without its tools"
-                )),
-            },
-            Requirement::LlmProviderFromEnv => match llm_env_var() {
-                Some(var) => Finding::ok(format!("llm handler will use {var}")),
-                None => Finding::warn(
-                    "llm handler with no key — it will answer with a deterministic \
-                     fallback that lists its tools",
-                ),
-            },
-            Requirement::UnknownHandler { name } => Finding::problem(format!(
-                "handler {name:?} is not built into this binary — the runner falls back \
-                 to echo, so the agent will not do what this config says"
-            )),
-        });
+            Requirement::McpCommand { server, command } => {
+                findings.push(match find_on_path(&command) {
+                    Some(found) => Finding::ok(format!(
+                        "MCP server {server:?}: `{command}` found ({})",
+                        found.display()
+                    )),
+                    None => Finding::problem(format!(
+                        "MCP server {server:?}: `{command}` is not on PATH — the agent will \
+                         start without its tools"
+                    )),
+                })
+            }
+            Requirement::UnknownHandler { name } => findings.push(Finding::problem(format!(
+                "handler {name:?} is not built into this binary — `a2a run` refuses to \
+                 start it; ship it as an image and name it under `[runtime] image`"
+            ))),
+            Requirement::ContainerImage { image } => findings.push(Finding::ok(format!(
+                "runs from image {image:?} — its handler, model provider and tools are \
+                 inside the image, so they are not checked here"
+            ))),
+        }
     }
 
     (findings, Some(config))
@@ -1321,7 +1352,7 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
             let hardening = resolve_hardening(args.no_hardening, args.memory, args.cpus);
             Arc::new(
                 ContainerRuntime::with_engine(args.engine)
-                    .with_image(args.image)
+                    .with_base_image(args.image)
                     .with_allowed_env(allowed_env)
                     .with_hardening(hardening),
             )
@@ -1329,7 +1360,7 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
     };
     let cp = Arc::new(ControlPlane::new(
         runtime,
-        registry,
+        registry.clone(),
         Arc::new(HttpCardSource::new()),
     ));
 
@@ -1358,6 +1389,12 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
              `--runtime container` for a control plane that can be bounced."
         ),
     }
+
+    // Discovery is written on deploy and recovery and was never revisited, so an
+    // agent that died stayed the answer to a skill lookup and kept being handed
+    // work. This re-reads each registered agent's card on an interval and ranks
+    // the ones that stopped answering behind the ones that did.
+    tokio::spawn(CardRefresher::new(registry, Arc::new(HttpCardSource::new())).run());
 
     let router = control_plane_router(cp, config_dir, auth);
 
@@ -1504,6 +1541,12 @@ async fn run_agents(config_paths: Vec<String>) -> anyhow::Result<()> {
 
     print_run_banner(&config_paths);
 
+    // Phase 1's cards come from the configs, not from running agents, so at this
+    // point every entry is `Unknown` — registered, never seen. This probes them
+    // as they come up, and keeps probing: in a fleet, a member that dies would
+    // otherwise stay the answer to a skill lookup for as long as the others run.
+    tokio::spawn(CardRefresher::new(registry.clone(), Arc::new(HttpCardSource::new())).run());
+
     // Phase 2: build and run each agent; LLM handlers resolve registry refs.
     let mut agents: JoinSet<Result<(), String>> = JoinSet::new();
     for config_path in &config_paths {
@@ -1554,11 +1597,21 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
         AgentBuilder::from_file(config_path).map_err(|e| anyhow::anyhow!("config error: {e}"))?;
     let handler_type = builder.config().handler_type();
     info!("Using handler: {}", handler_type);
+    // The image is the platform's to pull; this command only has the binary it
+    // is. Saying so is what stops "it ran, so it must be the image" — for an
+    // agent whose handler *is* built in, the run works and is simply not the
+    // deployed one.
+    if let Some(image) = builder.config().image() {
+        warn!(
+            "{config_path} runs from image '{image}' when deployed; \
+             `a2a run` is serving it from this binary instead"
+        );
+    }
     match handler_type {
         #[cfg(feature = "reimbursement-agent")]
         HandlerType::Reimbursement => {
             let storage = AutoStorage::from_config(&builder.config().server.storage).await?;
-            let llm_provider = resolve_llm(&builder.config().llm);
+            let llm_provider = resolve_llm(&builder.config().llm)?.map(|llm| llm.provider);
             let streaming = InMemoryStreamingHandler::new();
             let push = storage.push_notifier();
             let handler =
@@ -1581,20 +1634,44 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
             runtime.run().await?;
         }
         // `Custom(_)` plus any variant whose handler feature is disabled in this
-        // build fall through to the echo default with a warning.
-        other => {
-            warn!(
-                "Unsupported handler '{}' in {}. Falling back to echo.",
-                other, config_path
-            );
-            let runtime = builder
-                .with_handler(EchoHandler)
-                .build_with_auto_storage()
-                .await?;
-            runtime.run().await?;
-        }
+        // build. Neither can be served here, and echoing instead gives an agent
+        // that starts, answers, passes a health probe, and does none of what its
+        // config says.
+        other => return Err(unsupported_handler(&other)),
     }
     Ok(())
+}
+
+/// Why this binary cannot serve `handler`, and what to do about it.
+///
+/// Two different problems wear the same shape at this point: a name no build of
+/// `a2a` provides, and a built-in left out of *this* build. The way out differs,
+/// so the message has to.
+fn unsupported_handler(handler: &HandlerType) -> anyhow::Error {
+    match required_feature(handler) {
+        Some(feature) => anyhow::anyhow!(
+            "handler '{handler}' needs this binary built with the '{feature}' feature \
+             (`cargo install a2a-agents --features {feature}`)"
+        ),
+        None => anyhow::anyhow!(
+            "handler '{handler}' is not built into a2a. A handler no config can express \
+             ships as its own image: build it, then name it in the agent's config as \
+             `[runtime]` `image = \"...\"` and deploy it with `a2a deploy` onto a \
+             container runtime."
+        ),
+    }
+}
+
+/// The cargo feature that would have provided a built-in handler, or `None` for
+/// a name that is nobody's built-in.
+fn required_feature(handler: &HandlerType) -> Option<&'static str> {
+    match handler {
+        HandlerType::Reimbursement => Some("reimbursement-agent"),
+        HandlerType::Llm => Some("mcp-server"),
+        // Echo is unconditional, so it never reaches here; a custom name has no
+        // feature that would supply it.
+        HandlerType::Echo | HandlerType::Custom(_) => None,
+    }
 }
 
 /// Build the tool description shown to the model from a remote agent's card.
@@ -1615,6 +1692,20 @@ fn description_from_card(name: &str, card: &AgentCard) -> String {
     }
 }
 
+/// A tool description for a peer whose card could not be read at startup —
+/// which, now that a tool stays advertised through a peer being absent, is a
+/// normal state rather than a failure. Says what the config asked for, so the
+/// model still knows when to reach for the tool.
+#[cfg(feature = "mcp-server")]
+fn describe_target(name: &str, target: &RemoteAgentTarget<'_>) -> String {
+    match target {
+        RemoteAgentTarget::Skill(skill) => format!(
+            "Delegate a request to the '{name}' A2A agent, which provides the '{skill}' skill."
+        ),
+        other => format!("Delegate a request to the '{name}' A2A agent ({other})."),
+    }
+}
+
 #[cfg(feature = "mcp-server")]
 async fn run_llm_agent(
     builder: AgentBuilder,
@@ -1627,7 +1718,12 @@ async fn run_llm_agent(
     use rmcp::transport::TokioChildProcess;
 
     let llm_cfg: LlmHandlerConfig = builder.config().handler.llm.clone().unwrap_or_default();
-    let llm_provider = resolve_llm(&builder.config().llm);
+    let selected_llm = resolve_llm(&builder.config().llm)?;
+    let model_name = selected_llm
+        .as_ref()
+        .map(|llm| llm.model.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let llm_provider = selected_llm.map(|llm| llm.provider);
 
     // Assemble the tool sources the LLM loop can call: one per connected MCP
     // server (each spawned as a child process) plus one per configured remote
@@ -1678,97 +1774,66 @@ async fn run_llm_agent(
             }
         };
 
-        // Resolve the reference to a dialable endpoint, carrying the discovered
-        // card when resolved via the registry so the tool description needs no
-        // second card fetch.
-        let resolved: Option<(String, Option<AgentCard>)> = match target {
-            RemoteAgentTarget::Url(url) => Some((url.to_string(), None)),
-            RemoteAgentTarget::AgentId(id) => match registry.get(&AgentId::from(id)).await {
-                Ok(Some(found)) => Some((found.endpoint, Some(found.card))),
-                Ok(None) => {
-                    warn!(
-                        "remote agent '{}': no agent with id '{}' in registry",
-                        agent.name, id
-                    );
-                    None
-                }
-                Err(e) => {
-                    warn!(
-                        "remote agent '{}': registry lookup failed: {}",
-                        agent.name, e
-                    );
-                    None
-                }
-            },
-            RemoteAgentTarget::Skill(skill) => match registry.find_by_skill(skill).await {
-                Ok(mut matches) if !matches.is_empty() => {
-                    if matches.len() > 1 {
+        // The peer is *located* per call, not here: a startup pass makes this
+        // agent blind to anything deployed after it, and keeps dialing the old
+        // address of a peer that moved. What startup still does is look for a
+        // card to describe the tool with, since `tool_defs` cannot go and ask.
+        let (peer, resolved_card): (Arc<dyn PeerResolver>, Option<AgentCard>) = match target {
+            RemoteAgentTarget::Url(url) => (
+                Arc::new(DiscoveredPeer::at(url)),
+                a2a_rs::fetch_agent_card(url).await.ok(),
+            ),
+            RemoteAgentTarget::AgentId(id) => {
+                let id = AgentId::from(id);
+                let card = match registry.get(&id).await {
+                    Ok(found) => found.map(|found| found.card),
+                    Err(e) => {
                         warn!(
-                            "remote agent '{}': {} agents advertise skill '{}'; using the first",
-                            agent.name,
-                            matches.len(),
-                            skill
+                            "remote agent '{}': registry lookup failed: {}",
+                            agent.name, e
                         );
-                    }
-                    let found = matches.remove(0);
-                    Some((found.endpoint, Some(found.card)))
-                }
-                Ok(_) => {
-                    warn!(
-                        "remote agent '{}': no agent advertises skill '{}'",
-                        agent.name, skill
-                    );
-                    None
-                }
-                Err(e) => {
-                    warn!(
-                        "remote agent '{}': registry lookup failed: {}",
-                        agent.name, e
-                    );
-                    None
-                }
-            },
-        };
-
-        let Some((endpoint, resolved_card)) = resolved else {
-            continue;
-        };
-
-        match a2a_rs::auto_connect(&endpoint).await {
-            Ok(transport) => {
-                let description = match &agent.description {
-                    Some(d) => d.clone(),
-                    None => {
-                        // Prefer the card resolved from the registry; else fetch
-                        // it from the endpoint; else a generic hint.
-                        let card = match resolved_card {
-                            Some(c) => Some(c),
-                            None => a2a_rs::fetch_agent_card(&endpoint).await.ok(),
-                        };
-                        match card {
-                            Some(c) => description_from_card(&agent.name, &c),
-                            None => format!(
-                                "Delegate a request to the '{}' A2A agent at {}.",
-                                agent.name, endpoint
-                            ),
-                        }
+                        None
                     }
                 };
-                let source =
-                    A2aAgentToolSource::new(&agent.name, description, Arc::from(transport));
-                info!(
-                    "exposing remote agent '{}' ({}) as tool '{}'",
-                    agent.name,
-                    endpoint,
-                    source.tool_name()
-                );
-                sources.push(Arc::new(source));
+                (Arc::new(DiscoveredPeer::by_id(registry.clone(), id)), card)
             }
-            Err(e) => warn!(
-                "could not connect to remote agent {} at {}: {}",
-                agent.name, endpoint, e
-            ),
-        }
+            RemoteAgentTarget::Skill(skill) => {
+                let card = match registry.find_by_skill(skill).await {
+                    Ok(mut matches) if !matches.is_empty() => Some(matches.remove(0).card),
+                    Ok(_) => None,
+                    Err(e) => {
+                        warn!(
+                            "remote agent '{}': registry lookup failed: {}",
+                            agent.name, e
+                        );
+                        None
+                    }
+                };
+                (
+                    Arc::new(DiscoveredPeer::by_skill(registry.clone(), skill)),
+                    card,
+                )
+            }
+        };
+
+        let description = match (&agent.description, resolved_card) {
+            (Some(configured), _) => configured.clone(),
+            (None, Some(card)) => description_from_card(&agent.name, &card),
+            // No card to read: the peer has not registered or is not up yet,
+            // which is exactly the case this tool now stays advertised for. Say
+            // what the config asked for, so the model still knows when to reach
+            // for it.
+            (None, None) => describe_target(&agent.name, &target),
+        };
+
+        let source = A2aAgentToolSource::resolving(&agent.name, description, peer);
+        info!(
+            "exposing remote agent '{}' ({}) as tool '{}'",
+            agent.name,
+            target,
+            source.tool_name()
+        );
+        sources.push(Arc::new(source));
     }
 
     let storage = InMemoryTaskStorage::new();
@@ -1782,7 +1847,13 @@ async fn run_llm_agent(
         push,
         sources,
         llm_provider,
-    );
+    )
+    // The same store the tasks go into is the one the conversation is read back
+    // out of — `InMemoryTaskStorage` implements both ports over one state, which
+    // is what makes "the conversation" and "the task history" the same thing
+    // rather than two records that can disagree.
+    .with_context_memory(Arc::new(storage.clone()), llm_cfg.context)
+    .with_model(model_name);
     let runtime = builder
         .with_handler(handler)
         .with_storage(storage)
