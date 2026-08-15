@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-common-v0.5.0...a2a-agents-common-v0.6.0) - 2026-08-15
+
+### Added
+
+- *(a2a-rs,a2a-agents)* Agents can remember the conversation
+- *(a2a-agents-common)* Report the reasoning a provider will discard
+- *(a2a-agents-common)* A broken LLM provider stops the run instead of degrading it
+- *(a2a-agents)* Configure reasoning beside the model, and fail a task that delivers nothing
+
 ## [0.5.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-agents-common-v0.4.0...a2a-agents-common-v0.5.0) - 2026-07-31
 
 ### Build
