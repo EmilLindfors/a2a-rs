@@ -570,6 +570,11 @@ Example response when asking for info:
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
+                Ok(a2a_agents_common::llm::LlmStreamEvent::Usage(usage)) => {
+                    // Reported, not shown: this agent's artifacts are the answer
+                    // and its tool calls, and a token count is neither.
+                    info!("llm usage: {usage}");
+                }
                 Err(e) => {
                     tracing::error!("LLM Stream error: {}", e);
                     break;

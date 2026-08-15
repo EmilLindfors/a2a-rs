@@ -34,7 +34,7 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 
 # HTTP client - optional
-reqwest = { workspace = true, features = ["json", "rustls-tls", "stream"], optional = true }
+reqwest = { workspace = true, features = ["json", "stream"], optional = true }
 
 
 # HTTP server - optional

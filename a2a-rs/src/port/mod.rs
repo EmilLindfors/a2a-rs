@@ -11,10 +11,12 @@
 //!   - `task_manager`: Task lifecycle management  
 //!   - `notification_manager`: Push notifications
 //!   - `streaming_handler`: Real-time updates
+//!   - `conversation_store`: Durable conversation memory for a context
 
 // Business capability ports (focused domain interfaces)
 pub mod authenticator;
 pub mod client;
+pub mod conversation_store;
 pub mod interceptor;
 pub mod message_handler;
 pub mod notification_manager;
@@ -26,6 +28,9 @@ pub use authenticator::{
     AuthContext, AuthContextExtractor, AuthPrincipal, Authenticator, CompositeAuthenticator,
 };
 pub use client::{StreamEvent, StreamItem, Transport};
+pub use conversation_store::{
+    AsyncConversationStore, AsyncConversationStoreExt, NoConversationMemory,
+};
 pub use interceptor::{CallContext, CallInterceptor, CallSide, run_after, run_before};
 pub use message_handler::AsyncMessageHandler;
 pub use notification_manager::{

@@ -38,7 +38,7 @@ pub use builder::{AgentBuilder, BuildError};
 pub use config::{
     AgentConfig, Ap2ExtensionConfig, AuthConfig, ConfigError, ExtensionsConfig, HandlerConfig,
     HandlerType, LlmHandlerConfig, McpClientConfig, McpServerConfig, McpServerConnection,
-    RemoteAgentConfig, ServerConfig, StorageConfig, referenced_env_vars,
+    RemoteAgentConfig, RuntimeConfig, ServerConfig, StorageConfig, referenced_env_vars,
 };
 pub use doctor::{LlmSource, Requirement, requirements};
 pub use fleet::{

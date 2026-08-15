@@ -318,11 +318,9 @@ cargo run --features auth --example my_agent
 
 ## Example Configurations
 
-See the `examples/` directory for complete working examples:
-
-- `examples/jwt_auth.toml` - JWT authentication example
-- `examples/oauth2_auth.toml` - OAuth2 authorization code flow
-- `examples/oauth2_client_credentials.toml` - OAuth2 client credentials flow
+[`examples/auth.toml`](../examples/auth.toml) is one runnable config with every
+`[server.auth]` shape written out: JWT live, and bearer, API key and OAuth2
+(both flows) as commented alternatives to swap in.
 
 ---
 

@@ -243,8 +243,8 @@ command = "a2a-definitely-not-installed"
     assert!(out.contains("filesystem"), "{out}");
 }
 
-/// An unknown handler falls back to echo at runtime, so the agent answers —
-/// just not the way the config says. Silent-wrong, hence a problem.
+/// A handler name this binary does not have stops `a2a run` outright, so the
+/// config cannot run as written. Better caught here than at start-up.
 #[test]
 fn an_unknown_handler_is_a_problem() {
     let scratch = ScratchDir::new("handler");
@@ -269,6 +269,43 @@ type = "weather"
     let (ok, out) = scratch.a2a(&["doctor", "--config", "custom.toml"]);
     assert!(!ok, "an unknown handler must fail the check:\n{out}");
     assert!(out.contains("weather"), "{out}");
+}
+
+/// The same config with an image behind it is the supported way to ship a
+/// handler no TOML can express, so it has to come back clear — and the report
+/// has to say the image is where the answers are, because this machine cannot
+/// look inside it.
+#[test]
+fn an_agent_with_its_own_image_is_all_clear() {
+    let scratch = ScratchDir::new("image");
+    scratch.write(
+        "custom.toml",
+        &format!(
+            r#"
+[agent]
+name = "Custom"
+
+[server]
+host = "127.0.0.1"
+http_port = {}
+
+[handler]
+type = "weather"
+
+[runtime]
+image = "ghcr.io/acme/weather:2.0"
+"#,
+            free_port()
+        ),
+    );
+
+    let (ok, out) = scratch.a2a(&["doctor", "--config", "custom.toml"]);
+    assert!(
+        ok,
+        "an image supplies the handler, so this is runnable:\n{out}"
+    );
+    assert!(out.contains("ghcr.io/acme/weather:2.0"), "{out}");
+    assert!(out.contains("all clear"), "{out}");
 }
 
 /// Each config can be perfectly fine on its own and still not run alongside the

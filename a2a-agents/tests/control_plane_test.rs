@@ -20,7 +20,7 @@ use a2a_agents::runtime::{AgentSpec, Recovered, RuntimeError, RuntimeStatus};
 use a2a_agents::{
     AgentRegistry, AgentRuntime, ControlPlane, ControlPlaneAuth, ControlPlaneClient,
     ControlPlaneClientError, DeployedAgent, InMemoryAgentRegistry, InMemoryAgentRuntime,
-    InMemoryCardSource, ListFilter, RuntimeHealth, control_plane_router,
+    InMemoryCardSource, ListFilter, LocalProcessRuntime, RuntimeHealth, control_plane_router,
 };
 
 /// The token the test control plane requires.
@@ -550,6 +550,59 @@ async fn deploying_onto_a_held_port_is_a_conflict_not_a_second_agent() {
 /// "I do not keep logs" travels all the way from the adapter to the CLI as its
 /// own thing. Reporting it as an empty log would tell an operator their crashing
 /// agent printed nothing.
+/// An agent that brings its own image, deployed onto a backend that can only run
+/// this binary.
+const IMAGE_TOML: &str = r#"
+[agent]
+name = "Image Agent"
+
+[handler]
+type = "weather"
+
+[server]
+host = "127.0.0.1"
+http_port = 8202
+
+[runtime]
+image = "ghcr.io/acme/weather:2.0"
+"#;
+
+/// Deploying an image onto the local runtime has to fail, and fail as
+/// *unsupported*: the alternative is a control plane that reports a healthy
+/// `image-agent` which is really `a2a run` serving a handler it does not have.
+///
+/// Run against the real `LocalProcessRuntime` rather than a fake — the rejection
+/// is the adapter's own answer about what it can run, and a fake would only
+/// prove the test agrees with itself. Nothing is ever spawned, since provision
+/// refuses before it reaches the config.
+#[tokio::test]
+async fn deploying_an_image_onto_a_local_runtime_is_refused() {
+    let config_dir = temp_dir("image");
+    let base = serve_over(
+        // Any exe name will do: the refusal happens before anything is spawned.
+        Arc::new(LocalProcessRuntime::with_exe("a2a")),
+        Arc::new(InMemoryCardSource::new()),
+        ControlPlaneAuth::Disabled,
+        &config_dir,
+    )
+    .await;
+    let client = ControlPlaneClient::new(&base);
+
+    let err = client
+        .deploy(IMAGE_TOML)
+        .await
+        .expect_err("a child process cannot be someone else's image");
+    assert!(
+        matches!(&err, ControlPlaneClientError::Unsupported(reason)
+            if reason.contains("ghcr.io/acme/weather:2.0") && reason.contains("container")),
+        "the operator has to learn which image, and where it can run: {err}"
+    );
+
+    // A refused deploy leaves nothing behind — not a provisioned-but-dead entry,
+    // and not a registry card pointing at an endpoint nothing serves.
+    assert!(client.list(ListFilter::All).await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn a_backend_that_cannot_serve_logs_says_so_end_to_end() {
     let config_dir = temp_dir("nologs");

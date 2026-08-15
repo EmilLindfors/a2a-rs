@@ -193,9 +193,12 @@ config = "weather.toml"
 fn every_shipped_example_fleet_validates() {
     let crate_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
     let fleets = shipped_fleets(&crate_dir.join("examples"));
+    // One today (`examples/fleet/`). The assertion is that discovery found
+    // *something*: a walk that quietly returns nothing would make this test pass
+    // by checking no fleets at all.
     assert!(
-        fleets.len() >= 2,
-        "expected to discover the shipped fleets, found {fleets:?}"
+        !fleets.is_empty(),
+        "expected to discover the shipped fleets, found none"
     );
 
     for fleet in &fleets {

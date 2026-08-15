@@ -23,7 +23,7 @@ Schema via the `schema` feature:
 
 ```sh
 # Regenerate the schema fixture bundled into the provider:
-cargo run -p a2a-agents --example print_schema --features schema -- > internal/schema/agent_config.json
+cargo run -p a2a-agents --features schema --bin a2a -- print-schema > internal/schema/agent_config.json
 ```
 
 When an `a2a` binary is configured (`a2a_bin`), the provider validates configs
@@ -34,7 +34,7 @@ Schema. This keeps Rust the single validator.
 
 ```sh
 # 1. Generate the JSON Schema fixture from the Rust config types.
-cargo run -p a2a-agents --example print_schema --features schema -- \
+cargo run -p a2a-agents --features schema --bin a2a -- print-schema \
   > internal/schema/agent_config.json
 
 # 2. Build the provider.

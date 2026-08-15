@@ -52,11 +52,22 @@ pub enum Requirement {
     /// Carries where the provider comes from so the check can build it the way
     /// `a2a run` does, rather than guessing from the presence of a variable.
     LlmProvider(LlmSource),
-    /// A handler name no built-in provides. The runner falls back to echo, which
-    /// means a config that looks configured behaves like a stub.
+    /// A handler name no built-in provides, and no image to supply one. `a2a
+    /// run` refuses to start such an agent, so this is a config that cannot run
+    /// anywhere as written.
     UnknownHandler {
         /// The configured `handler.type`.
         name: String,
+    },
+    /// The agent runs from its own image (`[runtime] image`), so its handler,
+    /// its model provider and its MCP commands are all inside that image.
+    ///
+    /// It replaces those requirements rather than adding to them: this machine
+    /// cannot see into an image, and reporting what *this* build would have
+    /// needed produces confident answers about a binary that will not run.
+    ContainerImage {
+        /// The configured image reference.
+        image: String,
     },
 }
 
@@ -92,6 +103,17 @@ pub fn requirements(config: &AgentConfig) -> Vec<Requirement> {
         });
     }
 
+    // An agent with its own image stops here. What it needs beyond the ports it
+    // claims — a handler, a model key, an MCP command — lives inside that image,
+    // and the checks below would be answering for a binary that is not the one
+    // that will run.
+    if let Some(image) = config.image() {
+        requirements.push(Requirement::ContainerImage {
+            image: image.to_string(),
+        });
+        return requirements;
+    }
+
     if config.features.mcp_client.enabled {
         for server in &config.features.mcp_client.servers {
             requirements.push(Requirement::McpCommand {
@@ -111,8 +133,8 @@ pub fn requirements(config: &AgentConfig) -> Vec<Requirement> {
         HandlerType::Custom(name) => requirements.push(Requirement::UnknownHandler { name }),
         // The reimbursement agent is a sample behind an opt-in feature, so
         // whether it exists depends on how this binary was built. Unbuilt, the
-        // runner falls back to echo — a config that looks configured behaving
-        // like a stub is precisely what this check is for.
+        // runner refuses to start — a config that names a handler this binary
+        // does not have is precisely what this check is for.
         #[cfg(not(feature = "reimbursement-agent"))]
         HandlerType::Reimbursement => requirements.push(Requirement::UnknownHandler {
             name: "reimbursement".to_string(),
@@ -280,8 +302,8 @@ mod tests {
         );
     }
 
-    /// The silent-wrong case worth naming: an unknown handler falls back to
-    /// echo, so a configured-looking agent behaves like a stub.
+    /// A handler name this binary does not have, and no image to supply one:
+    /// nothing can run this config.
     #[test]
     fn an_unknown_handler_is_reported() {
         let config = config(
@@ -298,6 +320,71 @@ mod tests {
             requirements(&config).contains(&Requirement::UnknownHandler {
                 name: "weather".into()
             })
+        );
+    }
+
+    /// The same handler name, with an image behind it, is the supported way to
+    /// ship a handler no TOML can express — so it must stop being a problem.
+    #[test]
+    fn an_image_answers_for_the_handler_it_carries() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Custom"
+            [server]
+            host = "127.0.0.1"
+            http_port = 8080
+            [handler]
+            type = "weather"
+            [runtime]
+            image = "ghcr.io/acme/weather:2.0"
+            "#,
+        );
+        assert_eq!(
+            requirements(&config),
+            [
+                Requirement::HttpBind {
+                    host: "127.0.0.1".into(),
+                    port: 8080
+                },
+                Requirement::ContainerImage {
+                    image: "ghcr.io/acme/weather:2.0".into()
+                }
+            ]
+        );
+    }
+
+    /// What is inside the image is not this machine's to check. Reporting a
+    /// missing MCP command or model key would be a confident answer about a
+    /// binary that is not the one that will run.
+    #[test]
+    fn an_image_agents_needs_are_not_probed_here() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Custom"
+            [server]
+            http_port = 8080
+            [handler]
+            type = "llm"
+            [runtime]
+            image = "ghcr.io/acme/weather:2.0"
+
+            [features.mcp_client]
+            enabled = true
+
+            [[features.mcp_client.servers]]
+            name = "filesystem"
+            command = "definitely-not-installed"
+            "#,
+        );
+        let requirements = requirements(&config);
+        assert!(
+            !requirements.iter().any(|r| matches!(
+                r,
+                Requirement::McpCommand { .. } | Requirement::LlmProvider(_)
+            )),
+            "got: {requirements:?}"
         );
     }
 }

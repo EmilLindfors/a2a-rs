@@ -1,4 +1,7 @@
-use super::{Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning};
+use super::{
+    Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning, TokenUsage,
+    classify_api_error,
+};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
@@ -24,10 +27,23 @@ pub struct OpenAiConfig {
     /// Reasoning applied to requests that don't ask for their own — the model's
     /// setting, configured where the model is. `None` sends nothing.
     pub reasoning: Option<Reasoning>,
+    /// Whether this endpoint accepts `stream_options.include_usage`, which is
+    /// what makes a streaming response report what it cost.
+    ///
+    /// Opt-in rather than always-on: OpenAI and OpenRouter take it, but local
+    /// OpenAI-compatible servers vary, and one that rejects unknown parameters
+    /// fails the whole call. A non-streaming response reports usage either way,
+    /// so this only gates the streaming path.
+    pub stream_usage: bool,
 }
 
 /// Default base URL for the OpenRouter API (OpenAI-compatible surface).
 pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
+
+/// OpenAI's own endpoint. Named because it is the one OpenAI-compatible URL
+/// whose parameter support is known rather than guessed — see
+/// [`OpenAiConfig::stream_usage`].
+pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 /// Model used when neither a config nor `OPENROUTER_MODEL` names one. Shared by
 /// both paths so they cannot default differently.
@@ -56,6 +72,9 @@ impl OpenAiConfig {
             extra_headers: Vec::new(),
             supports_reasoning: false,
             reasoning: None,
+            // This path defaults to a local server (Ollama), which is exactly
+            // the population that varies on `stream_options`.
+            stream_usage: false,
         }
     }
 
@@ -85,6 +104,7 @@ impl OpenAiConfig {
             extra_headers,
             supports_reasoning: true,
             reasoning: None,
+            stream_usage: true,
         }
     }
 
@@ -152,12 +172,50 @@ struct OpenAiChatRequest {
     tools: Option<Vec<OpenAiTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream: Option<bool>,
+    /// Asks a streaming response to report usage in its final chunk. Only sent
+    /// when `OpenAiConfig::stream_usage` says the endpoint accepts it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_options: Option<StreamOptions>,
     /// OpenRouter's unified reasoning control, as resolved by
     /// [`OpenAiProvider::reasoning_for`] — the request's own setting, else the
     /// configured model default, and never for an endpoint that has no such
     /// field.
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenRouterReasoning>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamOptions {
+    include_usage: bool,
+}
+
+/// OpenAI's `usage` block. Present on every non-streaming response, and on the
+/// final streaming chunk when `stream_options.include_usage` was sent.
+#[derive(Debug, Deserialize)]
+struct OpenAiUsage {
+    prompt_tokens: Option<u32>,
+    completion_tokens: Option<u32>,
+    total_tokens: Option<u32>,
+    /// OpenAI/OpenRouter break reasoning out here; absent on most others.
+    completion_tokens_details: Option<OpenAiCompletionDetails>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiCompletionDetails {
+    reasoning_tokens: Option<u32>,
+}
+
+impl From<OpenAiUsage> for TokenUsage {
+    fn from(usage: OpenAiUsage) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_tokens,
+            completion_tokens: usage.completion_tokens,
+            reasoning_tokens: usage
+                .completion_tokens_details
+                .and_then(|details| details.reasoning_tokens),
+            total_tokens: usage.total_tokens,
+        }
+    }
 }
 
 /// OpenRouter's `reasoning` request object (see
@@ -237,6 +295,7 @@ struct OpenAiFunctionCall {
 #[derive(Debug, Deserialize)]
 struct OpenAiChatResponse {
     choices: Vec<ChatChoice>,
+    usage: Option<OpenAiUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -246,7 +305,11 @@ struct ChatChoice {
 
 #[derive(Debug, Deserialize)]
 struct OpenAiStreamChunk {
+    /// Empty on the final usage-only chunk, which is why this defaults rather
+    /// than failing the parse.
+    #[serde(default)]
     choices: Vec<StreamChoice>,
+    usage: Option<OpenAiUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,6 +446,7 @@ impl LlmProvider for OpenAiProvider {
             response_format,
             tools,
             stream: None,
+            stream_options: None,
             reasoning,
         };
 
@@ -415,7 +479,7 @@ impl LlmProvider for OpenAiProvider {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             error!(status = %status, error = %error_text, "OpenAI API returned error");
-            return Err(LlmError::ApiError(format!(
+            return Err(classify_api_error(format!(
                 "OpenAI API error ({}): {}",
                 status, error_text
             )));
@@ -459,6 +523,7 @@ impl LlmProvider for OpenAiProvider {
             content: message_content,
             tool_calls,
             reasoning,
+            usage: completion.usage.map(TokenUsage::from),
         })
     }
 
@@ -530,6 +595,9 @@ impl LlmProvider for OpenAiProvider {
             response_format,
             tools,
             stream: Some(true),
+            stream_options: self.config.stream_usage.then_some(StreamOptions {
+                include_usage: true,
+            }),
             reasoning,
         };
 
@@ -561,7 +629,7 @@ impl LlmProvider for OpenAiProvider {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             error!(status = %status, error = %error_text, "OpenAI API returned error on stream");
-            return Err(LlmError::ApiError(format!(
+            return Err(classify_api_error(format!(
                 "OpenAI stream error ({}): {}",
                 status, error_text
             )));
@@ -603,6 +671,16 @@ impl LlmProvider for OpenAiProvider {
                         continue;
                     }
                 };
+
+                // Arrives in the final chunk, which carries no choices. Emitted
+                // before the loop below so a chunk that somehow carries both
+                // still reports content first.
+                if let Some(usage) = chunk.usage {
+                    let usage = TokenUsage::from(usage);
+                    if !usage.is_empty() {
+                        yield super::LlmStreamEvent::Usage(usage);
+                    }
+                }
 
                 for choice in chunk.choices {
                     if let Some(reasoning) = choice.delta.reasoning.or(choice.delta.reasoning_content)
@@ -672,6 +750,7 @@ mod tests {
             extra_headers: Vec::new(),
             supports_reasoning,
             reasoning,
+            stream_usage: false,
         })
     }
 

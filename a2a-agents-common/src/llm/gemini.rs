@@ -114,6 +114,34 @@ struct GeminiGenerateContentResponse {
     candidates: Option<Vec<Candidate>>,
     #[serde(rename = "promptFeedback")]
     _prompt_feedback: Option<serde_json::Value>,
+    #[serde(rename = "usageMetadata")]
+    usage_metadata: Option<GeminiUsageMetadata>,
+}
+
+/// Gemini's `usageMetadata`. Present on the response and, while streaming, on
+/// every chunk — the last one carries the final counts, so a caller that keeps
+/// the newest wins.
+#[derive(Debug, Deserialize)]
+struct GeminiUsageMetadata {
+    #[serde(rename = "promptTokenCount")]
+    prompt_token_count: Option<u32>,
+    #[serde(rename = "candidatesTokenCount")]
+    candidates_token_count: Option<u32>,
+    #[serde(rename = "thoughtsTokenCount")]
+    thoughts_token_count: Option<u32>,
+    #[serde(rename = "totalTokenCount")]
+    total_token_count: Option<u32>,
+}
+
+impl From<GeminiUsageMetadata> for super::TokenUsage {
+    fn from(usage: GeminiUsageMetadata) -> Self {
+        Self {
+            prompt_tokens: usage.prompt_token_count,
+            completion_tokens: usage.candidates_token_count,
+            reasoning_tokens: usage.thoughts_token_count,
+            total_tokens: usage.total_token_count,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -308,7 +336,7 @@ impl LlmProvider for GeminiProvider {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             error!(status = %status, error = %error_text, "Gemini API returned error");
-            return Err(LlmError::ApiError(format!(
+            return Err(super::classify_api_error(format!(
                 "Gemini API error ({}): {}",
                 status, error_text
             )));
@@ -318,6 +346,8 @@ impl LlmProvider for GeminiProvider {
             error!(error = %e, "Failed to parse Gemini API response");
             LlmError::SerializationError(e.to_string())
         })?;
+
+        let usage = completion.usage_metadata.map(super::TokenUsage::from);
 
         let candidates = completion.candidates.ok_or_else(|| {
             warn!("No candidates in Gemini API response");
@@ -368,6 +398,7 @@ impl LlmProvider for GeminiProvider {
             content: message_content,
             tool_calls,
             reasoning: None,
+            usage,
         })
     }
 
@@ -520,7 +551,7 @@ impl LlmProvider for GeminiProvider {
                 .await
                 .unwrap_or_else(|_| "Unknown error".to_string());
             error!(status = %status, error = %error_text, "Gemini API returned error on stream");
-            return Err(LlmError::ApiError(format!(
+            return Err(super::classify_api_error(format!(
                 "Gemini stream error ({}): {}",
                 status, error_text
             )));
@@ -529,6 +560,11 @@ impl LlmProvider for GeminiProvider {
         let mut event_stream = response.bytes_stream().eventsource();
 
         let stream = async_stream::try_stream! {
+            // Gemini repeats `usageMetadata` on every chunk with running totals,
+            // so the last one seen is the answer. Held back and emitted once at
+            // the end rather than yielded per chunk.
+            let mut latest_usage: Option<super::TokenUsage> = None;
+
             while let Some(event_res) = event_stream.next().await {
                 let event = match event_res {
                     Ok(e) => e,
@@ -550,6 +586,13 @@ impl LlmProvider for GeminiProvider {
                         continue;
                     }
                 };
+
+                if let Some(usage) = chunk.usage_metadata {
+                    let usage = super::TokenUsage::from(usage);
+                    if !usage.is_empty() {
+                        latest_usage = Some(usage);
+                    }
+                }
 
                 if let Some(candidates) = chunk.candidates {
                     for candidate in candidates {
@@ -583,6 +626,10 @@ impl LlmProvider for GeminiProvider {
                         }
                     }
                 }
+            }
+
+            if let Some(usage) = latest_usage {
+                yield super::LlmStreamEvent::Usage(usage);
             }
         };
 

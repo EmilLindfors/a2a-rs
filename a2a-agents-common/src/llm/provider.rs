@@ -26,7 +26,7 @@ use std::sync::Arc;
 use super::{
     Env, LlmProvider, Reasoning,
     gemini::{GEMINI_BASE_URL, GEMINI_DEFAULT_MODEL, GeminiConfig, GeminiProvider},
-    openai::{OPENROUTER_DEFAULT_MODEL, OpenAiConfig, OpenAiProvider},
+    openai::{OPENAI_BASE_URL, OPENROUTER_DEFAULT_MODEL, OpenAiConfig, OpenAiProvider},
 };
 
 /// Provider-agnostic LLM settings sourced from a host's configuration
@@ -366,13 +366,19 @@ fn build_from_settings(
             // there is nothing to require here — and nothing to report either.
             let model = or_env(&settings.model, env, &["OPENAI_MODEL", "AI_MODEL"])
                 .unwrap_or_else(|| "gpt-4o-mini".to_string());
+            let base_url = or_env(
+                &settings.base_url,
+                env,
+                &["OPENAI_API_BASE_URL", "AI_API_BASE_URL"],
+            )
+            .unwrap_or_else(|| OPENAI_BASE_URL.to_string());
             let config = OpenAiConfig {
-                base_url: or_env(
-                    &settings.base_url,
-                    env,
-                    &["OPENAI_API_BASE_URL", "AI_API_BASE_URL"],
-                )
-                .unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+                // `stream_options.include_usage` is known to work on OpenAI's own
+                // endpoint. This branch also serves local OpenAI-compatible
+                // servers, which vary on it and reject unknown parameters
+                // outright, and nothing here can tell them apart beyond the URL.
+                stream_usage: base_url == OPENAI_BASE_URL,
+                base_url,
                 model: model.clone(),
                 api_key: or_env(&settings.api_key, env, &["OPENAI_API_KEY", "AI_API_KEY"]),
                 extra_headers: Vec::new(),

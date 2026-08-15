@@ -1,21 +1,27 @@
 use std::sync::Arc;
 
+use a2a_agents_common::context::{
+    CharEstimate, ContextBudget, Fit, TokenEstimate, cap_tool_result, fit, project,
+};
 use a2a_agents_common::llm::{
-    ChatMessage, LlmProvider, LlmRequest, LlmStreamEvent, MessageRole, ToolCallAccumulator,
-    ToolDefinition,
+    ChatMessage, LlmError, LlmProvider, LlmRequest, LlmStreamEvent, MessageRole,
+    ToolCallAccumulator, ToolDefinition,
 };
 use a2a_rs::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
 use a2a_rs::domain::{
-    A2AError, ContextId, Message, Part, Role, Task, TaskArtifactUpdateEvent, TaskId, TaskState,
-    part,
+    A2AError, ContextId, Conversation, Message, Part, Role, Seq, SequencedMessage, Task,
+    TaskArtifactUpdateEvent, TaskId, TaskState, part,
 };
 use a2a_rs::port::{
-    AsyncMessageHandler, AsyncPushNotifier, AsyncStreamingHandler, AsyncTaskLifecycle,
+    AsyncConversationStore, AsyncConversationStoreExt, AsyncMessageHandler, AsyncPushNotifier,
+    AsyncStreamingHandler, AsyncTaskLifecycle,
 };
 use async_trait::async_trait;
 use buffa::MessageField;
 
+use super::context::{SUMMARY_INSTRUCTION, budget_from, turns_from};
 use super::tools::{self, ToolSource};
+use crate::core::config::{ContextConfig, ContextMode};
 
 /// What a run produced — as distinct from whether it *broke*.
 ///
@@ -60,6 +66,17 @@ pub struct LlmHandler {
     push: Arc<dyn AsyncPushNotifier>,
     tools: Arc<Vec<Arc<dyn ToolSource>>>,
     llm: Option<Arc<dyn LlmProvider>>,
+    /// Where the conversation for a context is read from and summarized back to.
+    /// `NoConversationMemory` when `[handler.llm.context] mode = "none"`, so the
+    /// run loop needs no branch on whether history exists.
+    conversations: Arc<dyn AsyncConversationStore>,
+    context: ContextConfig,
+    budget: ContextBudget,
+    estimator: Arc<dyn TokenEstimate>,
+    /// Which model this handler is pointed at, recorded on every summary it
+    /// writes. `LlmProvider` does not expose it, so it is passed in at the
+    /// composition edge where `SelectedLlm` resolved it.
+    model: String,
 }
 
 impl HasTaskLifecycle for LlmHandler {
@@ -88,6 +105,7 @@ impl LlmHandler {
         tools: Vec<Arc<dyn ToolSource>>,
         llm: Option<Arc<dyn LlmProvider>>,
     ) -> Self {
+        let context = ContextConfig::default();
         Self {
             system_prompt,
             max_tool_rounds,
@@ -96,7 +114,104 @@ impl LlmHandler {
             push,
             tools: Arc::new(tools),
             llm,
+            conversations: Arc::new(a2a_rs::port::NoConversationMemory),
+            budget: budget_from(&context),
+            context,
+            estimator: Arc::new(CharEstimate::default()),
+            model: "unknown".to_string(),
         }
+    }
+
+    /// Name the model this handler calls, for the record kept against each
+    /// summary. Without it a digest cannot be told apart from one a weaker
+    /// model wrote.
+    pub fn with_model(mut self, model: impl Into<String>) -> Self {
+        self.model = model.into();
+        self
+    }
+
+    /// Give this handler a conversation to remember.
+    ///
+    /// Separate from [`new`](Self::new), which already takes seven positional
+    /// arguments; a builder is wanted there and is its own change. Passing a
+    /// `mode = "none"` config here is the same as not calling this at all.
+    pub fn with_context_memory(
+        mut self,
+        conversations: Arc<dyn AsyncConversationStore>,
+        context: ContextConfig,
+    ) -> Self {
+        self.budget = budget_from(&context);
+        self.context = context;
+        self.conversations = conversations;
+        self
+    }
+
+    /// Load whatever this agent is configured to remember about `context_id`.
+    ///
+    /// `mode = "none"` never reads, so an agent that carries no history costs no
+    /// query. Failure to load is logged and answered with an empty conversation
+    /// rather than failing the turn — except for
+    /// [`ContextAccessDenied`](A2AError::ContextAccessDenied), which is a
+    /// refusal and has to stay one.
+    async fn load_conversation(
+        &self,
+        task_id: &TaskId,
+        context_id: &str,
+    ) -> Result<Conversation, A2AError> {
+        let limit = load_limit(self.context.keep_recent_turns);
+
+        let loaded = match self.context.mode {
+            ContextMode::None => return Ok(Conversation::default()),
+            // One task's own messages. No conversation store involved, so no
+            // ownership question: a caller that can address the task can already
+            // read its history through `tasks/get`.
+            ContextMode::Task => {
+                return Ok(Conversation {
+                    digest: None,
+                    tail: self
+                        .lifecycle
+                        .get(task_id, Some(limit))
+                        .await?
+                        .history
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, message)| SequencedMessage {
+                            seq: Seq::new(index as u64 + 1),
+                            message,
+                        })
+                        .collect(),
+                });
+            }
+            ContextMode::Context => {
+                let id: ContextId = context_id.parse()?;
+                self.conversations
+                    .load(&id, self.caller(), Some(limit))
+                    .await
+            }
+        };
+
+        match loaded {
+            Ok(conversation) => Ok(conversation),
+            // A refusal has to stay a refusal. Everything else degrades to "no
+            // history", because answering without context beats not answering.
+            Err(denied @ A2AError::ContextAccessDenied { .. }) => Err(denied),
+            Err(e) => {
+                tracing::warn!("could not load conversation for {context_id}: {e}");
+                Ok(Conversation::default())
+            }
+        }
+    }
+
+    /// The authenticated principal this turn is acting as.
+    ///
+    /// Always `None`: no principal reaches [`AsyncMessageHandler`], so there is
+    /// nothing here to pass. Named as a method rather than inlined so the one
+    /// place that has to change when the principal is threaded through is
+    /// findable. `AgentBuilder` refuses `mode = "context"` on an agent with
+    /// authentication configured, precisely because this cannot yet tell two
+    /// callers apart.
+    fn caller(&self) -> Option<&str> {
+        None
     }
 
     async fn stream_artifact(
@@ -145,26 +260,130 @@ impl LlmHandler {
         .await;
     }
 
+    /// Summarize `conversation` and record the digest, so the next turn starts
+    /// from the summary instead of the transcript.
+    ///
+    /// Runs inline, before the answer: the caller is already waiting on a model,
+    /// and a background pass would need a lock across an LLM call to stop two
+    /// turns of one conversation compacting at once. Appending with a watermark
+    /// makes that race merely wasteful, so there is nothing to lock.
+    ///
+    /// A failure here is logged and swallowed. Not summarizing costs tokens on
+    /// the next turn; failing the task costs the user their answer.
+    async fn compact_conversation(
+        &self,
+        llm: &dyn LlmProvider,
+        task_id: &str,
+        context_id: &str,
+        conversation: &Conversation,
+    ) {
+        // Only the part before the recent window is folded. Summarizing the
+        // whole tail would leave the next turn with nothing verbatim, which is
+        // the opposite of what `keep_recent_turns` promises — and the recent
+        // turns are the ones a model most needs word for word.
+        let Some(older) = older_than_recent(conversation, self.context.keep_recent_turns) else {
+            return;
+        };
+
+        self.stream_progress(task_id, context_id, "compacting conversation")
+            .await;
+
+        let turns = turns_from(&older);
+        let mut messages = project(
+            "You are summarizing a conversation.",
+            // The previous summary is folded in rather than kept alongside, so
+            // digests chain instead of accumulating.
+            conversation.summary(),
+            &turns,
+            SUMMARY_INSTRUCTION,
+        );
+        // The summary request is itself subject to the budget: a conversation
+        // too long to send is exactly the one being compacted.
+        if let Err(e) = fit(&mut messages, &self.budget, self.estimator.as_ref()) {
+            tracing::warn!("cannot summarize conversation for {context_id}: {e}");
+            return;
+        }
+
+        let request = LlmRequest::new(messages).temperature(0.0);
+        let summary = match llm.chat_completion(request).await {
+            Ok(response) => response.content.unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!("summarizing conversation for {context_id} failed: {e}");
+                return;
+            }
+        };
+        if summary.trim().is_empty() {
+            tracing::warn!("summary for {context_id} came back empty; keeping the transcript");
+            return;
+        }
+
+        let Ok(id) = context_id.parse::<ContextId>() else {
+            return;
+        };
+        // `older`, not `conversation`: the watermark has to be the last message
+        // actually summarized, or the recent turns are hidden behind a digest
+        // that does not describe them.
+        if let Err(e) = self
+            .conversations
+            .compact_through(&id, self.caller(), &older, summary, self.model.clone())
+            .await
+        {
+            tracing::warn!("recording the summary for {context_id} failed: {e}");
+        }
+    }
+
     async fn run_with_llm(
         &self,
         llm: &dyn LlmProvider,
         task_id: &str,
         context_id: &str,
         user_text: &str,
+        conversation: Conversation,
     ) -> Result<Answer, A2AError> {
         use futures::StreamExt;
 
         let tools: Vec<ToolDefinition> = tools::collect_tool_defs(&self.tools);
-        let mut messages = vec![
-            ChatMessage::system(self.system_prompt.clone()),
-            ChatMessage::user(user_text),
-        ];
+        let turns = turns_from(&conversation);
+        let mut messages = project(
+            &self.system_prompt,
+            conversation.summary(),
+            &turns,
+            user_text,
+        );
+
+        // Tool schemas ride on every request and are easy to leave out of a
+        // budget. Charged once here rather than per round, since they do not
+        // change between rounds.
+        let tool_tokens = self.estimator.estimate_tools(&tools);
+        let mut budget = self.budget;
+        budget.max_input_tokens = budget.max_input_tokens.saturating_sub(tool_tokens);
         // What the model said on its way through the tool rounds. Kept outside
         // the loop because it is the only thing left to show if the budget runs
         // out before it commits to an answer.
         let mut said_along_the_way = String::new();
 
+        let mut compacted = false;
         for round in 0..self.max_tool_rounds {
+            // Trim before every round, not just the first: tool results are what
+            // grows, and they arrive between rounds.
+            match fit(&mut messages, &budget, self.estimator.as_ref()) {
+                Ok(Fit::AsIs) => {}
+                Ok(Fit::Trimmed) => {
+                    tracing::debug!(round, "trimmed the request to fit the context budget");
+                }
+                Ok(Fit::ShouldCompact) => {
+                    // Once. A second pass would summarize a summary, and the
+                    // request that still does not fit after one is not going to
+                    // fit after two.
+                    if !compacted && self.context.mode.reads_history() {
+                        compacted = true;
+                        self.compact_conversation(llm, task_id, context_id, &conversation)
+                            .await;
+                    }
+                }
+                Err(e) => return Err(A2AError::Internal(e.to_string())),
+            }
+
             let mut request = LlmRequest::new(messages.clone()).temperature(0.2);
             if !tools.is_empty() {
                 request = request.tools(tools.clone());
@@ -177,11 +396,38 @@ impl LlmHandler {
             // not the model — so a flash agent answering in one line paid for
             // frontier thinking on every request.
 
-            let mut stream = llm
-                .chat_completion_stream(request)
-                .await
-                .map_err(|e| A2AError::Internal(format!("LLM error: {e}")))?;
+            let mut stream = match llm.chat_completion_stream(request).await {
+                Ok(stream) => stream,
+                // The estimate was wrong and the model says so. Drop every tool
+                // result to their smallest useful size and try once more; a
+                // second refusal is a real failure.
+                Err(LlmError::ContextLengthExceeded(detail)) => {
+                    tracing::warn!(
+                        round,
+                        "the model rejected the request as too long: {detail}"
+                    );
+                    if !shrink_hard(&mut messages) {
+                        return Err(A2AError::Internal(format!(
+                            "the request exceeds the model's context window and there is nothing \
+                             left to drop — lower `[handler.llm.context] max_input_tokens` to \
+                             match the model, or shorten the system prompt ({detail})"
+                        )));
+                    }
+                    let mut retry = LlmRequest::new(messages.clone()).temperature(0.2);
+                    if !tools.is_empty() {
+                        retry = retry.tools(tools.clone());
+                    }
+                    llm.chat_completion_stream(retry)
+                        .await
+                        .map_err(|e| A2AError::Internal(format!("LLM error: {e}")))?
+                }
+                Err(e) => return Err(A2AError::Internal(format!("LLM error: {e}"))),
+            };
 
+            let estimated = {
+                let refs: Vec<&ChatMessage> = messages.iter().collect();
+                self.estimator.estimate_messages(&refs) + tool_tokens
+            };
             let thinking_id = format!("thinking-{task_id}-{round}");
             let answer_id = format!("answer-{task_id}-{round}");
             let mut content = String::new();
@@ -215,6 +461,17 @@ impl LlmHandler {
                     }
                     LlmStreamEvent::ToolCall(call) => {
                         calls.finalize(call);
+                    }
+                    LlmStreamEvent::Usage(usage) => {
+                        // What it actually cost, against what was estimated.
+                        // The gap is how the `chars_per_token` ratio gets tuned,
+                        // and the only way to notice the estimator drifting from
+                        // whatever model the config now points at.
+                        tracing::info!(
+                            round,
+                            estimated_prompt_tokens = estimated,
+                            "llm usage: {usage}"
+                        );
                     }
                 }
             }
@@ -277,12 +534,17 @@ impl LlmHandler {
                     A2AError::Internal(format!("model called unknown tool '{}'", call.name))
                 })?;
                 let result = source.invoke(task_id, call).await?;
+                // The progress artifact carries the whole result; only the copy
+                // going back to the model is capped. A caller watching the
+                // stream sees what the tool actually said.
                 self.stream_progress(task_id, context_id, &format!("{} -> {result}", call.name))
                     .await;
+                let for_model =
+                    cap_tool_result(&result, self.context.max_tool_result_chars).unwrap_or(result);
                 messages.push(ChatMessage::tool_result(
                     call.id.clone(),
                     call.name.clone(),
-                    result,
+                    for_model,
                 ));
             }
         }
@@ -344,6 +606,12 @@ impl AsyncMessageHandler for LlmHandler {
         }
         let context_id = self.lifecycle.get(&id, Some(1)).await?.context_id.clone();
 
+        // Loaded *before* this message is recorded. `update_and_broadcast` puts
+        // it on the conversation log, so a load afterwards returns it as history
+        // too and the model is handed the same question twice — once as the last
+        // turn and once as the thing to answer.
+        let conversation = self.load_conversation(&id, &context_id).await?;
+
         let working = self
             .update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
             .await?;
@@ -359,7 +627,13 @@ impl AsyncMessageHandler for LlmHandler {
             let outcome = match &handler.llm {
                 Some(llm) => {
                     handler
-                        .run_with_llm(llm.as_ref(), &task_id, &context_id, &user_text)
+                        .run_with_llm(
+                            llm.as_ref(),
+                            &task_id,
+                            &context_id,
+                            &user_text,
+                            conversation,
+                        )
                         .await
                 }
                 None => {
@@ -401,6 +675,79 @@ impl AsyncMessageHandler for LlmHandler {
         }
         Ok(())
     }
+}
+
+/// Messages per turn — a question and its answer.
+const MESSAGES_PER_TURN: usize = 2;
+
+/// How many recent windows a load reaches back over.
+///
+/// Strictly more than one, or the load would return exactly the window
+/// compaction is forbidden to touch and there would never be anything to
+/// summarize. In steady state the digest watermark bounds the read long before
+/// this does; the limit is the backstop for a conversation that has not
+/// compacted yet.
+const LOAD_WINDOWS: usize = 4;
+
+/// How many messages to read back for a prompt.
+///
+/// Bounded because loading an unbounded conversation only to drop most of it is
+/// the one cost trimming cannot recover.
+fn load_limit(keep_recent_turns: usize) -> u32 {
+    keep_recent_turns
+        .saturating_mul(MESSAGES_PER_TURN)
+        .saturating_mul(LOAD_WINDOWS)
+        .max(MESSAGES_PER_TURN)
+        .try_into()
+        .unwrap_or(u32::MAX)
+}
+
+/// The part of `conversation` that compaction may fold: everything before the
+/// last `keep_recent` turns.
+///
+/// `None` when there is nothing to summarize — a conversation shorter than the
+/// recent window, where compacting would replace turns the next prompt is
+/// supposed to carry verbatim.
+///
+/// A turn is a pair of messages (the question and the answer), so the window is
+/// counted in messages as twice that.
+fn older_than_recent(conversation: &Conversation, keep_recent: usize) -> Option<Conversation> {
+    let keep = keep_recent.saturating_mul(MESSAGES_PER_TURN);
+    if conversation.tail.len() <= keep {
+        return None;
+    }
+    let older = conversation.tail[..conversation.tail.len() - keep].to_vec();
+    Some(Conversation {
+        digest: conversation.digest.clone(),
+        tail: older,
+    })
+}
+
+/// How much of a tool result survives the last-resort shrink. Small enough to
+/// make a real difference against a model that just refused the request, large
+/// enough that an error message or a short answer still comes through whole.
+const HARD_TOOL_RESULT_CHARS: usize = 500;
+
+/// Cut every tool result down to [`HARD_TOOL_RESULT_CHARS`], reporting whether
+/// anything changed.
+///
+/// The backstop for a model that rejects a request the estimator thought would
+/// fit. `false` means there was nothing left to give up, and the caller should
+/// say so rather than retry the identical request.
+fn shrink_hard(messages: &mut [ChatMessage]) -> bool {
+    let mut changed = false;
+    for message in messages.iter_mut() {
+        if !matches!(message.role, MessageRole::Tool) {
+            continue;
+        }
+        if let Some(content) = message.content.as_ref()
+            && let Some(capped) = cap_tool_result(content, HARD_TOOL_RESULT_CHARS)
+        {
+            message.content = Some(capped);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn extract_text(message: &Message) -> String {
@@ -447,21 +794,100 @@ mod tests {
         }
     }
 
+    /// A tool whose result is far too long for any budget, so a test can drive
+    /// the trimming path without an MCP server that happens to be chatty.
+    struct VerboseTool;
+
+    #[async_trait]
+    impl ToolSource for VerboseTool {
+        fn tool_defs(&self) -> Vec<ToolDefinition> {
+            vec![ToolDefinition {
+                name: "dump_everything".to_string(),
+                description: "returns far too much".to_string(),
+                parameters: serde_json::json!({ "type": "object", "properties": {} }),
+            }]
+        }
+
+        fn has_tool(&self, name: &str) -> bool {
+            name == "dump_everything"
+        }
+
+        async fn invoke(&self, _task_id: &str, _call: &ToolCall) -> Result<String, A2AError> {
+            Ok(format!("HEAD{}TAIL", "x".repeat(200_000)))
+        }
+    }
+
     /// Replays a fixed event sequence, so a test can pin what the handler does
     /// with a *shape* of response rather than with a particular model's mood.
-    struct ScriptedProvider(Vec<LlmStreamEvent>);
+    ///
+    /// Records the requests it was given, because for context management the
+    /// thing under test *is* what reached the model.
+    #[derive(Clone)]
+    struct ScriptedProvider {
+        /// One script per request; the last one repeats. Lets a test give the
+        /// model a tool call first and an answer after, which is what the
+        /// interesting paths need.
+        scripts: Vec<Vec<LlmStreamEvent>>,
+        seen: Arc<std::sync::Mutex<Vec<LlmRequest>>>,
+        /// Which request index to refuse as over-long, if any.
+        refuse_at: Option<usize>,
+    }
+
+    impl ScriptedProvider {
+        fn new(events: Vec<LlmStreamEvent>) -> Self {
+            Self {
+                scripts: vec![events],
+                seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+                refuse_at: None,
+            }
+        }
+
+        fn scripted(scripts: Vec<Vec<LlmStreamEvent>>) -> Self {
+            Self {
+                scripts,
+                seen: Arc::new(std::sync::Mutex::new(Vec::new())),
+                refuse_at: None,
+            }
+        }
+
+        fn refusing_at(mut self, index: usize) -> Self {
+            self.refuse_at = Some(index);
+            self
+        }
+
+        fn requests(&self) -> Vec<LlmRequest> {
+            self.seen.lock().unwrap().clone()
+        }
+    }
 
     #[async_trait]
     impl LlmProvider for ScriptedProvider {
-        async fn chat_completion(&self, _request: LlmRequest) -> Result<LlmResponse, LlmError> {
-            Err(LlmError::ProviderError("unused in this test".to_string()))
+        async fn chat_completion(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+            self.seen.lock().unwrap().push(request);
+            Ok(LlmResponse {
+                content: Some("they talked about Bergen".to_string()),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
         }
 
         async fn chat_completion_stream(
             &self,
-            _request: LlmRequest,
+            request: LlmRequest,
         ) -> Result<BoxStream<'static, Result<LlmStreamEvent, LlmError>>, LlmError> {
-            let events: Vec<_> = self.0.clone().into_iter().map(Ok).collect();
+            let index = {
+                let mut seen = self.seen.lock().unwrap();
+                seen.push(request);
+                seen.len() - 1
+            };
+            if self.refuse_at == Some(index) {
+                return Err(LlmError::ContextLengthExceeded(
+                    "maximum context length is 8192 tokens".to_string(),
+                ));
+            }
+            let script = self.scripts[index.min(self.scripts.len() - 1)].clone();
+            let events: Vec<_> = script.into_iter().map(Ok).collect();
             Ok(stream::iter(events).boxed())
         }
     }
@@ -474,15 +900,66 @@ mod tests {
         events: Vec<LlmStreamEvent>,
         tools: Vec<Arc<dyn ToolSource>>,
     ) -> LlmHandler {
-        LlmHandler::new(
+        handler_from(
+            ScriptedProvider::new(events),
+            tools,
+            ContextConfig::default(),
+        )
+        .0
+    }
+
+    /// A handler over one shared `InMemoryTaskStorage`, which is both its task
+    /// store and its conversation store — the same wiring `a2a run` uses, and
+    /// the reason "the conversation" and "the task history" cannot disagree.
+    fn handler_from(
+        provider: ScriptedProvider,
+        tools: Vec<Arc<dyn ToolSource>>,
+        context: ContextConfig,
+    ) -> (LlmHandler, ScriptedProvider) {
+        let storage = InMemoryTaskStorage::new();
+        let handler = LlmHandler::new(
             "test".to_string(),
             2,
-            InMemoryTaskStorage::new(),
+            storage.clone(),
             InMemoryStreamingHandler::new(),
             Arc::new(NoopPushNotifier),
             tools,
-            Some(Arc::new(ScriptedProvider(events)) as Arc<dyn LlmProvider>),
+            Some(Arc::new(provider.clone()) as Arc<dyn LlmProvider>),
         )
+        .with_context_memory(Arc::new(storage), context);
+        (handler, provider)
+    }
+
+    /// Every user/assistant message that reached the model on request `index`.
+    fn sent_texts(provider: &ScriptedProvider, index: usize) -> Vec<String> {
+        provider.requests()[index]
+            .messages
+            .iter()
+            .filter(|m| matches!(m.role, MessageRole::User | MessageRole::Assistant))
+            .filter_map(|m| m.content.clone())
+            .collect()
+    }
+
+    async fn say(handler: &LlmHandler, task_id: &str, context_id: &str, text: &str) -> Task {
+        let id: TaskId = task_id.parse().unwrap();
+        let message = Message::builder()
+            .role(Role::User)
+            .parts(vec![Part::text(text.to_string())])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .context_id(context_id.to_string())
+            .build();
+        handler
+            .process_message(task_id, &message, None)
+            .await
+            .unwrap();
+        for _ in 0..200 {
+            let task = handler.lifecycle.get(&id, None).await.unwrap();
+            if state_of(&task).is_terminal() {
+                return task;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+        panic!("task never settled");
     }
 
     /// A model that only ever calls tools, so the loop always runs out of rounds.
@@ -614,5 +1091,408 @@ mod tests {
             reply.contains("Bergen is on the west coast."),
             "the partial answer must survive, got: {reply:?}"
         );
+    }
+
+    fn context_config(mode: ContextMode) -> ContextConfig {
+        ContextConfig {
+            mode,
+            ..ContextConfig::default()
+        }
+    }
+
+    /// The default, and what every existing agent keeps doing: each message is
+    /// answered on its own, with no memory of the last one.
+    #[tokio::test]
+    async fn without_context_memory_each_turn_starts_fresh() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("ok".to_string())]),
+            Vec::new(),
+            context_config(ContextMode::None),
+        );
+
+        say(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "ctx",
+            "first",
+        )
+        .await;
+        say(
+            &handler,
+            "22222222-2222-2222-2222-222222222222",
+            "ctx",
+            "second",
+        )
+        .await;
+
+        assert_eq!(
+            sent_texts(&provider, 1),
+            vec!["second"],
+            "the second turn must not see the first"
+        );
+    }
+
+    /// With `mode = "context"`, a second task in the same context is answered
+    /// with what was already said — the whole point of the feature.
+    #[tokio::test]
+    async fn a_second_turn_in_one_context_sees_the_first() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("Oslo".to_string())]),
+            Vec::new(),
+            context_config(ContextMode::Context),
+        );
+
+        say(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "ctx",
+            "what is the capital",
+        )
+        .await;
+        say(
+            &handler,
+            "22222222-2222-2222-2222-222222222222",
+            "ctx",
+            "and the population",
+        )
+        .await;
+
+        let second = sent_texts(&provider, 1);
+        assert!(
+            second.contains(&"what is the capital".to_string()),
+            "the earlier question must carry across: {second:?}"
+        );
+        assert!(
+            second.contains(&"Oslo".to_string()),
+            "the earlier answer must carry across: {second:?}"
+        );
+        assert_eq!(
+            second.last().map(String::as_str),
+            Some("and the population")
+        );
+    }
+
+    /// Conversations are keyed by context. A different context is a different
+    /// conversation, even on the same agent.
+    #[tokio::test]
+    async fn a_different_context_is_a_different_conversation() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("ok".to_string())]),
+            Vec::new(),
+            context_config(ContextMode::Context),
+        );
+
+        say(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "one",
+            "secret",
+        )
+        .await;
+        say(
+            &handler,
+            "22222222-2222-2222-2222-222222222222",
+            "two",
+            "hei",
+        )
+        .await;
+
+        assert_eq!(
+            sent_texts(&provider, 1),
+            vec!["hei"],
+            "nothing from context 'one' may appear in context 'two'"
+        );
+    }
+
+    /// A tool that returns 200k characters used to go to the model whole. The
+    /// caller still sees all of it on the progress stream; only the model's copy
+    /// is capped.
+    #[tokio::test]
+    async fn a_huge_tool_result_is_capped_before_it_reaches_the_model() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(always_calls("dump_everything", None)),
+            vec![Arc::new(VerboseTool) as Arc<dyn ToolSource>],
+            context_config(ContextMode::None),
+        );
+
+        say(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "ctx",
+            "dump it",
+        )
+        .await;
+
+        // The second request is the one carrying the first round's tool result.
+        let tool_message = provider.requests()[1]
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, MessageRole::Tool))
+            .and_then(|m| m.content.clone())
+            .expect("a tool result reached the model");
+
+        assert!(
+            tool_message.chars().count() < 20_000,
+            "200k characters must not reach the model, got {}",
+            tool_message.chars().count()
+        );
+        assert!(tool_message.starts_with("HEAD"), "the head survives");
+        assert!(tool_message.ends_with("TAIL"), "the tail survives");
+        assert!(tool_message.contains("elided"), "the cut is marked");
+    }
+
+    /// A model that rejects the request as too long gets one more chance with
+    /// tool results cut to the bone. This used to arrive as
+    /// `A2AError::Internal("LLM error: API error (400) ...")` and simply fail.
+    ///
+    /// The refusal is aimed at the *second* request, the one carrying a tool
+    /// result: that is the only point where there is anything left to shrink.
+    #[tokio::test]
+    async fn a_context_length_refusal_is_retried_smaller() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::scripted(vec![
+                always_calls("dump_everything", None),
+                vec![LlmStreamEvent::ContentChunk("fits now".to_string())],
+            ])
+            .refusing_at(1),
+            vec![Arc::new(VerboseTool) as Arc<dyn ToolSource>],
+            context_config(ContextMode::None),
+        );
+
+        let task = say(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "ctx",
+            "go",
+        )
+        .await;
+
+        assert_eq!(state_of(&task), TaskState::Completed);
+        assert_eq!(reply_text(&task), "fits now");
+        assert_eq!(
+            provider.requests().len(),
+            3,
+            "one refused request plus exactly one retry"
+        );
+
+        let retried = provider.requests()[2]
+            .messages
+            .iter()
+            .find(|m| matches!(m.role, MessageRole::Tool))
+            .and_then(|m| m.content.clone())
+            .expect("the retry still carries the tool result");
+        assert!(
+            retried.chars().count() <= 600,
+            "the retry has to be materially smaller, got {}",
+            retried.chars().count()
+        );
+    }
+
+    /// ...and when the very first request is refused there are no tool results
+    /// to give up, so retrying would send the identical request. It fails
+    /// instead, naming the setting that fixes it.
+    #[tokio::test]
+    async fn a_refusal_with_nothing_left_to_drop_fails_and_names_the_knob() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("never sent".to_string())])
+                .refusing_at(0),
+            Vec::new(),
+            context_config(ContextMode::None),
+        );
+
+        let task = say(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "ctx",
+            "go",
+        )
+        .await;
+
+        assert_eq!(state_of(&task), TaskState::Failed);
+        let reply = reply_text(&task);
+        assert!(reply.contains("max_input_tokens"), "{reply}");
+        assert_eq!(
+            provider.requests().len(),
+            1,
+            "an identical retry is not worth a round trip"
+        );
+    }
+
+    /// `mode = "task"` carries one task's own messages and nothing from the
+    /// sibling tasks that share its context.
+    #[tokio::test]
+    async fn task_mode_does_not_reach_across_tasks() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("ok".to_string())]),
+            Vec::new(),
+            context_config(ContextMode::Task),
+        );
+
+        say(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "ctx",
+            "first",
+        )
+        .await;
+        say(
+            &handler,
+            "22222222-2222-2222-2222-222222222222",
+            "ctx",
+            "second",
+        )
+        .await;
+
+        assert!(
+            !sent_texts(&provider, 1).contains(&"first".to_string()),
+            "task mode must not see a sibling task: {:?}",
+            sent_texts(&provider, 1)
+        );
+    }
+
+    /// A conversation that crosses the compaction threshold is summarized, and
+    /// the next turn is handed the summary instead of the transcript.
+    ///
+    /// The budget is tiny so two short turns trip it; in production the same
+    /// path runs at 80% of a real window.
+    #[tokio::test]
+    async fn a_long_conversation_is_summarized_and_the_summary_carries_forward() {
+        let context = ContextConfig {
+            mode: ContextMode::Context,
+            // Small, but well clear of the summary prompt itself: `fit` refuses
+            // a budget that cannot hold the request it is being asked to make.
+            max_input_tokens: 400,
+            reserve_for_output: 0,
+            compact_at_percent: 50,
+            // One turn kept verbatim, so the second turn already has something
+            // older to fold. The default of 4 would need nine turns.
+            keep_recent_turns: 1,
+            ..ContextConfig::default()
+        };
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("x".repeat(1000))]),
+            Vec::new(),
+            context,
+        );
+
+        say(
+            &handler,
+            "11111111-1111-1111-1111-111111111111",
+            "ctx",
+            "first question",
+        )
+        .await;
+        say(
+            &handler,
+            "22222222-2222-2222-2222-222222222222",
+            "ctx",
+            "second question",
+        )
+        .await;
+        say(
+            &handler,
+            "33333333-3333-3333-3333-333333333333",
+            "ctx",
+            "third question",
+        )
+        .await;
+        // A fourth turn, because a turn compacts the conversation it *loaded*:
+        // the digest written during turn three first reaches a prompt on turn
+        // four.
+        say(
+            &handler,
+            "44444444-4444-4444-4444-444444444444",
+            "ctx",
+            "fourth question",
+        )
+        .await;
+
+        // `chat_completion` (non-streaming) is only used for summarizing, so a
+        // recorded non-streaming request is proof compaction ran.
+        let summarized = provider.requests().iter().any(|request| {
+            request.messages.iter().any(|m| {
+                m.content
+                    .as_deref()
+                    .is_some_and(|c| c.contains("Summarize the conversation"))
+            })
+        });
+        assert!(summarized, "the conversation should have been compacted");
+
+        // And the digest reaches the next prompt as a system message.
+        let requests = provider.requests();
+        let last = requests.last().unwrap();
+        let has_summary_block = last.messages.iter().any(|m| {
+            matches!(m.role, MessageRole::System)
+                && m.content
+                    .as_deref()
+                    .is_some_and(|c| c.contains("Summary of the earlier part"))
+        });
+        assert!(
+            has_summary_block,
+            "the summary must be carried into the next turn: {:?}",
+            last.messages
+                .iter()
+                .map(|m| (&m.role, m.content.as_deref().map(|c| &c[..c.len().min(60)])))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The recent window is kept verbatim; only what precedes it is summarized.
+    /// Folding the whole tail would leave the next turn nothing word for word,
+    /// which is the opposite of what `keep_recent_turns` promises.
+    #[test]
+    fn compaction_leaves_the_recent_window_alone() {
+        use a2a_rs::domain::{Seq, SequencedMessage};
+
+        let conversation = Conversation {
+            digest: None,
+            tail: (1..=6)
+                .map(|seq| SequencedMessage {
+                    seq: Seq::new(seq),
+                    message: Message::default(),
+                })
+                .collect(),
+        };
+
+        // Two turns kept is four messages, leaving the first two foldable.
+        let older = older_than_recent(&conversation, 2).expect("six messages, two foldable");
+        assert_eq!(older.tail.len(), 2);
+        assert_eq!(
+            older.tail.last().unwrap().seq,
+            Seq::new(2),
+            "the watermark must be the last message actually summarized"
+        );
+
+        // …and a conversation no longer than the window has nothing to fold.
+        assert!(older_than_recent(&conversation, 3).is_none());
+        assert!(older_than_recent(&Conversation::default(), 1).is_none());
+    }
+
+    /// The load has to reach further back than the window compaction may not
+    /// touch, or there would never be anything to summarize.
+    #[test]
+    fn a_load_reaches_past_the_window_it_may_not_compact() {
+        for keep in [1usize, 4, 100] {
+            assert!(
+                load_limit(keep) as usize > keep * MESSAGES_PER_TURN,
+                "load_limit({keep}) must exceed the protected window"
+            );
+        }
+        assert!(load_limit(0) >= MESSAGES_PER_TURN as u32);
+    }
+
+    /// A model that only ever calls `name`, so the loop always runs out of
+    /// rounds and every round appends a tool result.
+    fn always_calls(name: &str, said: Option<&str>) -> Vec<LlmStreamEvent> {
+        let mut events: Vec<_> = said
+            .map(|s| LlmStreamEvent::ContentChunk(s.to_string()))
+            .into_iter()
+            .collect();
+        events.push(LlmStreamEvent::ToolCall(ToolCall {
+            id: "call-1".to_string(),
+            name: name.to_string(),
+            arguments: "{}".to_string(),
+        }));
+        events
     }
 }

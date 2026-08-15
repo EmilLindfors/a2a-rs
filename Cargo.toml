@@ -32,6 +32,19 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 async-trait = "0.1"
 futures = "0.3"
-reqwest = { version = "0.12", default-features = false }
+# TLS roots are decided here, once, for every crate that speaks HTTPS.
+#
+# The two root stores are additive in reqwest: webpki-roots is the floor (a
+# machine with no trust store still reaches public APIs), and the native store
+# adds whatever CA the operator installed. Without the native half, an agent
+# fails every outbound call behind a TLS-intercepting proxy — a corporate MITM
+# gateway, or a Docker Sandbox, which signs traffic with its own
+# "Docker Sandboxes Proxy CA" and hands the agent a cert webpki has never seen.
+# rustls ignores SSL_CERT_FILE, so there is no way to fix that from outside the
+# binary.
+reqwest = { version = "0.12", default-features = false, features = [
+    "rustls-tls",
+    "rustls-tls-native-roots",
+] }
 bon = "2.3"
 tokio = "1.32"

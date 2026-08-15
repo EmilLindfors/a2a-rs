@@ -1,8 +1,8 @@
-# Greeter — the agent this walkthrough deploys. See README.md.
+# Greeter — the simplest member of the fleet. See README.md.
 #
-# Deliberately an `echo` handler: the platform lifecycle (deploy, health, logs,
-# stop) is the subject here, and an agent that needs no API key keeps every
-# command in the README runnable, in CI as well as on a laptop.
+# An `echo` handler: no model, no API key, no external service. Every command in
+# the walkthrough runs against this agent whether or not the machine has a model
+# key, which is what keeps the platform half of the README reproducible.
 
 [agent]
 name = "Greeter"
@@ -18,6 +18,9 @@ http_port = 8081
 [server.storage]
 type = "inmemory"
 
+[handler]
+type = "echo"
+
 [[skills]]
 id = "greet"
 name = "Greet"
@@ -26,9 +29,6 @@ keywords = ["greet", "hello"]
 examples = ["Say hello"]
 input_formats = ["text"]
 output_formats = ["text"]
-
-[handler]
-type = "echo"
 
 [features]
 streaming = true

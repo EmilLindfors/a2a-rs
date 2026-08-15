@@ -123,12 +123,24 @@ pub struct AgentSpec {
     /// Dialable base URL the agent serves on (from [`AgentConfig::agent_url`]),
     /// probed to decide [`RuntimeHealth::Healthy`] vs [`RuntimeHealth::Unhealthy`].
     pub endpoint: String,
+    /// The agent's own image (`[runtime] image`), where it brings one.
+    ///
+    /// This is how an agent whose handler no TOML can express reaches the
+    /// platform: as an image, rather than as a handler name this binary would
+    /// have to already know. `None` means the runtime's own default — its base
+    /// image, or a child `a2a run` process.
+    ///
+    /// A backend that cannot run an arbitrary image must reject a spec carrying
+    /// one with [`RuntimeError::Unsupported`]: running the config's *config* in
+    /// something other than its image gives an agent that starts, answers, and
+    /// is not the agent that was deployed.
+    pub image: Option<String>,
 }
 
 impl AgentSpec {
     /// Derive a spec from a config file, reusing [`AgentConfig`] to read the
-    /// agent's name (→ [`AgentId`]) and bound endpoint. Invalid configs surface
-    /// as [`RuntimeError::Config`].
+    /// agent's name (→ [`AgentId`]), bound endpoint and image. Invalid configs
+    /// surface as [`RuntimeError::Config`].
     pub fn from_config_path(path: impl Into<PathBuf>) -> Result<Self, RuntimeError> {
         let config_path = path.into();
         let config = AgentConfig::from_file(&config_path)
@@ -136,6 +148,7 @@ impl AgentSpec {
         Ok(Self {
             id: AgentId::from_name(&config.agent.name),
             endpoint: config.agent_url(),
+            image: config.image().map(str::to_string),
             config_path,
         })
     }

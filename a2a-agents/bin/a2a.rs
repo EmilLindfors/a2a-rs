@@ -33,7 +33,7 @@ use a2a_agents::{
     control_plane_router,
 };
 use a2a_agents_common::llm::{
-    LlmProvider, LlmSettings, PROVIDER_ENV_VARS, provider_from_env, provider_from_settings,
+    LlmSettings, PROVIDER_ENV_VARS, SelectedLlm, provider_from_env, provider_from_settings,
 };
 
 #[cfg(feature = "mcp-server")]
@@ -184,7 +184,8 @@ enum Command {
         /// Container engine binary (only used with `--runtime container`).
         #[clap(long, default_value = "docker")]
         engine: String,
-        /// Base image (only used with `--runtime container`).
+        /// Base image for agents that do not name their own `[runtime] image`
+        /// (only used with `--runtime container`).
         #[clap(long, default_value = "a2a-agents:latest")]
         image: String,
         /// Bearer token callers must present. Prefer the
@@ -348,7 +349,7 @@ impl AsyncMessageHandler for EchoHandler {
 /// built stops startup: it used to fall back to the environment (and, before
 /// that, to nothing), so a mistyped provider or key produced an agent that
 /// served stub replies while looking healthy.
-fn resolve_llm(llm_config: &Option<LlmConfig>) -> anyhow::Result<Option<Arc<dyn LlmProvider>>> {
+fn resolve_llm(llm_config: &Option<LlmConfig>) -> anyhow::Result<Option<SelectedLlm>> {
     let selected = match llm_config {
         Some(cfg) => Some(provider_from_settings(&LlmSettings::from(cfg))?),
         None => provider_from_env()?,
@@ -363,7 +364,10 @@ fn resolve_llm(llm_config: &Option<LlmConfig>) -> anyhow::Result<Option<Arc<dyn 
         ),
         None => info!("no LLM configured — the handler will use its non-LLM fallback"),
     }
-    Ok(selected.map(|llm| llm.provider))
+    // The whole selection, not just the provider: the resolved model name is
+    // recorded on every conversation summary, and `LlmProvider` cannot be asked
+    // for it.
+    Ok(selected)
 }
 
 #[tokio::main]
@@ -831,6 +835,11 @@ fn check_config(path: &str, strict_env: bool) -> (bool, Option<AgentConfig>) {
                 config.server.http_port,
                 config.skills.len()
             );
+            // Without this the handler above reads as one of this binary's,
+            // which for an image agent is the one thing it is not.
+            if let Some(image) = config.image() {
+                println!("        image {image}, which supplies that handler");
+            }
             if !unset.is_empty() {
                 let how = if strict_env {
                     "unset"
@@ -1169,8 +1178,12 @@ fn config_findings(path: &str) -> (Vec<Finding>, Option<AgentConfig>) {
                 })
             }
             Requirement::UnknownHandler { name } => findings.push(Finding::problem(format!(
-                "handler {name:?} is not built into this binary — the runner falls back \
-                 to echo, so the agent will not do what this config says"
+                "handler {name:?} is not built into this binary — `a2a run` refuses to \
+                 start it; ship it as an image and name it under `[runtime] image`"
+            ))),
+            Requirement::ContainerImage { image } => findings.push(Finding::ok(format!(
+                "runs from image {image:?} — its handler, model provider and tools are \
+                 inside the image, so they are not checked here"
             ))),
         }
     }
@@ -1338,7 +1351,7 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
             let hardening = resolve_hardening(args.no_hardening, args.memory, args.cpus);
             Arc::new(
                 ContainerRuntime::with_engine(args.engine)
-                    .with_image(args.image)
+                    .with_base_image(args.image)
                     .with_allowed_env(allowed_env)
                     .with_hardening(hardening),
             )
@@ -1583,11 +1596,21 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
         AgentBuilder::from_file(config_path).map_err(|e| anyhow::anyhow!("config error: {e}"))?;
     let handler_type = builder.config().handler_type();
     info!("Using handler: {}", handler_type);
+    // The image is the platform's to pull; this command only has the binary it
+    // is. Saying so is what stops "it ran, so it must be the image" — for an
+    // agent whose handler *is* built in, the run works and is simply not the
+    // deployed one.
+    if let Some(image) = builder.config().image() {
+        warn!(
+            "{config_path} runs from image '{image}' when deployed; \
+             `a2a run` is serving it from this binary instead"
+        );
+    }
     match handler_type {
         #[cfg(feature = "reimbursement-agent")]
         HandlerType::Reimbursement => {
             let storage = AutoStorage::from_config(&builder.config().server.storage).await?;
-            let llm_provider = resolve_llm(&builder.config().llm)?;
+            let llm_provider = resolve_llm(&builder.config().llm)?.map(|llm| llm.provider);
             let streaming = InMemoryStreamingHandler::new();
             let push = storage.push_notifier();
             let handler =
@@ -1610,20 +1633,44 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
             runtime.run().await?;
         }
         // `Custom(_)` plus any variant whose handler feature is disabled in this
-        // build fall through to the echo default with a warning.
-        other => {
-            warn!(
-                "Unsupported handler '{}' in {}. Falling back to echo.",
-                other, config_path
-            );
-            let runtime = builder
-                .with_handler(EchoHandler)
-                .build_with_auto_storage()
-                .await?;
-            runtime.run().await?;
-        }
+        // build. Neither can be served here, and echoing instead gives an agent
+        // that starts, answers, passes a health probe, and does none of what its
+        // config says.
+        other => return Err(unsupported_handler(&other)),
     }
     Ok(())
+}
+
+/// Why this binary cannot serve `handler`, and what to do about it.
+///
+/// Two different problems wear the same shape at this point: a name no build of
+/// `a2a` provides, and a built-in left out of *this* build. The way out differs,
+/// so the message has to.
+fn unsupported_handler(handler: &HandlerType) -> anyhow::Error {
+    match required_feature(handler) {
+        Some(feature) => anyhow::anyhow!(
+            "handler '{handler}' needs this binary built with the '{feature}' feature \
+             (`cargo install a2a-agents --features {feature}`)"
+        ),
+        None => anyhow::anyhow!(
+            "handler '{handler}' is not built into a2a. A handler no config can express \
+             ships as its own image: build it, then name it in the agent's config as \
+             `[runtime]` `image = \"...\"` and deploy it with `a2a deploy` onto a \
+             container runtime."
+        ),
+    }
+}
+
+/// The cargo feature that would have provided a built-in handler, or `None` for
+/// a name that is nobody's built-in.
+fn required_feature(handler: &HandlerType) -> Option<&'static str> {
+    match handler {
+        HandlerType::Reimbursement => Some("reimbursement-agent"),
+        HandlerType::Llm => Some("mcp-server"),
+        // Echo is unconditional, so it never reaches here; a custom name has no
+        // feature that would supply it.
+        HandlerType::Echo | HandlerType::Custom(_) => None,
+    }
 }
 
 /// Build the tool description shown to the model from a remote agent's card.
@@ -1670,7 +1717,12 @@ async fn run_llm_agent(
     use rmcp::transport::TokioChildProcess;
 
     let llm_cfg: LlmHandlerConfig = builder.config().handler.llm.clone().unwrap_or_default();
-    let llm_provider = resolve_llm(&builder.config().llm)?;
+    let selected_llm = resolve_llm(&builder.config().llm)?;
+    let model_name = selected_llm
+        .as_ref()
+        .map(|llm| llm.model.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let llm_provider = selected_llm.map(|llm| llm.provider);
 
     // Assemble the tool sources the LLM loop can call: one per connected MCP
     // server (each spawned as a child process) plus one per configured remote
@@ -1794,7 +1846,13 @@ async fn run_llm_agent(
         push,
         sources,
         llm_provider,
-    );
+    )
+    // The same store the tasks go into is the one the conversation is read back
+    // out of — `InMemoryTaskStorage` implements both ports over one state, which
+    // is what makes "the conversation" and "the task history" the same thing
+    // rather than two records that can disagree.
+    .with_context_memory(Arc::new(storage.clone()), llm_cfg.context)
+    .with_model(model_name);
     let runtime = builder
         .with_handler(handler)
         .with_storage(storage)

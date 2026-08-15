@@ -99,6 +99,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 📚 **[See complete Builder API documentation →](docs/builder-api.md)**
 
+### 4. Deploy it like any other agent
+
+The platform runs configs, not handlers, so a custom handler reaches it as an
+image. Read the config path from `A2A_CONFIG` (the platform mounts the agent's
+TOML and points that at it), build an image, and name it in the config:
+
+```rust
+let config = std::env::var("A2A_CONFIG").unwrap_or_else(|_| "agent.toml".to_string());
+AgentBuilder::from_file(config)?
+```
+
+```toml
+[runtime]
+image = "ghcr.io/acme/my-agent:1.0"
+```
+
+`a2a deploy --config agent.toml` then provisions, starts, health-checks and
+registers it exactly as it would a TOML agent. See
+[Agents that bring their own image](#agents-that-bring-their-own-image).
+
 ## Overview
 
 This crate provides two approaches for building agents:
@@ -154,10 +174,11 @@ version = "2.0.0"                    # Optional override
 
 ### 2. Run the MCP Agent
 
-Compile and run your agent with the `mcp-server` Cargo feature enabled:
+`[features.mcp_server]` is config, so the `a2a` binary serves it — no Rust
+needed. Scaffold one with `a2a new Notes --template mcp`, then:
 
 ```bash
-cargo run -p a2a-agents --features mcp-server --example mcp_server_agent
+a2a run --config notes.toml
 ```
 
 ### 3. Claude Desktop Configuration
@@ -168,17 +189,8 @@ To connect Claude Desktop to your agent, add the following to your Claude Deskto
 {
   "mcpServers": {
     "a2a-echo-agent": {
-      "command": "cargo",
-      "args": [
-        "run",
-        "--release",
-        "-p",
-        "a2a-agents",
-        "--features",
-        "mcp-server",
-        "--example",
-        "mcp_server_agent"
-      ]
+      "command": "/usr/local/bin/a2a",
+      "args": ["run", "--config", "/absolute/path/to/notes.toml"]
     }
   }
 }
@@ -203,7 +215,7 @@ path = "/mcp"        # default mount path
 ```
 
 ```bash
-cargo run -p a2a-agents --features mcp-server --example mcp_http_agent
+a2a run --config notes.toml
 ```
 
 The server then accepts MCP requests at `http://127.0.0.1:8000/mcp`.
@@ -275,13 +287,11 @@ AgentBuilder::new(config)
 Connection is lenient — a server that fails to start is logged and skipped, and
 `connect` only errors if servers were configured but none could be reached.
 
-```bash
-cargo run -p a2a-agents --features mcp-client --example mcp_client_agent
-```
-
-The example connects to the bundled `mcp_echo_server`, so it runs with no
-external setup; point `command`/`args` at any MCP stdio server to talk to
-something real.
+`bin/mcp_echo_server.rs` is a two-tool MCP stdio server (`echo`, `add`) bundled
+for exactly this: point a `[[features.mcp_client.servers]]` entry at
+`cargo run -p a2a-agents --features mcp-client --bin mcp_echo_server` and the
+agent has real tools to call with no external setup. Swap in any MCP stdio
+server to talk to something real.
 
 ## 🤖 LLM agents & multi-agent platform
 
@@ -339,13 +349,13 @@ at runtime, so `a2a up` catches them before anything binds:
 
 ```toml
 # fleet.toml
-name = "Weather Demo"
+name = "Fleet Walkthrough"
 
 [[agents]]
-config = "registry_worker.toml"
+config = "greeter.toml"
 
 [[agents]]
-config = "registry_orchestrator.toml"
+config = "analyst.toml"
 ```
 
 ```bash
@@ -354,7 +364,7 @@ a2a validate --fleet fleet.toml    # same checks, nothing started
 ```
 
 Members share one process and one agent registry, so peers resolve each other by
-skill. See `examples/fleet.toml`.
+skill. [`examples/fleet/`](examples/fleet/) walks the whole thing through.
 
 ### Pre-flight (`a2a doctor`)
 
@@ -417,7 +427,52 @@ pretending. Code can override it per request with `LlmRequest::reasoning`.
 
 Beware the trap it exists to close: a small model asked for high effort can spend
 its whole response budget thinking and return **nothing**. That fails the task
-with the reason rather than completing it empty — see `examples/multi-model/`.
+with the reason rather than completing it empty — see
+[`examples/fleet/`](examples/fleet/), "Give them models".
+
+#### Remembering the conversation (`[handler.llm.context]`)
+
+By default an agent answers each message on its own: every turn starts from the
+system prompt and the incoming text, with no memory of the last one. Turn that
+off with `mode`:
+
+```toml
+[handler.llm.context]
+mode = "context"          # none (default) | task | context
+max_input_tokens = 100000 # ceiling on the request; 0 disables trimming
+reserve_for_output = 8000 # held back for the reply
+compact_at_percent = 80   # summarize at this share of the usable budget
+keep_recent_turns = 4     # turns kept verbatim
+max_tool_result_chars = 8000
+```
+
+- `task` carries the current task's own messages. Useful for a task that goes
+  back and forth through `input-required`.
+- `context` carries the whole conversation — every task sharing the message's
+  `contextId`. Pair it with `[server.storage] type = "sqlx"`; with in-memory
+  storage the conversation dies with the process.
+
+There is no separate conversation store to configure. A2A already records a
+message per task status transition, and read back in `contextId` order that *is*
+the conversation, so `mode = "context"` reads the same rows `tasks/get` does.
+
+When a conversation outgrows the budget the handler gives things up in order:
+first it trims tool results to their head and tail (one chatty MCP server is the
+usual cause), then it drops whole tool call/result pairs while keeping the
+assistant text that concluded from them, and only then does it ask the model to
+summarize the older turns. The summary is stored against the context and stands
+in for what it replaced on later turns. The system prompt and the message being
+answered are never trimmed — if those alone exceed the budget the task fails
+naming `max_input_tokens`, because silently dropping half of a question produces
+a confident answer to something nobody asked.
+
+**`mode = "context"` cannot yet be combined with `[server.auth]`.** A `contextId`
+is supplied by the caller, so once conversations are read back it decides which
+conversation you get — and no authenticated principal reaches the message
+handler yet to tell two callers apart. The storage layer records and enforces an
+owner per context, but with nothing to compare against it cannot separate them,
+so the config is rejected at startup rather than served as if it were enforcing
+something. Use `mode = "task"`, or run the agent without authentication.
 
 ### Agent-as-tool delegation
 
@@ -441,8 +496,7 @@ agent_id = "scheduler-agent"      # …by registry id (slug of the name)
 
 `skill` / `agent_id` are resolved against the **agent registry** at startup, so
 peers are found by capability instead of a hard-coded URL. See
-[`examples/orchestrator_agent.toml`](examples/orchestrator_agent.toml) and
-[`examples/registry_orchestrator.toml`](examples/registry_orchestrator.toml).
+[`examples/fleet/orchestrator.toml`](examples/fleet/orchestrator.toml).
 
 ### Control plane
 
@@ -453,6 +507,53 @@ health, `GET /agents/{id}/logs` replays its output, `DELETE /agents/{id}` tears
 down. Pick the backend with `--runtime`: `local` supervises child `a2a run`
 processes, `container` runs each agent in a `docker`/`podman` container
 (`--engine`, `--image`).
+
+#### Agents that bring their own image
+
+`--image` is the *base* image, for agents that are just a config. An agent that
+needs a handler no TOML can express names its own:
+
+```toml
+[runtime]
+image = "ghcr.io/acme/billing:1.4"
+```
+
+That is the escape hatch that keeps the declarative layer open: a custom Rust
+handler is a different image, and the platform goes back to caring only about the
+config, the port and the container. Deploy it exactly like any other agent
+(`a2a deploy --config billing.toml`).
+
+Every agent container gets the same contract, whoever built the image:
+
+| | |
+|---|---|
+| `/etc/agent.toml` | the agent's config, bind-mounted read-only |
+| `A2A_CONFIG` | that path, so the image need not hard-code it |
+| `HOST=0.0.0.0` | bind all interfaces, or the published port reaches nothing |
+| `-p <http_port>:<http_port>` | the port from `[server]` |
+| `-e VAR` | each `${VAR}` the config references, if `--allow-env` permits it |
+
+The one difference: the base image is started with `a2a run --config
+/etc/agent.toml`, while your image is started with **no command override** — its
+own `ENTRYPOINT` decides how to boot. Serve A2A on the configured `http_port` and
+the platform's health probe, `a2a ps` and skill-based discovery all work as they
+do for a TOML agent.
+
+One thing to keep in step: the card the control plane **registers** is derived
+from the config, not fetched from the image, so peers resolve by the `[[skills]]`
+the TOML declares. Declare there whatever the image's own card advertises.
+
+Two things say no rather than pretending:
+
+- `a2a run --config` warns that it is serving the config from *this* binary, not
+  from the image.
+- `--runtime local` refuses to deploy an image agent at all (`501`, "custom image
+  is not available on this runtime"). It has no image to pull, and running the
+  config under `a2a` instead would start an agent that is healthy and wrong.
+
+A handler name with **no** image behind it is now a hard error — `a2a run`
+refuses to start rather than falling back to echo, which used to give an agent
+that bound its port, answered requests, and did none of what its config said.
 
 Deploying an agent is remote code execution, so the API **requires a bearer
 token** — startup fails without `--token` / `A2A_CONTROL_PLANE_TOKEN` unless you
@@ -546,6 +647,36 @@ any control plane you expect to restart.**
 See the workspace [`NOTES.md`](../NOTES.md) for the decisions behind this design
 (and why Terraform is deferred), and [`TODO.md`](../TODO.md) for open work.
 
+### Running a fleet inside a Docker Sandbox
+
+[Docker Sandboxes](https://docs.docker.com/ai/sandboxes/) run a workload in a
+microVM behind a governed egress proxy. That is a stronger boundary than
+`--runtime container` gives you: `ContainerHardening` drops capabilities and caps
+processes, but shares the host kernel and says nothing about where an agent
+connects *out* to. Agents run there unmodified, and a fleet needs no changes
+beyond binding a reachable address.
+
+Publish each agent's port at creation, mount the directory holding your configs
+as the workspace, and run the fleet inside it:
+
+```bash
+sbx create --name my-fleet -p 8081:8081 -p 8082:8082 -p 8090:8090 shell /path/to/configs
+sbx exec my-fleet a2a up -f /path/to/configs/fleet.toml
+```
+
+Every agent is then reachable from the host on its published port — agent cards,
+`SendMessage`, streaming, `a2acli` — exactly as if it ran locally.
+
+Two things catch people out. A published port forwards to the sandbox's
+`0.0.0.0`, so the `host = "127.0.0.1"` that `a2a new` scaffolds has to become
+`host = "0.0.0.0"` before the forward reaches anything. And use the standalone
+`sbx` CLI: the `docker sandbox` plugin bundled with Docker Desktop is far behind
+it and supports none of this.
+
+See [docs/docker-sandboxes.md](docs/docker-sandboxes.md) for the full setup —
+egress policy, secrets, getting `a2a` into the sandbox, running
+`--runtime container` inside one, and troubleshooting.
+
 ## Reference agent and further reading
 
 - [docs/reimbursement-demo.md](docs/reimbursement-demo.md) — the reimbursement
@@ -553,5 +684,9 @@ See the workspace [`NOTES.md`](../NOTES.md) for the decisions behind this design
   flow and a small web frontend. Opt-in behind the `reimbursement-agent` feature.
 - [docs/builder-api.md](docs/builder-api.md) — the full `AgentBuilder` API.
 - [docs/authentication.md](docs/authentication.md) — Bearer, JWT, and OAuth2.
-- [examples/platform/](examples/platform/) — a worked walkthrough of the platform
-  lifecycle, from a config on disk to a supervised deployment.
+- [docs/docker-sandboxes.md](docs/docker-sandboxes.md) — running agents and
+  fleets in a microVM with governed egress.
+- [examples/fleet/](examples/fleet/) — a worked walkthrough: three agents from
+  configs on disk to a supervised deployment, then given models.
+- [examples/image-agent/](examples/image-agent/) — a handler written in Rust,
+  shipped as its own image and deployed like any other agent.

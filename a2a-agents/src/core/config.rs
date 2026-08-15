@@ -122,6 +122,108 @@ pub struct LlmHandlerConfig {
     /// enabling agent-to-agent delegation. Each becomes an `ask_<slug>` tool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<RemoteAgentConfig>,
+
+    /// How much of the conversation this agent carries between turns, and how it
+    /// keeps that inside the model's window (`[handler.llm.context]`).
+    #[serde(default)]
+    pub context: ContextConfig,
+}
+
+/// What an agent remembers between messages, and what it does when that no
+/// longer fits.
+///
+/// Off by default. Carrying history changes what an existing agent costs and how
+/// it answers, so it is opted into rather than switched on under everyone.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct ContextConfig {
+    /// Which messages a turn is given.
+    #[serde(default)]
+    pub mode: ContextMode,
+
+    /// Ceiling on the request, in tokens, counted by an estimator rather than a
+    /// real tokenizer — leave headroom. Zero means no ceiling and no trimming.
+    #[serde(default = "default_max_input_tokens")]
+    pub max_input_tokens: usize,
+
+    /// Held back from `max_input_tokens` for the reply.
+    #[serde(default = "default_reserve_for_output")]
+    pub reserve_for_output: usize,
+
+    /// Percentage of the usable budget at which the conversation is summarized,
+    /// before anything has to be dropped. A percentage rather than a fraction so
+    /// this config stays comparable by equality, which the surrounding structs
+    /// derive.
+    #[serde(default = "default_compact_at_percent")]
+    pub compact_at_percent: u8,
+
+    /// Turns kept verbatim at the end of the conversation; compaction may only
+    /// fold what precedes them.
+    #[serde(default = "default_keep_recent_turns")]
+    pub keep_recent_turns: usize,
+
+    /// Longest a single tool result may be, in characters, before it is trimmed
+    /// to its head and tail. The first thing given up, and usually enough.
+    #[serde(default = "default_max_tool_result_chars")]
+    pub max_tool_result_chars: usize,
+}
+
+/// Which messages a turn is given.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum ContextMode {
+    /// Only the incoming message. Every turn starts fresh, which is how this
+    /// handler has always behaved.
+    #[default]
+    None,
+    /// The messages of the current task.
+    Task,
+    /// Every message in the context — the conversation this message belongs to,
+    /// across all of its tasks. Needs storage that outlives the process to be
+    /// worth anything, so pair it with `[storage] type = "sqlx"`.
+    Context,
+}
+
+impl ContextMode {
+    /// Whether this mode reads anything back from storage.
+    pub fn reads_history(self) -> bool {
+        !matches!(self, ContextMode::None)
+    }
+}
+
+fn default_max_input_tokens() -> usize {
+    100_000
+}
+
+fn default_reserve_for_output() -> usize {
+    8_000
+}
+
+fn default_compact_at_percent() -> u8 {
+    80
+}
+
+fn default_keep_recent_turns() -> usize {
+    4
+}
+
+fn default_max_tool_result_chars() -> usize {
+    8_000
+}
+
+impl Default for ContextConfig {
+    fn default() -> Self {
+        Self {
+            mode: ContextMode::default(),
+            max_input_tokens: default_max_input_tokens(),
+            reserve_for_output: default_reserve_for_output(),
+            compact_at_percent: default_compact_at_percent(),
+            keep_recent_turns: default_keep_recent_turns(),
+            max_tool_result_chars: default_max_tool_result_chars(),
+        }
+    }
 }
 
 /// A remote A2A agent the LLM handler can delegate to, exposed as one tool.
@@ -221,8 +323,38 @@ impl Default for LlmHandlerConfig {
             system_prompt: default_llm_system_prompt(),
             max_tool_rounds: default_max_tool_rounds(),
             agents: Vec::new(),
+            context: ContextConfig::default(),
         }
     }
+}
+
+/// How the platform packages this agent when it runs it as a managed unit
+/// (`[runtime]`).
+///
+/// Only meaningful to a runtime that can honour it — [`ContainerRuntime`] today.
+/// `a2a run` reads the config in-process and has no image to pull, so it says so
+/// and runs the built-in handler instead.
+///
+/// [`ContainerRuntime`]: crate::ContainerRuntime
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeConfig {
+    /// Container image running this agent, instead of the platform's base image.
+    ///
+    /// This is what keeps the declarative layer from being closed: an agent that
+    /// needs a handler no TOML can express ships as its own image, and the
+    /// platform goes back to caring only about the config, the port and the
+    /// container. The image is passed to the engine verbatim, so any reference
+    /// it accepts works (`ghcr.io/acme/billing:1.4`, a digest, a local tag).
+    ///
+    /// The image gets the same contract as the base one: its config bind-mounted
+    /// read-only and named by `A2A_CONFIG`, `HOST=0.0.0.0`, its `http_port`
+    /// published, and the config's `${VAR}` references passed through. Unlike
+    /// the base image it is started with **no command override**, so its own
+    /// `ENTRYPOINT`/`CMD` decides how to boot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -249,6 +381,11 @@ pub struct AgentConfig {
     /// `agent.implementation` string is honoured via [`handler_type`].
     #[serde(default)]
     pub handler: HandlerConfig,
+
+    /// How the platform packages this agent (`[runtime]`) — a custom image, or
+    /// nothing, meaning the platform's base image runs it.
+    #[serde(default)]
+    pub runtime: RuntimeConfig,
 
     /// Server configuration
     #[serde(default)]
@@ -400,6 +537,14 @@ impl AgentConfig {
         }
     }
 
+    /// The image this agent runs from, if it brings its own.
+    ///
+    /// `None` means the runtime's base image (or, under `a2a run`, this binary's
+    /// built-in handlers).
+    pub fn image(&self) -> Option<&str> {
+        self.runtime.image.as_deref()
+    }
+
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), ConfigError> {
         if self.agent.name.is_empty() {
@@ -421,6 +566,39 @@ impl AgentConfig {
                     "Skill ID cannot be empty".to_string(),
                 ));
             }
+        }
+
+        // Carrying a conversation across turns makes `context_id` a capability:
+        // whoever presents one reads what was said in it. The store enforces an
+        // owner, but no authenticated principal reaches the message handler yet,
+        // so on an authenticated agent every caller would look identical and the
+        // check could not separate them. Refuse the combination rather than
+        // serve it and look like it is enforcing something.
+        if let Some(llm) = self.handler.llm.as_ref()
+            && llm.context.mode == ContextMode::Context
+            && self.server.auth != AuthConfig::None
+        {
+            return Err(ConfigError::ValidationError(
+                "`[handler.llm.context] mode = \"context\"` cannot be used with `[server.auth]` \
+                 yet: conversations are shared per context id, and the handler receives no \
+                 authenticated principal to tell two callers apart. Use `mode = \"task\"`, which \
+                 is scoped to one task, or run this agent without authentication."
+                    .to_string(),
+            ));
+        }
+
+        // A blank image would reach the engine as an empty argument, which fails
+        // as an unreadable `docker create` error rather than as the config
+        // mistake it is.
+        if self
+            .runtime
+            .image
+            .as_deref()
+            .is_some_and(|image| image.trim().is_empty())
+        {
+            return Err(ConfigError::ValidationError(
+                "[runtime] image cannot be empty — name an image or omit the key".to_string(),
+            ));
         }
 
         // Validate remote-agent references fail fast at load (exactly one of
@@ -537,7 +715,7 @@ pub enum StorageConfig {
 }
 
 /// Authentication configuration
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(JsonSchema))]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum AuthConfig {
@@ -1720,5 +1898,44 @@ mod tests {
             HandlerType::Custom("weather".to_string())
         );
         assert_eq!(config.handler.r#type.as_str(), "weather");
+    }
+
+    #[test]
+    fn an_agent_can_bring_its_own_image() {
+        let toml = r#"
+            [agent]
+            name = "Billing Agent"
+
+            [handler]
+            type = "billing"
+
+            [runtime]
+            image = "ghcr.io/acme/billing:1.4"
+        "#;
+        let config = AgentConfig::from_toml(toml).unwrap();
+        assert_eq!(config.image(), Some("ghcr.io/acme/billing:1.4"));
+        // The handler name is still the config's own: what resolves it is the
+        // image, not this binary's table of built-ins.
+        assert_eq!(
+            config.handler_type(),
+            HandlerType::Custom("billing".to_string())
+        );
+    }
+
+    #[test]
+    fn most_agents_bring_no_image() {
+        let config = AgentConfig::from_toml("[agent]\nname = \"Plain\"\n").unwrap();
+        assert_eq!(config.image(), None);
+    }
+
+    /// A blank image reaches the engine as an empty argument, where it fails as
+    /// an unreadable `create` error instead of as the typo it is.
+    #[test]
+    fn a_blank_image_is_a_config_error() {
+        for image in ["", "   "] {
+            let toml = format!("[agent]\nname = \"Blank\"\n\n[runtime]\nimage = \"{image}\"\n");
+            let err = AgentConfig::from_toml(&toml).expect_err("a blank image must not parse");
+            assert!(err.to_string().contains("image"), "{err}");
+        }
     }
 }

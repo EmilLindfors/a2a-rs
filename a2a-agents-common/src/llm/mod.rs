@@ -54,12 +54,101 @@ fn os_lookup(key: &str) -> Option<String> {
 pub enum LlmError {
     #[error("API error: {0}")]
     ApiError(String),
+    /// The request was larger than the model's context window.
+    ///
+    /// Separate from [`LlmError::ApiError`] because it is the one API failure a
+    /// caller can act on: drop history and try again. Folded into `ApiError` it
+    /// reached the handler as `A2AError::Internal("LLM error: API error (400)
+    /// …")` and simply failed the task.
+    #[error("context length exceeded: {0}")]
+    ContextLengthExceeded(String),
     #[error("Network error: {0}")]
     NetworkError(String),
     #[error("Serialization error: {0}")]
     SerializationError(String),
     #[error("Provider error: {0}")]
     ProviderError(String),
+}
+
+/// Substrings that identify an over-long request in a provider's error body.
+///
+/// Providers disagree on both the status code and the shape, and several return
+/// a plain 400 with prose, so matching on text is the only thing that works
+/// across all of them. Checked lowercase.
+const CONTEXT_LENGTH_MARKERS: [&str; 6] = [
+    // OpenAI (`"code": "context_length_exceeded"`), and OpenRouter passes it through.
+    "context_length_exceeded",
+    // OpenAI / OpenRouter prose, and most OpenAI-compatible servers.
+    "maximum context length",
+    "context length",
+    // llama.cpp, vLLM.
+    "too many tokens",
+    "exceeds the maximum",
+    // Gemini: INVALID_ARGUMENT naming the input token count.
+    "input token count",
+];
+
+/// Classify a provider's failure body, so an over-long request becomes
+/// [`LlmError::ContextLengthExceeded`] rather than an opaque API error.
+///
+/// Takes the already-formatted message so both providers and both code paths
+/// (streaming and not) classify identically.
+pub(crate) fn classify_api_error(message: String) -> LlmError {
+    let haystack = message.to_lowercase();
+    if CONTEXT_LENGTH_MARKERS
+        .iter()
+        .any(|marker| haystack.contains(marker))
+    {
+        return LlmError::ContextLengthExceeded(message);
+    }
+    LlmError::ApiError(message)
+}
+
+/// Tokens a provider reported for one request.
+///
+/// Reported rather than estimated: [`TokenEstimate`](crate::context::TokenEstimate)
+/// decides what to send, and this says what it actually cost. Every field is
+/// optional because providers disagree on which they return, and a missing count
+/// must not read as zero.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    /// Tokens in the request, including the system prompt and tool definitions.
+    pub prompt_tokens: Option<u32>,
+    /// Tokens the model generated, excluding reasoning where a provider splits
+    /// them out.
+    pub completion_tokens: Option<u32>,
+    /// Reasoning tokens, where the provider reports them separately. Billed, and
+    /// invisible in `completion_tokens` on most providers.
+    pub reasoning_tokens: Option<u32>,
+    /// The provider's own total. Not derived from the fields above — a provider
+    /// that reports only this one is common, and a total that disagrees with the
+    /// parts is the provider's answer, not ours to correct.
+    pub total_tokens: Option<u32>,
+}
+
+impl TokenUsage {
+    /// Whether the provider reported anything at all. A response carrying no
+    /// counts is `Some(TokenUsage::default())` nowhere — it is `None`.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+impl std::fmt::Display for TokenUsage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let field = |value: Option<u32>| match value {
+            Some(count) => count.to_string(),
+            None => "?".to_string(),
+        };
+        write!(
+            f,
+            "prompt={} completion={} reasoning={} total={}",
+            field(self.prompt_tokens),
+            field(self.completion_tokens),
+            field(self.reasoning_tokens),
+            field(self.total_tokens)
+        )
+    }
 }
 
 /// The role of the message sender.
@@ -333,6 +422,8 @@ pub struct LlmResponse {
     /// from the answer (e.g. OpenRouter's `reasoning`, Zhipu/GLM's
     /// `reasoning_content`). `None` for providers that don't surface it.
     pub reasoning: Option<String>,
+    /// What the provider says the request cost. `None` when it reported nothing.
+    pub usage: Option<TokenUsage>,
 }
 
 /// An event emitted during a streaming LLM response.
@@ -348,6 +439,10 @@ pub enum LlmStreamEvent {
         arguments: String,
     },
     ToolCall(ToolCall),
+    /// What the request cost, as reported by the provider. Terminal: it arrives
+    /// in the final chunk, after the content. Absent on endpoints that do not
+    /// report usage while streaming — see `OpenAiConfig::stream_usage`.
+    Usage(TokenUsage),
 }
 
 /// Trait defining a generic LLM provider for standardizing AI integration across agents.
@@ -361,4 +456,60 @@ pub trait LlmProvider: Send + Sync {
         &self,
         request: LlmRequest,
     ) -> Result<BoxStream<'static, Result<LlmStreamEvent, LlmError>>, LlmError>;
+}
+
+#[cfg(test)]
+mod error_tests {
+    use super::*;
+
+    /// The one API failure a caller can act on has to be tellable from the rest,
+    /// across the shapes the providers actually return.
+    #[test]
+    fn an_over_long_request_is_classified_as_a_context_length_failure() {
+        let bodies = [
+            r#"OpenAI API error (400): {"error":{"message":"This model's maximum context length is 128000 tokens","code":"context_length_exceeded"}}"#,
+            "OpenAI stream error (400): Requested 200000 tokens, exceeds the maximum for this model",
+            r#"Gemini API error (400): {"error":{"status":"INVALID_ARGUMENT","message":"The input token count (1200000) exceeds the maximum"}}"#,
+            "OpenAI API error (400): too many tokens in prompt",
+        ];
+        for body in bodies {
+            assert!(
+                matches!(
+                    classify_api_error(body.to_string()),
+                    LlmError::ContextLengthExceeded(_)
+                ),
+                "should classify as context length: {body}"
+            );
+        }
+    }
+
+    /// Everything else stays an ordinary API error. Classifying a bad key as
+    /// "too long" would send the handler into a compaction loop it can never win.
+    #[test]
+    fn other_failures_stay_api_errors() {
+        let bodies = [
+            r#"OpenAI API error (401): {"error":{"message":"Incorrect API key provided"}}"#,
+            "OpenAI API error (429): Rate limit reached for requests",
+            "Gemini API error (503): The model is overloaded",
+        ];
+        for body in bodies {
+            assert!(
+                matches!(classify_api_error(body.to_string()), LlmError::ApiError(_)),
+                "should stay an API error: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn usage_with_nothing_reported_reads_as_empty() {
+        assert!(TokenUsage::default().is_empty());
+        assert!(
+            !TokenUsage {
+                prompt_tokens: Some(0),
+                ..Default::default()
+            }
+            .is_empty(),
+            "a reported zero is a report, not an absence"
+        );
+    }
 }

@@ -106,6 +106,105 @@ every captured agent log had escape codes baked in.
 
 ## Choices that had a real alternative
 
+**Conversation memory lives in the protocol, not in the handler.** (2026-08-14)
+
+The alternative was a `HashMap<ContextId, Vec<ChatMessage>>` on `LlmHandler`:
+faster, and it keeps the tool-call rounds. It loses on the platform this repo
+actually ships. `a2a control-plane` recovers its fleet on startup, so agents get
+restarted on purpose — in-process conversation state would reset silently on
+every bounce, and would be per-replica the moment anyone runs two. Reconstructing
+from `task_history` on each turn keeps the handler stateless, makes sqlx storage
+give durable conversations for free, and makes restart and replica behaviour
+correct by construction.
+
+The cost is real and accepted: only A2A `Message`s round-trip, so tool-call
+rounds are lost between turns. Tool results are the bulk of the tokens and are
+re-derivable; the assistant's conclusion from them is in the history.
+
+The design follows Google ADK rather than being invented here. ADK is A2A's
+reference companion, and its `Session` *is* `context_id` by construction, so the
+mapping is protocol-native: ADK's event log is `task_history`, `Session.state`
+is a per-context scratchpad, `MemoryService` is the deferred retrieval tier.
+Four invariants are common to ADK, LangGraph checkpointers, and the OpenAI
+Responses API, and none of them is worth re-deriving:
+
+1. The log is append-only and never rewritten. Compaction appends a summary and
+   advances a watermark.
+2. The prompt is a projection, recomputed every turn, never the source of truth.
+3. Tool results are evicted before turns are. Anthropic shipped this as
+   first-class server-side context editing.
+4. Compaction triggers on tokens, not turn count.
+
+**`load` returns the digest and the tail together.** Splitting the conversation
+into an `AsyncContextHistory` port and an `AsyncContextDigest` port reads
+tidier and is wrong: a digest written between the two reads leaves either a gap
+or duplicated turns in the prompt, and nothing in the type system says the two
+reads have to agree. One method makes the transaction boundary expressible, so
+the split stays collapsed even though it puts two nouns behind one port.
+
+**Digests append and carry a watermark rather than updating in place.** Two
+concurrent turns in one context can both decide to compact. Both digests land,
+`load` takes the highest `covers_through_seq`, and the loser is duplicated work
+rather than corruption. Update-in-place would need a lock across an LLM call to
+get the same property.
+
+**The load window has to be wider than the window compaction may not touch.**
+`keep_recent_turns` means two things that pull against each other: how much of a
+conversation is read back for a prompt, and how much of it compaction is
+forbidden to summarize. Using the one number for both is a deadlock — the load
+returns exactly the protected window, so there is never anything older to fold
+and compaction can never fire. Hence `LOAD_WINDOWS`: a load reaches back several
+windows, and only what falls outside the last `keep_recent_turns` is summarized.
+In steady state the digest watermark bounds the read long before the limit does;
+the limit is the backstop for a conversation that has not compacted yet.
+
+The related trap is the watermark. A digest has to cover exactly what was
+summarized, not everything that was loaded — otherwise the recent turns sit
+behind a summary that does not describe them, and they vanish from the next
+prompt while appearing to have been preserved.
+
+**Wiring conversation memory makes `context_id` an authorization boundary.**
+Worth stating because it changes what an existing field means. Nothing reads by
+context today, so a guessed `context_id` gets you nothing; once a handler
+projects a conversation from it, presenting someone else's id reads their
+conversation into your prompt. Hence `contexts.owner`, taken from the
+`Authenticator` principal and checked on load. This is what pulled the deferred
+multi-tenancy theme forward, and it is not optional to defer again.
+
+**An agent's own image is started with no command; the base image is not.** Both
+get the same mount (`/etc/agent.toml`), the same `A2A_CONFIG` naming it, `HOST`,
+the published port and the allow-listed variables. The difference is that
+`ContainerRuntime` appends `run --config /etc/agent.toml` only for the base
+image, because that argv belongs to *this* project's binary. The alternative —
+one argv for every image — makes "accepts `a2a run --config`" part of the
+contract, which is a constraint on someone else's `ENTRYPOINT` that buys nothing
+and fails at run time, inside a container, rather than at deploy time.
+`A2A_CONFIG` exists so an image need not hard-code the mount path.
+
+**A runtime that cannot honour an image refuses the deploy.** `LocalProcessRuntime`
+returns `RuntimeError::Unsupported` for a spec carrying an image instead of
+spawning `a2a run` on the config. The fallback is worse than it looks: for an
+agent whose handler happens to be built in, it provisions something that starts,
+answers, and passes its health probe while being a different agent than the one
+deployed — the failure the whole `Recovered::Ephemeral` / `logs`-`Unsupported`
+line of reasoning exists to avoid. Same rule as those: say "I cannot", never
+answer with something else.
+
+**An unknown handler is a hard error now that images exist.** `a2a run` used to
+fall back to echo. That was defensible only while there was nothing else to
+offer; with `[runtime] image` there is a real answer, so the error names it. Note
+what this fixed: the fallback made a config with a typo'd handler name behave
+exactly like a config that asked for echo, and the only difference was one
+`warn!` on a stream supervisors do not read.
+
+**`doctor` stops at the image.** A config naming an image gets its port checks
+and nothing else — no handler verdict, no model provider, no MCP command probe.
+Those questions are all about a binary this machine does not have and cannot
+look inside; answering them from *this* build produces confident statements
+about something that will not run. This is the same rule as running the code
+rather than re-deriving it: when the code is in an image, all doctor can report
+is which image.
+
 **A configured LLM provider that cannot be built stops the run.** The
 alternative was what it did before: warn, fall back to the non-LLM handler, keep
 serving. That is worse for the case it actually covers — a typo.
@@ -441,6 +540,33 @@ an explicit fallback filter.
 **Docker's `.dockerignore` uses Go's `filepath.Match`, where `target/` with a
 trailing slash excludes nothing.** The first version of that file made no
 difference at all. Write patterns without trailing slashes.
+
+**rustls ignores `SSL_CERT_FILE`, so a TLS-intercepting proxy breaks every
+outbound call and nothing outside the binary can fix it.** With reqwest's
+`rustls-tls` alone the trust anchors are the compiled-in webpki roots; the
+environment variables every other tool honours (`SSL_CERT_FILE`,
+`REQUESTS_CA_BUNDLE`) do nothing. Found in a Docker Sandbox that re-signed all
+egress with a per-machine "Docker Sandboxes Proxy CA": every LLM call died as
+`error sending request for url (...)` with no cause attached, indistinguishable
+from the network being down, while `curl` in the same shell worked — which is the
+tell, since curl reads the OS store. The workspace `reqwest` dependency now
+enables `rustls-tls-native-roots` alongside `rustls-tls`; reqwest's two root
+stores are **additive**, so webpki stays the floor and the OS store adds whatever
+CA the operator installed.
+
+Worth knowing how narrow the reproduction was: interception is a *policy*, not a
+property of sandboxing. `sbx` v0.38 under the `balanced` policy tunnels allowed
+hosts, so agents see real certificates and even the unfixed binary works; the
+old bundled v0.12 plugin intercepted everything. The fix is not really about
+Docker Sandboxes at all — a corporate MITM gateway is the common case, and it
+fails the same way.
+
+**A `Network error` variant that drops the source is a debugging dead end.**
+The proxy-CA failure above reported only `error sending request for url (...)`.
+`reqwest::Error`'s `Display` deliberately omits the source chain, so the
+certificate error underneath was invisible; diagnosing it needed the *sandbox's*
+network log to prove the request had reached the proxy at all. Anywhere a
+`reqwest::Error` is wrapped, walk `std::error::Error::source()` into the message.
 
 ---
 

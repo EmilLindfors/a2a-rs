@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
 use tokio::sync::Mutex; // Changed from std::sync::Mutex
@@ -17,12 +18,12 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
-    A2AError, ContextId, Message, Task, TaskId, TaskPushNotificationConfig, TaskState,
-    TaskStateExt, VersionedTask,
+    A2AError, ContextId, Conversation, Digest, Message, Seq, SequencedMessage, Task, TaskId,
+    TaskPushNotificationConfig, TaskState, TaskStateExt, VersionedTask,
 };
 use crate::port::{
-    AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle, AsyncTaskQuery,
-    AsyncTaskVersioning,
+    AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle,
+    AsyncTaskQuery, AsyncTaskVersioning,
 };
 
 /// Simple in-memory task storage for testing and example purposes.
@@ -42,6 +43,28 @@ pub struct InMemoryTaskStorage {
     /// first and `versions` second, so the two stay consistent and never
     /// deadlock (see [`AsyncTaskVersioning`]).
     pub(crate) versions: Arc<Mutex<HashMap<String, u64>>>,
+    /// The conversation log, keyed by context id.
+    ///
+    /// A separate append-only list rather than something derived from `tasks`,
+    /// mirroring what the SQL adapter keeps in `task_history`. Deriving it would
+    /// need a total order across tasks that `Task` does not carry, and the point
+    /// of having both adapters is that they model the same thing.
+    ///
+    /// The only nesting that exists is `tasks` → `versions` → `conversations`,
+    /// taken in that order by `update_status`. `digests` and `context_owners`
+    /// are always taken alone, and `load` releases the digest lock before
+    /// acquiring this one.
+    pub(crate) conversations: Arc<Mutex<HashMap<String, Vec<SequencedMessage>>>>,
+    /// Appended digests, keyed by context id. Newest wins on load, by watermark
+    /// rather than by position, since two concurrent compactions can append out
+    /// of watermark order.
+    pub(crate) digests: Arc<Mutex<HashMap<String, Vec<Digest>>>>,
+    /// The principal that first wrote to each context. `None` is unowned and
+    /// stays readable by anyone.
+    pub(crate) context_owners: Arc<Mutex<HashMap<String, Option<String>>>>,
+    /// Hands out conversation sequence numbers. Shared across contexts, which is
+    /// harmless: `Seq` only has to be monotonic *within* one.
+    pub(crate) next_seq: Arc<AtomicU64>,
     /// Push notification registry (config store + delivery backend)
     pub(crate) push_notification_registry: Arc<PushNotificationRegistry>,
 }
@@ -60,6 +83,10 @@ impl InMemoryTaskStorage {
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             versions: Arc::new(Mutex::new(HashMap::new())),
+            conversations: Arc::new(Mutex::new(HashMap::new())),
+            digests: Arc::new(Mutex::new(HashMap::new())),
+            context_owners: Arc::new(Mutex::new(HashMap::new())),
+            next_seq: Arc::new(AtomicU64::new(1)),
             push_notification_registry: Arc::new(push_registry),
         }
     }
@@ -71,6 +98,10 @@ impl InMemoryTaskStorage {
         Self {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             versions: Arc::new(Mutex::new(HashMap::new())),
+            conversations: Arc::new(Mutex::new(HashMap::new())),
+            digests: Arc::new(Mutex::new(HashMap::new())),
+            context_owners: Arc::new(Mutex::new(HashMap::new())),
+            next_seq: Arc::new(AtomicU64::new(1)),
             push_notification_registry: Arc::new(push_registry),
         }
     }
@@ -99,6 +130,126 @@ impl InMemoryTaskStorage {
 impl Default for InMemoryTaskStorage {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl InMemoryTaskStorage {
+    /// Record `message` at the end of `context_id`'s conversation.
+    ///
+    /// Callers hold the `tasks` lock; this takes `conversations` after it,
+    /// preserving the order documented on the field.
+    async fn append_to_conversation(&self, context_id: &str, message: Message) {
+        let seq = Seq::new(self.next_seq.fetch_add(1, Ordering::Relaxed));
+        let mut conversations = self.conversations.lock().await;
+        conversations
+            .entry(context_id.to_string())
+            .or_default()
+            .push(SequencedMessage { seq, message });
+    }
+
+    /// Claim `context_id` for `caller` if nobody holds it, then refuse a caller
+    /// that is not the holder.
+    ///
+    /// One method because claim and check race otherwise: two first-turn
+    /// requests would both see "unclaimed" and both write an owner.
+    async fn claim_or_check_context(
+        &self,
+        context_id: &str,
+        caller: Option<&str>,
+        claim: bool,
+    ) -> Result<(), A2AError> {
+        let mut owners = self.context_owners.lock().await;
+        match owners.get(context_id) {
+            // Unowned, either because nothing claimed it or because it was
+            // claimed with no principal. Both stay open.
+            Some(None) => Ok(()),
+            Some(Some(owner)) if Some(owner.as_str()) == caller => Ok(()),
+            Some(Some(_)) => Err(A2AError::ContextAccessDenied {
+                context_id: context_id.to_string(),
+            }),
+            None => {
+                if claim {
+                    owners.insert(context_id.to_string(), caller.map(str::to_string));
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl AsyncConversationStore for InMemoryTaskStorage {
+    async fn load(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+        limit: Option<u32>,
+    ) -> Result<Conversation, A2AError> {
+        let context_id = context_id.as_str();
+        // Claims on read, not only on write. A handler loads history at the top
+        // of every turn, so the first turn of a conversation is what establishes
+        // who owns it; claiming only on compaction would leave a context
+        // readable by anyone until it first grew long enough to summarize.
+        self.claim_or_check_context(context_id, caller, true)
+            .await?;
+
+        // Highest watermark, not newest appended: two concurrent compactions can
+        // land out of order, and the one covering more is the one to use.
+        let digest = {
+            let digests = self.digests.lock().await;
+            digests.get(context_id).and_then(|digests| {
+                digests
+                    .iter()
+                    .max_by_key(|digest| digest.covers_through)
+                    .cloned()
+            })
+        };
+
+        let watermark = digest
+            .as_ref()
+            .map(|digest| digest.covers_through)
+            .unwrap_or(Seq::START);
+
+        let conversations = self.conversations.lock().await;
+        let mut tail: Vec<SequencedMessage> = conversations
+            .get(context_id)
+            .map(|log| {
+                log.iter()
+                    .filter(|entry| entry.seq > watermark)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        // Keep the newest when limiting: the older part is what a summary
+        // stands in for, and dropping the recent end would leave the model
+        // answering with the least relevant half of the conversation.
+        if let Some(limit) = limit {
+            let limit = limit as usize;
+            if tail.len() > limit {
+                tail.drain(..tail.len() - limit);
+            }
+        }
+
+        Ok(Conversation { digest, tail })
+    }
+
+    async fn compact(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+        digest: Digest,
+    ) -> Result<(), A2AError> {
+        let context_id = context_id.as_str();
+        self.claim_or_check_context(context_id, caller, true)
+            .await?;
+
+        let mut digests = self.digests.lock().await;
+        digests
+            .entry(context_id.to_string())
+            .or_default()
+            .push(digest);
+        Ok(())
     }
 }
 
@@ -136,10 +287,20 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
             .get_mut(task_id)
             .ok_or_else(|| A2AError::TaskNotFound(task_id.to_string()))?;
 
+        let context_id = task.context_id.clone();
+        let logged = message.clone();
+
         // Update the task status with the optional message
         task.update_status(state, message);
         let updated = task.clone();
         self.bump_version(task_id).await;
+
+        // The same message goes onto the context's conversation log, which is
+        // what a later turn reads back as history. Only messages: a status
+        // transition carrying none has nothing to record.
+        if let Some(message) = logged {
+            self.append_to_conversation(&context_id, message).await;
+        }
 
         // Persistence only: announcing the change to streaming subscribers is
         // the orchestration layer's job (see `TaskStatusBroadcast`), not a side
@@ -454,6 +615,10 @@ impl Clone for InMemoryTaskStorage {
         Self {
             tasks: self.tasks.clone(),
             versions: self.versions.clone(),
+            conversations: self.conversations.clone(),
+            digests: self.digests.clone(),
+            context_owners: self.context_owners.clone(),
+            next_seq: self.next_seq.clone(),
             push_notification_registry: self.push_notification_registry.clone(),
         }
     }
@@ -469,6 +634,264 @@ mod tests {
     }
     fn cid(s: &str) -> ContextId {
         s.parse().unwrap()
+    }
+
+    fn said(text: &str) -> Message {
+        use crate::domain::{Part, Role};
+        Message::builder()
+            .role(Role::User)
+            .parts(vec![Part::text(text.to_string())])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .build()
+    }
+
+    fn texts(conversation: &Conversation) -> Vec<String> {
+        use crate::domain::part;
+        conversation
+            .tail
+            .iter()
+            .flat_map(|entry| {
+                entry.message.parts.iter().filter_map(|p| match &p.content {
+                    Some(part::Content::Text(text)) => Some(text.clone()),
+                    _ => None,
+                })
+            })
+            .collect()
+    }
+
+    /// The conversation is the messages of every task in a context, in the order
+    /// they were recorded. Two tasks, because that is what a multi-turn
+    /// conversation actually looks like: one task per turn, sharing a context.
+    #[tokio::test]
+    async fn a_context_reads_back_as_one_ordered_conversation() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        store
+            .update_status(&tid("t1"), TaskState::Working, Some(said("what is it")))
+            .await
+            .unwrap();
+        store
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("Oslo")))
+            .await
+            .unwrap();
+
+        store.create(&tid("t2"), &cid("c1")).await.unwrap();
+        store
+            .update_status(
+                &tid("t2"),
+                TaskState::Completed,
+                Some(said("and the population")),
+            )
+            .await
+            .unwrap();
+
+        let conversation = store.load(&cid("c1"), None, None).await.unwrap();
+        assert_eq!(
+            texts(&conversation),
+            vec!["what is it", "Oslo", "and the population"]
+        );
+    }
+
+    /// A status transition with no message has nothing to record. Storing a
+    /// placeholder would put an empty turn in the model's prompt.
+    #[tokio::test]
+    async fn a_transition_without_a_message_records_nothing() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        store
+            .update_status(&tid("t1"), TaskState::Working, None)
+            .await
+            .unwrap();
+
+        assert!(store.load(&cid("c1"), None, None).await.unwrap().is_empty());
+    }
+
+    /// Contexts do not leak into one another. This is the whole reason the log
+    /// is keyed by context rather than kept per handler.
+    #[tokio::test]
+    async fn conversations_are_separate_per_context() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        store.create(&tid("t2"), &cid("c2")).await.unwrap();
+        store
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("in one")))
+            .await
+            .unwrap();
+        store
+            .update_status(&tid("t2"), TaskState::Completed, Some(said("in two")))
+            .await
+            .unwrap();
+
+        let one = store.load(&cid("c1"), None, None).await.unwrap();
+        assert_eq!(texts(&one), vec!["in one"]);
+    }
+
+    /// A digest hides everything at or below its watermark, and the tail picks
+    /// up after it. Loading the summarized part again would double the tokens
+    /// compaction was meant to save.
+    #[tokio::test]
+    async fn a_digest_replaces_the_messages_it_covers() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        for text in ["one", "two", "three"] {
+            store
+                .update_status(&tid("t1"), TaskState::Working, Some(said(text)))
+                .await
+                .unwrap();
+        }
+
+        let before = store.load(&cid("c1"), None, None).await.unwrap();
+        let watermark = before.tail[1].seq;
+        store
+            .compact(
+                &cid("c1"),
+                None,
+                Digest {
+                    covers_through: watermark,
+                    summary: "they said one and two".to_string(),
+                    replaced_messages: 2,
+                    model: "test".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+
+        let after = store.load(&cid("c1"), None, None).await.unwrap();
+        assert_eq!(after.summary(), Some("they said one and two"));
+        assert_eq!(texts(&after), vec!["three"]);
+    }
+
+    /// Two turns of one conversation can compact at the same time. Both digests
+    /// land, and the one covering more wins — the reason digests append with a
+    /// watermark instead of updating in place.
+    #[tokio::test]
+    async fn concurrent_compaction_keeps_the_widest_digest() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        for text in ["one", "two", "three"] {
+            store
+                .update_status(&tid("t1"), TaskState::Working, Some(said(text)))
+                .await
+                .unwrap();
+        }
+        let loaded = store.load(&cid("c1"), None, None).await.unwrap();
+
+        // The wider digest is written first, so "newest row wins" would pick the
+        // narrow one and re-feed a message the summary already covers.
+        for (seq, summary) in [
+            (loaded.tail[2].seq, "covers all three"),
+            (loaded.tail[0].seq, "covers only the first"),
+        ] {
+            store
+                .compact(
+                    &cid("c1"),
+                    None,
+                    Digest {
+                        covers_through: seq,
+                        summary: summary.to_string(),
+                        replaced_messages: 1,
+                        model: "test".to_string(),
+                    },
+                )
+                .await
+                .unwrap();
+        }
+
+        let after = store.load(&cid("c1"), None, None).await.unwrap();
+        assert_eq!(after.summary(), Some("covers all three"));
+        assert!(after.tail.is_empty(), "{:?}", texts(&after));
+    }
+
+    /// Limiting keeps the newest. The older end is what a summary stands in for,
+    /// so truncating there would leave the model the least relevant half.
+    #[tokio::test]
+    async fn limiting_a_conversation_keeps_the_most_recent_messages() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        for text in ["one", "two", "three", "four"] {
+            store
+                .update_status(&tid("t1"), TaskState::Working, Some(said(text)))
+                .await
+                .unwrap();
+        }
+
+        let conversation = store.load(&cid("c1"), None, Some(2)).await.unwrap();
+        assert_eq!(texts(&conversation), vec!["three", "four"]);
+    }
+
+    /// Reading a conversation back turns `context_id` into a capability: whoever
+    /// holds one would otherwise read what was said in it.
+    #[tokio::test]
+    async fn a_context_belongs_to_whoever_started_it() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        store
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("private")))
+            .await
+            .unwrap();
+
+        // First read claims it.
+        store.load(&cid("c1"), Some("alice"), None).await.unwrap();
+        assert_eq!(
+            texts(&store.load(&cid("c1"), Some("alice"), None).await.unwrap()),
+            vec!["private"]
+        );
+
+        let err = store
+            .load(&cid("c1"), Some("mallory"), None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, A2AError::ContextAccessDenied { .. }),
+            "{err:?}"
+        );
+
+        // And compacting someone else's conversation is refused the same way.
+        let err = store
+            .compact(
+                &cid("c1"),
+                Some("mallory"),
+                Digest {
+                    covers_through: Seq::new(1),
+                    summary: "mine now".to_string(),
+                    replaced_messages: 1,
+                    model: "test".to_string(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, A2AError::ContextAccessDenied { .. }));
+    }
+
+    /// An agent running without an authenticator has no principal to claim with,
+    /// and its conversations stay readable. Refusing here would break every
+    /// unauthenticated deployment.
+    #[tokio::test]
+    async fn an_unowned_context_stays_open() {
+        let store = InMemoryTaskStorage::new();
+        store.create(&tid("t1"), &cid("c1")).await.unwrap();
+        store
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("open")))
+            .await
+            .unwrap();
+
+        store.load(&cid("c1"), None, None).await.unwrap();
+        assert_eq!(
+            texts(&store.load(&cid("c1"), Some("anyone"), None).await.unwrap()),
+            vec!["open"]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_context_is_empty_rather_than_an_error() {
+        let store = InMemoryTaskStorage::new();
+        assert!(
+            store
+                .load(&cid("never-seen"), None, None)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

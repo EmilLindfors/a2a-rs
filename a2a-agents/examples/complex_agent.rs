@@ -379,6 +379,12 @@ impl ResearchAssistantHandler {
                     LlmStreamEvent::ToolCall(call) => {
                         calls.finalize(call);
                     }
+                    // What the round cost, as the provider counted it. Logged
+                    // rather than streamed: it is an operator's number, not part
+                    // of the answer.
+                    LlmStreamEvent::Usage(usage) => {
+                        tracing::info!("📊 usage: {usage}");
+                    }
                 }
             }
 

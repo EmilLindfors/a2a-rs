@@ -1,0 +1,60 @@
+# Analyst — a model-driven member. See README.md, "Give them models".
+#
+# Ships with no `[llm]` block, so it runs on whatever the environment provides
+# and, with nothing set, answers from the handler's deterministic fallback. That
+# keeps the fleet startable on a machine with no keys. Uncomment the block at the
+# bottom to pin this agent to a model of its own.
+
+[agent]
+name = "Analyst"
+description = "Summarizes figures and explains what moved."
+version = "0.1.0"
+
+[server]
+host = "127.0.0.1"
+http_port = 8082
+
+[server.storage]
+type = "inmemory"
+
+# The generic config-driven LLM handler: tool-calling loop, no Rust required.
+[handler]
+type = "llm"
+
+[handler.llm]
+system_prompt = "You are a careful analyst. Do precise work, then answer concisely."
+# LLM <-> tool round-trips before the handler gives up. This agent calls no
+# tools, so it never needs more than one.
+max_tool_rounds = 2
+
+[[skills]]
+id = "data-analysis"
+name = "Data analysis"
+description = "Analyze figures, summarize them, and explain the trend."
+keywords = ["analyze", "summary", "data", "report", "numbers"]
+examples = ["Summarize these Q3 numbers: 12, 40, 38, 91"]
+input_formats = ["text"]
+output_formats = ["text"]
+
+# --- Give this agent its own model ------------------------------------------
+# The provider and model live in a top-level [llm] block, per agent — so one
+# fleet can run each workload on the model that suits it. The API key stays out
+# of the config: `provider = "openrouter"` reads OPENROUTER_API_KEY from the
+# environment when `api_key` is absent.
+#
+# Pin `model` here rather than exporting OPENROUTER_MODEL: a fleet shares one
+# process environment, so the variable moves every unpinned member at once.
+#
+# `reasoning` says how hard to think, and it is billed — "high" is right for
+# analysis, and wrong for the greeter. Levels are off | low | medium | high, or a
+# token budget (reasoning = 1000). Omit it and the model's own default stands.
+#
+# [llm]
+# provider = "openrouter"
+# model = "z-ai/glm-5.2"
+# reasoning = "high"
+
+[features]
+streaming = true
+push_notifications = false
+state_history = true

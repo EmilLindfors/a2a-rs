@@ -4,4 +4,5 @@
 pub mod tools;
 
 #[cfg(feature = "llm")]
+pub mod context;
 pub mod llm;
