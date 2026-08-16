@@ -604,3 +604,21 @@ what ships; tags are an *output*, never pushed by hand.
   section lives.
 - The binary build (`release-binaries.yml`) needs manual dispatch —
   `GITHUB_TOKEN` will not auto-trigger it from a release-plz tag.
+- **The publish job is gated on the head commit's subject, and both merge
+  shapes have to match.** `release-plz.yml` runs the release only for a merged
+  release PR or a manual dispatch, so an ordinary push — or a hand-edited
+  version bump on master — never publishes. The gate originally matched only
+  `chore: release`, the subject a *squash* merge produces. master is protected,
+  so the release lands through whichever PR button was pressed, and a merge
+  commit reads `Merge pull request #N from OWNER/release-plz-…` instead. On
+  2026-08-15 that skipped the publish twice: the bumps landed on master,
+  crates.io stayed on the previous release, and no tags were written. The gate
+  now accepts both subjects.
+- **A skipped publish looks like release-plz re-proposing the same bump.**
+  Version numbers come from the last *published* release, not from the
+  `Cargo.toml` on master, so an unpublished bump makes every later push open a
+  release PR proposing that identical bump again. Two symptoms, one cause: if a
+  release PR keeps reappearing with versions master already carries, check
+  crates.io and the tags before merging it again — merging changes nothing. The
+  way out is a manual `workflow_dispatch` of `Release-plz`, which the gate
+  allows precisely for this.
