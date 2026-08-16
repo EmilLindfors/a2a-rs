@@ -24,15 +24,25 @@ jobs:
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
-    # Publish ONLY when the push is the merged "chore: release" PR (squash-merge
-    # the release PR so the commit subject is the PR title), or on an explicit
+    # Publish ONLY when the push is the merged release PR, or on an explicit
     # manual dispatch. This is the release gate: ordinary pushes to master never
     # attempt a publish, so a half-finished workspace state or an accidental
     # hand-edited version bump on master can no longer auto-release. The actual
     # version bumps are owned by the release PR (release-plz-pr below).
+    #
+    # Both merge shapes are accepted because master is a protected branch, so
+    # every release lands through the PR button and the commit subject depends on
+    # which one was pressed: a squash merge reads "chore: release", a merge commit
+    # reads "Merge pull request #N from OWNER/release-plz-<timestamp>". Matching
+    # only the first silently skipped the publish on 2026-08-15 — the version
+    # bumps landed on master, nothing reached crates.io, and release-plz then
+    # re-proposed the same bump every push, because it reads the last *published*
+    # version, not the one in Cargo.toml.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      startsWith(github.event.head_commit.message, 'chore: release')
+      startsWith(github.event.head_commit.message, 'chore: release') ||
+      (startsWith(github.event.head_commit.message, 'Merge pull request') &&
+      contains(github.event.head_commit.message, '/release-plz-'))
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
