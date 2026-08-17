@@ -23,9 +23,10 @@ settles — config strictness, fleet composition, lifecycle commands — is work
 provider would otherwise have had to invent and then re-litigate. The provider
 becomes a thin passthrough client over what the CLI already proves out.
 
-`terraform-provider-a2aagent/` is parked WIP and is not part of the supported
-path. Its README still describes it as the source of truth for agent
-definitions; that is stale.
+`terraform-provider-a2aagent/` moved to korps (`korps-fleet/`) on 2026-08-17,
+following the platform it targets. Still parked WIP and not part of the supported
+path; its README there now says so, and names the two defects that make its
+output silently wrong.
 
 **Pre-1.0 with only in-workspace consumers.** Break cleanly and fix call sites in
 one PR. No deprecation shims — they are over-engineering at this stage. See

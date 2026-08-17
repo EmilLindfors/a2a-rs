@@ -270,13 +270,21 @@ full plan; the Terraform provider does **not** move yet (see §4).
       `a2a-agents-v*` and built `-p a2a-agents --bin a2a`, neither of which
       exists here any more. `a2acli` is the only binary this repo ships, so it
       keeps the five-target cross-compile matrix. korps needs its own.
-- [ ] Move `terraform-provider-a2aagent/` to korps, or drop it. Everything it
-      targets is there now: it generates its schema fixture from korps's
-      `AgentConfig` and shells out to the `korps` binary to validate. Its README
-      is corrected to say so, but the directory is in the wrong repo. Parked
-      behind §4 either way.
+- [x] Move `terraform-provider-a2aagent/` to korps — everything it targets is
+      there (its schema fixture comes from korps's `AgentConfig`, and it shells
+      out to the `korps` binary to validate). Extracted with `git subtree split`
+      so its 3 commits came across as a merge parent, and landed under
+      `korps-fleet/`, which puts it on that crate's licence rather than MIT.
+- [x] Delete `.dockerignore` — it existed for `a2a-agents/Dockerfile` and this
+      repo has no Dockerfile left. Copied to korps, which has a Dockerfile that
+      does `COPY . .` and had no ignore file, so its build context included
+      `target/`.
 
-## 4. Terraform provider ⏸ (parked)
+## 4. Terraform provider ⏸ (parked, and now in korps)
+
+The code lives at `korps-fleet/terraform-provider-a2aagent/`. This section is the
+design and belongs there too — move it when `NOTES.md`/`TODO.md` are split along
+the seam (§3). Kept here meanwhile rather than dropped.
 
 Parked behind the standalone track and the extraction — see `NOTES.md` for why.
 The design below still holds for when it resumes.
@@ -343,9 +351,10 @@ config fields, so the provider cannot express most agents even when correct.
 
 ## 6. Docs
 
-- [ ] `terraform-provider-a2aagent/README.md` still describes the provider as the
-      source of truth for agent definitions. Fix when the provider resumes — or
-      sooner, with a parked-WIP banner, if it starts misleading anyone.
+- [x] `terraform-provider-a2aagent/README.md` — done as part of the move to
+      korps. It now leads with the parked-WIP banner and names the two concrete
+      defects (`implementation = "llm"`, both validators returning `nil`) rather
+      than presenting itself as a working source of truth.
 
 ---
 
