@@ -17,24 +17,30 @@ infrastructure — container/k8s/deployment stays in your existing tooling.
 
 ## Validation source
 
-The single source of truth for "what is a valid agent config" is the
-`AgentConfig` type in `a2a-agents/src/core/config.rs`, exported as a JSON
-Schema via the `schema` feature:
+The agent config this provider writes is korps's, not this repo's — `AgentConfig`
+lives in `korps/src/core/config.rs` (https://github.com/EmilLindfors/korps) and
+is exported as a JSON Schema via that crate's `schema` feature. Run these from a
+korps checkout:
 
 ```sh
 # Regenerate the schema fixture bundled into the provider:
-cargo run -p a2a-agents --features schema --bin a2a -- print-schema > internal/schema/agent_config.json
+cargo run -p korps --features schema --bin korps -- print-schema > internal/schema/agent_config.json
 ```
 
-When an `a2a` binary is configured (`a2a_bin`), the provider validates configs
-by shelling out to `a2a validate`. Otherwise it falls back to the bundled JSON
+When a `korps` binary is configured (`a2a_bin`), the provider validates configs
+by shelling out to `korps validate`. Otherwise it falls back to the bundled JSON
 Schema. This keeps Rust the single validator.
+
+Note this directory is parked (see `TODO.md`) and still sits in `a2a-rs` while
+everything it targets is in korps; it should follow the platform when work on it
+resumes.
 
 ## Build
 
 ```sh
-# 1. Generate the JSON Schema fixture from the Rust config types.
-cargo run -p a2a-agents --features schema --bin a2a -- print-schema \
+# 1. Generate the JSON Schema fixture from the Rust config types
+#    (from a korps checkout).
+cargo run -p korps --features schema --bin korps -- print-schema \
   > internal/schema/agent_config.json
 
 # 2. Build the provider.

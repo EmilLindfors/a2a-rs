@@ -266,10 +266,15 @@ full plan; the Terraform provider does **not** move yet (see §4).
 - [ ] Downstream-canary CI job here that builds `korps` HEAD against each PR,
       replacing what the shared workspace used to catch
 - [ ] Split `NOTES.md` and `CHANGELOG.md` along the same seam
-- [ ] `release-binaries.yml` still triggers on `a2a-agents-v*` tags and builds
-      `-p a2a-agents --bin a2a`, neither of which exists here any more. Dead
-      rather than noisy (no such tag will be cut again), but it is either korps's
-      workflow now or it should be repointed at `a2acli`.
+- [x] Repoint `release-binaries.yml` at `a2acli` — it triggered on
+      `a2a-agents-v*` and built `-p a2a-agents --bin a2a`, neither of which
+      exists here any more. `a2acli` is the only binary this repo ships, so it
+      keeps the five-target cross-compile matrix. korps needs its own.
+- [ ] Move `terraform-provider-a2aagent/` to korps, or drop it. Everything it
+      targets is there now: it generates its schema fixture from korps's
+      `AgentConfig` and shells out to the `korps` binary to validate. Its README
+      is corrected to say so, but the directory is in the wrong repo. Parked
+      behind §4 either way.
 
 ## 4. Terraform provider ⏸ (parked)
 

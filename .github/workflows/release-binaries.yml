@@ -1,13 +1,22 @@
 name: Release Binaries
 
+# Prebuilt `a2acli` binaries for the five targets below, attached to its release.
+#
+# `a2acli` is the only binary this repo ships — the agent runner moved to korps
+# along with the rest of the platform, so this used to build `-p a2a-agents
+# --bin a2a`, a package that no longer exists here.
+#
+# Note the push trigger rarely fires on its own: release-plz pushes tags with
+# `GITHUB_TOKEN`, and a token-pushed tag does not start a workflow. In practice
+# this is run from `workflow_dispatch` with the tag release-plz just cut.
 on:
   push:
     tags:
-      - "a2a-agents-v*"
+      - "a2acli-v*"
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build and upload binaries for (e.g. a2a-agents-v0.3.0)"
+        description: "Tag to build and upload binaries for (e.g. a2acli-v0.6.0)"
         required: true
 
 permissions:
@@ -59,31 +68,31 @@ jobs:
         shell: bash
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross build --release -p a2a-agents --bin a2a --target ${{ matrix.target }}
+            cross build --release -p a2acli --bin a2acli --target ${{ matrix.target }}
           else
-            cargo build --release -p a2a-agents --bin a2a --target ${{ matrix.target }}
+            cargo build --release -p a2acli --bin a2acli --target ${{ matrix.target }}
           fi
 
       - name: Package binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          tar -czvf a2a-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release a2a
+          tar -czvf a2acli-${{ matrix.target }}.tar.gz -C target/${{ matrix.target }}/release a2acli
 
       - name: Package binary (Windows)
         if: runner.os == 'Windows'
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/a2a.exe -DestinationPath a2a-${{ matrix.target }}.zip
+          Compress-Archive -Path target/${{ matrix.target }}/release/a2acli.exe -DestinationPath a2acli-${{ matrix.target }}.zip
 
       - name: Upload Release Asset (Unix)
         if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          files: a2a-${{ matrix.target }}.tar.gz
+          files: a2acli-${{ matrix.target }}.tar.gz
 
       - name: Upload Release Asset (Windows)
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.tag || github.ref_name }}
-          files: a2a-${{ matrix.target }}.zip
+          files: a2acli-${{ matrix.target }}.zip
