@@ -250,12 +250,19 @@ full plan; the Terraform provider does **not** move yet (see §4).
       `a2a-client`, `a2a-llm`, `a2a-mcp`, `a2acli` (directory `a2a-cli/`; the
       package stays `a2acli` because `a2a-cli` on crates.io belongs to
       a2aproject).
-- [x] **Publish `a2a-llm` 0.1.0** (2026-08-17). Every version korps declares now
-      resolves from crates.io — `a2a-rs` 0.6.0, `a2a-llm` 0.1.0, `a2a-mcp` 0.6.0,
-      `a2a-ap2` 0.4.1, `a2a-web-client` 0.6.0 — so its `[patch.crates-io]` is
-      back to being a co-development convenience rather than a build requirement.
-      Published off `refactor/protocol-platform-seam`: `a2a-llm` does not exist
-      on `master`, so there was no other source.
+- [x] **Publish `a2a-llm` 0.1.0** (2026-08-17). Published off
+      `refactor/protocol-platform-seam`; `a2a-llm` does not exist on `master`, so
+      there was no other source. Every version korps declares now *resolves* from
+      crates.io: `a2a-rs` 0.6.0, `a2a-llm` 0.1.0, `a2a-mcp` 0.6.0, `a2a-ap2`
+      0.4.1, `a2a-web-client` 0.6.0.
+- [ ] **`[patch.crates-io]` in korps is still load-bearing, for a new reason.**
+      Measured by stripping the patch and running `cargo check --workspace`: korps
+      needs `AsyncContextStateStore`, `NoContextState`, `ContextState`,
+      `StateKey`, and `StateScope`, which are on this branch (the `wip: context
+      state, oauth2/oidc verification, postgres migrations` commit) and not in
+      `a2a-rs` 0.6.0. Releasing `a2a-rs` 0.7 with the context-state API is what
+      actually unblocks korps CI — publishing `a2a-llm` only removed the
+      missing-crate half of the problem.
 - [ ] Downstream-canary CI job here that builds `korps` HEAD against each PR,
       replacing what the shared workspace used to catch
 - [ ] Split `NOTES.md` and `CHANGELOG.md` along the same seam
