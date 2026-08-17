@@ -16,7 +16,7 @@ The workspace is organized into several crates:
 | [a2a-rs](./a2a-rs/) | Core protocol library — types, traits, transports, storage |
 | [a2a-ap2](./a2a-ap2/) | Agent Payments Protocol (AP2) extension |
 | [a2a-agents](./a2a-agents/) | Declarative TOML agent framework + multi-agent platform (registry, runtime, control-plane) |
-| [a2a-agents-common](./a2a-agents-common/) | Shared utilities (NLP, formatting, LLM providers, testing fixtures) |
+| [a2a-llm](./a2a-llm/) | Provider-neutral LLM vocabulary and providers (OpenAI-compatible, Gemini) |
 | [a2a-client](./a2a-client/) | Web client library for building agent frontends |
 | [a2a-mcp](./a2a-mcp/) | Bidirectional A2A ↔ MCP bridge (Model Context Protocol) |
 

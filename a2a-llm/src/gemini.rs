@@ -1,4 +1,6 @@
-use super::{Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole};
+use super::{
+    Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, describe_transport_error,
+};
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
@@ -326,7 +328,7 @@ impl LlmProvider for GeminiProvider {
             .await
             .map_err(|e| {
                 error!(error = %e, "Failed to send request to Gemini API");
-                LlmError::NetworkError(e.to_string())
+                LlmError::NetworkError(describe_transport_error(&e))
             })?;
 
         if !response.status().is_success() {
@@ -541,7 +543,7 @@ impl LlmProvider for GeminiProvider {
             .await
             .map_err(|e| {
                 error!(error = %e, "Failed to send streaming request to Gemini API");
-                LlmError::NetworkError(e.to_string())
+                LlmError::NetworkError(describe_transport_error(&e))
             })?;
 
         if !response.status().is_success() {
@@ -569,7 +571,7 @@ impl LlmProvider for GeminiProvider {
                 let event = match event_res {
                     Ok(e) => e,
                     Err(e) => {
-                        yield Err(LlmError::NetworkError(format!("SSE error: {}", e)))?;
+                        yield Err(LlmError::NetworkError(format!("SSE error: {}", describe_transport_error(&e))))?;
                         continue;
                     }
                 };

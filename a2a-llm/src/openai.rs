@@ -1,6 +1,6 @@
 use super::{
     Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning, TokenUsage,
-    classify_api_error,
+    classify_api_error, describe_transport_error,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -469,7 +469,7 @@ impl LlmProvider for OpenAiProvider {
 
         let response = req_builder.send().await.map_err(|e| {
             error!(error = %e, "Failed to send request to OpenAI API");
-            LlmError::NetworkError(e.to_string())
+            LlmError::NetworkError(describe_transport_error(&e))
         })?;
 
         if !response.status().is_success() {
@@ -619,7 +619,7 @@ impl LlmProvider for OpenAiProvider {
 
         let response = req_builder.send().await.map_err(|e| {
             error!(error = %e, "Failed to send streaming request to OpenAI API");
-            LlmError::NetworkError(e.to_string())
+            LlmError::NetworkError(describe_transport_error(&e))
         })?;
 
         if !response.status().is_success() {
@@ -645,7 +645,7 @@ impl LlmProvider for OpenAiProvider {
                 let event = match event_res {
                     Ok(e) => e,
                     Err(e) => {
-                        yield Err(LlmError::NetworkError(format!("SSE error: {}", e)))?;
+                        yield Err(LlmError::NetworkError(format!("SSE error: {}", describe_transport_error(&e))))?;
                         continue;
                     }
                 };
@@ -740,7 +740,7 @@ impl LlmProvider for OpenAiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::{ChatMessage, Reasoning, ReasoningEffort};
+    use crate::{ChatMessage, Reasoning, ReasoningEffort};
 
     fn provider(supports_reasoning: bool, reasoning: Option<Reasoning>) -> OpenAiProvider {
         OpenAiProvider::new(OpenAiConfig {

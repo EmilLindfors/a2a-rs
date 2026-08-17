@@ -6,8 +6,8 @@ version = 4
 name = "a2a-agents"
 version = "0.7.0"
 dependencies = [
- "a2a-agents-common",
  "a2a-ap2",
+ "a2a-llm",
  "a2a-mcp",
  "a2a-rs",
  "a2a-web-client",
@@ -17,7 +17,6 @@ dependencies = [
  "async-trait",
  "axum 0.7.9",
  "axum 0.8.9",
- "base64 0.22.1",
  "bon",
  "buffa",
  "buffa-types",
@@ -25,6 +24,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "futures",
+ "futures-util",
  "oauth2",
  "regex",
  "reqwest",
@@ -43,26 +43,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "a2a-agents-common"
-version = "0.6.0"
-dependencies = [
- "async-stream",
- "async-trait",
- "chrono",
- "eventsource-stream",
- "futures",
- "moka",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "uuid",
-]
-
-[[package]]
 name = "a2a-ap2"
 version = "0.4.1"
 dependencies = [
@@ -75,10 +55,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "a2a-llm"
+version = "0.1.0"
+dependencies = [
+ "async-stream",
+ "async-trait",
+ "eventsource-stream",
+ "futures",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "a2a-mcp"
 version = "0.6.0"
 dependencies = [
- "a2a-agents-common",
+ "a2a-llm",
  "a2a-rs",
  "anyhow",
  "async-trait",
@@ -133,6 +129,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tower",
@@ -147,7 +144,6 @@ dependencies = [
 name = "a2a-web-client"
 version = "0.6.0"
 dependencies = [
- "a2a-agents",
  "a2a-rs",
  "anyhow",
  "async-stream",
@@ -372,17 +368,6 @@ dependencies = [
  "compression-core",
  "pin-project-lite",
  "tokio",
-]
-
-[[package]]
-name = "async-lock"
-version = "3.4.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "290f7f2596bd5b78a9fec8088ccd89180d7f9f55b94b0576823bbbdc72ee8311"
-dependencies = [
- "event-listener",
- "event-listener-strategy",
- "pin-project-lite",
 ]
 
 [[package]]
@@ -1097,15 +1082,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-channel"
-version = "0.5.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "82b8f8f868b36967f9606790d1903570de9ceaf870a7bf9fbbd3016d636a2cb2"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-deque"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1496,16 +1472,6 @@ checksum = "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
 dependencies = [
  "concurrent-queue",
  "parking",
- "pin-project-lite",
-]
-
-[[package]]
-name = "event-listener-strategy"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
-dependencies = [
- "event-listener",
  "pin-project-lite",
 ]
 
@@ -2465,26 +2431,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "moka"
-version = "0.12.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "957228ad12042ee839f93c8f257b62b4c0ab5eaae1d4fa60de53b27c9d7c5046"
-dependencies = [
- "async-lock",
- "crossbeam-channel",
- "crossbeam-epoch",
- "crossbeam-utils",
- "equivalent",
- "event-listener",
- "futures-util",
- "parking_lot",
- "portable-atomic",
- "smallvec",
- "tagptr",
- "uuid",
-]
-
-[[package]]
 name = "multer"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2927,12 +2873,6 @@ checksum = "51bae2ac328883f7acdfea3d66a7c35751187f870bc81f94563733a154d7a670"
 dependencies = [
  "plotters-backend",
 ]
-
-[[package]]
-name = "portable-atomic"
-version = "1.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c33a9471896f1c69cecef8d20cbe2f7accd12527ce60845ff44c153bb2a21b49"
 
 [[package]]
 name = "potential_utf"
@@ -4298,12 +4238,6 @@ dependencies = [
  "quote",
  "syn",
 ]
-
-[[package]]
-name = "tagptr"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b2093cf4c8eb1e67749a6762251bc9cd836b6fc171623bd0a9d324d37af2417"
 
 [[package]]
 name = "tempfile"

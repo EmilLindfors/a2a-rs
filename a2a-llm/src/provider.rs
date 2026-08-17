@@ -53,6 +53,15 @@ pub struct LlmSettings {
     /// OpenRouter only today; elsewhere it is dropped, and the resulting
     /// [`SelectedLlm::reasoning`] says so as [`ReasoningPlan::Unsupported`].
     pub reasoning: Option<Reasoning>,
+    /// Whether the endpoint accepts `stream_options.include_usage`, which is
+    /// what makes a *streaming* response report what it cost.
+    ///
+    /// `None` leaves it to the endpoint: on for OpenRouter and OpenAI's own
+    /// URL, off elsewhere, because a local OpenAI-compatible server that
+    /// rejects unknown parameters fails the whole call. Set it for a server
+    /// this crate has no way to recognize — a proxy in front of OpenAI, or a
+    /// self-hosted vLLM that does support it.
+    pub stream_usage: Option<bool>,
 }
 
 impl std::fmt::Debug for LlmSettings {
@@ -68,6 +77,7 @@ impl std::fmt::Debug for LlmSettings {
             .field("http_referer", &self.http_referer)
             .field("x_title", &self.x_title)
             .field("reasoning", &self.reasoning)
+            .field("stream_usage", &self.stream_usage)
             .finish()
     }
 }
@@ -91,6 +101,22 @@ pub const PROVIDER_ENV_VARS: [&str; 6] = [
 /// How the config path names itself in an error, where the env path names the
 /// variable it read.
 const SELECTED_BY_CONFIG: &str = "`[llm] provider`";
+
+/// Whether to ask a streaming request to report what it cost.
+///
+/// The config decides when it says anything. Otherwise the endpoint does, and
+/// the only endpoint whose support is *known* rather than guessed is OpenAI's
+/// own — everything else on this branch is a local OpenAI-compatible server,
+/// which may reject the parameter and fail the whole call.
+///
+/// The URL is compared with a trailing slash trimmed: `https://api.openai.com/v1/`
+/// names the same endpoint, and a plain string comparison quietly decides it is
+/// some other server.
+fn stream_usage_for(settings: &LlmSettings, base_url: &str) -> bool {
+    settings
+        .stream_usage
+        .unwrap_or_else(|| base_url.trim_end_matches('/') == OPENAI_BASE_URL)
+}
 
 /// A provider is named but cannot be built.
 ///
@@ -342,7 +368,7 @@ fn build_from_settings(
                 })?;
             let model = or_env(&settings.model, env, &["OPENROUTER_MODEL"])
                 .unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_string());
-            let config = OpenAiConfig {
+            let mut config = OpenAiConfig {
                 reasoning: settings.reasoning,
                 ..OpenAiConfig::openrouter(
                     api_key,
@@ -352,6 +378,11 @@ fn build_from_settings(
                     or_env(&settings.x_title, env, &["OPENROUTER_X_TITLE"]),
                 )
             };
+            // OpenRouter takes `stream_options`, but a proxy in front of it may
+            // not — the config gets the last word wherever it has one.
+            if let Some(stream_usage) = settings.stream_usage {
+                config.stream_usage = stream_usage;
+            }
             Ok(SelectedLlm {
                 kind: "openrouter",
                 model,
@@ -376,8 +407,9 @@ fn build_from_settings(
                 // `stream_options.include_usage` is known to work on OpenAI's own
                 // endpoint. This branch also serves local OpenAI-compatible
                 // servers, which vary on it and reject unknown parameters
-                // outright, and nothing here can tell them apart beyond the URL.
-                stream_usage: base_url == OPENAI_BASE_URL,
+                // outright, and nothing here can tell them apart beyond the URL —
+                // so a config that knows better says so.
+                stream_usage: stream_usage_for(settings, &base_url),
                 base_url,
                 model: model.clone(),
                 api_key: or_env(&settings.api_key, env, &["OPENAI_API_KEY", "AI_API_KEY"]),
@@ -426,7 +458,7 @@ fn build_from_settings(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::llm::ReasoningEffort;
+    use crate::ReasoningEffort;
 
     /// A fake environment. Mutating the real one would race the other tests in
     /// this binary (`set_var` is `unsafe` in edition 2024 for that reason).
@@ -436,6 +468,34 @@ mod tests {
             .map(|(k, v)| ((*k).to_string(), (*v).to_string()))
             .collect();
         move |key| pairs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone())
+    }
+
+    /// Streaming usage is opt-in per endpoint because a server that rejects
+    /// unknown parameters fails the whole call — but the same endpoint written
+    /// with a trailing slash used to silently lose it.
+    #[test]
+    fn stream_usage_follows_the_endpoint_when_nothing_says_otherwise() {
+        let settings = LlmSettings::default();
+        assert!(stream_usage_for(&settings, OPENAI_BASE_URL));
+        assert!(stream_usage_for(&settings, &format!("{OPENAI_BASE_URL}/")));
+        assert!(!stream_usage_for(&settings, "http://localhost:11434/v1"));
+    }
+
+    /// The point of the field: a server this crate cannot recognize — a proxy
+    /// in front of OpenAI, a self-hosted vLLM — is the config's to describe.
+    #[test]
+    fn a_configured_stream_usage_wins_in_both_directions() {
+        let on = LlmSettings {
+            stream_usage: Some(true),
+            ..LlmSettings::default()
+        };
+        assert!(stream_usage_for(&on, "https://llm.internal/v1"));
+
+        let off = LlmSettings {
+            stream_usage: Some(false),
+            ..LlmSettings::default()
+        };
+        assert!(!stream_usage_for(&off, OPENAI_BASE_URL));
     }
 
     #[test]

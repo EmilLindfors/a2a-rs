@@ -14,7 +14,7 @@ use a2a_rs::port::RequestContext;
 use a2a_rs::port::message_handler::AsyncMessageHandler;
 
 use super::types::*;
-use a2a_agents_common::llm::{ChatMessage, LlmProvider, LlmRequest, ToolCallAccumulator};
+use a2a_llm::{ChatMessage, LlmProvider, LlmRequest, ToolCallAccumulator};
 
 // NOTE: Task storage is handled by ConnectRpcAdapter + SQLx/InMemory storage
 // This handler is stateless and only processes messages
@@ -145,7 +145,7 @@ impl ReimbursementHandler {
         // configured and broken is reported here and treated as absent, since
         // this constructor cannot fail — `a2a run` builds the provider itself
         // (`resolve_llm`) and refuses to start instead.
-        let llm_provider = match a2a_agents_common::llm::provider_from_env() {
+        let llm_provider = match a2a_llm::provider_from_env() {
             Ok(selected) => selected.map(|llm| llm.provider),
             Err(e) => {
                 tracing::error!("{e}; continuing without conversational features");
@@ -442,7 +442,7 @@ Example response when asking for info:
 
         while let Some(event) = stream.next().await {
             match event {
-                Ok(a2a_agents_common::llm::LlmStreamEvent::ContentChunk(chunk)) => {
+                Ok(a2a_llm::LlmStreamEvent::ContentChunk(chunk)) => {
                     ai_response.push_str(&chunk);
 
                     // Push partial output to UI as an appending Artifact Update
@@ -471,7 +471,7 @@ Example response when asking for info:
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
-                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCallChunk {
+                Ok(a2a_llm::LlmStreamEvent::ToolCallChunk {
                     id,
                     name,
                     arguments,
@@ -511,7 +511,7 @@ Example response when asking for info:
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
-                Ok(a2a_agents_common::llm::LlmStreamEvent::ToolCall(call)) => {
+                Ok(a2a_llm::LlmStreamEvent::ToolCall(call)) => {
                     // Reconcile the authoritative final call and emit a terminal,
                     // non-partial artifact carrying the complete arguments.
                     let metadata = tool_call_metadata(&call.id, &call.name, false);
@@ -542,7 +542,7 @@ Example response when asking for info:
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
-                Ok(a2a_agents_common::llm::LlmStreamEvent::Reasoning(chunk)) => {
+                Ok(a2a_llm::LlmStreamEvent::Reasoning(chunk)) => {
                     // Reasoning-model thinking: surface it as a distinct artifact
                     // but keep it OUT of `ai_response` — the request forces JSON,
                     // and reasoning text would corrupt the parsed answer.
@@ -571,7 +571,7 @@ Example response when asking for info:
                         .broadcast_artifact_update(task_id, update_event)
                         .await;
                 }
-                Ok(a2a_agents_common::llm::LlmStreamEvent::Usage(usage)) => {
+                Ok(a2a_llm::LlmStreamEvent::Usage(usage)) => {
                     // Reported, not shown: this agent's artifacts are the answer
                     // and its tool calls, and a token count is neither.
                     info!("llm usage: {usage}");
@@ -1773,7 +1773,7 @@ impl AsyncMessageHandler for ReimbursementHandler {
 #[cfg(test)]
 mod tool_call_streaming_tests {
     use super::*;
-    use a2a_agents_common::llm::{
+    use a2a_llm::{
         LlmError, LlmProvider, LlmResponse, LlmStreamEvent, ToolCall as LlmToolCall,
     };
     use a2a_rs::adapter::{InMemoryStreamingHandler, InMemoryTaskStorage};

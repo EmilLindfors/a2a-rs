@@ -1,25 +1,27 @@
 use std::sync::Arc;
 
-use a2a_agents_common::context::{
-    CharEstimate, ContextBudget, Fit, TokenEstimate, cap_tool_result, fit, project,
+use crate::context::{
+    CharEstimate, ContextBudget, DriftWatch, Fit, Prompt, TokenEstimate, cap_tool_result, fit,
+    project,
 };
-use a2a_agents_common::llm::{
+use a2a_llm::{
     ChatMessage, LlmError, LlmProvider, LlmRequest, LlmStreamEvent, MessageRole,
     ToolCallAccumulator, ToolDefinition,
 };
 use a2a_rs::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskStatusBroadcast};
 use a2a_rs::domain::{
-    A2AError, ContextId, Conversation, Message, Part, Role, Seq, SequencedMessage, Task,
-    TaskArtifactUpdateEvent, TaskId, TaskState, part,
+    A2AError, ContextId, ContextState, Conversation, Message, Part, Role, Seq, SequencedMessage,
+    Task, TaskArtifactUpdateEvent, TaskId, TaskState, part,
 };
 use a2a_rs::port::{
-    AsyncConversationStore, AsyncConversationStoreExt, AsyncMessageHandler, AsyncPushNotifier,
-    AsyncStreamingHandler, AsyncTaskLifecycle, RequestContext,
+    AsyncContextStateStore, AsyncConversationStore, AsyncConversationStoreExt, AsyncMessageHandler,
+    AsyncPushNotifier, AsyncStreamingHandler, AsyncTaskLifecycle, RequestContext,
 };
 use async_trait::async_trait;
 use buffa::MessageField;
 
 use super::context::{SUMMARY_INSTRUCTION, budget_from, turns_from};
+use super::memory::{MemoryToolSource, is_memory_tool, render_state};
 use super::tools::{self, ToolSource};
 use crate::core::config::{ContextConfig, ContextMode};
 
@@ -57,6 +59,34 @@ impl Answer {
     }
 }
 
+/// How many model responses spent only on `remember`/`forget` are not charged
+/// against `max_tool_rounds`.
+///
+/// A tool round is a model response, so an agent with the state bag on used to
+/// pay for its bookkeeping out of the budget for the work: with the default of
+/// 4, a model that wrote one fact had three rounds left to answer, and the
+/// failure it produced named `max_tool_rounds` without saying where they went.
+/// Bookkeeping is not the work, so it is free — but it still has to be bounded,
+/// since nothing stops a model calling `remember` forever. Two covers the shape
+/// this takes in practice: one response for what it learned on the way in, one
+/// for what it concluded. Past that the rounds are charged again, so a model
+/// looping on the bag ends the same way it did before.
+const FREE_MEMORY_ROUNDS: u32 = 2;
+
+/// What the agent recalled for one turn, read before the work starts.
+///
+/// The two halves travel together because they are read together, refuse
+/// together (a context the caller does not own denies both), and are projected
+/// into the same request. Loaded in `process_message` rather than in the run:
+/// the refusal has to reach the transport as a refusal, not settle a task as
+/// failed with the reason recorded as something the agent said.
+struct Recalled {
+    /// What was said in this context, as far back as the budget allows.
+    conversation: Conversation,
+    /// What the agent was asked to remember, empty when `remember = false`.
+    state: ContextState,
+}
+
 #[derive(Clone)]
 pub struct LlmHandler {
     system_prompt: String,
@@ -70,9 +100,15 @@ pub struct LlmHandler {
     /// `NoConversationMemory` when `[handler.llm.context] mode = "none"`, so the
     /// run loop needs no branch on whether history exists.
     conversations: Arc<dyn AsyncConversationStore>,
+    /// Where the state bag lives. `NoContextState` when
+    /// `[handler.llm.context] remember = false`, for the same reason.
+    state: Arc<dyn AsyncContextStateStore>,
     context: ContextConfig,
     budget: ContextBudget,
     estimator: Arc<dyn TokenEstimate>,
+    /// Reconciles the estimator against what the provider charges. Shared across
+    /// clones of this handler, since one agent's ratio is one measurement.
+    drift: Arc<DriftWatch>,
     /// Which model this handler is pointed at, recorded on every summary it
     /// writes. `LlmProvider` does not expose it, so it is passed in at the
     /// composition edge where `SelectedLlm` resolved it.
@@ -95,7 +131,14 @@ impl HasPushNotifier for LlmHandler {
     }
 }
 
+#[bon::bon]
 impl LlmHandler {
+    /// Assemble a handler from its collaborators.
+    ///
+    /// A builder rather than positional arguments: five of these are ports, and
+    /// at the call site `Arc::new(NoopPushNotifier)` next to `Arc::new(storage)`
+    /// says nothing about which is which.
+    #[builder]
     pub fn new(
         system_prompt: String,
         max_tool_rounds: u32,
@@ -104,6 +147,11 @@ impl LlmHandler {
         push: Arc<dyn AsyncPushNotifier>,
         tools: Vec<Arc<dyn ToolSource>>,
         llm: Option<Arc<dyn LlmProvider>>,
+        /// Which model this handler is pointed at, recorded against every
+        /// summary it writes. Without it a digest cannot be told apart from one
+        /// a weaker model wrote.
+        #[builder(into, default = "unknown".to_string())]
+        model: String,
     ) -> Self {
         let context = ContextConfig::default();
         Self {
@@ -115,32 +163,37 @@ impl LlmHandler {
             tools: Arc::new(tools),
             llm,
             conversations: Arc::new(a2a_rs::port::NoConversationMemory),
+            state: Arc::new(a2a_rs::port::NoContextState),
             budget: budget_from(&context),
+            estimator: Arc::new(CharEstimate::with_chars_per_token(
+                context.chars_per_token.as_f32(),
+            )),
+            drift: Arc::new(DriftWatch::new(context.chars_per_token.as_f32())),
             context,
-            estimator: Arc::new(CharEstimate::default()),
-            model: "unknown".to_string(),
+            model,
         }
     }
 
-    /// Name the model this handler calls, for the record kept against each
-    /// summary. Without it a digest cannot be told apart from one a weaker
-    /// model wrote.
-    pub fn with_model(mut self, model: impl Into<String>) -> Self {
-        self.model = model.into();
-        self
-    }
-
-    /// Give this handler a conversation to remember.
+    /// Give this handler somewhere to remember, and the settings that say what
+    /// it keeps.
     ///
-    /// Separate from [`new`](Self::new), which already takes seven positional
-    /// arguments; a builder is wanted there and is its own change. Passing a
-    /// `mode = "none"` config here is the same as not calling this at all.
+    /// One method taking all three, rather than builder fields: a
+    /// `ContextConfig` asking for `mode = "context"` or `remember = true` with
+    /// no store behind it would compile, build, and remember nothing. The two
+    /// stores are separate arguments because they are separate capabilities —
+    /// usually one object implements both, and nothing requires it to.
     pub fn with_context_memory(
         mut self,
         conversations: Arc<dyn AsyncConversationStore>,
+        state: Arc<dyn AsyncContextStateStore>,
         context: ContextConfig,
     ) -> Self {
+        self.state = state;
         self.budget = budget_from(&context);
+        self.estimator = Arc::new(CharEstimate::with_chars_per_token(
+            context.chars_per_token.as_f32(),
+        ));
+        self.drift = Arc::new(DriftWatch::new(context.chars_per_token.as_f32()));
         self.context = context;
         self.conversations = conversations;
         self
@@ -197,6 +250,26 @@ impl LlmHandler {
             Err(e) => {
                 tracing::warn!("could not load conversation for {context_id}: {e}");
                 Ok(Conversation::default())
+            }
+        }
+    }
+
+    /// Load the state bag for this context and caller.
+    ///
+    /// Degrades the same way [`load_conversation`](Self::load_conversation)
+    /// does, and for the same reason: answering without what was remembered
+    /// beats not answering, while a refusal stays a refusal.
+    async fn load_state(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+    ) -> Result<ContextState, A2AError> {
+        match self.state.load_state(context_id, caller).await {
+            Ok(state) => Ok(state),
+            Err(denied @ A2AError::ContextAccessDenied { .. }) => Err(denied),
+            Err(e) => {
+                tracing::warn!("could not load remembered state for {context_id}: {e}");
+                Ok(ContextState::new())
             }
         }
     }
@@ -277,14 +350,18 @@ impl LlmHandler {
             .await;
 
         let turns = turns_from(&older);
-        let mut messages = project(
-            "You are summarizing a conversation.",
+        let mut messages = project(Prompt {
+            system: "You are summarizing a conversation.",
+            // No state block: the bag is not part of the conversation and
+            // survives compaction by itself, so summarizing it would only
+            // duplicate it into the digest.
+            state: None,
             // The previous summary is folded in rather than kept alongside, so
             // digests chain instead of accumulating.
-            conversation.summary(),
-            &turns,
-            SUMMARY_INSTRUCTION,
-        );
+            summary: conversation.summary(),
+            turns: &turns,
+            current: SUMMARY_INSTRUCTION,
+        });
         // The summary request is itself subject to the budget: a conversation
         // too long to send is exactly the one being compacted.
         if let Err(e) = fit(&mut messages, &self.budget, self.estimator.as_ref()) {
@@ -292,7 +369,22 @@ impl LlmHandler {
             return;
         }
 
-        let request = LlmRequest::new(messages).temperature(0.0);
+        // What the digest will stand in for: the turns being folded, plus the
+        // previous summary, which is folded in rather than kept alongside.
+        let replaced_tokens: usize = turns
+            .iter()
+            .map(|turn| self.estimator.estimate_text(&turn.text))
+            .sum::<usize>()
+            + conversation
+                .summary()
+                .map_or(0, |summary| self.estimator.estimate_text(summary));
+
+        let request = LlmRequest::new(messages).temperature(0.0).max_tokens(
+            self.budget
+                .summary_tokens(replaced_tokens)
+                .try_into()
+                .unwrap_or(u32::MAX),
+        );
         let summary = match llm.chat_completion(request).await {
             Ok(response) => response.content.unwrap_or_default(),
             Err(e) => {
@@ -302,6 +394,19 @@ impl LlmHandler {
         };
         if summary.trim().is_empty() {
             tracing::warn!("summary for {context_id} came back empty; keeping the transcript");
+            return;
+        }
+        // The backstop for a provider that ignored `max_tokens`. A digest is
+        // re-sent on every later turn, so one that is not smaller than the turns
+        // it replaces makes every following turn more expensive, not less.
+        let summary_tokens = self.estimator.estimate_text(&summary);
+        if summary_tokens >= replaced_tokens {
+            tracing::warn!(
+                summary_tokens,
+                replaced_tokens,
+                "summary for {context_id} is no shorter than what it replaces; keeping the \
+                 transcript"
+            );
             return;
         }
 
@@ -320,6 +425,28 @@ impl LlmHandler {
         }
     }
 
+    /// Compact at most once per turn, and only when there is history to compact.
+    ///
+    /// A second pass would summarize a summary, and a request that still does not
+    /// fit after one is not going to fit after two. `done` carries that across
+    /// the tool rounds of one turn.
+    async fn compact_once(
+        &self,
+        done: &mut bool,
+        llm: &dyn LlmProvider,
+        task_id: &str,
+        context_id: &str,
+        caller: Option<&str>,
+        conversation: &Conversation,
+    ) {
+        if *done || !self.context.mode.reads_history() {
+            return;
+        }
+        *done = true;
+        self.compact_conversation(llm, task_id, context_id, caller, conversation)
+            .await;
+    }
+
     async fn run_with_llm(
         &self,
         llm: &dyn LlmProvider,
@@ -327,18 +454,46 @@ impl LlmHandler {
         context_id: &str,
         caller: Option<&str>,
         user_text: &str,
-        conversation: Conversation,
+        recalled: Recalled,
     ) -> Result<Answer, A2AError> {
         use futures::StreamExt;
 
-        let tools: Vec<ToolDefinition> = tools::collect_tool_defs(&self.tools);
+        let Recalled {
+            conversation,
+            state: remembered,
+        } = recalled;
+
+        // The sources for this turn: the handler's own, plus the two memory
+        // tools when the agent keeps state. Built here rather than held on the
+        // handler because they are bound to this context and this caller, which
+        // is what stops a write landing in another conversation.
+        let mut sources: Vec<Arc<dyn ToolSource>> = self.tools.as_ref().clone();
+        let state_block = if self.context.remember {
+            // First, so the built-ins win `resolve` against a tool server that
+            // happens to advertise the same name.
+            sources.insert(
+                0,
+                Arc::new(MemoryToolSource::new(
+                    self.state.clone(),
+                    context_id.parse()?,
+                    caller.map(str::to_string),
+                    self.context.max_state_chars,
+                )),
+            );
+            render_state(&remembered, self.context.max_state_chars)
+        } else {
+            None
+        };
+
+        let tools: Vec<ToolDefinition> = tools::collect_tool_defs(&sources);
         let turns = turns_from(&conversation);
-        let mut messages = project(
-            &self.system_prompt,
-            conversation.summary(),
-            &turns,
-            user_text,
-        );
+        let mut messages = project(Prompt {
+            system: &self.system_prompt,
+            state: state_block.as_deref(),
+            summary: conversation.summary(),
+            turns: &turns,
+            current: user_text,
+        });
 
         // Tool schemas ride on every request and are easy to leave out of a
         // budget. Charged once here rather than per round, since they do not
@@ -352,7 +507,14 @@ impl LlmHandler {
         let mut said_along_the_way = String::new();
 
         let mut compacted = false;
-        for round in 0..self.max_tool_rounds {
+        // `round` counts passes through the loop and `charged` counts the ones
+        // that went on the task, which differ once the state bag is on. Both
+        // exist because the artifact ids are keyed on the pass: two passes
+        // sharing a suffix would stream into one artifact.
+        let mut round = 0u32;
+        let mut charged = 0u32;
+        let mut memory_rounds = 0u32;
+        while charged < self.max_tool_rounds {
             // Trim before every round, not just the first: tool results are what
             // grows, and they arrive between rounds.
             match fit(&mut messages, &budget, self.estimator.as_ref()) {
@@ -360,15 +522,40 @@ impl LlmHandler {
                 Ok(Fit::Trimmed) => {
                     tracing::debug!(round, "trimmed the request to fit the context budget");
                 }
+                // Under the ceiling, over the threshold: this request is fine
+                // and the next one might not be.
                 Ok(Fit::ShouldCompact) => {
-                    // Once. A second pass would summarize a summary, and the
-                    // request that still does not fit after one is not going to
-                    // fit after two.
-                    if !compacted && self.context.mode.reads_history() {
-                        compacted = true;
-                        self.compact_conversation(llm, task_id, context_id, caller, &conversation)
-                            .await;
-                    }
+                    self.compact_once(
+                        &mut compacted,
+                        llm,
+                        task_id,
+                        context_id,
+                        caller,
+                        &conversation,
+                    )
+                    .await;
+                }
+                Ok(Fit::OverBudget) => {
+                    // Compaction writes a digest for the next turn; this request
+                    // goes out as it is. Which makes it the one case worth
+                    // saying out loud — the provider may refuse it, and the
+                    // retry that follows drops every tool result to get under
+                    // the window.
+                    tracing::warn!(
+                        round,
+                        max_input_tokens = self.context.max_input_tokens,
+                        "the request is over the context budget with nothing left to trim; \
+                         sending it anyway"
+                    );
+                    self.compact_once(
+                        &mut compacted,
+                        llm,
+                        task_id,
+                        context_id,
+                        caller,
+                        &conversation,
+                    )
+                    .await;
                 }
                 Err(e) => return Err(A2AError::Internal(e.to_string())),
             }
@@ -453,14 +640,28 @@ impl LlmHandler {
                     }
                     LlmStreamEvent::Usage(usage) => {
                         // What it actually cost, against what was estimated.
-                        // The gap is how the `chars_per_token` ratio gets tuned,
-                        // and the only way to notice the estimator drifting from
-                        // whatever model the config now points at.
                         tracing::info!(
                             round,
                             estimated_prompt_tokens = estimated,
                             "llm usage: {usage}"
                         );
+                        // And once the gap is wide enough to change what this
+                        // agent sends, the ratio that closes it. Nothing else in
+                        // the loop can tell an over-eager compaction from a
+                        // window the estimate never reached.
+                        if let Some(drift) = self
+                            .drift
+                            .record(estimated, usage.prompt_tokens.unwrap_or(0))
+                        {
+                            tracing::warn!(
+                                observed_ratio = drift.ratio,
+                                samples = drift.samples,
+                                "the token estimate is off by more than a third against what \
+                                 {} charges — set `[handler.llm.context] chars_per_token = {:.1}`",
+                                self.model,
+                                drift.chars_per_token
+                            );
+                        }
                     }
                 }
             }
@@ -519,7 +720,7 @@ impl LlmHandler {
                     &format!("calling {}({})", call.name, call.arguments),
                 )
                 .await;
-                let source = tools::resolve(&self.tools, &call.name).ok_or_else(|| {
+                let source = tools::resolve(&sources, &call.name).ok_or_else(|| {
                     A2AError::Internal(format!("model called unknown tool '{}'", call.name))
                 })?;
                 let result = source.invoke(task_id, call).await?;
@@ -536,16 +737,41 @@ impl LlmHandler {
                     for_model,
                 ));
             }
+
+            // A response that only wrote to the state bag did not advance the
+            // task, so it is not charged — up to the allowance, past which the
+            // model is looping on the bag rather than using it. `calls` is
+            // non-empty here; the answer path returned above.
+            if self.context.remember && calls.iter().all(|call| is_memory_tool(&call.name)) {
+                memory_rounds += 1;
+                if memory_rounds > FREE_MEMORY_ROUNDS {
+                    charged += 1;
+                }
+            } else {
+                charged += 1;
+            }
+            round += 1;
         }
         // The budget ran out with the model still calling tools. That is a task
         // that did not get done, so it settles `Failed` — and it keeps whatever
         // the model said on the way, because an apology in place of the work is
         // strictly less than the work.
+        let mut why = format!(
+            "gave up after {} tool-call rounds without reaching an answer — raise `max_tool_rounds` if the work genuinely needs more",
+            self.max_tool_rounds
+        );
+        // Where the rounds went, when some of them went on bookkeeping. Raising
+        // `max_tool_rounds` is the wrong fix for a model stuck writing to the
+        // bag, and the number is the only thing that says which case this is.
+        if memory_rounds > 0 {
+            why.push_str(&format!(
+                "; {memory_rounds} responses went on `remember`/`forget`, {} of them charged \
+                 against that budget",
+                memory_rounds.saturating_sub(FREE_MEMORY_ROUNDS)
+            ));
+        }
         Ok(Answer::GaveUp {
-            why: format!(
-                "gave up after {} tool-call rounds without reaching an answer — raise `max_tool_rounds` if the work genuinely needs more",
-                self.max_tool_rounds
-            ),
+            why,
             partial: said_along_the_way,
         })
     }
@@ -607,6 +833,21 @@ impl AsyncMessageHandler for LlmHandler {
             .load_conversation(&id, &context_id, caller.as_deref())
             .await?;
 
+        // Read here rather than in the run, and for the same reason the
+        // conversation is: refusing a context the caller does not own has to
+        // reach the transport as a refusal (403), not settle a task as failed
+        // and record the refusal in the conversation as something the agent
+        // said. With `mode = "none"` this is the only read that checks.
+        let recalled = Recalled {
+            conversation,
+            state: if self.context.remember {
+                let context: ContextId = context_id.parse()?;
+                self.load_state(&context, caller.as_deref()).await?
+            } else {
+                ContextState::new()
+            },
+        };
+
         let working = self
             .update_and_broadcast(&id, TaskState::Working, Some(message.clone()))
             .await?;
@@ -628,7 +869,7 @@ impl AsyncMessageHandler for LlmHandler {
                             &context_id,
                             caller.as_deref(),
                             &user_text,
-                            conversation,
+                            recalled,
                         )
                         .await
                 }
@@ -760,7 +1001,7 @@ fn extract_text(message: &Message) -> String {
 
 #[cfg(test)]
 mod tests {
-    use a2a_agents_common::llm::{LlmError, LlmResponse, ToolCall};
+    use a2a_llm::{LlmError, LlmResponse, ToolCall};
     use a2a_rs::adapter::{InMemoryStreamingHandler, InMemoryTaskStorage};
     use a2a_rs::port::NoopPushNotifier;
     use futures::stream::{self, BoxStream, StreamExt};
@@ -785,8 +1026,40 @@ mod tests {
             name == "look_it_up"
         }
 
+        fn label(&self) -> String {
+            "the lookup tool".to_string()
+        }
+
         async fn invoke(&self, _task_id: &str, _call: &ToolCall) -> Result<String, A2AError> {
             Ok("a fact".to_string())
+        }
+    }
+
+    /// A tool server that happens to advertise `remember`. Both built-in names
+    /// are ordinary enough words for one to use, which is why the memory source
+    /// is inserted ahead of the handler's own sources.
+    struct NamesakeTool;
+
+    #[async_trait]
+    impl ToolSource for NamesakeTool {
+        fn tool_defs(&self) -> Vec<ToolDefinition> {
+            vec![ToolDefinition {
+                name: "remember".to_string(),
+                description: "someone else's remember".to_string(),
+                parameters: serde_json::json!({ "type": "object", "properties": {} }),
+            }]
+        }
+
+        fn has_tool(&self, name: &str) -> bool {
+            name == "remember"
+        }
+
+        fn label(&self) -> String {
+            "a tool server".to_string()
+        }
+
+        async fn invoke(&self, _task_id: &str, _call: &ToolCall) -> Result<String, A2AError> {
+            Ok("noted".to_string())
         }
     }
 
@@ -808,6 +1081,10 @@ mod tests {
             name == "dump_everything"
         }
 
+        fn label(&self) -> String {
+            "the verbose tool".to_string()
+        }
+
         async fn invoke(&self, _task_id: &str, _call: &ToolCall) -> Result<String, A2AError> {
             Ok(format!("HEAD{}TAIL", "x".repeat(200_000)))
         }
@@ -827,15 +1104,14 @@ mod tests {
         seen: Arc<std::sync::Mutex<Vec<LlmRequest>>>,
         /// Which request index to refuse as over-long, if any.
         refuse_at: Option<usize>,
+        /// What the non-streaming call answers with — the summary, since that
+        /// is the only thing this handler asks for without streaming.
+        summary: String,
     }
 
     impl ScriptedProvider {
         fn new(events: Vec<LlmStreamEvent>) -> Self {
-            Self {
-                scripts: vec![events],
-                seen: Arc::new(std::sync::Mutex::new(Vec::new())),
-                refuse_at: None,
-            }
+            Self::scripted(vec![events])
         }
 
         fn scripted(scripts: Vec<Vec<LlmStreamEvent>>) -> Self {
@@ -843,11 +1119,19 @@ mod tests {
                 scripts,
                 seen: Arc::new(std::sync::Mutex::new(Vec::new())),
                 refuse_at: None,
+                summary: "they talked about Bergen".to_string(),
             }
         }
 
         fn refusing_at(mut self, index: usize) -> Self {
             self.refuse_at = Some(index);
+            self
+        }
+
+        /// A model that ignores `max_tokens` and hands back a "summary" the size
+        /// of the transcript.
+        fn summarizing_with(mut self, summary: impl Into<String>) -> Self {
+            self.summary = summary.into();
             self
         }
 
@@ -861,7 +1145,7 @@ mod tests {
         async fn chat_completion(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
             self.seen.lock().unwrap().push(request);
             Ok(LlmResponse {
-                content: Some("they talked about Bergen".to_string()),
+                content: Some(self.summary.clone()),
                 tool_calls: None,
                 reasoning: None,
                 usage: None,
@@ -913,16 +1197,16 @@ mod tests {
         context: ContextConfig,
     ) -> (LlmHandler, ScriptedProvider) {
         let storage = InMemoryTaskStorage::new();
-        let handler = LlmHandler::new(
-            "test".to_string(),
-            2,
-            storage.clone(),
-            InMemoryStreamingHandler::new(),
-            Arc::new(NoopPushNotifier),
-            tools,
-            Some(Arc::new(provider.clone()) as Arc<dyn LlmProvider>),
-        )
-        .with_context_memory(Arc::new(storage), context);
+        let handler = LlmHandler::builder()
+            .system_prompt("test".to_string())
+            .max_tool_rounds(2)
+            .lifecycle(storage.clone())
+            .streaming(InMemoryStreamingHandler::new())
+            .push(Arc::new(NoopPushNotifier))
+            .tools(tools)
+            .llm(Arc::new(provider.clone()) as Arc<dyn LlmProvider>)
+            .build()
+            .with_context_memory(Arc::new(storage.clone()), Arc::new(storage), context);
         (handler, provider)
     }
 
@@ -1432,14 +1716,10 @@ mod tests {
         );
     }
 
-    /// A conversation that crosses the compaction threshold is summarized, and
-    /// the next turn is handed the summary instead of the transcript.
-    ///
-    /// The budget is tiny so two short turns trip it; in production the same
-    /// path runs at 80% of a real window.
-    #[tokio::test]
-    async fn a_long_conversation_is_summarized_and_the_summary_carries_forward() {
-        let context = ContextConfig {
+    /// A budget small enough that a few short turns trip compaction; in
+    /// production the same path runs at 80% of a real window.
+    fn compacting_context() -> ContextConfig {
+        ContextConfig {
             mode: ContextMode::Context,
             // Small, but well clear of the summary prompt itself: `fit` refuses
             // a budget that cannot hold the request it is being asked to make.
@@ -1450,55 +1730,55 @@ mod tests {
             // older to fold. The default of 4 would need nine turns.
             keep_recent_turns: 1,
             ..ContextConfig::default()
-        };
+        }
+    }
+
+    /// Four turns of one context. The fourth is there because a turn compacts
+    /// the conversation it *loaded*: a digest written during turn three first
+    /// reaches a prompt on turn four.
+    async fn four_turns(handler: &LlmHandler) {
+        for (task, text) in [
+            ("11111111-1111-1111-1111-111111111111", "first question"),
+            ("22222222-2222-2222-2222-222222222222", "second question"),
+            ("33333333-3333-3333-3333-333333333333", "third question"),
+            ("44444444-4444-4444-4444-444444444444", "fourth question"),
+        ] {
+            say(handler, task, "ctx", text).await;
+        }
+    }
+
+    /// `chat_completion` (non-streaming) is only used for summarizing, so a
+    /// recorded non-streaming request is what proves compaction ran.
+    fn summary_requests(provider: &ScriptedProvider) -> Vec<LlmRequest> {
+        provider
+            .requests()
+            .into_iter()
+            .filter(|request| {
+                request.messages.iter().any(|m| {
+                    m.content
+                        .as_deref()
+                        .is_some_and(|c| c.contains("Summarize the conversation"))
+                })
+            })
+            .collect()
+    }
+
+    /// A conversation that crosses the compaction threshold is summarized, and
+    /// the next turn is handed the summary instead of the transcript.
+    #[tokio::test]
+    async fn a_long_conversation_is_summarized_and_the_summary_carries_forward() {
         let (handler, provider) = handler_from(
             ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("x".repeat(1000))]),
             Vec::new(),
-            context,
+            compacting_context(),
         );
 
-        say(
-            &handler,
-            "11111111-1111-1111-1111-111111111111",
-            "ctx",
-            "first question",
-        )
-        .await;
-        say(
-            &handler,
-            "22222222-2222-2222-2222-222222222222",
-            "ctx",
-            "second question",
-        )
-        .await;
-        say(
-            &handler,
-            "33333333-3333-3333-3333-333333333333",
-            "ctx",
-            "third question",
-        )
-        .await;
-        // A fourth turn, because a turn compacts the conversation it *loaded*:
-        // the digest written during turn three first reaches a prompt on turn
-        // four.
-        say(
-            &handler,
-            "44444444-4444-4444-4444-444444444444",
-            "ctx",
-            "fourth question",
-        )
-        .await;
+        four_turns(&handler).await;
 
-        // `chat_completion` (non-streaming) is only used for summarizing, so a
-        // recorded non-streaming request is proof compaction ran.
-        let summarized = provider.requests().iter().any(|request| {
-            request.messages.iter().any(|m| {
-                m.content
-                    .as_deref()
-                    .is_some_and(|c| c.contains("Summarize the conversation"))
-            })
-        });
-        assert!(summarized, "the conversation should have been compacted");
+        assert!(
+            !summary_requests(&provider).is_empty(),
+            "the conversation should have been compacted"
+        );
 
         // And the digest reaches the next prompt as a system message.
         let requests = provider.requests();
@@ -1516,6 +1796,60 @@ mod tests {
                 .iter()
                 .map(|m| (&m.role, m.content.as_deref().map(|c| &c[..c.len().min(60)])))
                 .collect::<Vec<_>>()
+        );
+    }
+
+    /// Without a ceiling a verbose model can return a "summary" about as long
+    /// as the transcript it replaces, and the digest is re-sent every turn
+    /// after.
+    #[tokio::test]
+    async fn a_summary_is_asked_for_with_a_ceiling() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("x".repeat(1000))]),
+            Vec::new(),
+            compacting_context(),
+        );
+
+        four_turns(&handler).await;
+
+        let requests = summary_requests(&provider);
+        assert!(!requests.is_empty(), "nothing was summarized");
+        assert!(
+            requests.iter().all(|request| request.max_tokens.is_some()),
+            "every summary request must carry a max_tokens"
+        );
+    }
+
+    /// The backstop for a provider that ignores `max_tokens`: a digest that is
+    /// no smaller than the turns it stands in for makes every later turn more
+    /// expensive rather than less, so it is thrown away and the transcript kept.
+    #[tokio::test]
+    async fn a_summary_no_shorter_than_the_transcript_is_discarded() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("x".repeat(1000))])
+                .summarizing_with("y".repeat(100_000)),
+            Vec::new(),
+            compacting_context(),
+        );
+
+        four_turns(&handler).await;
+
+        assert!(
+            !summary_requests(&provider).is_empty(),
+            "compaction should still have been attempted"
+        );
+        let requests = provider.requests();
+        let carried_a_digest = requests.iter().any(|request| {
+            request.messages.iter().any(|m| {
+                matches!(m.role, MessageRole::System)
+                    && m.content
+                        .as_deref()
+                        .is_some_and(|c| c.contains("Summary of the earlier part"))
+            })
+        });
+        assert!(
+            !carried_a_digest,
+            "a summary that saves nothing must not reach a later prompt"
         );
     }
 
@@ -1576,5 +1910,270 @@ mod tests {
             arguments: "{}".to_string(),
         }));
         events
+    }
+
+    // --- the state bag -------------------------------------------------------
+
+    fn remembering_context() -> ContextConfig {
+        ContextConfig {
+            remember: true,
+            ..ContextConfig::default()
+        }
+    }
+
+    /// One tool call with arguments, then an answer — the two requests a turn
+    /// that writes to memory produces.
+    fn calls_then_answers(name: &str, arguments: serde_json::Value) -> Vec<Vec<LlmStreamEvent>> {
+        vec![
+            vec![LlmStreamEvent::ToolCall(ToolCall {
+                id: "call-1".to_string(),
+                name: name.to_string(),
+                arguments: arguments.to_string(),
+            })],
+            vec![LlmStreamEvent::ContentChunk("noted".to_string())],
+        ]
+    }
+
+    /// Every system message that reached the model on request `index`. The state
+    /// block is one, which is why `sent_texts` cannot see it.
+    fn sent_system(provider: &ScriptedProvider, index: usize) -> Vec<String> {
+        provider.requests()[index]
+            .messages
+            .iter()
+            .filter(|m| matches!(m.role, MessageRole::System))
+            .filter_map(|m| m.content.clone())
+            .collect()
+    }
+
+    fn tool_names(provider: &ScriptedProvider, index: usize) -> Vec<String> {
+        provider.requests()[index]
+            .tools
+            .iter()
+            .flatten()
+            .map(|t| t.name.clone())
+            .collect()
+    }
+
+    /// The point of the whole feature: a fact written on one turn is in the
+    /// prompt on the next, without having been said again.
+    #[tokio::test]
+    async fn a_remembered_fact_reaches_the_next_turns_prompt() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::scripted(calls_then_answers(
+                "remember",
+                serde_json::json!({"key": "project", "value": "a2a-rs"}),
+            )),
+            Vec::new(),
+            remembering_context(),
+        );
+
+        say(&handler, "task-1", "ctx-1", "I work on a2a-rs").await;
+        // A second task in the same context: a new turn, nothing carried in
+        // process.
+        say(&handler, "task-2", "ctx-1", "what am I working on").await;
+
+        let system = sent_system(&provider, 2).join("\n");
+        assert!(system.contains("project = a2a-rs"), "{system}");
+    }
+
+    /// The tools are advertised only when the agent keeps state, so an existing
+    /// agent's prompt and tool list are unchanged by this shipping.
+    #[tokio::test]
+    async fn the_memory_tools_appear_only_when_the_agent_remembers() {
+        let (off, off_provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("ok".to_string())]),
+            Vec::new(),
+            ContextConfig::default(),
+        );
+        say(&off, "task-1", "ctx-1", "hei").await;
+        assert!(tool_names(&off_provider, 0).is_empty());
+        assert!(
+            sent_system(&off_provider, 0) == vec!["test".to_string()],
+            "{:?}",
+            sent_system(&off_provider, 0)
+        );
+
+        let (on, on_provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("ok".to_string())]),
+            Vec::new(),
+            remembering_context(),
+        );
+        say(&on, "task-1", "ctx-1", "hei").await;
+        assert_eq!(tool_names(&on_provider, 0), ["remember", "forget"]);
+        // And nothing remembered yet means no block, rather than an empty one.
+        assert_eq!(sent_system(&on_provider, 0), vec!["test".to_string()]);
+    }
+
+    /// What `user:` buys over a bare key: it is filed under the principal, so a
+    /// conversation that has never seen the fact still gets it.
+    #[tokio::test]
+    async fn a_user_scoped_fact_crosses_into_another_conversation() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::scripted(calls_then_answers(
+                "remember",
+                serde_json::json!({"key": "user:tone", "value": "brief"}),
+            )),
+            Vec::new(),
+            remembering_context(),
+        );
+
+        say_as(&handler, "task-1", "ctx-1", "be brief", Some("alice"))
+            .await
+            .unwrap();
+        say_as(&handler, "task-2", "ctx-2", "hei", Some("alice"))
+            .await
+            .unwrap();
+
+        let system = sent_system(&provider, 2).join("\n");
+        assert!(system.contains("user:tone = brief"), "{system}");
+    }
+
+    /// The other half of that: it is the *principal's*, so another caller's
+    /// conversation does not read it.
+    #[tokio::test]
+    async fn a_user_scoped_fact_belongs_to_the_caller_it_was_written_for() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::scripted(calls_then_answers(
+                "remember",
+                serde_json::json!({"key": "user:tone", "value": "brief"}),
+            )),
+            Vec::new(),
+            remembering_context(),
+        );
+
+        say_as(&handler, "task-1", "ctx-1", "be brief", Some("alice"))
+            .await
+            .unwrap();
+        say_as(&handler, "task-2", "ctx-2", "hei", Some("bob"))
+            .await
+            .unwrap();
+
+        let system = sent_system(&provider, 2).join("\n");
+        assert!(!system.contains("brief"), "{system}");
+    }
+
+    /// A context belongs to whoever started it, and the state bag is behind the
+    /// same check as the transcript — reached here with `mode = "none"`, where
+    /// nothing else would have consulted the store.
+    #[tokio::test]
+    async fn another_caller_is_refused_the_state_of_a_context_they_do_not_own() {
+        let (handler, _) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ContentChunk("ok".to_string())]),
+            Vec::new(),
+            remembering_context(),
+        );
+
+        say_as(&handler, "task-1", "ctx-1", "hei", Some("alice"))
+            .await
+            .unwrap();
+        let refused = say_as(&handler, "task-2", "ctx-1", "hei", Some("bob")).await;
+        assert!(
+            matches!(refused, Err(A2AError::ContextAccessDenied { .. })),
+            "{refused:?}"
+        );
+    }
+
+    /// A `forget` has to reach the same store the block was rendered from, or
+    /// the model would keep being shown something it has dropped.
+    #[tokio::test]
+    async fn a_forgotten_fact_leaves_the_prompt() {
+        let mut scripts = calls_then_answers(
+            "remember",
+            serde_json::json!({"key": "project", "value": "a2a-rs"}),
+        );
+        scripts.extend(calls_then_answers(
+            "forget",
+            serde_json::json!({"key": "project"}),
+        ));
+        let (handler, provider) = handler_from(
+            ScriptedProvider::scripted(scripts),
+            Vec::new(),
+            remembering_context(),
+        );
+
+        say(&handler, "task-1", "ctx-1", "I work on a2a-rs").await;
+        // Requests 2 and 3: the forget call and the answer after it.
+        say(&handler, "task-2", "ctx-1", "forget that").await;
+        assert!(sent_system(&provider, 2).join("\n").contains("project"));
+
+        say(&handler, "task-3", "ctx-1", "what am I working on").await;
+        let system = sent_system(&provider, 4).join("\n");
+        assert!(!system.contains("project"), "{system}");
+    }
+
+    /// One model response per name, then an answer. The arguments suit
+    /// `remember` and are ignored by everything else.
+    fn calls_in_turn(names: &[&str]) -> Vec<Vec<LlmStreamEvent>> {
+        let mut scripts: Vec<Vec<LlmStreamEvent>> = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                vec![LlmStreamEvent::ToolCall(ToolCall {
+                    id: format!("call-{i}"),
+                    name: name.to_string(),
+                    arguments: serde_json::json!({"key": "project", "value": "a2a-rs"}).to_string(),
+                })]
+            })
+            .collect();
+        scripts.push(vec![LlmStreamEvent::ContentChunk("42".to_string())]);
+        scripts
+    }
+
+    /// A tool round is a model response, so writing to the bag came out of the
+    /// budget for the work: with `max_tool_rounds` at 2, remembering one fact
+    /// and looking one up left nothing to answer with.
+    #[tokio::test]
+    async fn remembering_something_does_not_spend_a_tool_round() {
+        let (handler, _) = handler_from(
+            ScriptedProvider::scripted(calls_in_turn(&["remember", "look_it_up"])),
+            vec![Arc::new(AlwaysCallableTool) as Arc<dyn ToolSource>],
+            remembering_context(),
+        );
+
+        let task = say(&handler, "task-1", "ctx-1", "I work on a2a-rs").await;
+        assert_eq!(state_of(&task), TaskState::Completed);
+        assert_eq!(reply_text(&task), "42");
+    }
+
+    /// The other half: free is not unbounded, since nothing stops a model
+    /// calling `remember` forever. Past the allowance the rounds are charged
+    /// again, and the failure says where they went — raising `max_tool_rounds`
+    /// is the wrong fix for a model stuck writing to the bag.
+    #[tokio::test]
+    async fn a_model_that_only_ever_remembers_still_gives_up() {
+        let (handler, provider) = handler_from(
+            ScriptedProvider::new(vec![LlmStreamEvent::ToolCall(ToolCall {
+                id: "call-1".to_string(),
+                name: "remember".to_string(),
+                arguments: serde_json::json!({"key": "project", "value": "a2a-rs"}).to_string(),
+            })]),
+            Vec::new(),
+            remembering_context(),
+        );
+
+        let task = say(&handler, "task-1", "ctx-1", "I work on a2a-rs").await;
+        assert_eq!(state_of(&task), TaskState::Failed);
+        // Two free responses, then the budget of two.
+        assert_eq!(provider.requests().len(), 4);
+        let reply = reply_text(&task);
+        assert!(
+            reply.contains("`remember`/`forget`"),
+            "the failure has to say where the rounds went, got: {reply:?}"
+        );
+    }
+
+    /// The exemption is for the handler's own memory tools, which exist only
+    /// when the bag is on. With `remember = false` the same name belongs to
+    /// whatever tool server advertises it, and calling one is work.
+    #[tokio::test]
+    async fn a_tool_named_remember_is_charged_when_the_bag_is_off() {
+        let (handler, _) = handler_from(
+            ScriptedProvider::scripted(calls_in_turn(&["remember", "remember"])),
+            vec![Arc::new(NamesakeTool) as Arc<dyn ToolSource>],
+            ContextConfig::default(),
+        );
+
+        let task = say(&handler, "task-1", "ctx-1", "hei").await;
+        assert_eq!(state_of(&task), TaskState::Failed);
     }
 }

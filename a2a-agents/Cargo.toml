@@ -12,9 +12,9 @@ categories = ["api-bindings", "network-programming"]
 
 [dependencies]
 a2a-rs = { path = "../a2a-rs", version = "0.6", features = ["server", "http-server", "http-client", "tracing"] }
-a2a-agents-common = { path = "../a2a-agents-common", version = "0.6" }
+a2a-llm = { path = "../a2a-llm", version = "0.1" }
 a2a-ap2 = { path = "../a2a-ap2", version = "0.4", optional = true }
-a2a-client = { package = "a2a-web-client", path = "../a2a-client", version = "0.6" }
+a2a-client = { package = "a2a-web-client", path = "../a2a-client", version = "0.6", optional = true }
 a2a-mcp = { path = "../a2a-mcp", version = "0.6", optional = true }
 rmcp = { version = "1.7", features = ["server", "client", "transport-io", "transport-child-process", "transport-streamable-http-server"], optional = true }
 
@@ -55,12 +55,17 @@ reqwest = { workspace = true, features = ["json"] }
 # OAuth2 support (optional, for auth feature)
 oauth2 = { version = "5.0", optional = true }
 
-# Frontend dependencies
+# The control-plane HTTP API (`control_plane/http.rs`, served by `axum::serve`
+# in `bin/a2a.rs`) is built on axum, so this is not optional.
 axum = { version = "0.7", features = ["multipart"] }
-askama = "0.12"
-askama_axum = "0.4"
-tower-http = { version = "0.6", features = ["fs", "cors"] }
-base64 = "0.22"
+
+# Templating and static-file serving for the reimbursement demo's web frontend.
+# Nothing in `src/` touches these — `bin/reimbursement_demo.rs` is the only
+# consumer, so they are gated behind the same feature that gates the binary.
+askama = { version = "0.12", optional = true }
+askama_axum = { version = "0.4", optional = true }
+tower-http = { version = "0.6", features = ["fs", "cors"], optional = true }
+
 futures = { workspace = true }
 anyhow = { workspace = true }
 
@@ -78,9 +83,14 @@ rustdoc-args = ["--cfg", "docsrs"]
 # The reimbursement agent is a *sample*, so it is opt-in — it has no business in
 # everyone's install, and nothing in the CLI needs it.
 default = ["llm", "mcp-server", "schema", "sqlx"]
-reimbursement-agent = []
+# The sample's web frontend (`bin/reimbursement_demo.rs`) is the only consumer of
+# the templating and static-file crates, and of the web client. Gating them here
+# keeps them out of a plain `cargo install a2a-agents`.
+reimbursement-agent = ["dep:a2a-client", "dep:askama", "dep:askama_axum", "dep:tower-http"]
 ap2 = ["dep:a2a-ap2"]
-sqlx = ["a2a-rs/sqlite"]
+# Both backends, because which one an agent uses is a URL in its config and the
+# binary that reads that config is the same one everywhere.
+sqlx = ["a2a-rs/sqlite", "a2a-rs/postgres"]
 auth = ["a2a-rs/auth", "dep:oauth2"]
 # JSON Schema export for `AgentConfig` (used by the Terraform provider and the
 # `a2a --print-schema` subcommand to validate agent definitions).
@@ -158,3 +168,9 @@ a2a-rs = { path = "../a2a-rs", features = ["jsonrpc-server", "jsonrpc-client"] }
 # a2a-rs serves on axum 0.8 while this crate's frontend is on 0.7; alias the 0.8
 # build for tests so `jsonrpc_router`'s Router matches the `serve` we call.
 axum8 = { package = "axum", version = "0.8" }
+# `e2e_framework_lifecycle_test` and `sse_streaming_test` drive a live agent
+# built here through the browser-facing client. They used to live in
+# `a2a-client/tests/`, which made that crate dev-depend on this one — a cycle
+# that would have spanned two repos after the platform extraction.
+a2a-client = { package = "a2a-web-client", path = "../a2a-client", version = "0.6" }
+futures-util = "0.3"

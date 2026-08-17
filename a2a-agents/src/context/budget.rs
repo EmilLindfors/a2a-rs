@@ -4,7 +4,7 @@
 //! when what is left still does not fit, and the caller — which owns the
 //! conversation store and the LLM — acts on that.
 
-use crate::llm::{ChatMessage, MessageRole};
+use a2a_llm::{ChatMessage, MessageRole};
 
 use super::TokenEstimate;
 
@@ -44,6 +44,12 @@ impl Default for ContextBudget {
     }
 }
 
+/// Smallest summary worth asking for, in tokens. Below this there is no room to
+/// name what a later turn needs — decisions, identifiers, open threads — and
+/// what comes back is a sentence *about* the conversation rather than notes
+/// from it.
+const MIN_SUMMARY_TOKENS: usize = 256;
+
 impl ContextBudget {
     /// Tokens available to the request after reserving room for the reply.
     /// Saturates at zero rather than wrapping when the reserve is larger than
@@ -51,6 +57,21 @@ impl ContextBudget {
     pub fn usable(&self) -> usize {
         self.max_input_tokens
             .saturating_sub(self.reserve_for_output)
+    }
+
+    /// Ceiling on a summary standing in for `replaced` tokens of transcript.
+    ///
+    /// Asking for a summary with no ceiling lets a verbose model return one
+    /// about as long as what it replaces, and the digest is re-sent on every
+    /// later turn — so the cost lands again each turn while the saving is zero.
+    /// A tenth of the usable window, never more than half of what it replaces,
+    /// and never below [`MIN_SUMMARY_TOKENS`]. The last floor is what covers
+    /// `max_input_tokens = 0` ("no ceiling"), where a tenth of `usable` is a
+    /// meaningless number.
+    pub fn summary_tokens(&self, replaced: usize) -> usize {
+        (self.usable() / 10)
+            .min(replaced / 2)
+            .max(MIN_SUMMARY_TOKENS)
     }
 
     /// The size at which compaction is worth doing, below [`Self::usable`].
@@ -71,6 +92,11 @@ pub enum Fit {
     /// Something was dropped to make it fit. Sending this works and the model
     /// has less to go on than the caller gave it.
     Trimmed,
+    /// Still over the ceiling with nothing left that trimming may drop. Sending
+    /// this may be refused by the provider. Compaction is the only thing that
+    /// helps and it helps the *next* turn, since the digest is written after
+    /// this request was built.
+    OverBudget,
 }
 
 /// Why a message list cannot be made to fit.
@@ -203,10 +229,11 @@ pub fn fit(
     }
 
     if estimate_all(estimator, messages) > usable {
-        // Nothing left that this function is allowed to drop. The caller has to
-        // compact — and if it already did, `Irreducible` on the next pass is the
-        // truthful answer.
-        return Ok(Fit::ShouldCompact);
+        // Nothing left that this function is allowed to drop. Reported apart
+        // from `ShouldCompact` because the two ask different things of the
+        // caller: one is a request that fits and wants summarizing before the
+        // next one, this is a request that does not fit.
+        return Ok(Fit::OverBudget);
     }
 
     Ok(verdict(trimmed, estimate_all(estimator, messages), budget))
@@ -281,7 +308,7 @@ fn drop_tool_round(messages: &mut Vec<ChatMessage>, index: usize) {
 mod tests {
     use super::*;
     use crate::context::CharEstimate;
-    use crate::llm::ToolCall;
+    use a2a_llm::ToolCall;
 
     fn estimator() -> CharEstimate {
         CharEstimate::default()
@@ -451,10 +478,11 @@ mod tests {
         assert_eq!(messages.len(), 3, "nothing should have been dropped");
     }
 
-    /// Over the ceiling with no tool rounds left to drop: only compaction can
-    /// help, and saying `Trimmed` here would claim the request now fits.
+    /// Over the ceiling with no tool rounds left to drop. Saying `Trimmed` here
+    /// would claim the request now fits, and `ShouldCompact` would claim it fits
+    /// today and wants summarizing tomorrow.
     #[test]
-    fn plain_turns_over_the_ceiling_ask_for_compaction() {
+    fn plain_turns_over_the_ceiling_report_over_budget() {
         let mut messages = vec![
             ChatMessage::system("be helpful"),
             ChatMessage::assistant("a".repeat(8_000)),
@@ -463,7 +491,65 @@ mod tests {
 
         assert_eq!(
             fit(&mut messages, &budget(100), &estimator()).unwrap(),
+            Fit::OverBudget
+        );
+    }
+
+    /// The distinction the split exists for: the same conversation is
+    /// `ShouldCompact` under a budget it fits and `OverBudget` under one it does
+    /// not, and only the second is a request the provider may refuse.
+    #[test]
+    fn over_the_threshold_and_over_the_ceiling_are_different_answers() {
+        let messages = || {
+            vec![
+                ChatMessage::system("be helpful"),
+                ChatMessage::assistant("a".repeat(3_600)),
+                ChatMessage::user("hei"),
+            ]
+        };
+
+        assert_eq!(
+            fit(&mut messages(), &budget(1_100), &estimator()).unwrap(),
             Fit::ShouldCompact
+        );
+        assert_eq!(
+            fit(&mut messages(), &budget(500), &estimator()).unwrap(),
+            Fit::OverBudget
+        );
+    }
+
+    /// The cap is what stops a "summary" that is as long as the transcript, so
+    /// it has to stay well under what is being replaced.
+    #[test]
+    fn a_summary_is_capped_below_what_it_replaces() {
+        let budget = ContextBudget::default();
+        let replaced = 40_000;
+        let cap = budget.summary_tokens(replaced);
+
+        assert!(cap < replaced / 2, "{cap}");
+        assert!(cap >= MIN_SUMMARY_TOKENS, "{cap}");
+    }
+
+    /// `max_input_tokens = 0` means no ceiling, which makes a fraction of the
+    /// usable window meaningless — what is being replaced is the only number
+    /// left to size against.
+    #[test]
+    fn an_uncapped_budget_sizes_the_summary_against_the_transcript() {
+        let budget = ContextBudget {
+            max_input_tokens: usize::MAX,
+            ..ContextBudget::default()
+        };
+        assert_eq!(budget.summary_tokens(10_000), 5_000);
+    }
+
+    /// A short conversation cannot be squeezed into a few tokens, and asking
+    /// for that yields a sentence about the conversation instead of notes from
+    /// it. Whether the result is worth keeping is then decided by measuring it.
+    #[test]
+    fn a_small_transcript_still_gets_room_to_write() {
+        assert_eq!(
+            ContextBudget::default().summary_tokens(10),
+            MIN_SUMMARY_TOKENS
         );
     }
 

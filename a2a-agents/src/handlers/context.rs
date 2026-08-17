@@ -6,7 +6,7 @@
 //! stored [`Message`]s to [`Turn`]s and a [`ContextConfig`] to a
 //! [`ContextBudget`].
 
-use a2a_agents_common::context::{ContextBudget, Turn};
+use crate::context::{ContextBudget, Turn};
 use a2a_rs::domain::{Conversation, Message, Role, part};
 
 use crate::core::config::ContextConfig;

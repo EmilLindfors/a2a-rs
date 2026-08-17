@@ -11,9 +11,10 @@
 //! machine (binding a port, searching `PATH`, reading the environment) stays in
 //! the binary where the I/O belongs. `a2a doctor` is the two halves joined.
 
-use a2a_agents_common::llm::LlmSettings;
+use a2a_llm::LlmSettings;
 
 use crate::core::config::AgentConfig;
+use crate::core::config::ContextMode;
 use crate::core::config::HandlerType;
 
 /// Something that has to hold on the host for a config to run as written.
@@ -45,6 +46,15 @@ pub enum Requirement {
         /// The command as configured.
         command: String,
     },
+    /// The agent binds every interface, so the address it publishes on its card
+    /// is a guess: right on the machine it runs on, wrong from anywhere else.
+    ///
+    /// Only raised when it *is* a guess. A configured `advertised_url`, or a
+    /// bind address a peer can dial, answers the question and says nothing.
+    AdvertisedGuess {
+        /// What the agent will publish.
+        url: String,
+    },
     /// The `llm` handler needs a working provider. Without one the agent runs
     /// and answers with a deterministic fallback instead of a model; with a
     /// broken one (`a2a run` refuses to start) it does not run at all.
@@ -52,6 +62,33 @@ pub enum Requirement {
     /// Carries where the provider comes from so the check can build it the way
     /// `a2a run` does, rather than guessing from the presence of a variable.
     LlmProvider(LlmSource),
+    /// The agent carries a conversation between turns
+    /// (`[handler.llm.context] mode`), so what it remembers is only as durable
+    /// as the storage it is kept in.
+    ///
+    /// Both halves are read from the config, because the pairing is the whole
+    /// question: `mode = "context"` over in-memory storage runs perfectly and
+    /// forgets every conversation the moment the process restarts — which the
+    /// control plane does on purpose.
+    ConversationStore {
+        /// What the agent is configured to remember.
+        mode: ContextMode,
+        /// Whether `[server.storage]` outlives the process.
+        durable: bool,
+    },
+    /// The agent gives the model `remember` and `forget`
+    /// (`[handler.llm.context] remember`), so what it was told to keep is only
+    /// as durable as the storage behind it.
+    ///
+    /// Reported apart from [`ConversationStore`](Self::ConversationStore)
+    /// because the two are configured apart: an agent that carries no
+    /// transcript can still keep a state bag, and the failure is worse there —
+    /// a fact the model was explicitly asked to remember is the thing a user
+    /// notices going missing.
+    StateStore {
+        /// Whether `[server.storage]` outlives the process.
+        durable: bool,
+    },
     /// A handler name no built-in provides, and no image to supply one. `a2a
     /// run` refuses to start such an agent, so this is a config that cannot run
     /// anywhere as written.
@@ -95,6 +132,15 @@ pub fn requirements(config: &AgentConfig) -> Vec<Requirement> {
         });
     }
 
+    // Only when the agent cannot name its own address. A peer dials what is on
+    // the card, so this failure never shows up on the agent that caused it.
+    let advertised = config.advertised();
+    if config.server.http_port != 0 && advertised.is_guess() {
+        requirements.push(Requirement::AdvertisedGuess {
+            url: advertised.into_url(),
+        });
+    }
+
     let mcp_server = &config.features.mcp_server;
     if mcp_server.enabled && mcp_server.http.enabled {
         requirements.push(Requirement::McpHttpBind {
@@ -128,7 +174,19 @@ pub fn requirements(config: &AgentConfig) -> Vec<Requirement> {
             requirements.push(Requirement::LlmProvider(match config.llm.as_ref() {
                 Some(llm) => LlmSource::Config(llm.into()),
                 None => LlmSource::Environment,
-            }))
+            }));
+
+            // Only the llm handler reads `[handler.llm.context]`, and only a
+            // mode that reads history cares where the conversation is kept.
+            let context = config.handler.llm.as_ref().map(|llm| &llm.context);
+            let mode = context.map(|context| context.mode).unwrap_or_default();
+            let durable = config.server.storage.is_durable();
+            if mode.reads_history() {
+                requirements.push(Requirement::ConversationStore { mode, durable });
+            }
+            if context.is_some_and(|context| context.remember) {
+                requirements.push(Requirement::StateStore { durable });
+            }
         }
         HandlerType::Custom(name) => requirements.push(Requirement::UnknownHandler { name }),
         // The reimbursement agent is a sample behind an opt-in feature, so
@@ -299,6 +357,174 @@ mod tests {
         };
         assert!(
             requirements(&config).contains(&Requirement::LlmProvider(LlmSource::Config(expected)))
+        );
+    }
+
+    /// A dialable bind address answers for itself, so there is nothing to say.
+    #[test]
+    fn an_agent_that_can_name_its_address_is_not_warned_about_it() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Echo"
+            [server]
+            host = "127.0.0.1"
+            http_port = 8080
+            "#,
+        );
+        assert!(
+            requirements(&config)
+                .iter()
+                .all(|r| !matches!(r, Requirement::AdvertisedGuess { .. }))
+        );
+    }
+
+    /// Binding every interface publishes an address the agent cannot know, and
+    /// the failure lands on whichever peer dials it.
+    #[test]
+    fn a_wildcard_bind_is_reported_as_a_guessed_address() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Echo"
+            [server]
+            host = "0.0.0.0"
+            http_port = 8080
+            "#,
+        );
+        assert!(
+            requirements(&config).contains(&Requirement::AdvertisedGuess {
+                url: "http://localhost:8080".into()
+            })
+        );
+    }
+
+    /// Saying what to advertise settles it, whatever is bound — this is the
+    /// path `ContainerRuntime` takes for every agent it publishes.
+    #[test]
+    fn an_advertised_url_settles_the_question() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Echo"
+            [server]
+            host = "0.0.0.0"
+            http_port = 8080
+            advertised_url = "http://agents.internal:8080"
+            "#,
+        );
+        assert!(
+            requirements(&config)
+                .iter()
+                .all(|r| !matches!(r, Requirement::AdvertisedGuess { .. }))
+        );
+    }
+
+    /// An agent that remembers nothing has no conversation to lose, so pairing
+    /// it with in-memory storage is not worth a word.
+    #[test]
+    fn an_agent_that_remembers_nothing_reports_no_store() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Chat"
+            [server]
+            http_port = 8080
+            [handler]
+            type = "llm"
+            "#,
+        );
+        assert!(
+            requirements(&config)
+                .iter()
+                .all(|r| !matches!(r, Requirement::ConversationStore { .. }))
+        );
+    }
+
+    /// The pairing that runs fine and forgets everything on restart. Both
+    /// halves come from the config, since neither is a fact about the host.
+    #[test]
+    fn carrying_a_conversation_reports_where_it_is_kept() {
+        let toml = r#"
+            [agent]
+            name = "Chat"
+            [server]
+            http_port = 8080
+            [server.storage]
+            {storage}
+            [handler]
+            type = "llm"
+            [handler.llm.context]
+            mode = "context"
+        "#;
+
+        let memory = config(&toml.replace("{storage}", r#"type = "inmemory""#));
+        assert!(
+            requirements(&memory).contains(&Requirement::ConversationStore {
+                mode: ContextMode::Context,
+                durable: false,
+            })
+        );
+
+        let sqlx =
+            config(&toml.replace("{storage}", "type = \"sqlx\"\nurl = \"sqlite://agent.db\""));
+        assert!(
+            requirements(&sqlx).contains(&Requirement::ConversationStore {
+                mode: ContextMode::Context,
+                durable: true,
+            })
+        );
+    }
+
+    /// The state bag is configured apart from the transcript, so it is reported
+    /// apart: `remember = true` under the default `mode = "none"` still needs
+    /// somewhere durable to put what it was told.
+    #[test]
+    fn keeping_state_reports_where_it_is_kept_whatever_the_mode_is() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Chat"
+            [server]
+            http_port = 8080
+            [server.storage]
+            type = "inmemory"
+            [handler]
+            type = "llm"
+            [handler.llm.context]
+            remember = true
+            "#,
+        );
+        let requirements = requirements(&config);
+        assert!(requirements.contains(&Requirement::StateStore { durable: false }));
+        // And nothing about a conversation, which this agent does not carry.
+        assert!(
+            requirements
+                .iter()
+                .all(|r| !matches!(r, Requirement::ConversationStore { .. }))
+        );
+    }
+
+    /// `[handler.llm.context]` is read by the `llm` handler and nobody else, so
+    /// a block left behind on an echo agent is not a finding about storage.
+    #[test]
+    fn context_settings_on_a_non_llm_handler_are_not_a_store_requirement() {
+        let config = config(
+            r#"
+            [agent]
+            name = "Echo"
+            [server]
+            http_port = 8080
+            [handler]
+            type = "echo"
+            [handler.llm.context]
+            mode = "context"
+            "#,
+        );
+        assert!(
+            requirements(&config)
+                .iter()
+                .all(|r| !matches!(r, Requirement::ConversationStore { .. }))
         );
     }
 

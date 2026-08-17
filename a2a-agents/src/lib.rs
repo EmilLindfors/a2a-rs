@@ -95,6 +95,10 @@ pub mod utils;
 /// Generic config-driven handlers.
 pub mod handlers;
 
+/// Fitting a conversation into a model's context window — estimation, budgeting,
+/// and projection. Sits on the `a2a-llm` vocabulary.
+pub mod context;
+
 /// Agent registry / discovery — find peers by skill instead of hard-coded URLs.
 pub mod registry;
 
@@ -114,7 +118,8 @@ pub use core::{AgentBuilder, AgentConfig, AgentServer, BuildError, ConfigError, 
 pub use traits::{AgentPlugin, SkillDefinition};
 
 pub use handlers::tools::{
-    A2aAgentToolSource, ConnectedPeer, PeerResolver, PeerUnavailable, ToolSource,
+    A2aAgentToolSource, AdvertisedTools, ConnectedPeer, PeerResolver, PeerUnavailable,
+    ToolCollision, ToolSource, tool_collisions,
 };
 
 pub use registry::{

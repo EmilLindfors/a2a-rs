@@ -1,3 +1,17 @@
+//! Provider-neutral vocabulary for chat completions, plus the providers that
+//! speak it.
+//!
+//! [`LlmProvider`] is the port: [`chat_completion`](LlmProvider::chat_completion)
+//! and [`chat_completion_stream`](LlmProvider::chat_completion_stream) over
+//! [`LlmRequest`] / [`LlmResponse`]. [`openai`] covers OpenAI and every
+//! OpenAI-compatible endpoint (OpenRouter, vLLM, llama.cpp); [`gemini`] covers
+//! Google's API. [`provider_from_env`] picks one from the environment.
+//!
+//! The types are deliberately not tied to A2A. [`ToolCall`] and
+//! [`ToolDefinition`] are the tool-calling vocabulary shared with the MCP
+//! bridge, which is why they live in their own crate rather than inside an
+//! agent framework.
+
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
@@ -70,6 +84,26 @@ pub enum LlmError {
     ProviderError(String),
 }
 
+/// An error and everything under it, as one line.
+///
+/// `reqwest::Error`'s `Display` omits its source chain, so a DNS failure, a
+/// refused connection and an untrusted certificate all read as `error sending
+/// request for url (…)` — which is what made a TLS-intercepting proxy
+/// indistinguishable from the network being down, and cost a full investigation
+/// (see `NOTES.md`). The certificate error was one `source()` away the whole
+/// time. Takes `dyn Error` so the SSE stream's wrapper is covered by the same
+/// rule.
+pub(crate) fn describe_transport_error(error: &dyn std::error::Error) -> String {
+    let mut message = error.to_string();
+    let mut source = error.source();
+    while let Some(cause) = source {
+        message.push_str(": ");
+        message.push_str(&cause.to_string());
+        source = cause.source();
+    }
+    message
+}
+
 /// Substrings that identify an over-long request in a provider's error body.
 ///
 /// Providers disagree on both the status code and the shape, and several return
@@ -106,10 +140,10 @@ pub(crate) fn classify_api_error(message: String) -> LlmError {
 
 /// Tokens a provider reported for one request.
 ///
-/// Reported rather than estimated: [`TokenEstimate`](crate::context::TokenEstimate)
-/// decides what to send, and this says what it actually cost. Every field is
-/// optional because providers disagree on which they return, and a missing count
-/// must not read as zero.
+/// Reported rather than estimated: a caller's own token estimate decides what to
+/// send, and this says what it actually cost. Every field is optional because
+/// providers disagree on which they return, and a missing count must not read as
+/// zero.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TokenUsage {
     /// Tokens in the request, including the system prompt and tool definitions.

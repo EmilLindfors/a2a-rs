@@ -19,7 +19,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 
-use a2a_agents_common::llm::{ToolCall, ToolDefinition};
+use a2a_llm::{ToolCall, ToolDefinition};
 use a2a_rs::domain::{
     A2AError, Message, Part, Role, SendCompletion, Task, TaskState, TaskStateExt,
 };
@@ -39,12 +39,19 @@ pub trait ToolSource: Send + Sync {
     /// Whether this source owns (and can execute) the named tool.
     fn has_tool(&self, name: &str) -> bool;
 
+    /// How this source is named in a report — the MCP server, the peer agent.
+    ///
+    /// Required rather than defaulted: the only thing this is for is telling an
+    /// operator which two sources claimed one tool name, and a default would
+    /// name neither.
+    fn label(&self) -> String;
+
     /// Execute a single tool call, returning the stringified result.
     async fn invoke(&self, task_id: &str, call: &ToolCall) -> Result<String, A2AError>;
 }
 
 /// Find the source that owns `name`, if any. First match wins, so callers should
-/// keep tool names unique across sources.
+/// keep tool names unique across sources — see [`tool_collisions`].
 pub fn resolve<'a>(sources: &'a [Arc<dyn ToolSource>], name: &str) -> Option<&'a dyn ToolSource> {
     sources
         .iter()
@@ -55,6 +62,80 @@ pub fn resolve<'a>(sources: &'a [Arc<dyn ToolSource>], name: &str) -> Option<&'a
 /// Flatten the tool definitions of every source into one list for the LLM.
 pub fn collect_tool_defs(sources: &[Arc<dyn ToolSource>]) -> Vec<ToolDefinition> {
     sources.iter().flat_map(|s| s.tool_defs()).collect()
+}
+
+/// What one source advertises, labelled so a report can name it.
+pub struct AdvertisedTools {
+    pub label: String,
+    pub names: Vec<String>,
+}
+
+impl AdvertisedTools {
+    /// What `source` advertises right now.
+    pub fn of(source: &dyn ToolSource) -> Self {
+        Self {
+            label: source.label(),
+            names: source.tool_defs().into_iter().map(|t| t.name).collect(),
+        }
+    }
+
+    /// A set of names that belongs to no [`ToolSource`] — the built-in memory
+    /// tools, which are assembled per turn rather than held by the handler.
+    pub fn builtin(label: impl Into<String>, names: &[&str]) -> Self {
+        Self {
+            label: label.into(),
+            names: names.iter().map(|n| n.to_string()).collect(),
+        }
+    }
+}
+
+/// A tool name more than one source advertises.
+pub struct ToolCollision {
+    pub name: String,
+    /// Every source claiming it, in the order [`resolve`] searches — so the
+    /// first is the only one the model can ever reach.
+    pub claimed_by: Vec<String>,
+}
+
+/// Tool names advertised by more than one source.
+///
+/// [`collect_tool_defs`] sends every definition and [`resolve`] takes the first
+/// match, so a duplicate reaches the model twice while only one of the two can
+/// ever be called. Which one is decided by the order the sources happened to be
+/// assembled in, and nothing about the run says so — hence a report at startup.
+///
+/// Takes labelled name lists rather than the sources themselves, because the
+/// collision most likely to happen is with names no source holds: `remember`
+/// and `forget` are built in and ordinary enough words for a tool server to use.
+pub fn tool_collisions(advertised: &[AdvertisedTools]) -> Vec<ToolCollision> {
+    use std::collections::HashMap;
+
+    // Reported in the order the names were first advertised, so the report
+    // reads in the order `resolve` searches.
+    let mut order: Vec<&str> = Vec::new();
+    let mut claims: HashMap<&str, Vec<String>> = HashMap::new();
+    for source in advertised {
+        for name in &source.names {
+            if !claims.contains_key(name.as_str()) {
+                order.push(name.as_str());
+            }
+            claims
+                .entry(name.as_str())
+                .or_default()
+                .push(source.label.clone());
+        }
+    }
+
+    order
+        .into_iter()
+        .filter_map(|name| {
+            let claimed_by = claims.remove(name)?;
+            (claimed_by.len() > 1).then(|| ToolCollision {
+                name: name.to_string(),
+                claimed_by,
+            })
+        })
+        .collect()
 }
 
 // --- A2A agent as a tool -----------------------------------------------------
@@ -226,6 +307,10 @@ impl ToolSource for A2aAgentToolSource {
 
     fn has_tool(&self, name: &str) -> bool {
         name == self.tool_name
+    }
+
+    fn label(&self) -> String {
+        format!("the delegation tool for agent '{}'", self.agent)
     }
 
     async fn invoke(&self, _task_id: &str, call: &ToolCall) -> Result<String, A2AError> {
@@ -414,12 +499,18 @@ mod mcp {
 
     /// Exposes one connected MCP server's tools to the LLM loop.
     pub struct McpToolSource {
+        /// The `[[features.mcp_client.servers]]` name, which is the only thing
+        /// that identifies this server to whoever wrote the config.
+        server: String,
         bridge: Arc<McpToA2ABridge<UnusedInner>>,
     }
 
     impl McpToolSource {
-        pub fn new(bridge: Arc<McpToA2ABridge<UnusedInner>>) -> Self {
-            Self { bridge }
+        pub fn new(server: &str, bridge: Arc<McpToA2ABridge<UnusedInner>>) -> Self {
+            Self {
+                server: server.to_string(),
+                bridge,
+            }
         }
     }
 
@@ -431,6 +522,10 @@ mod mcp {
 
         fn has_tool(&self, name: &str) -> bool {
             self.bridge.tools().iter().any(|t| t.name.as_ref() == name)
+        }
+
+        fn label(&self) -> String {
+            format!("MCP server '{}'", self.server)
         }
 
         async fn invoke(&self, task_id: &str, call: &ToolCall) -> Result<String, A2AError> {
@@ -471,6 +566,9 @@ mod tests {
         fn has_tool(&self, name: &str) -> bool {
             name == self.name
         }
+        fn label(&self) -> String {
+            format!("fake source '{}'", self.name)
+        }
         async fn invoke(&self, _task_id: &str, _call: &ToolCall) -> Result<String, A2AError> {
             Ok(self.result.clone())
         }
@@ -492,6 +590,76 @@ mod tests {
         assert!(resolve(&sources, "beta").is_some());
         assert!(resolve(&sources, "missing").is_none());
         assert_eq!(collect_tool_defs(&sources).len(), 2);
+    }
+
+    #[test]
+    fn distinct_names_across_sources_are_not_a_collision() {
+        let sources: Vec<Arc<dyn ToolSource>> = vec![
+            Arc::new(FakeSource {
+                name: "alpha".into(),
+                result: "a".into(),
+            }),
+            Arc::new(FakeSource {
+                name: "beta".into(),
+                result: "b".into(),
+            }),
+        ];
+        let advertised: Vec<AdvertisedTools> = sources
+            .iter()
+            .map(|s| AdvertisedTools::of(s.as_ref()))
+            .collect();
+
+        assert!(tool_collisions(&advertised).is_empty());
+    }
+
+    /// The model is sent both definitions and can only ever reach the first, so
+    /// the report has to name both and say which one that is.
+    #[test]
+    fn a_name_two_sources_claim_is_reported_in_resolve_order() {
+        let sources: Vec<Arc<dyn ToolSource>> = vec![
+            Arc::new(FakeSource {
+                name: "search".into(),
+                result: "first".into(),
+            }),
+            Arc::new(FakeSource {
+                name: "search".into(),
+                result: "second".into(),
+            }),
+        ];
+        let advertised: Vec<AdvertisedTools> = sources
+            .iter()
+            .map(|s| AdvertisedTools::of(s.as_ref()))
+            .collect();
+
+        let collisions = tool_collisions(&advertised);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].name, "search");
+        assert_eq!(collisions[0].claimed_by.len(), 2);
+        // Whichever `resolve` would pick, listed first.
+        assert_eq!(
+            collisions[0].claimed_by[0],
+            resolve(&sources, "search").unwrap().label()
+        );
+    }
+
+    /// The reachable case: `remember` and `forget` are built in and ordinary
+    /// enough words for a tool server to use, and the built-ins are assembled
+    /// ahead of it — so the server's tool is the one that disappears.
+    #[test]
+    fn a_tool_server_shadowed_by_the_built_ins_is_reported() {
+        let advertised = vec![
+            AdvertisedTools::builtin("the built-in memory tools", &["remember", "forget"]),
+            AdvertisedTools::of(&FakeSource {
+                name: "remember".into(),
+                result: "x".into(),
+            }),
+        ];
+
+        let collisions = tool_collisions(&advertised);
+        assert_eq!(collisions.len(), 1);
+        assert_eq!(collisions[0].name, "remember");
+        assert_eq!(collisions[0].claimed_by[0], "the built-in memory tools");
+        assert_eq!(collisions[0].claimed_by[1], "fake source 'remember'");
     }
 
     #[tokio::test]

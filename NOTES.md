@@ -135,6 +135,160 @@ Responses API, and none of them is worth re-deriving:
    first-class server-side context editing.
 4. Compaction triggers on tokens, not turn count.
 
+**A summary is capped by what it replaces, and measured after.** (2026-08-16)
+
+Two rules, because they answer different failures. The `max_tokens` cap
+(`ContextBudget::summary_tokens`) is sized against the transcript being folded
+rather than against the window alone, since `max_input_tokens = 0` means "no
+ceiling" and a fraction of that is meaningless. The post-check exists for a
+provider that ignores `max_tokens` at all.
+
+The post-check deliberately rejects only a digest that is **not smaller** than
+what it stands in for, not one that is merely mediocre. A summary at 0.6× still
+saves 40% and advances the watermark; rejecting it would re-run compaction on
+the next turn, and on the turn after that, for a conversation that may simply be
+incompressible. Only a digest that saves nothing is a strict loss — and it is
+charged again on every later turn, because the digest is re-sent each time.
+
+**PostgreSQL is one store over two schemas, not two stores.** (2026-08-16)
+
+The alternative was a second adapter, and the evidence against it was already in
+the repo: `migrations/` carried `_postgres.sql` files for the first two
+migrations and none of the last three. Two copies of a store drift, and the
+drifted copy is the one nobody runs.
+
+So the queries are written once and executed through sqlx's `Any` driver, which
+picks the backend from the URL at runtime. Three constraints follow, and all of
+them are worth knowing before touching this again:
+
+- **The driver decodes text, integers, floats, booleans and bytes, and converts
+  a row whole.** A `jsonb` or `timestamptz` column in a result set fails the
+  read even if nothing asks for it, which is why the PostgreSQL schema stores
+  JSON as `TEXT` and why every query names its columns instead of `SELECT *`.
+  Nothing queries into the JSON, so `jsonb` would buy operators nothing.
+- **Nothing may execute on a borrowed connection.** sqlx implements `Executor`
+  for `&'c mut AnyConnection` at a single lifetime, so a future holding that
+  borrow across an await can only be proved `Send` at a concrete lifetime — and
+  a caller that spawns asks for every lifetime. `a2a up` puts each agent on a
+  `JoinSet`, so the whole construction path stops compiling, reported as
+  "implementation of `Executor` is not general enough" at the spawn site, a long
+  way from the cause. Execute through `&AnyPool`, always. (Checked against sqlx
+  0.9: the impl has the same shape there, and 0.9 costs an `AssertSqlSafe`
+  wrapper at every dynamic call site, so it buys nothing here.)
+- **`sqlite::memory:` has to be given a name.** An anonymous in-memory database
+  gets a fresh one invented per URL *parse*, and this driver parses per
+  connection — so a ten-connection pool would be ten empty databases and the
+  second query would not see the first one's table. `pooled_url` pins one.
+
+**A database belongs to one agent.** (2026-08-16)
+
+The schema has no agent column and no tenant column — tasks are keyed by a
+caller-supplied id, contexts by a caller-supplied `contextId`, and `contexts`
+records an *owner* (the authenticated principal), not an agent. So two agents on
+one database share both namespaces: `ListTasks` returns the other's work, and a
+`contextId` used against both reads back one mixed transcript. Delegation
+produces that `contextId` by itself, which makes it the likely case rather than
+the perverse one.
+
+Hence one SQLite file per agent, or one PostgreSQL *database* per agent — a
+fleet may share a server, not a database — and `fleet_conflicts` reports two
+members pointing at the same URL alongside the port and id clashes. What
+PostgreSQL buys today is durability across a restart onto another host, and
+several instances of *one* agent behind one address. Sharing a database between
+different agents is the multi-tenancy item in `TODO.md`, not a configuration.
+
+**Migrations take a lock because a fleet starts at once.** (2026-08-16)
+
+A shared database is the reason to run PostgreSQL, so several agents migrating
+concurrently is the normal case, not an edge one. Concurrent `CREATE TABLE IF
+NOT EXISTS` on related tables does not no-op: it deadlocks, or the loser fails on
+the catalog's unique index. This was observed, not predicted — nine concurrent
+test processes made four tests flaky before the lock existed.
+
+The lock is `pg_advisory_lock`, and it needs a session to live in. Since nothing
+may hold a borrowed connection (above), the session is a *pool of one*, opened
+just for the migrations and closed after — closing it releases the lock, so
+there is no unlock statement to get wrong on the error path. Behind that, each
+migration file is retried once on the duplicate-object and deadlock SQLSTATEs,
+which covers the database being migrated by a process that holds no lock.
+
+**The estimator is reconciled against the bill, and reports once.** (2026-08-16)
+
+`CharEstimate` decides what to send; only the provider knows what it cost. The
+gap is worth measuring and not worth emitting per request, so `DriftWatch`
+accumulates and says something once, when the accumulated ratio is off by more
+than a third over at least eight requests. A third, because tokenizers disagree
+by 10–20% against any fixed characters-per-token ratio and a band tighter than
+that fires on ordinary English prose — a warning that fires on every deployment
+is one nobody reads. Reporting once for the same reason: it asks for a config
+change, and repeating it every request is how it gets filtered out.
+
+A provider that reports no `prompt_tokens` contributes nothing rather than a
+zero. Counting it would accumulate toward "the estimate is far too high" and
+eventually suggest a ratio measured against requests nobody priced.
+
+`chars_per_token` is one value per agent, so an agent whose model is switched, or
+whose provider routes across a model family, measures the average of two
+tokenizers. Acceptable while an agent names one model, which every shipped
+config does.
+
+**`Fit` names the request that does not fit separately.** (2026-08-16)
+
+`ShouldCompact` used to cover both "over the threshold, still fits" and "over the
+ceiling, nothing left to trim". They ask different things of the caller: the
+first is a request that works and wants summarizing before the next one, the
+second is a request that goes out over budget no matter what — compaction writes
+a digest for the *next* turn, so it cannot rescue the one being built. Hence
+`Fit::OverBudget`, and a warning when the handler sends one. The recovery path is
+unchanged and already existed: the provider refuses, `ContextLengthExceeded`
+retries with tool results cut to the bone.
+
+**OAuth2 identity comes from introspection, and there is no fallback.** (2026-08-16)
+
+`OAuth2Authenticator` had no way to validate an opaque token, so it matched
+against a list `a2a-agents` never filled — an agent that rejected every request —
+and named the caller `oauth2:{access_token}`, which changes on refresh. RFC 7662
+introspection fixes both at once: the server says whether the token is live and
+returns `sub`.
+
+A response that names no subject is an **error**. Falling back to the token there
+would put the credential back in the principal id, silently, on exactly the
+server that gave us nothing better — and everything an agent keys on the caller
+(a conversation, a quota) would start over at the next refresh without anything
+saying so. `client_id` is accepted as the subject for a client-credentials token,
+because that token genuinely has no end user and the client is a stable identity.
+
+The static token list stays for tests and is ignored once introspection is
+configured: a list cannot know about a revocation, which is what introspection
+is for. And `AgentConfig::validate` refuses an OAuth2 block without an
+`introspection_url` rather than warning: an agent that binds its port, serves a
+card and refuses every request is the same silent-wrong as the echo fallback for
+an unknown handler, and the same answer applies — fail the config, name the key.
+
+**Two authenticators for one OIDC provider, because the credential differs.**
+(2026-08-17)
+
+`OpenIdConnectAuthenticator` verifies an **ID token**: signature against the
+keys discovery published, `iss`, `exp`, and `aud` naming the configured
+`client_id`. `OAuth2Authenticator::with_introspection` handles an **opaque
+access token**, which cannot be verified locally at all. Keycloak (or any other
+provider) serves both, so the choice is made by what the caller presents, not by
+who issued it. That is why `[server.auth]` in `a2a-agents` has `oauth2` and no
+`oidc`: an agent is a resource server, and what reaches it is an access token.
+The OIDC authenticator is a library surface for an embedder whose callers
+forward ID tokens.
+
+`aud` is the check doing the work in that path. An ID token is issued to one
+client, and an agent that accepted any well-signed one would let every
+application the user has signed into speak for them. The nonce is *not* checked,
+and cannot be: it binds a token to an authentication request, and the agent
+never made one.
+
+The key set is refetched only on a token naming a key we do not have, and at
+most once a minute. That failure is what a rotation looks like — and also what a
+flood of junk tokens looks like, which is why the floor is there rather than a
+refetch per failure.
+
 **`load` returns the digest and the tail together.** Splitting the conversation
 into an `AsyncContextHistory` port and an `AsyncContextDigest` port reads
 tidier and is wrong: a digest written between the two reads leaves either a gap
@@ -163,6 +317,25 @@ summarized, not everything that was loaded — otherwise the recent turns sit
 behind a summary that does not describe them, and they vanish from the next
 prompt while appearing to have been preserved.
 
+**Ownership is read before it is claimed.** (2026-08-17)
+
+`SqlxTaskStorage` inserted the `contexts` row and then selected its owner, so
+every conversation read and every state-bag read cost two statements. Ownership
+is first-write and is never reassigned, which makes an existing row the whole
+answer for every turn but the one that opens a context — so the read goes
+first, and only its absence writes.
+
+The one-statement version, `INSERT … ON CONFLICT DO UPDATE … RETURNING owner`,
+looks better and is worse where it counts: it turns every read into a row
+update, leaving a dead tuple per turn on PostgreSQL and firing the `contexts`
+update trigger on SQLite.
+
+The claiming path reads back rather than trusting `rows_affected` to say whether
+the insert was ours. Two callers can open one context in the same instant, and a
+driver that counted an ignored insert as a row would admit the loser to a
+conversation it does not own. One statement is not worth resting an
+authorization decision on how each backend reports a no-op.
+
 **Wiring conversation memory makes `context_id` an authorization boundary.**
 Worth stating because it changes what an existing field means. Nothing reads by
 context today, so a guessed `context_id` gets you nothing; once a handler
@@ -187,6 +360,112 @@ and the transport adapter, because that is the only channel `connectrpc` gives a
 tower layer (it moves `parts.extensions` onto its `Context` verbatim). Note the
 name collides with `rmcp::service::RequestContext`; `a2a-mcp` aliases one of the
 two wherever both are in scope.
+
+**The state bag is a row per key, and its scope lives in the key.** (2026-08-17)
+
+Three decisions, each with a real alternative that was tried on paper first.
+
+*A table, not the `contexts.state` column 005 created.* A JSON document per
+context needs read-modify-write to add one key, and two turns of one context can
+run at once — the same fact that makes `context_digests` append-only. The loser
+of that race loses its write, silently. A row per key upserts and has nothing to
+lose. The column was dropped in 006 rather than left: nothing had ever written
+it, and a column named `state` next to a state table is a schema that lies.
+
+*The scope is a key prefix, not a column the caller passes.* Taken from Google
+ADK, which is A2A's reference companion, so the spelling is one a model has
+likely seen. It also puts the scope where the model reads it back — in the
+prompt, in a `forget` call, in the store — rather than in a parameter it has to
+be told about separately. The cost is that `app:tone` and `user:tone` differ by
+five characters, which is why an unrecognized prefix is a refusal naming the
+three that exist rather than an ordinary key.
+
+*No `app:` scope, and `temp:` stores nothing.* ADK has four; two of them do not
+survive the trip. `app:` is agent-wide, so it has no owner to check a caller
+against — which makes it a config value the operator writes, not something one
+caller's model can set for every other caller. `temp:` is kept precisely because
+it stores nothing: without the prefix being parsed, `temp:draft` would be an
+ordinary key outliving the turn under a name promising the opposite.
+
+The `user:` scope is what earns the feature. A per-context bag is close to
+redundant with the transcript — everything in it was said in this context — and
+its value is surviving compaction. A `user:` key is filed under the principal, so
+it reaches a conversation that has never seen it, which nothing else in the
+memory design does. That is also why a `user:` write with no principal is an
+error rather than a fallback to context scope: the fallback would keep the value
+and break the promise its name makes.
+
+**A round spent on the state bag is not charged to `max_tool_rounds`.**
+(2026-08-17)
+
+A tool round is a model *response*, so turning the bag on silently narrowed the
+budget for the task: a model that wrote one fact had three of the default four
+rounds left, and the failure named `max_tool_rounds` while two of them had gone
+on bookkeeping. The alternative was raising the default when `remember = true`,
+and it is a guess — it changes what every such agent costs, and the number it
+would have to guess is how often a particular model writes to the bag.
+
+So the budget keeps meaning rounds of *work*, and bookkeeping is free for the
+first two responses of a turn (`FREE_MEMORY_ROUNDS`): one for what the model
+learned on the way in, one for what it concluded. Free is not unbounded, because
+nothing stops a model calling `remember` forever — past the allowance the rounds
+are charged and the turn ends exactly as it did before the bag existed. That is
+also why the give-up message counts them: raising `max_tool_rounds` is the wrong
+fix for a model looping on the bag, and the count is the only thing that says
+which of the two cases the reader is looking at.
+
+Two details that were not free. The exemption is keyed on `remember = true`,
+since with the bag off those names belong to whatever tool server advertises
+them — `remember` is an ordinary enough word, which is the same collision the
+built-ins are inserted ahead of. And the loop now counts passes and charges
+separately, so the streaming artifact ids stay keyed on the pass: two passes
+sharing a suffix would have appended into one artifact.
+
+**A duplicate tool name is reported, not resolved.** (2026-08-17)
+
+`resolve` takes the first source that claims a name, so ordering already decides
+which of two identically-named tools the model can reach — and the model is sent
+both definitions either way. The fix is a warning naming both sources and the
+winner, not a rename or a refusal: which of the two an operator meant is not
+something the runtime can know, and refusing to start over a name clash takes an
+agent that works and stops it.
+
+It lives at the composition edge in `bin/a2a.rs` rather than in `a2a doctor`,
+because what an MCP server serves is only knowable once it has been connected —
+doctor checks the config, and the config names a command, not its tools. That
+also made `ToolSource::label` a required method: the whole value of the report is
+saying *which* two sources collided, and nothing else could name an MCP server,
+so `McpToolSource::new` now takes the config's server name.
+
+**Binding and advertising are two fields, because one cannot be derived from the
+other.** (2026-08-16)
+
+The card's URL used to be `http://{server.host}:{port}` — the address the agent
+bound. The tempting fix is to keep one field and be smarter about deriving the
+other, and it does not work, because the two mistakes point opposite ways. A
+container *must* bind `0.0.0.0` to be reachable through its published port, and
+`http://0.0.0.0:8080` is dialable by nobody. The scaffolded `host = "127.0.0.1"`
+publishes an address that is perfectly *correct* and belongs to an agent that is
+unreachable the moment it is containerised. No rule over one value gets both
+right.
+
+Two consequences worth keeping:
+
+- **`ContainerRuntime` sets `A2A_ADVERTISED_URL` beside `HOST=0.0.0.0`.** The
+  agent inside the container can see the interface it bound and nothing about
+  how it was published, so the component that forced the wildcard is the only
+  one that can answer. Whenever an adapter takes a decision away from a config,
+  it inherits the questions that decision makes unanswerable.
+- **A guess is reported as one.** With a wildcard bind and nothing configured
+  the agent advertises `http://localhost:{port}` — right on its own machine,
+  wrong from anywhere else — and both `a2a run` and `a2a doctor` say so.
+  `Advertised::{Configured, Bound, Guessed}` exists so they can: a bare `String`
+  cannot tell a report which of the three it is holding. Same shape as
+  `Recovered` and `ReasoningPlan`.
+
+What this does *not* fix: `127.0.0.1` is the host's loopback, so a peer in
+another container still cannot use it. `--advertise-host` is the escape hatch;
+see `TODO.md`.
 
 **An agent's own image is started with no command; the base image is not.** Both
 get the same mount (`/etc/agent.toml`), the same `A2A_CONFIG` naming it, `HOST`,
@@ -313,6 +592,24 @@ matches, or the dial failed) is news, while an error *during* a delegation means
 the peer took the work and we lost it, which is a broken run. Two different
 types, so a call site cannot blur them by accident.
 
+**Adopting a card and registering one are different operations.** (2026-08-16)
+
+`CardRefresher` re-reads every registered agent's card anyway, so throwing it
+away left a skill added to a running agent invisible until something
+re-registered it. The obvious fix — call `register` with what was fetched — is
+the trap: `register` derives the id from `card.name`, so an agent that renamed
+itself lands under a *second* id with the old entry still there, and the next
+skill lookup hands work to whichever it finds first. `update_card` takes the id
+from the caller instead, and a card that no longer derives it is
+`RegistryError::Renamed`.
+
+Refusing is not a resolution and is not meant to be. Both resolutions are wrong
+to pick on someone's behalf: keeping the old id leaves an entry whose id and
+name disagree, and moving to the new one silently breaks every config referring
+to the agent by `agent_id`. So the loop reports it every pass — the condition
+persists, which is the difference between this and the liveness transitions
+next to it, where only *changes* are logged.
+
 **A dead peer is ranked, not removed.** The refresh loop could have
 deregistered an agent that stopped answering, and that reads fine until the
 lookup happens: `find_by_skill` would return nothing, and the orchestrator would
@@ -412,6 +709,38 @@ dirs) — see `TODO.md`.
 ---
 
 ## Hazards that will recur
+
+**A feature checked by `a2a doctor` and wired by hand at the composition edge can
+be blessed and not connected.** (2026-08-17) `run_llm_agent` built an
+`InMemoryTaskStorage` unconditionally, so `[server.storage] type = "sqlx"` on an
+LLM agent parsed, validated, passed `doctor` — which said conversation memory was
+"kept in storage that survives a restart" — and was never used. Everything
+`mode = "context"` exists for was lost on every restart, and the control plane
+restarts agents on purpose. It survived a release because every layer was right
+on its own: the config, the check, the store, and the port. Only the wire between
+two of them was missing, and nothing tests wires.
+
+Two things generalize. A `doctor` check that reads the config is asserting what
+the config *means*, and it is only true while some other code honours it — so a
+check on a value is worth an end-to-end test that the value reaches the thing it
+names. And a handler branch that assembles its own collaborators will eventually
+differ from the others; the branch that differed here is the one that had an
+extra port to satisfy (`AsyncConversationStore`, which `AutoStorage` did not
+implement), so the shortcut was the path of least resistance rather than an
+oversight.
+
+Closed by `AgentBuilder::build_wired` (2026-08-17): it builds storage, streaming
+and push from the config, hands them to a closure that constructs the handler,
+and wires all three into the server, so a branch chooses a handler and decides
+nothing else. Finding it also turned up the second instance — the reimbursement
+branch gave its `InMemoryStreamingHandler` to the handler and not to the server,
+so it broadcast to a registry the transport never subscribed through. That one
+had survived longer than the storage bug and looked exactly as correct.
+
+The reason a wire needs a *test* and not just one construction site:
+`AgentServer::streaming()` exists only so the two sides can be compared. Where
+correctness is "these two hold the same instance", nothing about either side on
+its own can show it, and both sides pass every test written about them.
 
 **A test gated on Docker skips *green* when the image is absent — and an image
 that cannot be built is absent.** The container backend silently had no image at
@@ -584,6 +913,14 @@ The proxy-CA failure above reported only `error sending request for url (...)`.
 certificate error underneath was invisible; diagnosing it needed the *sandbox's*
 network log to prove the request had reached the proxy at all. Anywhere a
 `reqwest::Error` is wrapped, walk `std::error::Error::source()` into the message.
+
+Fixed 2026-08-16 with a `describe_transport_error` in each crate that flattens
+one into a string (`a2a_llm`, `a2a_rs::adapter::error`). Two copies rather than
+one shared helper on purpose: `a2a-llm` does not depend on `a2a-rs` and should
+not start doing so for eight lines. It takes
+`&dyn Error` rather than `&reqwest::Error` so the SSE stream's
+`EventStreamError` wrapper is covered by the same rule — a wrapper is exactly
+where a cause chain gets lost.
 
 ---
 

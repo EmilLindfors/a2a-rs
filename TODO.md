@@ -36,28 +36,12 @@ whoever started it. That was the blocker; what follows is not.
 
 **Correctness and operability:**
 
-- [ ] **Only `jwt` gives a principal id that outlives the credential.**
-      `JwtAuthenticator` uses the token's `sub`, so a refresh keeps the same
-      identity. `BearerTokenAuthenticator` and `ApiKeyAuthenticator` use the
-      credential itself, and `OAuth2Authenticator` uses `oauth2:{access_token}` —
-      which rotates on every refresh, so a conversation owned under OAuth2 stops
-      being readable by the same user. It is documented (`a2a-agents/README.md`)
-      and it is still wrong: OAuth2 should carry the subject from introspection
-      or userinfo, not the bearer string. Bearer and API key have nothing else to
-      use and are honestly credential-scoped.
-- [ ] **`a2a doctor` says nothing about context configuration.** An agent with
-      `mode = "context"` and `[server.storage] type = "memory"` loses every
-      conversation on restart, and the control plane restarts agents on purpose.
-      That is exactly the class of mistake `doctor` exists to catch before it is
-      discovered in production, and it is checkable from the config alone. Same
-      for `max_input_tokens` far above what the configured model actually has,
-      once there is anywhere to look that up.
-- [ ] **A summary has no length bound.** `compact_conversation` sends its request
-      with no `max_tokens`, so a verbose model can return a "summary" about as
-      long as the transcript it replaces — which costs the tokens compaction
-      exists to save and does so on every later turn. Wants a cap derived from
-      the budget, and a check that what came back is meaningfully shorter than
-      what it stands in for.
+- [ ] **`a2a doctor` cannot check `max_input_tokens` against the model.** A
+      ceiling far above what the configured model actually has is the remaining
+      context misconfiguration nothing catches; it needs a model-name → window
+      table, which goes stale with every release — the same cost that keeps
+      `[llm] reasoning` off OpenAI and Gemini. (The storage half shipped
+      2026-08-16: `mode = "context"` over in-memory storage is now a warning.)
 - [ ] **A failed history load makes an agent quietly amnesiac.**
       `LlmHandler::load_conversation` logs and returns an empty conversation for
       anything that is not `ContextAccessDenied`, on the grounds that answering
@@ -65,48 +49,38 @@ whoever started it. That was the blocker; what follows is not.
       probably right; it also means a persistent storage fault shows up as an
       agent that has forgotten the conversation rather than as an error. Revisit
       once there is somewhere to surface degraded-but-serving.
-- [ ] **Compaction runs at most once per turn.** The `compacted` flag stops a
-      second pass, so a conversation still over budget after one summary
-      proceeds and may be refused by the provider — recoverable, since
-      `ContextLengthExceeded` retries smaller, but it burns a round trip. The
-      alternative is summarizing a summary mid-turn, which is worse; what is
-      actually wanted is noticing the case and saying so.
-- [ ] **Nothing reconciles the token estimator against reported usage.**
-      `CharEstimate` divides characters by 3.5 and the handler logs the estimate
-      beside what the provider charged, but nothing closes the loop: a deployment
-      that measures its own ratio sets it by hand, and there is no signal when
-      the configured model drifts far enough from 3.5 to matter.
-      `CharEstimate::with_chars_per_token` is the seam, and `TokenUsage` is
-      already on the stream.
 - [ ] **`mode = "task"` re-reads the whole task every turn** through
       `AsyncTaskLifecycle::get`, which returns artifacts and status to use only
       the history. Fine at current sizes.
-- [ ] **`stream_options.include_usage` is decided by string-comparing the base
-      URL** against `OPENAI_BASE_URL`, so a config naming the same endpoint with
-      a trailing slash silently loses streaming usage. It is a log line either
-      way, not a failure — but the rule should be a config field once anyone
-      needs it on a server we do not know about.
-- [ ] **Migrations 003–005 have no PostgreSQL siblings** where 001 and 002 do.
-      Nothing runs them — `SqlxTaskStorage` is `SqlitePool`-only — so the
-      existing `_postgres.sql` files imply support that does not exist. Either
-      finish the Postgres adapter or delete the files; leaving three of five is
-      the worst of both.
+- [ ] **Both reads on one turn ask the same question about ownership.** The
+      claim and the check are one statement now (`claim_or_check_context`, see
+      `CHANGELOG.md`), so a turn with `mode = "context"` *and* `remember = true`
+      asks twice rather than four times — but it is the same question, and
+      every `remember` asks it again. A context's owner never changes once the
+      row exists, so the answer is cacheable; what stops that being free is that
+      the cache is unbounded and becomes a second source of truth for an
+      authorization decision. Not urgent — these are indexed primary-key
+      lookups — but it is the per-turn floor, and it grows with each thing a
+      turn remembers.
 
-**Next tiers of memory** (the design is settled — see `NOTES.md` — only the work
-is open):
+**Next tiers of memory.** The design is settled — see `NOTES.md`, and read it
+before reopening any of it. The state bag shipped 2026-08-17
+(`[handler.llm.context] remember`, in `CHANGELOG.md`); what is left of it, and
+the tiers after it:
 
-- [ ] **State bag.** `contexts.state` already exists as a column and nothing
-      reads or writes it. Fill it: JSON injected into the system prompt, written
-      by a built-in `remember(key, value)` tool. Letta's core memory blocks and
-      Anthropic's memory tool in miniature, at the cost of one column and no
-      embeddings. Steal ADK's key prefixes so scope is visible in the key
-      (`user:*` outlives the context, bare keys are per-context, `temp:*` never
-      persists).
+- [ ] **A remembered value is replaced in place, leaving no trace.** An agent
+      that overwrites `user:name` with the wrong thing loses what it held, and
+      nothing tells the caller it happened — `context_state.updated_at` is
+      written and read by nobody. A history table nobody reads is not the fix;
+      surfacing the change to whoever is talking to the agent is, and that needs
+      somewhere to surface it.
 - [ ] **Retention.** The conversation log is durable now, so storage growth is
       the real cost — and `InMemoryTaskStorage` never evicts its tasks,
-      conversations or digests at all, which matters for a long-lived process.
-      Contexts idle beyond N days. Separate policy and opt-in, since `tasks/get`
-      with history is a protocol feature and deleting history breaks it.
+      conversations, digests or state at all, which matters for a long-lived
+      process. Contexts idle beyond N days. Separate policy and opt-in, since
+      `tasks/get` with history is a protocol feature and deleting history breaks
+      it. `user:`-scoped state is the awkward part: it belongs to a principal
+      rather than to a context, so no context going idle says it is stale.
 - [ ] **Retrieval memory is deferred, not forgotten.** The tier-3 shape (embed,
       index, search — ADK `MemoryService`, LangGraph `BaseStore`, Letta
       archival) needs a vector index and is its own pass. Define the config key
@@ -121,25 +95,17 @@ is open):
       container tests skip when an image is absent, and CI builds no image at
       all. Wants a docker-gated test that builds the example image and deploys
       it.
-- [ ] **An agent advertises the address it *bound*, not one a peer can dial.**
-      `AgentConfig::agent_url` is `http://{server.host}:{port}`, and that string
-      becomes the card's `supportedInterfaces[].url`. Binding all interfaces —
-      which `ContainerRuntime` requires, and the base image sets with
-      `HOST=0.0.0.0` — therefore publishes `http://0.0.0.0:8080` as the agent's
-      address, and a peer resolving it by skill dials `0.0.0.0`. Confirmed
-      against a running containerised agent. The bind address and the advertised
-      address are two different facts and need two fields; the second should
-      default to the first only when the first is dialable. Note the scaffolded
-      templates set `host = "127.0.0.1"` explicitly, which produces a card that
-      is *correct* and an agent that is unreachable once containerised — the two
-      failures point opposite ways, which is why guessing from the bind address
-      cannot work.
-- [ ] **Wrapping a `reqwest::Error` drops the cause.** `Network error: error
-      sending request for url (…)` is the whole message for a DNS failure, a
-      refused connection and an untrusted certificate alike — `reqwest::Error`'s
-      `Display` omits its source chain. Cost a full investigation to tell a
-      proxy CA problem from the network being down (see `NOTES.md`). Every site
-      that wraps one should walk `Error::source()` into the message.
+- [ ] **Containerised peers cannot reach each other through a published port.**
+      The address on the card is now a separate fact from the bind address
+      (`[server] advertised_url`, 2026-08-16), so an agent no longer publishes
+      `http://0.0.0.0:8080` — but what `ContainerRuntime` injects is
+      `http://127.0.0.1:{port}`, which is the *host's* loopback. That is right
+      for the control plane, `a2acli`, and any peer running as a local process,
+      and wrong for a peer in another container, which has its own loopback.
+      `a2a control-plane --advertise-host` is the escape hatch (the bridge
+      gateway, `host.docker.internal`); the real answer is a shared container
+      network with the agents addressed by container name, which is a change to
+      how `ContainerRuntime` creates them.
 - [ ] **Nothing exercises the Docker Sandboxes path.** Agents, a whole fleet, and
       `--runtime container` all work inside a sandbox unmodified on `sbx` v0.38 —
       verified by hand end to end, including reaching every agent from the host
@@ -178,15 +144,11 @@ is open):
       multimodal model as silence — which is why no shipped example points a
       multimodal model at anything but text. Needs a mapping from `Part` to
       whatever the provider's content array wants, and a decision for providers
-      that have no such array.
-- [ ] **`LlmHandler::new` takes seven positional arguments**, five of them
-      collaborators the call site has to keep in the right order. The types
-      differ, so nothing is silently swappable today — the cost is that a reader
-      cannot tell what `2` or the third `Arc` is without the signature, and every
-      new knob has to argue against making it eight. That pressure is what sent
-      `[llm] reasoning` to the provider instead, which was the better home
-      anyway; the next one may not be so lucky. `bon` is already a dependency;
-      a `#[builder]` here costs three call sites.
+      that have no such array. Note there are two copies of this function to fix:
+      `handlers::llm::extract_text` reads the incoming message and the `pub`
+      `handlers::context::text_of` reads stored history, and they are the same
+      function. Whichever one grows the mapping leaves the other dropping parts
+      silently, on the half of the prompt it happens to own.
 - [ ] **Relay a delegated agent's tokens to the orchestrator's own stream.**
       The wait itself is a subscription now, so the peer's status updates
       already arrive as they happen — but `ToolSource::invoke` returns
@@ -195,51 +157,100 @@ is open):
       way for a source to emit progress mid-invoke (the handler holds the
       streaming port; the source does not).
 - [ ] **Refresh a delegation tool's description when its peer arrives.** The
-      *endpoint* is resolved per call now, but the description shown to the
-      model is fixed at startup, so a peer that registers later is described by
-      the config's skill name rather than by its card. `ToolSource::tool_defs`
-      is synchronous, which is what stops it asking; either it becomes async or
-      a `DiscoveredPeer` caches the card it fetched while dialing and the source
-      reads that.
-- [ ] **Let the refresh loop adopt the card it fetched.** `CardRefresher` probes
-      liveness and throws the card away, so a skill added to a running agent is
-      invisible until something re-registers it. Blocked on the rename hazard:
-      `register` derives the id from `card.name`, so adopting a renamed card
-      creates a second entry and orphans the first. Needs an update-in-place on
-      `AgentRegistry` that keeps the id and replaces the card — at which point
-      "the name changed" becomes a case to decide rather than a silent
-      duplicate.
+      *endpoint* is resolved per call now, and the registry's card is kept
+      current by `CardRefresher` (2026-08-16), but the description shown to the
+      model is still fixed at startup — so a peer that registers later is
+      described by the config's skill name rather than by its card.
+      `ToolSource::tool_defs` is synchronous, which is what stops it asking;
+      either it becomes async or a `DiscoveredPeer` caches the card it fetched
+      while dialing and the source reads that.
+- [ ] **A renamed agent has no way back into the registry.**
+      `AgentRegistry::update_card` refuses a card whose name derives a different
+      id (`RegistryError::Renamed`, 2026-08-16) rather than duplicating the
+      entry, and `CardRefresher` reports it every pass. What it does not have is
+      a resolution: re-registering files the agent under the new id and orphans
+      the old entry, which every config referring to it by `agent_id` still
+      points at. Wants a rename operation that moves the entry and says what
+      broke, or a decision that ids are immutable and the name on the card is
+      just a label.
 - [ ] **Persistent `AgentRegistry` adapter**, for what recovery-by-derivation
       cannot cover: agents registered by something other than this runtime, and
       discovery shared across control-plane processes. Both speculative today —
       hence a port and not a database (see `NOTES.md`).
-- [ ] **Resolve the axum 0.7 (frontend) vs 0.8 (`a2a-rs`) split.** Tests use an
-      `axum8` dev-dep alias as a stopgap; bump the frontend when `askama_axum`
-      allows.
+- [ ] **The duplicate-tool-name check only runs on the `a2a run` LLM path.**
+      `report_tool_collisions` lives in `bin/a2a.rs`, so a Rust agent that
+      assembles its own `ToolSource`s and drives `LlmHandler::builder()` —
+      `complex_agent`, and any embedder — gets no warning at all, on exactly the
+      path where the sources were written by hand rather than derived from a
+      config. Same shape as the composition edge that `build_wired` closed, but
+      it does not fit there: `AgentPorts` holds storage, streaming and push, and
+      tool sources are assembled before any of them exist. The check belongs
+      wherever the sources are assembled, and there is more than one such place.
+      The handler is the tempting home, since it holds `tools` and knows whether
+      the bag is on, but it assembles the list per turn and the report must not
+      be.
+- [ ] **`AutoStorage` is 16 hand-written delegation arms and grows with every
+      port method.** Two ports were added to it for the state bag, and each new
+      method on any storage port means another
+      `match self { InMemory(s) => …, Sqlx(s) => … }`. The enum exists to keep
+      dispatch static across a choice made once at startup, which is the right
+      call in itself — and nothing here is silent, since a port gaining a method
+      stops this file compiling. The cost is that every port method is paid for
+      twice, forever — and the branch that skipped `AutoStorage` entirely was the
+      one that needed a port it did not implement. Either a macro over the port
+      traits, or `Arc<dyn …>` per port at the composition edge, accepting the
+      vtable on calls that already do I/O.
+- [ ] **Resolve the axum 0.7 (`a2a-agents`) vs 0.8 (`a2a-rs`) split.** Tests use
+      an `axum8` dev-dep alias as a stopgap. Gating `askama_axum` behind
+      `reimbursement-agent` (§3 Phase 0) did *not* close this: `axum` stays
+      non-optional because `control_plane/http.rs` is built on it, and enabling
+      `reimbursement-agent` on an axum-0.8 `a2a-agents` would put `askama_axum`
+      0.4's own axum 0.7 types in the same file as an 0.8 `Router`. Closing it
+      means moving `bin/reimbursement_demo.rs` (plus `templates/`, `static/`) out
+      into its own sample crate — which is what `CLAUDE.md` already asks of every
+      other agent, and which naturally happens on the korps side.
 
-## 3. Platform extraction — before the provider work
+## 3. Platform extraction → `korps`
 
-Move `a2a-agents`, `a2a-agents-common`, and the Terraform provider into
-`a2a-agents-platform`, depending only on **published** `a2a-rs` / `a2a-mcp` /
-`a2a-ap2` (no path deps back), keeping the protocol crates clean.
+`a2a-agents` moves to https://github.com/EmilLindfors/korps (private, created
+2026-08-17), depending only on **published** `a2a-rs` / `a2a-llm` / `a2a-mcp` /
+`a2a-ap2` — no path deps back, so the protocol crates stay clean and stay MIT.
+The split line is protocol vs. platform. `MIGRATION.md` in that repo holds the
+full plan; the Terraform provider does **not** move yet (see §4).
 
-Extract *before* the provider rework (§4), not after: a Terraform provider with
-its own Go toolchain, Go CI, and TF acceptance tests does not belong in the
-protocol repo, and the provider work is where the Go surface gets serious —
-extracting afterwards means moving a much larger, freshly-churning surface. The
-extraction only needs published `a2a-rs`; use a local `[patch.crates-io]` path
-override if co-development is needed during the transition.
+### Phase 0 — cross-seam cleanup, in this repo ✅ done 2026-08-17
 
-One PR, pre-1.0 "break cleanly" posture:
+- [x] Extract `a2a-llm` from `a2a-agents-common/src/llm/`. `a2a-mcp` depended on
+      all 5.3k lines of `a2a-agents-common` for two types (`ToolCall`,
+      `ToolDefinition`); it now takes a 2.8k-line crate that is MIT-side by
+      design.
+- [x] Move `a2a-agents-common/src/context/` into `a2a-agents/src/context/`.
+- [x] Delete `nlp/`, `formatting/`, `caching/`, `testing/` (1,157 lines) and
+      `CommonError`. Zero consumers anywhere in the workspace. `a2a-agents-common`
+      is gone; `moka` and its `async` feature go with it.
+- [x] Move `e2e_framework_lifecycle_test.rs` and `sse_streaming_test.rs` from
+      `a2a-client/tests/` to `a2a-agents/tests/`, killing the
+      `a2a-agents → a2a-web-client → a2a-agents` dev cycle.
+- [x] Gate `a2a-client`, `askama`, `askama_axum`, and `tower-http` behind
+      `reimbursement-agent` — `bin/reimbursement_demo.rs` is their only consumer.
+      Drop `base64`, unused anywhere.
+- [x] Add LICENSE files. Seven crates declared `license = "MIT"` with no license
+      text in the repo.
 
-- [ ] Create `a2a-agents-platform`; copy `a2a-agents/`, `a2a-agents-common/`,
-      and `terraform-provider-a2aagent/`.
-- [ ] Flip path deps to crates.io versions (`a2a-rs = "0.4"`, etc.).
+### Phase 1 — the move
+
+- [ ] `git filter-repo` `a2a-agents/` into `korps` so its history comes along
+- [ ] Rename the crate and the `a2a` binary to `korps`
+- [ ] Flip path deps to crates.io versions; add `[patch.crates-io]` for
+      co-development
 - [ ] Split the generic handler into its own crate if wanted — it is co-located
       in `a2a-agents/src/handlers/` today to avoid a circular dep with `a2a-mcp`.
-- [ ] In this repo: drop `a2a-agents` / `a2a-agents-common` from the workspace
-      `Cargo.toml`; point `README.md` / `CLAUDE.md` at the new repo. Keep
-      `a2a-rs`, `a2a-ap2`, `a2a-client`, `a2a-mcp`, `a2acli` here.
+- [ ] In this repo: drop `a2a-agents` from the workspace `Cargo.toml`; point
+      `README.md` / `CLAUDE.md` at the new repo. Keep `a2a-rs`, `a2a-ap2`,
+      `a2a-client`, `a2a-llm`, `a2a-mcp`, `a2acli` here.
+- [ ] Downstream-canary CI job here that builds `korps` HEAD against each PR,
+      replacing what the shared workspace used to catch
+- [ ] Split `NOTES.md` and `CHANGELOG.md` along the same seam
 
 ## 4. Terraform provider ⏸ (parked)
 
@@ -291,6 +302,14 @@ config fields, so the provider cannot express most agents even when correct.
       validates our *client* against other SDKs.
 - [ ] Once both pass, capture the matrix (which transports and SDKs interoperate)
       in the `a2acli` README.
+- [ ] **`authenticated_principal_test` flakes under a full workspace run.**
+      `the_connectrpc_path_carries_the_caller_over_a_socket` binds a hard-coded
+      `127.0.0.1:8199` and waits a flat 200ms for the server to come up. Seen
+      failing once on 2026-08-17 under `cargo test --workspace --all-features`
+      and passing on its own and on a re-run, which is the shape of both
+      possible causes — the sleep being short under load, and another test
+      binary holding the port. Bind port 0 and read the address back, or poll
+      until the socket answers.
 - [ ] **Pin an MSRV CI job the moment the declared version drops below stable.**
       Not needed today: every workflow uses `dtolnay/rust-toolchain@stable` and
       1.96 is current stable, so CI already builds on exactly the declared
@@ -312,7 +331,10 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
 
 - [ ] **Multi-tenancy.** Thread a `tenant` through requests and storage. Only
       placeholder fields exist today (`TaskPushNotificationConfig.tenant`, the
-      proto `/{tenant}/…` routes). Two viable shapes, and the choice is the work:
+      proto `/{tenant}/…` routes). It is also what would make one database
+      serve several agents: nothing in the schema names the agent, so today a
+      database belongs to exactly one (`FleetConflict::Storage` reports the
+      mistake — see `NOTES.md`). Two viable shapes, and the choice is the work:
       - **(a) edge tenant-routing** — a `TenantRouter` holding per-tenant
         storage, resolving the tenant from the `/{tenant}/` path at the transport
         edge, keeping domain and ports tenant-free. Smallest blast radius, most
