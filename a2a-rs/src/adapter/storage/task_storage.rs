@@ -290,7 +290,10 @@ impl AsyncContextStateStore for InMemoryTaskStorage {
             for (name, value) in bucket {
                 match StateKey::scoped(scope, name) {
                     Ok(key) => loaded.insert(key, value.clone()),
-                    Err(e) => tracing::warn!("ignoring unusable state key '{name}': {e}"),
+                    Err(_e) => {
+                        #[cfg(feature = "tracing")]
+                        tracing::warn!("ignoring unusable state key '{name}': {_e}");
+                    }
                 }
             }
         }

@@ -447,7 +447,10 @@ impl SqlxTaskStorage {
             .execute(&pool)
             .await
         {
+            #[cfg(feature = "tracing")]
             tracing::debug!("left the unused contexts.state column in place: {e}");
+            #[cfg(not(feature = "tracing"))]
+            let _ = e;
         }
     }
 
@@ -1653,14 +1656,18 @@ impl AsyncContextStateStore for SqlxTaskStorage {
                 // A scope this build does not know. Skipped rather than guessed
                 // at: filing it under the wrong scope would report a lifetime
                 // the row does not have.
-                other => {
-                    tracing::warn!("ignoring state row with unknown scope '{other}'");
+                _other => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!("ignoring state row with unknown scope '{_other}'");
                     continue;
                 }
             };
             match StateKey::scoped(scope, &name) {
                 Ok(key) => state.insert(key, value),
-                Err(e) => tracing::warn!("ignoring unusable state key '{name}': {e}"),
+                Err(_e) => {
+                    #[cfg(feature = "tracing")]
+                    tracing::warn!("ignoring unusable state key '{name}': {_e}");
+                }
             }
         }
         Ok(state)
