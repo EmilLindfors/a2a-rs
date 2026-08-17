@@ -1,5 +1,6 @@
 //! Error types for client adapters
 
+use crate::adapter::error::describe_transport_error;
 use crate::domain::A2AError;
 use std::io;
 use thiserror::Error;
@@ -34,7 +35,12 @@ pub enum HttpClientError {
 impl From<HttpClientError> for A2AError {
     fn from(error: HttpClientError) -> Self {
         match error {
-            HttpClientError::Reqwest(e) => A2AError::Internal(format!("HTTP client error: {}", e)),
+            // Flattened to a string here, so the cause has to come with it —
+            // `reqwest::Error` prints none of it on its own.
+            HttpClientError::Reqwest(e) => A2AError::Internal(format!(
+                "HTTP client error: {}",
+                describe_transport_error(&e)
+            )),
             HttpClientError::Io(e) => A2AError::Io(e),
             HttpClientError::Request(msg) => {
                 A2AError::Internal(format!("HTTP request error: {}", msg))

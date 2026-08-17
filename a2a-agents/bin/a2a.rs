@@ -17,12 +17,10 @@
 
 #[cfg(feature = "reimbursement-agent")]
 use a2a_agents::agents::reimbursement::ReimbursementHandler;
-#[cfg(feature = "reimbursement-agent")]
-use a2a_agents::core::builder::AutoStorage;
 use a2a_agents::core::config::LlmConfig;
 use a2a_agents::core::{
-    AgentBuilder, AgentConfig, AgentTemplate, FleetConfig, LlmSource, Requirement, fleet_conflicts,
-    fleet_header, member_block, member_path, requirements,
+    Advertised, AgentBuilder, AgentConfig, AgentTemplate, FleetConfig, LlmSource, Requirement,
+    fleet_conflicts, fleet_header, member_block, member_path, requirements,
 };
 use a2a_agents::core::{HandlerType, LlmHandlerConfig};
 use a2a_agents::utils::slugify;
@@ -32,7 +30,7 @@ use a2a_agents::{
     HttpCardSource, InMemoryAgentRegistry, ListFilter, LocalProcessRuntime, Recovered,
     control_plane_router,
 };
-use a2a_agents_common::llm::{
+use a2a_llm::{
     LlmSettings, PROVIDER_ENV_VARS, SelectedLlm, provider_from_env, provider_from_settings,
 };
 use a2a_rs::port::RequestContext;
@@ -40,15 +38,17 @@ use a2a_rs::port::RequestContext;
 #[cfg(feature = "mcp-server")]
 use a2a_agents::core::config::RemoteAgentTarget;
 #[cfg(feature = "mcp-server")]
+use a2a_agents::handlers::memory::{FORGET_TOOL, MEMORY_SOURCE_LABEL, REMEMBER_TOOL};
+#[cfg(feature = "mcp-server")]
 use a2a_agents::handlers::tools::ToolSource;
 #[cfg(feature = "mcp-server")]
 use a2a_agents::{
-    A2aAgentToolSource, DiscoveredPeer, LlmHandler, McpToolSource, PeerResolver, UnusedInner,
+    A2aAgentToolSource, AdvertisedTools, DiscoveredPeer, LlmHandler, McpToolSource, PeerResolver,
+    UnusedInner, tool_collisions,
 };
 #[cfg(feature = "mcp-server")]
 use a2a_rs::domain::AgentCard;
 use a2a_rs::{
-    InMemoryStreamingHandler,
     domain::{A2AError, Message, Part, Role, Task, TaskState, TaskStatus},
     port::AsyncMessageHandler,
 };
@@ -189,6 +189,13 @@ enum Command {
         /// (only used with `--runtime container`).
         #[clap(long, default_value = "a2a-agents:latest")]
         image: String,
+        /// Host peers should dial to reach a deployed agent — it goes on the
+        /// agent's card, next to its published port. Defaults to `127.0.0.1`,
+        /// which reaches agents from this machine only; set a name or address
+        /// that reaches this host from wherever the peers run
+        /// (`--runtime container` only).
+        #[clap(long, value_name = "HOST")]
+        advertise_host: Option<String>,
         /// Bearer token callers must present. Prefer the
         /// `A2A_CONTROL_PLANE_TOKEN` env var — an argv token is visible to `ps`.
         #[clap(long)]
@@ -452,6 +459,7 @@ async fn main() -> anyhow::Result<()> {
             runtime,
             engine,
             image,
+            advertise_host,
             token,
             no_auth,
             allow_env,
@@ -466,6 +474,7 @@ async fn main() -> anyhow::Result<()> {
                 runtime_kind: runtime,
                 engine,
                 image,
+                advertise_host,
                 token,
                 no_auth,
                 allow_env,
@@ -663,11 +672,11 @@ async fn stop_agents(ids: &[String], client: ControlPlaneClient) -> anyhow::Resu
 fn print_run_banner(config_paths: &[String]) {
     // Re-read leniently: an unreadable config is reported by the agent task, and
     // a banner is not worth failing a run over.
-    let agents: Vec<(String, String)> = config_paths
+    let agents: Vec<(String, Advertised)> = config_paths
         .iter()
         .filter_map(|path| {
             let (config, _) = AgentConfig::check_file(path).ok()?;
-            Some((config.agent.name.clone(), config.agent_url()))
+            Some((config.agent.name.clone(), config.advertised()))
         })
         .collect();
 
@@ -676,13 +685,24 @@ fn print_run_banner(config_paths: &[String]) {
     }
 
     println!();
-    for (name, url) in &agents {
+    for (name, advertised) in &agents {
+        let url = advertised.url();
         println!("  {name}");
         println!("    {url}");
         println!("    card: {url}/.well-known/agent-card.json");
+        // The address on the card is what a peer dials, so being wrong here is
+        // invisible from this side — it surfaces as somebody else failing to
+        // reach this agent.
+        if advertised.is_guess() {
+            println!(
+                "    note: bound to every interface, so this address is a guess — set \
+                 `[server] advertised_url` for peers on another host"
+            );
+        }
     }
     println!();
-    if let Some((_, url)) = agents.first() {
+    if let Some((_, advertised)) = agents.first() {
+        let url = advertised.url();
         println!("  try:  a2acli send --url {url} 'hello'");
         println!("        curl {url}/.well-known/agent-card.json");
     }
@@ -1178,6 +1198,38 @@ fn config_findings(path: &str) -> (Vec<Finding>, Option<AgentConfig>) {
                     )),
                 })
             }
+            Requirement::AdvertisedGuess { url } => findings.push(Finding::warn(format!(
+                "binds every interface, so its card will advertise {url} — right from this \
+                 machine, unreachable from anywhere else; set `[server] advertised_url` (the \
+                 control plane sets it for container agents)"
+            ))),
+            Requirement::ConversationStore { mode, durable } => findings.push(if durable {
+                Finding::ok(format!(
+                    "conversation memory (mode = \"{mode}\") is kept in storage that survives \
+                     a restart"
+                ))
+            } else {
+                Finding::warn(format!(
+                    "`[handler.llm.context] mode = \"{mode}\"` over `[server.storage] type = \
+                     \"inmemory\"` — everything this agent remembers is lost when it restarts, \
+                     and the control plane restarts agents on purpose; `type = \"sqlx\"` keeps it"
+                ))
+            }),
+            Requirement::StateStore { durable } => findings.push(if durable {
+                Finding::ok(
+                    "what the model is told to remember is kept in storage that survives a \
+                     restart"
+                        .to_string(),
+                )
+            } else {
+                Finding::warn(
+                    "`[handler.llm.context] remember = true` over `[server.storage] type = \
+                     \"inmemory\"` — the model can be asked to remember something and it is \
+                     gone on the next restart, including anything scoped `user:`; `type = \
+                     \"sqlx\"` keeps it"
+                        .to_string(),
+                )
+            }),
             Requirement::UnknownHandler { name } => findings.push(Finding::problem(format!(
                 "handler {name:?} is not built into this binary — `a2a run` refuses to \
                  start it; ship it as an image and name it under `[runtime] image`"
@@ -1263,6 +1315,7 @@ struct ControlPlaneArgs {
     runtime_kind: RuntimeKind,
     engine: String,
     image: String,
+    advertise_host: Option<String>,
     token: Option<String>,
     no_auth: bool,
     allow_env: Vec<String>,
@@ -1350,12 +1403,15 @@ async fn run_control_plane(args: ControlPlaneArgs) -> anyhow::Result<()> {
         }
         RuntimeKind::Container => {
             let hardening = resolve_hardening(args.no_hardening, args.memory, args.cpus);
-            Arc::new(
-                ContainerRuntime::with_engine(args.engine)
-                    .with_base_image(args.image)
-                    .with_allowed_env(allowed_env)
-                    .with_hardening(hardening),
-            )
+            let mut runtime = ContainerRuntime::with_engine(args.engine)
+                .with_base_image(args.image)
+                .with_allowed_env(allowed_env)
+                .with_hardening(hardening);
+            if let Some(host) = args.advertise_host {
+                info!("agents will advertise themselves at http://{host}:<port>");
+                runtime = runtime.with_advertise_host(host);
+            }
+            Arc::new(runtime)
         }
     };
     let cp = Arc::new(ControlPlane::new(
@@ -1610,16 +1666,17 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
     match handler_type {
         #[cfg(feature = "reimbursement-agent")]
         HandlerType::Reimbursement => {
-            let storage = AutoStorage::from_config(&builder.config().server.storage).await?;
             let llm_provider = resolve_llm(&builder.config().llm)?.map(|llm| llm.provider);
-            let streaming = InMemoryStreamingHandler::new();
-            let push = storage.push_notifier();
-            let handler =
-                ReimbursementHandler::with_llm(storage.clone(), streaming, push, llm_provider);
             let runtime = builder
-                .with_handler(handler)
-                .with_storage(storage)
-                .build()?;
+                .build_wired(|ports| {
+                    ReimbursementHandler::with_llm(
+                        ports.storage.clone(),
+                        ports.streaming.clone(),
+                        ports.push.clone(),
+                        llm_provider,
+                    )
+                })
+                .await?;
             runtime.run().await?;
         }
         #[cfg(feature = "mcp-server")]
@@ -1627,10 +1684,7 @@ async fn run_one_agent(config_path: &str, registry: Arc<dyn AgentRegistry>) -> a
             run_llm_agent(builder, registry).await?;
         }
         HandlerType::Echo => {
-            let runtime = builder
-                .with_handler(EchoHandler)
-                .build_with_auto_storage()
-                .await?;
+            let runtime = builder.build_wired(|_| EchoHandler).await?;
             runtime.run().await?;
         }
         // `Custom(_)` plus any variant whose handler feature is disabled in this
@@ -1706,13 +1760,43 @@ fn describe_target(name: &str, target: &RemoteAgentTarget<'_>) -> String {
     }
 }
 
+/// Warn about any tool name two sources advertise, naming both and which one
+/// the model will actually reach.
+///
+/// A warning rather than a refusal: the agent serves, and which of two tools an
+/// operator meant is not something this can decide. What it can do is stop the
+/// order the sources were assembled in being the only record of the choice.
+#[cfg(feature = "mcp-server")]
+fn report_tool_collisions(sources: &[Arc<dyn ToolSource>], remember: bool) {
+    let mut advertised: Vec<AdvertisedTools> = Vec::new();
+    // First, matching the order the handler assembles them in — the built-ins
+    // win `resolve`, and the report has to say so.
+    if remember {
+        advertised.push(AdvertisedTools::builtin(
+            MEMORY_SOURCE_LABEL,
+            &[REMEMBER_TOOL, FORGET_TOOL],
+        ));
+    }
+    advertised.extend(sources.iter().map(|s| AdvertisedTools::of(s.as_ref())));
+
+    for collision in tool_collisions(&advertised) {
+        warn!(
+            "tool '{}' is advertised by {} — the model is sent {} definitions of it and only \
+             the one from {} can be called; rename the others",
+            collision.name,
+            collision.claimed_by.join(" and "),
+            collision.claimed_by.len(),
+            collision.claimed_by[0],
+        );
+    }
+}
+
 #[cfg(feature = "mcp-server")]
 async fn run_llm_agent(
     builder: AgentBuilder,
     registry: Arc<dyn AgentRegistry>,
 ) -> anyhow::Result<()> {
     use a2a_mcp::McpToA2ABridge;
-    use a2a_rs::InMemoryTaskStorage;
     use rmcp::ServiceExt;
     use rmcp::model::{ClientCapabilities, ClientInfo, Implementation, ProtocolVersion};
     use rmcp::transport::TokioChildProcess;
@@ -1751,7 +1835,8 @@ async fn run_llm_agent(
                         Ok(svc) => {
                             match McpToA2ABridge::new(svc.peer().clone(), UnusedInner).await {
                                 Ok(b) => {
-                                    sources.push(Arc::new(McpToolSource::new(Arc::new(b))));
+                                    sources
+                                        .push(Arc::new(McpToolSource::new(&srv.name, Arc::new(b))));
                                     info!("connected MCP tool server '{}'", srv.name);
                                 }
                                 Err(e) => warn!("MCP bridge init failed for {}: {}", srv.name, e),
@@ -1836,29 +1921,36 @@ async fn run_llm_agent(
         sources.push(Arc::new(source));
     }
 
-    let storage = InMemoryTaskStorage::new();
-    let streaming = InMemoryStreamingHandler::new();
-    let push: Arc<dyn a2a_rs::port::AsyncPushNotifier> = storage.push_notifier();
-    let handler = LlmHandler::new(
-        llm_cfg.system_prompt,
-        llm_cfg.max_tool_rounds,
-        storage.clone(),
-        streaming.clone(),
-        push,
-        sources,
-        llm_provider,
-    )
-    // The same store the tasks go into is the one the conversation is read back
-    // out of — `InMemoryTaskStorage` implements both ports over one state, which
-    // is what makes "the conversation" and "the task history" the same thing
-    // rather than two records that can disagree.
-    .with_context_memory(Arc::new(storage.clone()), llm_cfg.context)
-    .with_model(model_name);
+    // Every definition reaches the model and only the first source that claims a
+    // name can be called, so a duplicate is a tool the model can see and never
+    // reach. Reported here because it is only knowable once the MCP servers have
+    // said what they serve, which is after they are connected.
+    report_tool_collisions(&sources, llm_cfg.context.remember);
+
     let runtime = builder
-        .with_handler(handler)
-        .with_storage(storage)
-        .with_streaming(streaming)
-        .build()?;
+        .build_wired(|ports| {
+            LlmHandler::builder()
+                .system_prompt(llm_cfg.system_prompt)
+                .max_tool_rounds(llm_cfg.max_tool_rounds)
+                .lifecycle(ports.storage.clone())
+                .streaming(ports.streaming.clone())
+                .push(ports.push.clone())
+                .tools(sources)
+                .maybe_llm(llm_provider)
+                .model(model_name)
+                .build()
+                // The same store the tasks go into is the one the conversation
+                // and the state bag are read back out of — one object
+                // implementing all of these ports over one state, which is what
+                // makes "the conversation" and "the task history" the same thing
+                // rather than two records that can disagree.
+                .with_context_memory(
+                    Arc::new(ports.storage.clone()),
+                    Arc::new(ports.storage.clone()),
+                    llm_cfg.context,
+                )
+        })
+        .await?;
     runtime.run().await?;
     Ok(())
 }

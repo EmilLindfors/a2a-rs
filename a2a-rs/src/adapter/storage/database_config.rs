@@ -36,12 +36,18 @@ impl DatabaseType {
         }
     }
 
-    /// Check whether this database type is supported by the currently compiled features.
+    /// Check whether this database type is supported by the currently compiled
+    /// features.
+    ///
+    /// MySQL is always `false`: the URL scheme is recognized so the error can
+    /// name it, and there is no schema or adapter behind it. There used to be a
+    /// `mysql` feature, which compiled a driver nothing used and made this
+    /// return `true` for a backend the storage could not talk to.
     pub fn is_feature_enabled(self) -> bool {
         match self {
             Self::Sqlite => cfg!(feature = "sqlite"),
             Self::Postgres => cfg!(feature = "postgres"),
-            Self::Mysql => cfg!(feature = "mysql"),
+            Self::Mysql => false,
         }
     }
 

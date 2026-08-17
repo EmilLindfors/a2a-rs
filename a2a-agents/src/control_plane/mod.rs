@@ -326,6 +326,10 @@ impl ControlPlane {
         self.runtime.stop(id).await?;
         match self.registry.deregister(id).await {
             Ok(()) | Err(RegistryError::NotFound(_)) => Ok(()),
+            // `deregister` names an id and reads no card, so it cannot raise
+            // this. Mapped rather than ignored so a future adapter that does
+            // cannot report success for an agent it left registered.
+            Err(e @ RegistryError::Renamed { .. }) => Err(ControlPlaneError::from(e)),
         }
     }
 

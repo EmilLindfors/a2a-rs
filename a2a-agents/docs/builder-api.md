@@ -281,11 +281,29 @@ builder
     })
 ```
 
+A handler that holds ports of its own — storage, streaming, push — should be
+built by `build_wired` instead (below). It hands the handler the same instances
+the transport gets; assembling them at the call site and passing the handler in
+already built is how an agent comes to broadcast status updates into a streaming
+backend nothing subscribes through.
+
 ### Building and Running
 
 ```rust
 // Build the runtime
 let runtime = builder.build()?;
+
+// Or, for a handler that takes ports: let the builder assemble them from
+// `[server.storage]` and wire the same instances into both sides.
+let runtime = builder
+    .build_wired(|ports| {
+        MyHandler::new(
+            ports.storage.clone(),   // tasks, and the conversation if you read one
+            ports.streaming.clone(), // the backend `tasks/subscribe` reads from
+            ports.push.clone(),      // webhook delivery
+        )
+    })
+    .await?;
 
 // Run all configured servers
 runtime.run().await?;
@@ -359,12 +377,15 @@ AgentBuilder::from_file("agent.toml")?
 ### Custom Storage with Migrations
 
 ```rust
-let migrations = &[
+let migrations = [
     include_str!("../migrations/001_init.sql"),
     include_str!("../migrations/002_add_fields.sql"),
 ];
 
-let storage = SqlxTaskStorage::with_migrations(&db_url, migrations).await?;
+let storage = SqlxTaskStorage::builder(&db_url)
+    .migrations(migrations)
+    .connect()
+    .await?;
 
 AgentBuilder::from_file("agent.toml")?
     .with_storage(storage)

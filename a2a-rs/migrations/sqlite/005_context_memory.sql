@@ -16,10 +16,12 @@ CREATE INDEX IF NOT EXISTS idx_task_history_context_seq
 -- readable by anyone. A non-NULL owner is enforced on every read, because
 -- projecting a conversation into a prompt turns `context_id` into a capability:
 -- whoever holds one would otherwise read what was said in it.
+-- This table carried a `state TEXT` column that nothing read or wrote. The
+-- state bag went to its own table in 006, one row per key; 006 also drops the
+-- column from a database that already has it.
 CREATE TABLE IF NOT EXISTS contexts (
     id         TEXT PRIMARY KEY,
     owner      TEXT,
-    state      TEXT NOT NULL DEFAULT '{}',
     created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (datetime('now')),
     updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT (datetime('now'))
 );

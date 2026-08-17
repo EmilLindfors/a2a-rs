@@ -43,7 +43,7 @@
 use std::sync::Arc;
 
 use a2a_agents::core::AgentBuilder;
-use a2a_agents_common::llm::{
+use a2a_llm::{
     ChatMessage, LlmProvider, LlmRequest, LlmStreamEvent, MessageRole, Reasoning, ReasoningEffort,
     ToolCall, ToolCallAccumulator, ToolDefinition,
 };
@@ -632,7 +632,7 @@ fn load_llm() -> anyhow::Result<Option<Arc<dyn LlmProvider>>> {
     // returns None and the handler falls back to the rule-based router; a key
     // that is set and unusable is an error, not a silent fallback.
     Ok(
-        a2a_agents_common::llm::provider_from_env()?.map(|selected| {
+        a2a_llm::provider_from_env()?.map(|selected| {
             tracing::info!(provider = selected.kind, model = %selected.model, "LLM");
             selected.provider
         }),

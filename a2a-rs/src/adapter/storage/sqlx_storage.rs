@@ -1,14 +1,21 @@
-//! SQLx-based task storage implementation
+//! SQLx-based task storage implementation.
 //!
-//! This module provides a persistent storage solution using SQLx, supporting
-//! SQLite, PostgreSQL, and MySQL databases.
+//! Persists tasks, history, push configs and conversations to SQLite or
+//! PostgreSQL. The backend is chosen from the URL scheme at runtime, over sqlx's
+//! `Any` driver, so both are served by one set of queries; the differences live
+//! in [`Dialect`](super::dialect::Dialect).
 
 #[cfg(feature = "sqlx-storage")]
 use async_trait::async_trait;
 #[cfg(feature = "sqlx-storage")]
 use serde_json;
 #[cfg(feature = "sqlx-storage")]
-use sqlx::{Row, SqlitePool};
+use sqlx::{
+    AnyPool, ConnectOptions, Row,
+    any::{AnyConnectOptions, AnyPoolOptions},
+};
+#[cfg(feature = "sqlx-storage")]
+use std::{str::FromStr, time::Duration};
 
 #[cfg(feature = "sqlx-storage")]
 use crate::adapter::business::push_notification::{
@@ -24,13 +31,14 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
-    A2AError, ContextId, Conversation, Digest, Message, Seq, SequencedMessage, Task, TaskId,
-    TaskPushNotificationConfig, TaskState, TaskStateExt, TaskStatus, VersionedTask,
+    A2AError, ContextId, ContextState, Conversation, Digest, Message, Seq, SequencedMessage,
+    StateKey, StateScope, Task, TaskId, TaskPushNotificationConfig, TaskState, TaskStateExt,
+    TaskStatus, VersionedTask,
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
-    AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle,
-    AsyncTaskQuery, AsyncTaskVersioning,
+    AsyncContextStateStore, AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier,
+    AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning, context_state::scope_key,
 };
 
 #[cfg(feature = "sqlx-storage")]
@@ -45,194 +53,478 @@ use std::sync::Arc;
 /// [`push_notifier`](Self::push_notifier)). The store still owns push-config
 /// CRUD ([`AsyncNotificationManager`]) — that is config persistence.
 pub struct SqlxTaskStorage {
-    /// Database pool
-    pool: SqlitePool,
+    /// Database pool, over the driver the URL scheme selected.
+    pool: AnyPool,
+    /// Which SQL the queries are rendered in. Fixed at connect time from the
+    /// same URL the pool was opened with.
+    dialect: Dialect,
     /// Push notification registry (config store + delivery backend)
     push_notification_registry: Arc<PushNotificationRegistry>,
 }
 
 #[cfg(feature = "sqlx-storage")]
 use super::database_config::DatabaseType;
+#[cfg(feature = "sqlx-storage")]
+use super::dialect::Dialect;
+
+/// The task columns this store reads, spelled out rather than `SELECT *`.
+///
+/// Both tables carry timestamps the `Any` driver cannot decode — it handles
+/// text, integers, floats, booleans and bytes — and a row is converted whole, so
+/// selecting a column nobody reads fails the query on PostgreSQL.
+#[cfg(feature = "sqlx-storage")]
+const TASK_COLUMNS: &str = "id, context_id, status_state, status_message, metadata, artifacts";
+
+/// How the pool is opened. Applied to both the main pool and the
+/// one-connection migration pool, which connect to the same database.
+#[cfg(feature = "sqlx-storage")]
+struct PoolSettings {
+    max_connections: u32,
+    acquire_timeout: Duration,
+    log_statements: bool,
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl Default for PoolSettings {
+    /// sqlx's own pool defaults, so an unconfigured store is sized as it was
+    /// before there was anything to configure. Statement logging is the one
+    /// departure: sqlx logs every statement at `DEBUG` by default, and this
+    /// crate makes that a choice (see [`SqlxStorageBuilder::log_statements`]).
+    fn default() -> Self {
+        Self {
+            max_connections: 10,
+            acquire_timeout: Duration::from_secs(30),
+            log_statements: false,
+        }
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl PoolSettings {
+    fn connect_options(&self, url: &str) -> Result<AnyConnectOptions, A2AError> {
+        let options = AnyConnectOptions::from_str(url)
+            .map_err(|e| A2AError::DatabaseError(format!("Invalid database URL '{url}': {e}")))?;
+
+        Ok(if self.log_statements {
+            options
+        } else {
+            options.disable_statement_logging()
+        })
+    }
+}
+
+/// Builds a [`SqlxTaskStorage`]: see [`SqlxTaskStorage::builder`].
+#[cfg(feature = "sqlx-storage")]
+pub struct SqlxStorageBuilder {
+    url: String,
+    pool: PoolSettings,
+    push_sender: Option<Arc<dyn PushNotificationSender>>,
+    additional_migrations: Vec<String>,
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl SqlxStorageBuilder {
+    /// Take the URL and the pool settings from a [`DatabaseConfig`].
+    pub fn from_config(config: &super::database_config::DatabaseConfig) -> Self {
+        SqlxTaskStorage::builder(&config.url)
+            .max_connections(config.max_connections)
+            .acquire_timeout(Duration::from_secs(config.timeout_seconds))
+            .log_statements(config.enable_logging)
+    }
+
+    /// Cap the connection pool. Defaults to 10, sqlx's own default.
+    ///
+    /// On PostgreSQL this is a share of a server-wide limit, so a fleet of
+    /// agents against one server is the case worth setting it for.
+    pub fn max_connections(mut self, max: u32) -> Self {
+        self.pool.max_connections = max;
+        self
+    }
+
+    /// How long a query waits for a free connection before failing. Defaults
+    /// to 30 seconds, sqlx's own default.
+    pub fn acquire_timeout(mut self, timeout: Duration) -> Self {
+        self.pool.acquire_timeout = timeout;
+        self
+    }
+
+    /// Log every statement the store executes, at `DEBUG` through the `log`
+    /// crate (which `tracing-subscriber` bridges into tracing). Off by default.
+    pub fn log_statements(mut self, log: bool) -> Self {
+        self.pool.log_statements = log;
+        self
+    }
+
+    /// Deliver push notifications through this sender rather than the default
+    /// (HTTP with the `http-client` feature, a no-op without it).
+    pub fn push_sender(mut self, sender: impl PushNotificationSender + 'static) -> Self {
+        self.push_sender = Some(Arc::new(sender));
+        self
+    }
+
+    /// Run these statements after the framework's own migrations.
+    ///
+    /// The caller's own SQL, run verbatim, so it has to be written in the
+    /// dialect the URL selects.
+    pub fn migrations<S: AsRef<str>>(mut self, migrations: impl IntoIterator<Item = S>) -> Self {
+        self.additional_migrations
+            .extend(migrations.into_iter().map(|s| s.as_ref().to_string()));
+        self
+    }
+
+    /// Open the pool, migrate, and hand back the store.
+    pub async fn connect(self) -> Result<SqlxTaskStorage, A2AError> {
+        if self.pool.max_connections == 0 {
+            return Err(A2AError::DatabaseError(
+                "max_connections must be greater than 0; a pool that hands out no connections \
+                 fails every query"
+                    .to_string(),
+            ));
+        }
+
+        let (pool, dialect) = SqlxTaskStorage::connect(&self.url, &self.pool).await?;
+        SqlxTaskStorage::run_additional_migrations(&pool, &self.additional_migrations).await?;
+
+        let push_registry = match self.push_sender {
+            Some(sender) => PushNotificationRegistry::from_shared(sender),
+            None => {
+                #[cfg(feature = "http-client")]
+                let sender = HttpPushNotificationSender::new();
+                #[cfg(not(feature = "http-client"))]
+                let sender = NoopPushNotificationSender::default();
+                PushNotificationRegistry::new(sender)
+            }
+        };
+
+        Ok(SqlxTaskStorage {
+            pool,
+            dialect,
+            push_notification_registry: Arc::new(push_registry),
+        })
+    }
+}
+
+/// What the `contexts` row says about who may read a conversation.
+///
+/// The absence of a row is a third answer and is spelled `Option<ContextClaim>`
+/// rather than a variant here: it is the one case the caller has to *act* on by
+/// writing, and folding it in would let a call site treat "nothing holds this
+/// yet" as a decision that had been made.
+#[cfg(feature = "sqlx-storage")]
+enum ContextClaim {
+    /// A row with no owner — an agent running without an authenticator. Open to
+    /// anyone.
+    Open,
+    /// Claimed by this principal on the first write, and never reassigned.
+    Owner(String),
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl ContextClaim {
+    fn verdict(&self, context_id: &str, caller: Option<&str>) -> Result<(), A2AError> {
+        match self {
+            Self::Open => Ok(()),
+            Self::Owner(owner) if Some(owner.as_str()) == caller => Ok(()),
+            Self::Owner(_) => Err(A2AError::ContextAccessDenied {
+                context_id: context_id.to_string(),
+            }),
+        }
+    }
+}
 
 #[cfg(feature = "sqlx-storage")]
 impl SqlxTaskStorage {
-    /// Validate that the database URL is a supported SQLite URL.
+    /// Resolve the URL to a dialect, or say why it cannot be.
     ///
-    /// Returns an error if the URL points to a different database type
-    /// or if the required feature is not enabled.
-    fn validate_url(database_url: &str) -> Result<(), A2AError> {
-        match DatabaseType::from_url(database_url) {
-            Some(DatabaseType::Sqlite) => Ok(()),
-            Some(db_type) => Err(A2AError::DatabaseError(format!(
-                "{db_type} database detected from URL '{database_url}', but SqlxTaskStorage \
-                 currently only supports SQLite. For {db_type} support, see the project roadmap."
-            ))),
-            None => Err(A2AError::DatabaseError(format!(
-                "Unrecognized database URL scheme in '{database_url}'. \
-                 Expected a URL starting with sqlite:, e.g. 'sqlite::memory:' or 'sqlite:data.db'"
-            ))),
+    /// Three ways this fails, and they need different answers: an unrecognized
+    /// scheme, a recognized one with no adapter behind it (MySQL), and a
+    /// recognized one whose driver was not compiled in.
+    fn dialect_for(database_url: &str) -> Result<Dialect, A2AError> {
+        let Some(database_type) = DatabaseType::from_url(database_url) else {
+            return Err(A2AError::DatabaseError(format!(
+                "Unrecognized database URL scheme in '{database_url}'. Expected sqlite: or \
+                 postgres:, e.g. 'sqlite::memory:' or 'postgres://user:pass@localhost/a2a'"
+            )));
+        };
+
+        let Some(dialect) = Dialect::of(database_type) else {
+            return Err(A2AError::DatabaseError(format!(
+                "{database_type} is not supported by SqlxTaskStorage. It stores tasks in SQLite \
+                 or PostgreSQL; there is no {database_type} schema."
+            )));
+        };
+
+        if !database_type.is_feature_enabled() {
+            return Err(A2AError::DatabaseError(format!(
+                "{database_type} detected from URL '{database_url}', but the '{}' feature is not \
+                 enabled. Add `features = [\"{}\"]` to your a2a-rs dependency.",
+                database_type.feature_name(),
+                database_type.feature_name(),
+            )));
         }
+
+        Ok(dialect)
+    }
+
+    /// Give an in-memory SQLite URL a name the whole pool can share.
+    ///
+    /// `sqlite::memory:` is an *anonymous* database, and sqlx names one by
+    /// inventing `sqlx-in-memory-{n}` while parsing the URL. A typed
+    /// `SqlitePool` parses once and every connection lands in the same one; the
+    /// `Any` driver parses per connection, so a pool of ten would be ten empty
+    /// databases and the second query would not see the first one's table.
+    /// Pinning one name here keeps `sqlite::memory:` meaning what it means
+    /// everywhere else — one database, private to this store.
+    fn pooled_url(database_url: &str) -> std::borrow::Cow<'_, str> {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+        let anonymous_memory = (database_url.contains(":memory:")
+            || database_url.contains("mode=memory"))
+            && !database_url.contains("cache=shared");
+        if !anonymous_memory {
+            return std::borrow::Cow::Borrowed(database_url);
+        }
+
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::borrow::Cow::Owned(format!(
+            "sqlite:file:a2a-in-memory-{n}?mode=memory&cache=shared"
+        ))
+    }
+
+    /// Open the pool and bring the schema up to date.
+    async fn connect(
+        database_url: &str,
+        settings: &PoolSettings,
+    ) -> Result<(AnyPool, Dialect), A2AError> {
+        let dialect = Self::dialect_for(database_url)?;
+
+        // The `Any` driver dispatches on the URL scheme at runtime, and it
+        // panics if no driver was registered. Guarded by a `Once` inside sqlx,
+        // so every constructor can call it.
+        sqlx::any::install_default_drivers();
+
+        let url = match dialect {
+            Dialect::Sqlite => Self::pooled_url(database_url),
+            Dialect::Postgres => std::borrow::Cow::Borrowed(database_url),
+        };
+        let pool = AnyPoolOptions::new()
+            .max_connections(settings.max_connections)
+            .acquire_timeout(settings.acquire_timeout)
+            .connect_with(settings.connect_options(&url)?)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to connect to database: {e}")))?;
+
+        // The migrations get a pool of their own, capped at one connection, and
+        // that cap is what makes the lock possible: an advisory lock belongs to
+        // a session, and a one-connection pool *is* a session — reachable
+        // through `&pool`, which is the only way to execute anything here (see
+        // `run_base_migrations`). Opened after the main pool so an in-memory
+        // SQLite database, which lives only as long as something is connected to
+        // it, is already held open by the pool that will keep using it.
+        let migrations = AnyPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(settings.acquire_timeout)
+            .connect_with(settings.connect_options(&url)?)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to open the migration connection: {e}"))
+            })?;
+        let migrated = Self::run_base_migrations(migrations.clone(), dialect).await;
+        migrations.close().await;
+        migrated?;
+
+        Ok((pool, dialect))
     }
 
     /// Create a new SQLx task storage with the given database URL.
     ///
-    /// Currently only SQLite URLs are supported (e.g. `sqlite::memory:`, `sqlite:data.db`).
-    /// Passing a PostgreSQL or MySQL URL will return an error.
+    /// The scheme picks the backend: `sqlite::memory:`, `sqlite:data.db`, or
+    /// `postgres://user:pass@host/db`. Each needs its cargo feature (`sqlite`,
+    /// `postgres`) compiled in, and the error says so when it is missing.
+    ///
+    /// Pool sizing, statement logging, a custom push sender and agent-specific
+    /// migrations go through [`builder`](Self::builder).
     pub async fn new(database_url: &str) -> Result<Self, A2AError> {
-        Self::validate_url(database_url)?;
-
-        let pool = SqlitePool::connect(database_url).await.map_err(|e| {
-            A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
-        })?;
-
-        // Run base migrations
-        Self::run_base_migrations(&pool).await?;
-
-        // Use the appropriate push notification sender based on available features
-        #[cfg(feature = "http-client")]
-        let push_sender = HttpPushNotificationSender::new();
-        #[cfg(not(feature = "http-client"))]
-        let push_sender = NoopPushNotificationSender::default();
-
-        let push_registry = PushNotificationRegistry::new(push_sender);
-
-        Ok(Self {
-            pool,
-            push_notification_registry: Arc::new(push_registry),
-        })
+        Self::builder(database_url).connect().await
     }
 
-    /// Create a new SQLx task storage with a custom push notification sender.
+    /// Configure a store before opening it.
     ///
-    /// Currently only SQLite URLs are supported.
-    pub async fn with_push_sender(
-        database_url: &str,
-        push_sender: impl PushNotificationSender + 'static,
-    ) -> Result<Self, A2AError> {
-        Self::validate_url(database_url)?;
-
-        let pool = SqlitePool::connect(database_url).await.map_err(|e| {
-            A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
-        })?;
-
-        // Run migrations
-        Self::run_base_migrations(&pool).await?;
-
-        let push_registry = PushNotificationRegistry::new(push_sender);
-
-        Ok(Self {
-            pool,
-            push_notification_registry: Arc::new(push_registry),
-        })
+    /// ```no_run
+    /// # use a2a_rs::adapter::storage::SqlxTaskStorage;
+    /// # async fn f() -> Result<(), a2a_rs::domain::A2AError> {
+    /// let storage = SqlxTaskStorage::builder("postgres://user:pass@localhost/a2a")
+    ///     .max_connections(20)
+    ///     .log_statements(true)
+    ///     .connect()
+    ///     .await?;
+    /// # Ok(()) }
+    /// ```
+    pub fn builder(database_url: impl Into<String>) -> SqlxStorageBuilder {
+        SqlxStorageBuilder {
+            url: database_url.into(),
+            pool: PoolSettings::default(),
+            push_sender: None,
+            additional_migrations: Vec::new(),
+        }
     }
 
-    /// Create a new SQLx task storage with additional migrations.
+    /// Run base A2A framework migrations, in the dialect the URL selected.
     ///
-    /// Currently only SQLite URLs are supported.
-    pub async fn with_migrations(
-        database_url: &str,
-        additional_migrations: &[&str],
-    ) -> Result<Self, A2AError> {
-        Self::validate_url(database_url)?;
+    /// These re-run on every construction, so every file has to be idempotent —
+    /// which is what the legacy-table probe and `tolerates_existing_column` are
+    /// for. `raw_sql` rather than `query`: a migration file holds several
+    /// statements, and PostgreSQL only accepts those unprepared.
+    ///
+    /// `pool` is the one-connection migration pool, so on PostgreSQL an
+    /// advisory lock taken through it holds for everything that follows: a
+    /// fleet starting together is the normal case for a shared database, and
+    /// concurrent `CREATE TABLE IF NOT EXISTS` on related tables does not
+    /// no-op — it deadlocks, or fails on the catalog's unique index.
+    ///
+    /// Everything runs through the pool and never on a borrowed connection.
+    /// sqlx implements `Executor` for `&'c mut AnyConnection` at a single
+    /// lifetime, so a future holding such a borrow cannot be proved `Send` by a
+    /// caller that spawns — which `a2a up` does for every agent — and the whole
+    /// construction path would stop compiling for anyone who spawns it.
+    ///
+    /// Owned `AnyPool` here and in every helper below, cloned per call — it is
+    /// an `Arc` inside. A borrowed parameter would make each of these futures
+    /// generic over that lifetime, which is the same shape callers cannot prove.
+    async fn run_base_migrations(pool: AnyPool, dialect: Dialect) -> Result<(), A2AError> {
+        if let Some(lock) = dialect.migration_lock() {
+            sqlx::raw_sql(lock).execute(&pool).await.map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to take the migration lock: {e}"))
+            })?;
+        }
+        // No explicit unlock: the caller closes this pool, which ends the
+        // session, which releases the lock. An unlock statement would be one
+        // more thing to get wrong on the error path.
 
-        let pool = SqlitePool::connect(database_url).await.map_err(|e| {
-            A2AError::DatabaseError(format!("Failed to connect to database: {}", e))
-        })?;
+        let [initial, push_configs, rest @ ..] = dialect.migrations();
 
-        // Run base migrations
-        Self::run_base_migrations(&pool).await?;
-
-        // Run additional migrations
-        Self::run_additional_migrations(&pool, additional_migrations).await?;
-
-        // Use the appropriate push notification sender based on available features
-        #[cfg(feature = "http-client")]
-        let push_sender = HttpPushNotificationSender::new();
-        #[cfg(not(feature = "http-client"))]
-        let push_sender = NoopPushNotificationSender::default();
-
-        let push_registry = PushNotificationRegistry::new(push_sender);
-
-        Ok(Self {
-            pool,
-            push_notification_registry: Arc::new(push_registry),
-        })
-    }
-
-    /// Run base A2A framework migrations (SQLite dialect).
-    async fn run_base_migrations(pool: &SqlitePool) -> Result<(), A2AError> {
-        sqlx::query(include_str!("../../../migrations/001_initial_schema.sql"))
-            .execute(pool)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Migration 001 failed: {}", e)))?;
-
-        sqlx::query(include_str!(
-            "../../../migrations/002_v030_push_configs.sql"
-        ))
-        .execute(pool)
-        .await
-        .map_err(|e| A2AError::DatabaseError(format!("Migration 002 failed: {}", e)))?;
-
-        // Migration 003 is an `ALTER TABLE ADD COLUMN`, which SQLite cannot
-        // express idempotently. Since base migrations re-run on every `new()`,
-        // tolerate the "duplicate column name" error on an already-migrated DB.
-        if let Err(e) = sqlx::query(include_str!("../../../migrations/003_task_version.sql"))
-            .execute(pool)
-            .await
-        {
-            let msg = e.to_string();
-            if !msg.contains("duplicate column name") {
-                return Err(A2AError::DatabaseError(format!(
-                    "Migration 003 failed: {msg}"
-                )));
-            }
+        Self::run_migration(pool.clone(), initial).await?;
+        // Between 001 and 002: 001 may have just created the v0.2 table, and 002
+        // creates the one that replaces it.
+        Self::drop_legacy_push_configs(pool.clone(), dialect).await?;
+        Self::run_migration(pool.clone(), push_configs).await?;
+        for migration in rest {
+            Self::run_migration(pool.clone(), migration).await?;
         }
 
-        // 004 is the same shape as 003. The backfill runs only when the column
-        // was just added: on an already-migrated database it would rewrite every
-        // history row to the value it already holds.
-        match sqlx::query(include_str!(
-            "../../../migrations/004_task_history_context.sql"
-        ))
-        .execute(pool)
+        // The 004 backfill. Guarded by `context_id IS NULL` rather than run only
+        // when the column was just added: that is idempotent on both backends,
+        // and on an already-migrated database it matches nothing.
+        sqlx::raw_sql(
+            "UPDATE task_history SET context_id = \
+             (SELECT context_id FROM tasks WHERE tasks.id = task_history.task_id) \
+             WHERE context_id IS NULL",
+        )
+        .execute(&pool)
         .await
+        .map_err(|e| A2AError::DatabaseError(format!("Migration 004 backfill failed: {e}")))?;
+
+        Self::drop_dead_context_state_column(pool.clone(), dialect).await;
+
+        Ok(())
+    }
+
+    /// Drop `contexts.state`, which 005 created and nothing ever wrote.
+    ///
+    /// The state bag went to its own table in 006, so the column is dead on a
+    /// database old enough to have it. Best effort on purpose: an unused column
+    /// costs nothing, and `ALTER TABLE … DROP COLUMN` has enough conditions
+    /// attached on SQLite that failing it must not stop an agent from starting.
+    async fn drop_dead_context_state_column(pool: AnyPool, dialect: Dialect) {
+        let probe = sqlx::query(dialect.dead_context_state_column_probe())
+            .fetch_optional(&pool)
+            .await;
+        if !matches!(probe, Ok(Some(_))) {
+            return;
+        }
+
+        if let Err(e) = sqlx::raw_sql("ALTER TABLE contexts DROP COLUMN state")
+            .execute(&pool)
+            .await
         {
-            Ok(_) => {
-                sqlx::query(
-                    "UPDATE task_history SET context_id = \
-                     (SELECT context_id FROM tasks WHERE tasks.id = task_history.task_id)",
-                )
-                .execute(pool)
+            tracing::debug!("left the unused contexts.state column in place: {e}");
+        }
+    }
+
+    /// Run one migration file, once more if another process was running the
+    /// same one.
+    ///
+    /// A shared database is the reason to run PostgreSQL at all, so several
+    /// agents starting together is the normal case — and `CREATE TABLE IF NOT
+    /// EXISTS` checks and creates in two steps, so the loser of that race sees
+    /// the object appear in between and fails on the catalog's unique index
+    /// rather than no-opping. By the retry the winner has finished and every
+    /// statement in the file finds what it wanted already there.
+    async fn run_migration(
+        pool: AnyPool,
+        migration: super::dialect::Migration,
+    ) -> Result<(), A2AError> {
+        let mut attempt = sqlx::raw_sql(migration.sql).execute(&pool).await;
+        if attempt
+            .as_ref()
+            .err()
+            .is_some_and(super::dialect::is_concurrent_ddl_conflict)
+        {
+            attempt = sqlx::raw_sql(migration.sql).execute(&pool).await;
+        }
+
+        match attempt {
+            Ok(_) => Ok(()),
+            // An `ALTER TABLE ADD COLUMN` this dialect cannot write
+            // idempotently, run a second time. The column being there is the
+            // outcome the migration wanted.
+            Err(e)
+                if migration.tolerates_existing_column
+                    && e.to_string().contains("duplicate column name") =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(A2AError::DatabaseError(format!(
+                "Migration {} failed: {e}",
+                migration.name
+            ))),
+        }
+    }
+
+    /// Drop the v0.2 push-config table, and only when it is still the v0.2 one.
+    ///
+    /// Migration 002 replaces that table, and it used to do the drop itself —
+    /// but base migrations re-run on every startup, so every restart destroyed
+    /// the push configs the agent had stored. The probe makes the drop happen
+    /// once, on the database that actually needs it.
+    async fn drop_legacy_push_configs(pool: AnyPool, dialect: Dialect) -> Result<(), A2AError> {
+        let legacy = sqlx::query(dialect.legacy_push_config_probe())
+            .fetch_optional(&pool)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to inspect push config table: {e}"))
+            })?;
+
+        if legacy.is_some() {
+            sqlx::raw_sql("DROP TABLE IF EXISTS push_notification_configs")
+                .execute(&pool)
                 .await
                 .map_err(|e| {
-                    A2AError::DatabaseError(format!("Migration 004 backfill failed: {e}"))
+                    A2AError::DatabaseError(format!(
+                        "Failed to drop the pre-v0.3 push config table: {e}"
+                    ))
                 })?;
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                if !msg.contains("duplicate column name") {
-                    return Err(A2AError::DatabaseError(format!(
-                        "Migration 004 failed: {msg}"
-                    )));
-                }
-            }
         }
-
-        sqlx::query(include_str!("../../../migrations/005_context_memory.sql"))
-            .execute(pool)
-            .await
-            .map_err(|e| A2AError::DatabaseError(format!("Migration 005 failed: {}", e)))?;
-
         Ok(())
     }
 
     /// Run additional migrations provided by the application
     async fn run_additional_migrations(
-        pool: &SqlitePool,
-        migrations: &[&str],
+        pool: &AnyPool,
+        migrations: &[String],
     ) -> Result<(), A2AError> {
         for (i, migration_sql) in migrations.iter().enumerate() {
-            sqlx::query(migration_sql)
+            sqlx::raw_sql(migration_sql)
                 .execute(pool)
                 .await
                 .map_err(|e| {
@@ -242,8 +534,16 @@ impl SqlxTaskStorage {
         Ok(())
     }
 
+    /// Render a query for this store's backend.
+    ///
+    /// Every query in this file goes through here, which is where `?` becomes
+    /// `$1..$n` on PostgreSQL.
+    fn sql<'a>(&self, sql: &'a str) -> std::borrow::Cow<'a, str> {
+        self.dialect.bind_params(sql)
+    }
+
     /// Convert database row to Task
-    fn row_to_task(row: &sqlx::sqlite::SqliteRow) -> Result<Task, A2AError> {
+    fn row_to_task(row: &sqlx::any::AnyRow) -> Result<Task, A2AError> {
         let task_id: String = row
             .try_get("id")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get task_id: {}", e)))?;
@@ -358,9 +658,8 @@ impl SqlxTaskStorage {
                 .to_string()
         };
 
-        let query = sqlx::query(&query_str);
-
-        let rows = query
+        let query_str = self.sql(&query_str);
+        let rows = sqlx::query(&query_str)
             .bind(task_id)
             .fetch_all(&self.pool)
             .await
@@ -415,67 +714,82 @@ impl SqlxTaskStorage {
         // `context_id` is denormalized from `tasks` at insert rather than joined
         // at read: a task's context never changes, and rebuilding a conversation
         // for the model is the hottest read there is.
-        sqlx::query(
+        let sql = self.sql(
             "INSERT INTO task_history (task_id, context_id, status_state, message) \
              VALUES (?, (SELECT context_id FROM tasks WHERE id = ?), ?, ?)",
-        )
-        .bind(task_id)
-        .bind(task_id)
-        .bind(state_str)
-        .bind(message_json)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| A2AError::DatabaseError(format!("Failed to add task history: {}", e)))?;
-
-        Ok(())
-    }
-
-    /// Register `context_id` as a conversation, claiming it for `owner` if it is
-    /// new.
-    ///
-    /// Ownership is first-write: whoever starts a context owns it, and a `None`
-    /// owner leaves it unowned and readable by anyone, which is what an agent
-    /// running without an authenticator wants. `INSERT OR IGNORE` means a second
-    /// caller cannot take over an existing context by writing to it.
-    async fn ensure_context(&self, context_id: &str, owner: Option<&str>) -> Result<(), A2AError> {
-        sqlx::query("INSERT OR IGNORE INTO contexts (id, owner) VALUES (?, ?)")
-            .bind(context_id)
-            .bind(owner)
+        );
+        sqlx::query(&sql)
+            .bind(task_id)
+            .bind(task_id)
+            .bind(state_str)
+            .bind(message_json)
             .execute(&self.pool)
             .await
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to register context: {}", e)))?;
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to add task history: {}", e)))?;
+
         Ok(())
     }
 
-    /// Refuse a caller that is not this context's owner.
+    /// Claim `context_id` for `caller` if nobody holds it, then refuse a caller
+    /// that is not the holder.
     ///
-    /// An unowned context (`owner IS NULL`) is open, and a context with no row at
-    /// all has nothing to protect yet.
-    async fn check_context_owner(
+    /// Ownership is first-write and never changes afterwards, so an existing
+    /// row is the whole answer and only its absence needs a write. That is why
+    /// the read comes first: every turn after the one that opened a context
+    /// settles this in a single statement, on a path a handler takes twice a
+    /// turn (the conversation and the state bag).
+    ///
+    /// An unowned context — one claimed with no principal, which is what an
+    /// agent running without an authenticator produces — stays readable by
+    /// anyone.
+    async fn claim_or_check_context(
         &self,
         context_id: &str,
         caller: Option<&str>,
     ) -> Result<(), A2AError> {
-        let row = sqlx::query("SELECT owner FROM contexts WHERE id = ?")
+        if let Some(claim) = self.read_claim(context_id).await? {
+            return claim.verdict(context_id, caller);
+        }
+
+        // Nothing holds it. The insert ignores a conflict, so a caller arriving
+        // second cannot take a context over.
+        sqlx::query(self.dialect.insert_context_if_absent())
+            .bind(context_id)
+            .bind(caller)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to register context: {}", e)))?;
+
+        // Read back rather than assuming the insert was ours: two callers can
+        // open one context in the same instant, and the loser has to be refused.
+        // `rows_affected` would settle it without this statement, and would rest
+        // an access decision on how each driver counts an ignored insert.
+        match self.read_claim(context_id).await? {
+            Some(claim) => claim.verdict(context_id, caller),
+            None => Ok(()),
+        }
+    }
+
+    /// Read the claim on a context, or `None` if it has no row yet.
+    async fn read_claim(&self, context_id: &str) -> Result<Option<ContextClaim>, A2AError> {
+        let sql = self.sql("SELECT owner FROM contexts WHERE id = ?");
+        let row = sqlx::query(&sql)
             .bind(context_id)
             .fetch_optional(&self.pool)
             .await
             .map_err(|e| A2AError::DatabaseError(format!("Failed to read context owner: {}", e)))?;
 
         let Some(row) = row else {
-            return Ok(());
+            return Ok(None);
         };
         let owner: Option<String> = row
             .try_get("owner")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get context owner: {}", e)))?;
 
-        match owner {
-            None => Ok(()),
-            Some(owner) if Some(owner.as_str()) == caller => Ok(()),
-            Some(_) => Err(A2AError::ContextAccessDenied {
-                context_id: context_id.to_string(),
-            }),
-        }
+        Ok(Some(match owner {
+            Some(owner) => ContextClaim::Owner(owner),
+            None => ContextClaim::Open,
+        }))
     }
 
     /// Hand out this store's push-notification registry as an
@@ -487,6 +801,13 @@ impl SqlxTaskStorage {
     pub fn push_notifier(&self) -> Arc<dyn AsyncPushNotifier> {
         self.push_notification_registry.clone()
     }
+
+    /// The connection cap the pool was opened with — what
+    /// [`SqlxStorageBuilder::max_connections`] asked for, read back off the
+    /// pool. On PostgreSQL this is the store's share of a server-wide limit.
+    pub fn max_connections(&self) -> u32 {
+        self.pool.options().get_max_connections()
+    }
 }
 
 #[cfg(feature = "sqlx-storage")]
@@ -496,7 +817,8 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         let task_id = id.as_str();
         let context_id = context_id.as_str();
         // Check if task already exists
-        let existing = sqlx::query("SELECT id FROM tasks WHERE id = ?")
+        let exists_sql = self.sql("SELECT id FROM tasks WHERE id = ?");
+        let existing = sqlx::query(&exists_sql)
             .bind(task_id)
             .fetch_optional(&self.pool)
             .await
@@ -527,7 +849,11 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
             .map(|m| serde_json::to_string(m).unwrap_or_default());
 
         // Insert into database
-        sqlx::query("INSERT INTO tasks (id, context_id, status_state, status_message, metadata, artifacts) VALUES (?, ?, ?, ?, ?, ?)")
+        let insert_sql = self.sql(
+            "INSERT INTO tasks (id, context_id, status_state, status_message, metadata, artifacts) \
+             VALUES (?, ?, ?, ?, ?, ?)",
+        );
+        sqlx::query(&insert_sql)
             .bind(&task.id)
             .bind(&task.context_id)
             .bind("submitted")
@@ -566,15 +892,13 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         };
 
         // Update task in database (bump the optimistic-concurrency version)
-        let result =
-            sqlx::query("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?")
-                .bind(state_str)
-                .bind(task_id)
-                .execute(&self.pool)
-                .await
-                .map_err(|e| {
-                    A2AError::DatabaseError(format!("Failed to update task status: {}", e))
-                })?;
+        let sql = self.sql("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?");
+        let result = sqlx::query(&sql)
+            .bind(state_str)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to update task status: {}", e)))?;
 
         if result.rows_affected() == 0 {
             return Err(A2AError::TaskNotFound(task_id.to_string()));
@@ -591,7 +915,8 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
 
     async fn exists(&self, id: &TaskId) -> Result<bool, A2AError> {
         let task_id = id.as_str();
-        let row = sqlx::query("SELECT id FROM tasks WHERE id = ?")
+        let sql = self.sql("SELECT id FROM tasks WHERE id = ?");
+        let row = sqlx::query(&sql)
             .bind(task_id)
             .fetch_optional(&self.pool)
             .await
@@ -605,7 +930,9 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
     async fn get(&self, id: &TaskId, history_length: Option<u32>) -> Result<Task, A2AError> {
         let task_id = id.as_str();
         // Get task from database
-        let row = sqlx::query("SELECT * FROM tasks WHERE id = ?")
+        let query_str = format!("SELECT {TASK_COLUMNS} FROM tasks WHERE id = ?");
+        let sql = self.sql(&query_str);
+        let row = sqlx::query(&sql)
             .bind(task_id)
             .fetch_optional(&self.pool)
             .await
@@ -651,7 +978,8 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         cancel_message.context_id = task.context_id.clone();
 
         // Update task status (bump the optimistic-concurrency version)
-        sqlx::query("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?")
+        let sql = self.sql("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?");
+        sqlx::query(&sql)
             .bind("canceled")
             .bind(task_id)
             .execute(&self.pool)
@@ -672,7 +1000,8 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
 impl SqlxTaskStorage {
     /// Read the current stored version of a task, or `None` if it doesn't exist.
     async fn current_version(&self, task_id: &str) -> Result<Option<u64>, A2AError> {
-        let row = sqlx::query("SELECT version FROM tasks WHERE id = ?")
+        let sql = self.sql("SELECT version FROM tasks WHERE id = ?");
+        let row = sqlx::query(&sql)
             .bind(task_id)
             .fetch_optional(&self.pool)
             .await
@@ -728,17 +1057,18 @@ impl AsyncTaskVersioning for SqlxTaskStorage {
             TaskState::Unknown => "unknown",
         };
 
-        // Conditional update: SQLite applies it atomically, so the row count
-        // tells us whether the version matched without a separate lock.
-        let result = sqlx::query(
+        // Conditional update: both backends apply it atomically, so the row
+        // count tells us whether the version matched without a separate lock.
+        let sql = self.sql(
             "UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ? AND version = ?",
-        )
-        .bind(state_str)
-        .bind(task_id)
-        .bind(expected as i64)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| A2AError::DatabaseError(format!("Failed to update task status: {}", e)))?;
+        );
+        let result = sqlx::query(&sql)
+            .bind(state_str)
+            .bind(task_id)
+            .bind(expected as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to update task status: {}", e)))?;
 
         if result.rows_affected() == 0 {
             // No row matched: either the task is gone or the version moved on.
@@ -780,7 +1110,9 @@ impl AsyncTaskQuery for SqlxTaskStorage {
             where_conditions.push("status_state = ?".to_string());
         }
 
-        // Filter by status_timestamp_after
+        // Filter by status_timestamp_after. Both the predicate and the value
+        // are the dialect's, since one backend keeps its timestamps as text and
+        // the other as a timestamp the parameter has to be cast to.
         let timestamp_str = if let Some(status_timestamp_after) = &params.status_timestamp_after {
             // Parse ISO 8601 string
             let timestamp =
@@ -790,12 +1122,10 @@ impl AsyncTaskQuery for SqlxTaskStorage {
                         status_timestamp_after, e
                     ))
                 })?;
-            where_conditions.push("updated_at >= ?".to_string());
+            where_conditions.push(self.dialect.updated_since_predicate().to_string());
             Some(
-                timestamp
-                    .with_timezone(&chrono::Utc)
-                    .format("%Y-%m-%d %H:%M:%S")
-                    .to_string(),
+                self.dialect
+                    .format_timestamp(timestamp.with_timezone(&chrono::Utc)),
             )
         } else {
             None
@@ -809,7 +1139,8 @@ impl AsyncTaskQuery for SqlxTaskStorage {
         };
 
         // First, get total count with same filters
-        let count_query = format!("SELECT COUNT(*) as count FROM tasks{}", where_clause);
+        let count_sql = format!("SELECT COUNT(*) as count FROM tasks{}", where_clause);
+        let count_query = self.sql(&count_sql);
         let mut count_q = sqlx::query(&count_query);
 
         // Bind parameters for count query
@@ -839,9 +1170,13 @@ impl AsyncTaskQuery for SqlxTaskStorage {
             .await
             .map_err(|e| A2AError::DatabaseError(format!("Failed to count tasks: {}", e)))?;
 
+        // Read as 64-bit: `COUNT(*)` is a bigint on PostgreSQL and an integer
+        // wide enough to be one on SQLite, and the driver will not narrow it.
         let total_size: i32 = count_row
-            .try_get("count")
-            .map_err(|e| A2AError::DatabaseError(format!("Failed to get count: {}", e)))?;
+            .try_get::<i64, _>("count")
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to get count: {}", e)))?
+            .try_into()
+            .unwrap_or(i32::MAX);
 
         // Handle pagination
         let page_size = params.page_size.unwrap_or(50).clamp(1, 100);
@@ -852,10 +1187,11 @@ impl AsyncTaskQuery for SqlxTaskStorage {
         };
 
         // Build main query with LIMIT and OFFSET
-        let main_query = format!(
-            "SELECT * FROM tasks{} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
+        let main_sql = format!(
+            "SELECT {TASK_COLUMNS} FROM tasks{} ORDER BY updated_at DESC LIMIT ? OFFSET ?",
             where_clause
         );
+        let main_query = self.sql(&main_sql);
 
         let mut main_q = sqlx::query(&main_query);
 
@@ -941,16 +1277,17 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         // back to the task's config (single-config-per-task convenience, matching
         // the in-memory adapter and the v1.0.0 single-config helpers).
         // Note: push_notification_config_id filtering requires migration 002 to be applied.
+        let by_id = self.sql(
+            "SELECT id, task_id, url, token, authentication FROM push_notification_configs \
+             WHERE task_id = ? AND id = ?",
+        );
+        let by_task = self.sql(
+            "SELECT id, task_id, url, token, authentication FROM push_notification_configs \
+             WHERE task_id = ? ORDER BY id LIMIT 1",
+        );
         let row = match params.push_notification_config_id.as_ref() {
-            Some(config_id) => sqlx::query(
-                "SELECT id, task_id, url, token, authentication FROM push_notification_configs WHERE task_id = ? AND id = ?"
-            )
-            .bind(&params.id)
-            .bind(config_id),
-            None => sqlx::query(
-                "SELECT id, task_id, url, token, authentication FROM push_notification_configs WHERE task_id = ? ORDER BY id LIMIT 1"
-            )
-            .bind(&params.id),
+            Some(config_id) => sqlx::query(&by_id).bind(&params.id).bind(config_id),
+            None => sqlx::query(&by_task).bind(&params.id),
         }
         .fetch_optional(&self.pool)
         .await
@@ -999,13 +1336,15 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         params: &crate::domain::ListTaskPushNotificationConfigsParams,
     ) -> Result<Vec<crate::domain::TaskPushNotificationConfig>, A2AError> {
         // Query all configs for the task
-        let rows = sqlx::query(
-            "SELECT id, task_id, url, token, authentication FROM push_notification_configs WHERE task_id = ?"
-        )
-        .bind(&params.id)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(|e| A2AError::DatabaseError(format!("Failed to list push configs: {}", e)))?;
+        let sql = self.sql(
+            "SELECT id, task_id, url, token, authentication FROM push_notification_configs \
+             WHERE task_id = ?",
+        );
+        let rows = sqlx::query(&sql)
+            .bind(&params.id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to list push configs: {}", e)))?;
 
         let configs: Vec<crate::domain::TaskPushNotificationConfig> = rows
             .iter()
@@ -1043,10 +1382,12 @@ impl AsyncNotificationManager for SqlxTaskStorage {
         // Delete the specific config when an id is supplied; otherwise delete all
         // configs for the task (single-config-per-task convenience, matching the
         // in-memory adapter).
+        let all_for_task = self.sql("DELETE FROM push_notification_configs WHERE task_id = ?");
+        let one = self.sql("DELETE FROM push_notification_configs WHERE task_id = ? AND id = ?");
         let query = if params.push_notification_config_id.is_empty() {
-            sqlx::query("DELETE FROM push_notification_configs WHERE task_id = ?").bind(&params.id)
+            sqlx::query(&all_for_task).bind(&params.id)
         } else {
-            sqlx::query("DELETE FROM push_notification_configs WHERE task_id = ? AND id = ?")
+            sqlx::query(&one)
                 .bind(&params.id)
                 .bind(&params.push_notification_config_id)
         };
@@ -1077,19 +1418,17 @@ impl AsyncNotificationManager for SqlxTaskStorage {
             .map(|auth| serde_json::to_string(auth).unwrap_or_default());
 
         // Store in database (using new schema with id, token, authentication)
-        sqlx::query(
-            "INSERT OR REPLACE INTO push_notification_configs (id, task_id, url, token, authentication) VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(&config_id)
-        .bind(&config.task_id)
-        .bind(&config.url)
-        .bind(&config.token)
-        .bind(auth_json)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| {
-            A2AError::DatabaseError(format!("Failed to set push notification config: {}", e))
-        })?;
+        sqlx::query(self.dialect.upsert_push_config())
+            .bind(&config_id)
+            .bind(&config.task_id)
+            .bind(&config.url)
+            .bind(&config.token)
+            .bind(auth_json)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to set push notification config: {}", e))
+            })?;
 
         // Register with the push notification registry
         self.push_notification_registry
@@ -1108,6 +1447,7 @@ impl Clone for SqlxTaskStorage {
     fn clone(&self) -> Self {
         Self {
             pool: self.pool.clone(),
+            dialect: self.dialect,
             push_notification_registry: self.push_notification_registry.clone(),
         }
     }
@@ -1127,19 +1467,23 @@ impl AsyncConversationStore for SqlxTaskStorage {
         // the first turn is what establishes who owns the conversation.
         // Claiming only on compaction would leave a context readable by anyone
         // until it first grew long enough to summarize.
-        self.ensure_context(context_id, caller).await?;
-        self.check_context_owner(context_id, caller).await?;
+        self.claim_or_check_context(context_id, caller).await?;
 
         // Highest watermark rather than newest row: two turns of one
         // conversation can compact concurrently and land out of order, and the
         // digest covering more is the one to read from.
-        let digest_row = sqlx::query(
-            "SELECT covers_through_seq, summary, replaced_messages, model              FROM context_digests WHERE context_id = ?              ORDER BY covers_through_seq DESC LIMIT 1",
-        )
-        .bind(context_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| A2AError::DatabaseError(format!("Failed to load context digest: {}", e)))?;
+        let digest_sql = self.sql(
+            "SELECT covers_through_seq, summary, replaced_messages, model \
+             FROM context_digests WHERE context_id = ? \
+             ORDER BY covers_through_seq DESC LIMIT 1",
+        );
+        let digest_row = sqlx::query(&digest_sql)
+            .bind(context_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to load context digest: {}", e))
+            })?;
 
         let digest = match digest_row {
             Some(row) => {
@@ -1177,12 +1521,17 @@ impl AsyncConversationStore for SqlxTaskStorage {
         // compute without first counting the rows.
         let query = match limit {
             Some(limit) => format!(
-                "SELECT id, message FROM task_history                  WHERE context_id = ? AND id > ? AND message IS NOT NULL                  ORDER BY id DESC LIMIT {}",
+                "SELECT id, message FROM task_history \
+                 WHERE context_id = ? AND id > ? AND message IS NOT NULL \
+                 ORDER BY id DESC LIMIT {}",
                 limit
             ),
-            None => "SELECT id, message FROM task_history                      WHERE context_id = ? AND id > ? AND message IS NOT NULL                      ORDER BY id DESC"
+            None => "SELECT id, message FROM task_history \
+                     WHERE context_id = ? AND id > ? AND message IS NOT NULL \
+                     ORDER BY id DESC"
                 .to_string(),
         };
+        let query = self.sql(&query);
 
         let rows = sqlx::query(&query)
             .bind(context_id)
@@ -1219,21 +1568,199 @@ impl AsyncConversationStore for SqlxTaskStorage {
         digest: Digest,
     ) -> Result<(), A2AError> {
         let context_id = context_id.as_str();
-        self.ensure_context(context_id, caller).await?;
-        self.check_context_owner(context_id, caller).await?;
+        self.claim_or_check_context(context_id, caller).await?;
 
-        sqlx::query(
-            "INSERT INTO context_digests              (context_id, covers_through_seq, summary, replaced_messages, model)              VALUES (?, ?, ?, ?, ?)",
-        )
-        .bind(context_id)
-        .bind(digest.covers_through.get() as i64)
-        .bind(&digest.summary)
-        .bind(digest.replaced_messages as i64)
-        .bind(&digest.model)
-        .execute(&self.pool)
-        .await
-        .map_err(|e| A2AError::DatabaseError(format!("Failed to append context digest: {}", e)))?;
+        let sql = self.sql(
+            "INSERT INTO context_digests \
+             (context_id, covers_through_seq, summary, replaced_messages, model) \
+             VALUES (?, ?, ?, ?, ?)",
+        );
+        sqlx::query(&sql)
+            .bind(context_id)
+            .bind(digest.covers_through.get() as i64)
+            .bind(&digest.summary)
+            .bind(digest.replaced_messages as i64)
+            .bind(&digest.model)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to append context digest: {}", e))
+            })?;
 
         Ok(())
+    }
+}
+
+/// How a stored scope is spelled in the `scope` column.
+///
+/// This adapter's encoding, not the domain's: [`StateScope`] carries the key
+/// prefix a model writes, which is not the same string.
+#[cfg(feature = "sqlx-storage")]
+fn scope_column(scope: StateScope) -> Option<&'static str> {
+    match scope {
+        StateScope::User => Some("user"),
+        StateScope::Context => Some("context"),
+        // Never stored. That is the whole content of the scope.
+        StateScope::Temp => None,
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+#[async_trait]
+impl AsyncContextStateStore for SqlxTaskStorage {
+    async fn load_state(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+    ) -> Result<ContextState, A2AError> {
+        let context_id = context_id.as_str();
+        // The same claim-then-check the conversation gets: a context id that
+        // reads back what was remembered in it is a capability, and this store
+        // is reached on the same turn as `load`.
+        self.claim_or_check_context(context_id, caller).await?;
+
+        // Both scopes in one round trip. With no principal the second parameter
+        // binds NULL, and `scope_key = NULL` matches nothing — which is the
+        // right answer, since a `user:` key cannot have been written without
+        // one.
+        let sql = self.sql(
+            "SELECT scope, name, value FROM context_state \
+             WHERE (scope = 'context' AND scope_key = ?) \
+                OR (scope = 'user' AND scope_key = ?)",
+        );
+        let rows = sqlx::query(&sql)
+            .bind(context_id)
+            .bind(caller)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to load context state: {}", e)))?;
+
+        let mut state = ContextState::new();
+        for row in rows {
+            let scope: String = row.try_get("scope").map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to get state scope: {}", e))
+            })?;
+            let name: String = row
+                .try_get("name")
+                .map_err(|e| A2AError::DatabaseError(format!("Failed to get state key: {}", e)))?;
+            let value: String = row.try_get("value").map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to get state value: {}", e))
+            })?;
+
+            let scope = match scope.as_str() {
+                "user" => StateScope::User,
+                "context" => StateScope::Context,
+                // A scope this build does not know. Skipped rather than guessed
+                // at: filing it under the wrong scope would report a lifetime
+                // the row does not have.
+                other => {
+                    tracing::warn!("ignoring state row with unknown scope '{other}'");
+                    continue;
+                }
+            };
+            match StateKey::scoped(scope, &name) {
+                Ok(key) => state.insert(key, value),
+                Err(e) => tracing::warn!("ignoring unusable state key '{name}': {e}"),
+            }
+        }
+        Ok(state)
+    }
+
+    async fn remember(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+        key: &StateKey,
+        value: &str,
+    ) -> Result<(), A2AError> {
+        let context_id = context_id.as_str();
+        self.claim_or_check_context(context_id, caller).await?;
+
+        let (Some(scope_key), Some(scope)) = (
+            scope_key(key.scope(), context_id, caller, key)?,
+            scope_column(key.scope()),
+        ) else {
+            return Ok(());
+        };
+
+        sqlx::query(self.dialect.upsert_context_state())
+            .bind(scope)
+            .bind(scope_key)
+            .bind(key.name())
+            .bind(value)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to write context state: {}", e))
+            })?;
+        Ok(())
+    }
+
+    async fn forget(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+        key: &StateKey,
+    ) -> Result<bool, A2AError> {
+        let context_id = context_id.as_str();
+        self.claim_or_check_context(context_id, caller).await?;
+
+        let (Some(scope_key), Some(scope)) = (
+            scope_key(key.scope(), context_id, caller, key)?,
+            scope_column(key.scope()),
+        ) else {
+            return Ok(false);
+        };
+
+        let sql =
+            self.sql("DELETE FROM context_state WHERE scope = ? AND scope_key = ? AND name = ?");
+        let deleted = sqlx::query(&sql)
+            .bind(scope)
+            .bind(scope_key)
+            .bind(key.name())
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to drop context state: {}", e)))?;
+        Ok(deleted.rows_affected() > 0)
+    }
+}
+
+#[cfg(all(test, feature = "sqlx-storage"))]
+mod tests {
+    use super::*;
+
+    /// Migration 006 drops `contexts.state`, which 005 created and nothing ever
+    /// wrote. A database made by an older build still has it, and this is the
+    /// path that clears it — on SQLite, where `ALTER TABLE … DROP COLUMN` has
+    /// the most conditions attached and the drop is deliberately best effort.
+    ///
+    /// Inside the adapter rather than in `tests/`, because putting the column
+    /// back needs the pool.
+    #[tokio::test]
+    async fn the_dead_state_column_is_dropped_on_the_next_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}?mode=rwc", dir.path().join("a2a.db").display());
+
+        let storage = SqlxTaskStorage::new(&url).await.unwrap();
+        sqlx::raw_sql("ALTER TABLE contexts ADD COLUMN state TEXT NOT NULL DEFAULT '{}'")
+            .execute(&storage.pool)
+            .await
+            .expect("put the pre-006 column back");
+        assert!(has_state_column(&storage).await);
+        drop(storage);
+
+        let restarted = SqlxTaskStorage::new(&url).await.unwrap();
+        assert!(
+            !has_state_column(&restarted).await,
+            "the unused column should be gone after the migration runs"
+        );
+    }
+
+    async fn has_state_column(storage: &SqlxTaskStorage) -> bool {
+        sqlx::query(storage.dialect.dead_context_state_column_probe())
+            .fetch_optional(&storage.pool)
+            .await
+            .unwrap()
+            .is_some()
     }
 }

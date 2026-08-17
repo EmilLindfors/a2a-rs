@@ -17,7 +17,9 @@ The agent builder supports multiple authentication schemes that can be configure
 A successful authentication produces a **principal**, and the principal's id
 reaches the message handler — it is what
 `[handler.llm.context] mode = "context"` uses to decide whose conversation a
-`contextId` refers to. Each scheme names the caller differently:
+`contextId` refers to, and what a `user:`-scoped memory
+(`[handler.llm.context] remember`) is filed under. Each scheme names the caller
+differently:
 
 | Scheme | Principal id | Stable across a credential change? |
 |---|---|---|
@@ -25,10 +27,21 @@ reaches the message handler — it is what
 | `bearer` | the token | No |
 | `api_key` | the key | No |
 | `jwt` | the `sub` claim | **Yes** |
-| `oauth2` / `oidc` | `oauth2:{access_token}` | No — rotates on refresh |
+| `oauth2` | the `sub` the authorization server returns | **Yes** |
 
-Only `jwt` identifies a *user* rather than a *credential*. If anything downstream
-keys state on the caller, that is the scheme to use.
+`bearer` and `api_key` have nothing but the credential to go on, and are honestly
+credential-scoped. `oauth2` asks the authorization server: the principal is the
+`sub` from the introspection response (or `client_id` for a client-credentials
+token, which has no end user), so a refresh keeps it. That is why
+`introspection_url` is required — without somewhere to ask, an OAuth2 agent can
+neither validate a token nor say whose it is.
+
+The stability column is what `user:`-scoped memory turns on. Under `jwt` or
+`oauth2`, a caller who signs in again is the same caller and reads back what the
+agent remembered about them; under `bearer` or `api_key` a rotated credential is
+a different principal, so the memory is still there and nobody can reach it. With
+`type = "none"` there is no principal at all, and a `user:` write is refused
+rather than kept against the conversation under a name saying it outlives one.
 
 ## Configuration Format
 
@@ -174,6 +187,7 @@ client_id = "${OAUTH_CLIENT_ID}"
 client_secret = "${OAUTH_CLIENT_SECRET}"
 authorization_url = "https://provider.com/oauth/authorize"
 token_url = "https://provider.com/oauth/token"
+introspection_url = "https://provider.com/oauth/introspect"
 redirect_url = "http://localhost:8080/oauth/callback"
 flow = "authorization_code"
 scopes = ["read", "write", "email"]
@@ -190,6 +204,7 @@ client_id = "${OAUTH_CLIENT_ID}"
 client_secret = "${OAUTH_CLIENT_SECRET}"
 authorization_url = "http://localhost"  # Not used in client_credentials
 token_url = "https://provider.com/oauth/token"
+introspection_url = "https://provider.com/oauth/introspect"
 flow = "client_credentials"
 scopes = ["api.read", "api.write"]
 ```
@@ -199,6 +214,11 @@ scopes = ["api.read", "api.write"]
 - `client_secret` - OAuth2 client secret (use environment variables!)
 - `authorization_url` - Authorization endpoint URL
 - `token_url` - Token endpoint URL
+- `introspection_url` - RFC 7662 introspection endpoint. **Required**: an access
+  token is opaque, so this is the only thing that can say whether it is still
+  valid and whose it is. The agent authenticates to it with the same `client_id`
+  / `client_secret`. A config that omits it does not load — without it the agent
+  would serve a card and then refuse every request.
 - `redirect_url` - Callback URL (authorization_code flow only)
 - `flow` - OAuth2 flow type: "authorization_code" or "client_credentials"
 - `scopes` - Required OAuth2 scopes

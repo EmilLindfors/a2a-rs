@@ -14,7 +14,7 @@ use async_trait::async_trait;
 
 use a2a_agents::handlers::tools::ToolSource;
 use a2a_agents::{A2aAgentToolSource, AgentRegistry, InMemoryAgentRegistry};
-use a2a_agents_common::llm::ToolCall;
+use a2a_llm::ToolCall;
 
 use a2a_rs::adapter::business::{Responder, ResponderMessageHandler};
 use a2a_rs::adapter::{JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router};

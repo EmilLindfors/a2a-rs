@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 #[cfg(feature = "schema")]
 use schemars::JsonSchema;
 
-use crate::core::config::{AgentConfig, ConfigError};
+use crate::core::config::{AgentConfig, ConfigError, StorageConfig};
 use crate::registry::AgentId;
 
 /// A set of agents run together by `a2a up`.
@@ -172,10 +172,11 @@ pub fn fleet_header(name: &str) -> String {
 /// A problem that exists only *between* fleet members, so no single
 /// [`AgentConfig`] can detect it.
 ///
-/// Both variants are silent-wrong failures at runtime rather than loud ones,
+/// Every variant is a silent-wrong failure at runtime rather than a loud one,
 /// which is why they are worth a pre-flight check: a port clash surfaces as one
-/// agent's bind error buried in the log of a process that otherwise came up, and
-/// an id clash surfaces as delegation that reaches the wrong agent.
+/// agent's bind error buried in the log of a process that otherwise came up, an
+/// id clash surfaces as delegation that reaches the wrong agent, and a shared
+/// database surfaces as an agent that answers with another's conversation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FleetConflict {
     /// Two or more members bind the same TCP port; all but one fail to bind.
@@ -194,6 +195,17 @@ pub enum FleetConflict {
         /// Config paths claiming it, in fleet order.
         members: Vec<String>,
     },
+    /// Two or more members store into the same database. Nothing in the schema
+    /// names the agent, so they share one namespace for tasks *and* for
+    /// conversations: a `contextId` used against both — which is exactly what
+    /// happens when one delegates to the other — reads back one mixed
+    /// transcript, and `ListTasks` returns the other's work.
+    Storage {
+        /// The contested database URL, as written in the configs.
+        url: String,
+        /// Config paths pointing at it, in fleet order.
+        members: Vec<String>,
+    },
 }
 
 impl std::fmt::Display for FleetConflict {
@@ -208,6 +220,12 @@ impl std::fmt::Display for FleetConflict {
                 f,
                 "agent id '{id}' is claimed by {} — registration overwrites, so peers \
                  resolving by skill or agent_id reach only the last one",
+                members.join(", ")
+            ),
+            FleetConflict::Storage { url, members } => write!(
+                f,
+                "storage '{url}' is shared by {} — tasks and conversations are stored \
+                 without an agent column, so give each member its own database",
                 members.join(", ")
             ),
         }
@@ -227,6 +245,7 @@ where
     // group keeps fleet order.
     let mut by_port: BTreeMap<u16, Vec<String>> = BTreeMap::new();
     let mut by_id: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut by_storage: BTreeMap<String, Vec<String>> = BTreeMap::new();
 
     for (label, config) in members {
         // Port 0 means "no HTTP server" (MCP-only agents), so it never clashes.
@@ -240,6 +259,16 @@ where
             .entry(AgentId::from_name(&config.agent.name).to_string())
             .or_default()
             .push(label.to_string());
+        // In-memory storage is per process and cannot be shared, so only a
+        // configured database URL can clash. Compared as written: two spellings
+        // of one database read as two here, which understates the problem rather
+        // than inventing one.
+        if let StorageConfig::Sqlx { url, .. } = &config.server.storage {
+            by_storage
+                .entry(url.clone())
+                .or_default()
+                .push(label.to_string());
+        }
     }
 
     let ports = by_port
@@ -250,8 +279,12 @@ where
         .into_iter()
         .filter(|(_, members)| members.len() > 1)
         .map(|(id, members)| FleetConflict::AgentId { id, members });
+    let storage = by_storage
+        .into_iter()
+        .filter(|(_, members)| members.len() > 1)
+        .map(|(url, members)| FleetConflict::Storage { url, members });
 
-    ports.chain(ids).collect()
+    ports.chain(ids).chain(storage).collect()
 }
 
 #[cfg(test)]
@@ -421,6 +454,72 @@ mod tests {
     #[test]
     fn a_clean_fleet_has_no_conflicts() {
         let (a, b) = (agent("Weather", 8080), agent("Billing", 8081));
+        assert!(fleet_conflicts([("a.toml", &a), ("b.toml", &b)]).is_empty());
+    }
+
+    /// A fleet on one database is the mistake PostgreSQL invites: a server is
+    /// shared, a database is not. Nothing in the schema names the agent, so the
+    /// two would answer each other's `ListTasks` and — through a `contextId`
+    /// that reaches both, which delegation produces by itself — read one mixed
+    /// conversation.
+    #[test]
+    fn members_sharing_one_database_are_reported() {
+        let stored = |name: &str, port: u16, url: &str| {
+            AgentConfig::from_toml(&format!(
+                r#"
+                [agent]
+                name = "{name}"
+
+                [server]
+                http_port = {port}
+
+                [server.storage]
+                type = "sqlx"
+                url = "{url}"
+                "#
+            ))
+            .expect("valid config")
+        };
+        let a = stored("Weather", 8080, "postgres://localhost/a2a");
+        let b = stored("Billing", 8081, "postgres://localhost/a2a");
+
+        let conflicts = fleet_conflicts([("a.toml", &a), ("b.toml", &b)]);
+        assert_eq!(
+            conflicts,
+            [FleetConflict::Storage {
+                url: "postgres://localhost/a2a".into(),
+                members: vec!["a.toml".into(), "b.toml".into()],
+            }]
+        );
+        assert!(
+            conflicts[0].to_string().contains("own database"),
+            "{}",
+            conflicts[0]
+        );
+    }
+
+    /// One database each is the arrangement that works, including on one server.
+    #[test]
+    fn a_database_each_is_no_conflict() {
+        let stored = |name: &str, port: u16, url: &str| {
+            AgentConfig::from_toml(&format!(
+                r#"
+                [agent]
+                name = "{name}"
+
+                [server]
+                http_port = {port}
+
+                [server.storage]
+                type = "sqlx"
+                url = "{url}"
+                "#
+            ))
+            .expect("valid config")
+        };
+        let a = stored("Weather", 8080, "postgres://localhost/weather");
+        let b = stored("Billing", 8081, "postgres://localhost/billing");
+
         assert!(fleet_conflicts([("a.toml", &a), ("b.toml", &b)]).is_empty());
     }
 

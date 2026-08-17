@@ -18,13 +18,18 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
-    A2AError, ContextId, Conversation, Digest, Message, Seq, SequencedMessage, Task, TaskId,
-    TaskPushNotificationConfig, TaskState, TaskStateExt, VersionedTask,
+    A2AError, ContextId, ContextState, Conversation, Digest, Message, Seq, SequencedMessage,
+    StateKey, StateScope, Task, TaskId, TaskPushNotificationConfig, TaskState, TaskStateExt,
+    VersionedTask,
 };
 use crate::port::{
-    AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier, AsyncTaskLifecycle,
-    AsyncTaskQuery, AsyncTaskVersioning,
+    AsyncContextStateStore, AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier,
+    AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning, context_state::scope_key,
 };
+
+/// The state bag's buckets: a scope and what that scope files under, to the
+/// names and values kept there.
+type StateBuckets = HashMap<(StateScope, String), HashMap<String, String>>;
 
 /// Simple in-memory task storage for testing and example purposes.
 ///
@@ -62,6 +67,13 @@ pub struct InMemoryTaskStorage {
     /// The principal that first wrote to each context. `None` is unowned and
     /// stays readable by anyone.
     pub(crate) context_owners: Arc<Mutex<HashMap<String, Option<String>>>>,
+    /// The state bag, in the two buckets it is partitioned into: keyed by scope
+    /// and by whatever that scope files under — a context id for
+    /// [`StateScope::Context`], a principal for [`StateScope::User`]. Held apart
+    /// from `conversations` because a `user:` bucket belongs to no context.
+    ///
+    /// Always taken alone, like `digests` and `context_owners`.
+    pub(crate) context_state: Arc<Mutex<StateBuckets>>,
     /// Hands out conversation sequence numbers. Shared across contexts, which is
     /// harmless: `Seq` only has to be monotonic *within* one.
     pub(crate) next_seq: Arc<AtomicU64>,
@@ -86,6 +98,7 @@ impl InMemoryTaskStorage {
             conversations: Arc::new(Mutex::new(HashMap::new())),
             digests: Arc::new(Mutex::new(HashMap::new())),
             context_owners: Arc::new(Mutex::new(HashMap::new())),
+            context_state: Arc::new(Mutex::new(HashMap::new())),
             next_seq: Arc::new(AtomicU64::new(1)),
             push_notification_registry: Arc::new(push_registry),
         }
@@ -101,6 +114,7 @@ impl InMemoryTaskStorage {
             conversations: Arc::new(Mutex::new(HashMap::new())),
             digests: Arc::new(Mutex::new(HashMap::new())),
             context_owners: Arc::new(Mutex::new(HashMap::new())),
+            context_state: Arc::new(Mutex::new(HashMap::new())),
             next_seq: Arc::new(AtomicU64::new(1)),
             push_notification_registry: Arc::new(push_registry),
         }
@@ -156,7 +170,6 @@ impl InMemoryTaskStorage {
         &self,
         context_id: &str,
         caller: Option<&str>,
-        claim: bool,
     ) -> Result<(), A2AError> {
         let mut owners = self.context_owners.lock().await;
         match owners.get(context_id) {
@@ -168,9 +181,7 @@ impl InMemoryTaskStorage {
                 context_id: context_id.to_string(),
             }),
             None => {
-                if claim {
-                    owners.insert(context_id.to_string(), caller.map(str::to_string));
-                }
+                owners.insert(context_id.to_string(), caller.map(str::to_string));
                 Ok(())
             }
         }
@@ -190,8 +201,7 @@ impl AsyncConversationStore for InMemoryTaskStorage {
         // of every turn, so the first turn of a conversation is what establishes
         // who owns it; claiming only on compaction would leave a context
         // readable by anyone until it first grew long enough to summarize.
-        self.claim_or_check_context(context_id, caller, true)
-            .await?;
+        self.claim_or_check_context(context_id, caller).await?;
 
         // Highest watermark, not newest appended: two concurrent compactions can
         // land out of order, and the one covering more is the one to use.
@@ -241,8 +251,7 @@ impl AsyncConversationStore for InMemoryTaskStorage {
         digest: Digest,
     ) -> Result<(), A2AError> {
         let context_id = context_id.as_str();
-        self.claim_or_check_context(context_id, caller, true)
-            .await?;
+        self.claim_or_check_context(context_id, caller).await?;
 
         let mut digests = self.digests.lock().await;
         digests
@@ -250,6 +259,84 @@ impl AsyncConversationStore for InMemoryTaskStorage {
             .or_default()
             .push(digest);
         Ok(())
+    }
+}
+
+#[async_trait]
+impl AsyncContextStateStore for InMemoryTaskStorage {
+    async fn load_state(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+    ) -> Result<ContextState, A2AError> {
+        let context_id = context_id.as_str();
+        // Claimed on read for the same reason the conversation is: whoever holds
+        // a context id would otherwise read what was remembered in it.
+        self.claim_or_check_context(context_id, caller).await?;
+
+        let state = self.context_state.lock().await;
+        let mut loaded = ContextState::new();
+        // The context's own keys, then the caller's. A principal has none when
+        // the agent authenticates nobody, and nothing could have been written
+        // under one either.
+        let buckets = [
+            Some((StateScope::Context, context_id)),
+            caller.map(|caller| (StateScope::User, caller)),
+        ];
+        for (scope, scope_key) in buckets.into_iter().flatten() {
+            let Some(bucket) = state.get(&(scope, scope_key.to_string())) else {
+                continue;
+            };
+            for (name, value) in bucket {
+                match StateKey::scoped(scope, name) {
+                    Ok(key) => loaded.insert(key, value.clone()),
+                    Err(e) => tracing::warn!("ignoring unusable state key '{name}': {e}"),
+                }
+            }
+        }
+        Ok(loaded)
+    }
+
+    async fn remember(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+        key: &StateKey,
+        value: &str,
+    ) -> Result<(), A2AError> {
+        let context_id = context_id.as_str();
+        self.claim_or_check_context(context_id, caller).await?;
+
+        // `None` is `temp:`, which is stored nowhere.
+        let Some(scope_key) = scope_key(key.scope(), context_id, caller, key)? else {
+            return Ok(());
+        };
+
+        let mut state = self.context_state.lock().await;
+        state
+            .entry((key.scope(), scope_key.to_string()))
+            .or_default()
+            .insert(key.name().to_string(), value.to_string());
+        Ok(())
+    }
+
+    async fn forget(
+        &self,
+        context_id: &ContextId,
+        caller: Option<&str>,
+        key: &StateKey,
+    ) -> Result<bool, A2AError> {
+        let context_id = context_id.as_str();
+        self.claim_or_check_context(context_id, caller).await?;
+
+        let Some(scope_key) = scope_key(key.scope(), context_id, caller, key)? else {
+            return Ok(false);
+        };
+
+        let mut state = self.context_state.lock().await;
+        Ok(state
+            .get_mut(&(key.scope(), scope_key.to_string()))
+            .is_some_and(|bucket| bucket.remove(key.name()).is_some()))
     }
 }
 
@@ -618,6 +705,7 @@ impl Clone for InMemoryTaskStorage {
             conversations: self.conversations.clone(),
             digests: self.digests.clone(),
             context_owners: self.context_owners.clone(),
+            context_state: self.context_state.clone(),
             next_seq: self.next_seq.clone(),
             push_notification_registry: self.push_notification_registry.clone(),
         }

@@ -192,6 +192,124 @@ fn a_mistyped_provider_is_a_problem() {
     );
 }
 
+/// An agent bound to every interface publishes an address it cannot know, and
+/// the failure lands on whichever peer dials the card — never on the agent that
+/// wrote it.
+#[test]
+fn a_wildcard_bind_warns_about_what_it_will_advertise() {
+    let scratch = ScratchDir::new("wildcard");
+    scratch.write(
+        "open.toml",
+        &format!(
+            r#"
+[agent]
+name = "Open"
+
+[server]
+host = "0.0.0.0"
+http_port = {}
+"#,
+            free_port()
+        ),
+    );
+
+    let (ok, out) = scratch.a2a(&["doctor", "--config", "open.toml"]);
+    assert!(ok, "it runs — peers just cannot reach it:\n{out}");
+    assert!(out.contains("advertised_url"), "{out}");
+    assert!(out.contains("http://localhost:"), "{out}");
+}
+
+/// Saying what to advertise settles it, so the warning above stays worth
+/// reading.
+#[test]
+fn an_advertised_url_is_all_clear() {
+    let scratch = ScratchDir::new("advertised");
+    let port = free_port();
+    scratch.write(
+        "open.toml",
+        &format!(
+            r#"
+[agent]
+name = "Open"
+
+[server]
+host = "0.0.0.0"
+http_port = {port}
+advertised_url = "http://agents.internal:{port}"
+"#
+        ),
+    );
+
+    let (ok, out) = scratch.a2a(&["doctor", "--config", "open.toml"]);
+    assert!(ok, "{out}");
+    assert!(out.contains("all clear"), "{out}");
+}
+
+/// An agent that carries a conversation between turns, with a config for
+/// `[server.storage]`.
+fn remembering_agent(scratch: &ScratchDir, file: &str, storage: &str) {
+    scratch.write(
+        file,
+        &format!(
+            r#"
+[agent]
+name = "Chat"
+
+[server]
+host = "127.0.0.1"
+http_port = {}
+
+[server.storage]
+{storage}
+
+[handler]
+type = "llm"
+
+[handler.llm.context]
+mode = "context"
+
+[llm]
+provider = "openrouter"
+api_key = "sk-test"
+"#,
+            free_port()
+        ),
+    );
+}
+
+/// A config that runs perfectly and forgets every conversation the moment the
+/// process restarts — which the control plane does on purpose. Checkable from
+/// the config alone, and invisible until it happens in production.
+#[test]
+fn remembering_conversations_in_memory_is_a_warning() {
+    let scratch = ScratchDir::new("ctxmemory");
+    remembering_agent(&scratch, "chat.toml", r#"type = "inmemory""#);
+
+    let (ok, out) = scratch.a2a_env(&["doctor", "--config", "chat.toml"], &LLM_VARS);
+    assert!(ok, "it runs — it just forgets:\n{out}");
+    assert!(out.contains("restarts"), "{out}");
+    assert!(
+        out.contains("sqlx"),
+        "the report must name the way out:\n{out}"
+    );
+}
+
+/// The same agent over durable storage has nothing to warn about, so the
+/// warning above stays worth reading.
+#[test]
+fn remembering_conversations_in_a_database_is_clear() {
+    let scratch = ScratchDir::new("ctxsqlx");
+    remembering_agent(
+        &scratch,
+        "chat.toml",
+        "type = \"sqlx\"\nurl = \"sqlite://chat.db\"",
+    );
+
+    let (ok, out) = scratch.a2a_env(&["doctor", "--config", "chat.toml"], &LLM_VARS);
+    assert!(ok, "{out}");
+    assert!(out.contains("all clear"), "{out}");
+}
+
 /// The check that earns the command: the config is valid and the run still
 /// cannot work, because something else already holds the port.
 #[test]

@@ -144,9 +144,8 @@ There are a couple of small, deliberate divergences, all backward-compatible:
 - `http-server` - HTTP server implementation
 - `auth` - Authentication support (JWT, OAuth2, OpenID Connect)
 - `sqlx-storage` - SQLx-based persistent storage
-- `sqlite` - SQLite database support
-- `postgres` - PostgreSQL database support
-- `mysql` - MySQL database support
+- `sqlite` - SQLite storage (`sqlite::memory:`, `sqlite:tasks.db`)
+- `postgres` - PostgreSQL storage (`postgres://user:pass@host/db`)
 - `tracing` - Structured logging and tracing
 - `full` - All features enabled
 

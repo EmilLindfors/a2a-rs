@@ -444,6 +444,9 @@ reserve_for_output = 8000 # held back for the reply
 compact_at_percent = 80   # summarize at this share of the usable budget
 keep_recent_turns = 4     # turns kept verbatim
 max_tool_result_chars = 8000
+remember = false          # give the model `remember` / `forget`; see below
+max_state_chars = 2000    # ceiling on what it may keep
+chars_per_token = 3.5     # what the estimator assumes; see below
 ```
 
 - `task` carries the current task's own messages. Useful for a task that goes
@@ -451,6 +454,25 @@ max_tool_result_chars = 8000
 - `context` carries the whole conversation — every task sharing the message's
   `contextId`. Pair it with `[server.storage] type = "sqlx"`; with in-memory
   storage the conversation dies with the process.
+
+```toml
+[server.storage]
+type = "sqlx"
+url = "sqlite:agent.db"                      # or postgres://user:pass@host/db
+```
+
+The URL picks the backend. SQLite is a file next to the agent — right for one
+process, and a container that does not mount it keeps nothing. PostgreSQL is the
+one to reach for when the agent has to survive being restarted onto another host,
+or when several *instances of the same agent* answer behind one address; the
+schema is created on first start, and instances starting together do not race.
+
+**One database per agent.** Not one per fleet: nothing in the schema names the
+agent, so two agents sharing a database share one namespace for tasks and one for
+conversations — and a `contextId` that reaches both is exactly what delegation
+produces, so one would answer out of the other's transcript. A fleet can share a
+PostgreSQL *server*; give each member its own database. `a2a validate --fleet`
+and `a2a up` check this along with the port and agent-id clashes.
 
 There is no separate conversation store to configure. A2A already records a
 message per task status transition, and read back in `contextId` order that *is*
@@ -466,6 +488,75 @@ answered are never trimmed — if those alone exceed the budget the task fails
 naming `max_input_tokens`, because silently dropping half of a question produces
 a confident answer to something nobody asked.
 
+#### Remembering facts (`remember = true`)
+
+The transcript is what was *said*. A state bag is the handful of facts worth
+keeping apart from it — the user's name, a unit preference, which project is
+being worked on — and it survives compaction, because a summary can lose a detail
+while a stored value cannot.
+
+```toml
+[handler.llm.context]
+remember = true
+max_state_chars = 2000
+```
+
+That gives the model two tools, `remember(key, value)` and `forget(key)`, and puts
+what it has kept into every later prompt. The key's prefix says how long the value
+lives:
+
+| Key | Scope | Read back by |
+|---|---|---|
+| `user:preferred_units` | the authenticated principal | every conversation with that caller |
+| `deadline` | this conversation | this `contextId` only |
+| `temp:draft` | nothing — not stored | nobody |
+
+`user:` needs `[server.auth]`, and one that names a *user* rather than a
+credential: `jwt`, or `oauth2` with an `introspection_url` (see
+[authentication](docs/authentication.md)). Without an authenticator there is no
+principal to file it under, and the tool says so rather than quietly keeping it
+against the conversation instead. `temp:` exists so the prefix means something —
+without it, `temp:draft` would be an ordinary key outliving the turn under a name
+saying it does not.
+
+This is independent of `mode`. An agent with `mode = "none"` still answers each
+message on its own and can still be told the user's name. Both, though, are only
+as durable as `[server.storage]` — `a2a doctor` warns when either is on over
+in-memory storage, because the control plane restarts agents on purpose.
+
+`max_state_chars` bounds the whole block, and it is enforced where a value is
+*written*: the block is a system message, and the trimming above never touches
+those. A `remember` that would cross the ceiling comes back refused, telling the
+model to `forget` something first.
+
+**Writing to the bag does not spend `max_tool_rounds`** — for the first two
+responses of a turn that call nothing else. A tool round is a model response, so
+without that exemption a model that remembered one fact had three of the default
+four rounds left to do the work, and the failure it produced named
+`max_tool_rounds` without saying where they went. Past those two the rounds are
+charged again, so a model looping on `remember` still ends the turn; the failure
+then says how many responses went there, since raising `max_tool_rounds` is the
+wrong fix for that.
+
+**The budget is counted by an estimate.** Characters divided by
+`chars_per_token`, not a real tokenizer: an exact count is per model family, and
+an agent pointed at OpenRouter runs whichever model its config names. The default
+3.5 suits English prose mixed with JSON; dense code runs lower and non-Latin
+script much lower. The handler compares the estimate against the `prompt_tokens`
+the provider reports and, once the gap is wider than a third, logs the value that
+would have matched:
+
+```
+WARN the token estimate is off by more than a third against what gpt-4o-mini
+     charges — set `[handler.llm.context] chars_per_token = 4.3`
+```
+
+Being off matters in both directions: too low and the agent summarizes long
+before it has to, too high and it sends requests the provider refuses despite a
+budget that says they fit. A refusal is recovered from — the request is retried
+with tool results cut to the bone — but that costs a round trip and the model
+sees less than it was given.
+
 **With `[server.auth]` set, a conversation belongs to whoever started it.** A
 `contextId` is supplied by the caller, so once conversations are read back it
 decides which conversation you get. The store claims a context for the
@@ -477,12 +568,12 @@ follows whatever `[server.auth]` is configured; on an agent with no
 authentication there is no principal, contexts are unowned, and any caller
 holding a `contextId` can read it.
 
-Which identity that is depends on the scheme, and only `jwt` gives a stable one.
-`jwt` uses the token's `sub` claim, so a refreshed token is the same principal.
-`bearer` and `api_key` use the credential itself — everyone sharing a token
-shares their conversations, and rotating the token orphans them. `oauth2` uses
-the access token, which rotates on every refresh, so a long conversation under
-OAuth2 will lose access to itself. Use `jwt` if you want conversations to
+Which identity that is depends on the scheme. `jwt` uses the token's `sub`
+claim, and `oauth2` uses the `sub` its `introspection_url` returns (or the
+`client_id`, for a client-credentials token that has no end user) — under both,
+a refreshed token is the same principal. `bearer` and `api_key` use the
+credential itself, so everyone sharing a token shares their conversations and
+rotating it orphans them. Use one of the first two if you want conversations to
 outlive a credential.
 
 ### Agent-as-tool delegation
@@ -541,8 +632,16 @@ Every agent container gets the same contract, whoever built the image:
 | `/etc/agent.toml` | the agent's config, bind-mounted read-only |
 | `A2A_CONFIG` | that path, so the image need not hard-code it |
 | `HOST=0.0.0.0` | bind all interfaces, or the published port reaches nothing |
+| `A2A_ADVERTISED_URL` | the address to put on the card — the bound one is `0.0.0.0`, which nobody can dial |
 | `-p <http_port>:<http_port>` | the port from `[server]` |
 | `-e VAR` | each `${VAR}` the config references, if `--allow-env` permits it |
+
+`A2A_ADVERTISED_URL` is `http://127.0.0.1:<port>` by default, which reaches the
+agent from the machine running the engine — where the control plane, `a2acli`
+and any locally-run peer are. Give `a2a control-plane --advertise-host <host>` a
+name or address that reaches this host from wherever your peers run if that is
+somewhere else. A config can also say it outright with `[server]
+advertised_url`, which wins over both.
 
 The one difference: the base image is started with `a2a run --config
 /etc/agent.toml`, while your image is started with **no command override** — its
@@ -680,9 +779,11 @@ Every agent is then reachable from the host on its published port — agent card
 
 Two things catch people out. A published port forwards to the sandbox's
 `0.0.0.0`, so the `host = "127.0.0.1"` that `a2a new` scaffolds has to become
-`host = "0.0.0.0"` before the forward reaches anything. And use the standalone
-`sbx` CLI: the `docker sandbox` plugin bundled with Docker Desktop is far behind
-it and supports none of this.
+`host = "0.0.0.0"` before the forward reaches anything — and a wildcard bind is
+an address no peer can dial, so set `advertised_url` alongside it (`a2a run`
+prints a note when it has to guess). And use the standalone `sbx` CLI: the
+`docker sandbox` plugin bundled with Docker Desktop is far behind it and
+supports none of this.
 
 See [docs/docker-sandboxes.md](docs/docker-sandboxes.md) for the full setup —
 egress policy, secrets, getting `a2a` into the sandbox, running

@@ -27,6 +27,23 @@ const CONTAINER_CONFIG_PATH: &str = "/etc/agent.toml";
 /// find it without hard-coding [`CONTAINER_CONFIG_PATH`].
 const CONFIG_PATH_ENV: &str = "A2A_CONFIG";
 
+/// Environment variable carrying the address the agent should put on its card.
+///
+/// This adapter is what forces the wildcard bind, so it is also what has to say
+/// what a peer should dial instead — an agent inside a container can see the
+/// interface it bound and nothing about how it was published.
+const ADVERTISED_URL_ENV: &str = "A2A_ADVERTISED_URL";
+
+/// Host part of that address when nothing else is configured.
+///
+/// The container publishes its port on every host interface, so the loopback of
+/// the machine running the engine always reaches it — which is where the
+/// control plane, `a2acli`, and any locally-run peer are. It is *not* reachable
+/// from another container, which is what [`with_advertise_host`] is for.
+///
+/// [`with_advertise_host`]: ContainerRuntime::with_advertise_host
+const DEFAULT_ADVERTISE_HOST: &str = "127.0.0.1";
+
 /// Label carrying the [`AgentId`]. `<engine> ps --filter label=a2a-agent` is
 /// this adapter's durable store: it is what makes the engine, not this process's
 /// memory, the source of truth about which agents exist.
@@ -95,6 +112,8 @@ pub struct ContainerRuntime {
     allowed_env: EnvAllowlist,
     /// What the engine is asked to enforce on each agent.
     hardening: ContainerHardening,
+    /// Host peers should dial to reach an agent this runtime published.
+    advertise_host: String,
     /// id -> published host port (presence == provisioned).
     agents: Arc<Mutex<HashMap<AgentId, u16>>>,
 }
@@ -112,8 +131,22 @@ impl ContainerRuntime {
             base_image: DEFAULT_IMAGE.to_string(),
             allowed_env: EnvAllowlist::deny_all(),
             hardening: ContainerHardening::default(),
+            advertise_host: DEFAULT_ADVERTISE_HOST.to_string(),
             agents: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    /// The host peers should dial to reach agents this runtime publishes
+    /// (default [`DEFAULT_ADVERTISE_HOST`]).
+    ///
+    /// Each agent is told `http://{this}:{its published port}` and puts it on
+    /// its card, so this is the one place that decides whether discovery works
+    /// beyond the machine running the engine. Set it to a hostname or address
+    /// that reaches this host from wherever the peers are — a LAN name, the
+    /// bridge gateway, `host.docker.internal` on Docker Desktop.
+    pub fn with_advertise_host(mut self, host: impl Into<String>) -> Self {
+        self.advertise_host = host.into();
+        self
     }
 
     /// Replace the hardening policy applied to every agent this runtime
@@ -346,6 +379,8 @@ struct CreateParams<'a> {
     id: &'a AgentId,
     port: u16,
     config_path: &'a Path,
+    /// Host part of the address the agent advertises on its card.
+    advertise_host: &'a str,
     /// Names only — see [`create_args`].
     env_refs: &'a [String],
     hardening: &'a ContainerHardening,
@@ -372,6 +407,7 @@ fn create_args(params: CreateParams<'_>) -> Vec<String> {
         id,
         port,
         config_path,
+        advertise_host,
         env_refs,
         hardening,
         writable_rootfs_needed,
@@ -385,6 +421,11 @@ fn create_args(params: CreateParams<'_>) -> Vec<String> {
         format!("{port}:{port}"),
         "-e".to_string(),
         "HOST=0.0.0.0".to_string(),
+        // Bind and advertise in the same breath, because this is where they
+        // come apart: the agent binds every interface and can therefore say
+        // nothing useful about its own address.
+        "-e".to_string(),
+        format!("{ADVERTISED_URL_ENV}=http://{advertise_host}:{port}"),
         "-e".to_string(),
         format!("{CONFIG_PATH_ENV}={CONTAINER_CONFIG_PATH}"),
     ];
@@ -541,6 +582,7 @@ impl AgentRuntime for ContainerRuntime {
                 id: &id,
                 port,
                 config_path: &spec.config_path,
+                advertise_host: &self.advertise_host,
                 env_refs: &env_refs,
                 hardening: &self.hardening,
                 writable_rootfs_needed: needs_writable_rootfs(&config),
@@ -711,6 +753,7 @@ mod tests {
             id,
             port,
             config_path: Path::new("/cfg/echo.toml"),
+            advertise_host: DEFAULT_ADVERTISE_HOST,
             env_refs,
             hardening,
             writable_rootfs_needed,
@@ -733,6 +776,8 @@ mod tests {
                 "-e",
                 "HOST=0.0.0.0",
                 "-e",
+                "A2A_ADVERTISED_URL=http://127.0.0.1:8080",
+                "-e",
                 "A2A_CONFIG=/etc/agent.toml",
                 "-v",
                 "/cfg/echo.toml:/etc/agent.toml:ro",
@@ -745,6 +790,32 @@ mod tests {
                 "--config",
                 "/etc/agent.toml",
             ]
+        );
+    }
+
+    /// The container makes the agent bind every interface, so the agent cannot
+    /// name its own address — `http://0.0.0.0:8080` on a card is what every
+    /// peer then tries to dial. Whoever published the port says what to dial
+    /// instead, and both variables have to travel together.
+    #[test]
+    fn an_agent_is_told_what_to_advertise_wherever_it_binds() {
+        let id = AgentId::from_name("Echo Agent");
+        let args = create_args(CreateParams {
+            image: AgentImage::Base("a2a-agents:latest"),
+            id: &id,
+            port: 9001,
+            config_path: Path::new("/cfg/echo.toml"),
+            advertise_host: "agents.internal",
+            env_refs: &[],
+            hardening: &ContainerHardening::none(),
+            writable_rootfs_needed: false,
+        });
+
+        assert!(args.iter().any(|a| a == "HOST=0.0.0.0"), "{args:?}");
+        assert!(
+            args.iter()
+                .any(|a| a == "A2A_ADVERTISED_URL=http://agents.internal:9001"),
+            "the advertised host and the published port must both reach the agent: {args:?}"
         );
     }
 

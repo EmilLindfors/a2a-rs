@@ -9,12 +9,13 @@
 //! must answer, and it goes through the [`CardSource`] port so the loop is
 //! testable without HTTP servers.
 //!
-//! It reads the card and does **not** adopt it. Re-registering would derive the
-//! id from the fetched card's `name`, so an agent that renamed itself would land
-//! under a second id with the old entry left behind — a duplicate that the next
-//! skill lookup would happily hand work to. Refreshing card *content* needs an
-//! update-in-place that `register` is not; until then this loop answers one
-//! question, which is whether the agent is there.
+//! What it reads it also **adopts**, through
+//! [`AgentRegistry::update_card`](super::AgentRegistry::update_card) — so a
+//! skill added to a running agent becomes discoverable without redeploying it.
+//! Deliberately not through `register`: that derives the id from the fetched
+//! card's `name`, so an agent that renamed itself would land under a second id
+//! with the old entry left behind, a duplicate the next skill lookup would
+//! happily hand work to. A renamed card is refused and reported instead.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -37,6 +38,8 @@ pub struct RefreshReport {
     pub live: usize,
     /// Agents that did not answer.
     pub unreachable: usize,
+    /// Agents whose card had changed and was adopted.
+    pub adopted: usize,
 }
 
 impl RefreshReport {
@@ -78,8 +81,27 @@ impl CardRefresher {
         let mut report = RefreshReport::default();
         for agent in self.registry.list().await? {
             let liveness = match self.cards.fetch(&agent.endpoint).await {
-                Ok(_) => {
+                Ok(card) => {
                     report.live += 1;
+                    // Only when it changed: in the steady state this is every
+                    // agent on every tick, and a write lock per agent per pass
+                    // buys nothing.
+                    if card != agent.card {
+                        match self.registry.update_card(&agent.id, card).await {
+                            Ok(()) => {
+                                report.adopted += 1;
+                                info!(agent = %agent.id, "adopted an updated agent card");
+                            }
+                            // Repeats every pass while the name stays changed,
+                            // because the entry never becomes the new card.
+                            // That is the point: it is a state someone has to
+                            // resolve, not a transient.
+                            Err(e @ RegistryError::Renamed { .. }) => {
+                                warn!(agent = %agent.id, error = %e, "keeping the card on file")
+                            }
+                            Err(e) => debug!(agent = %agent.id, error = %e, "could not adopt card"),
+                        }
+                    }
                     Liveness::Live
                 }
                 Err(e) => {
@@ -136,6 +158,7 @@ impl CardRefresher {
                     debug!(
                         live = report.live,
                         unreachable = report.unreachable,
+                        adopted = report.adopted,
                         "liveness pass"
                     )
                 }
@@ -205,11 +228,78 @@ mod tests {
             report,
             RefreshReport {
                 live: 1,
-                unreachable: 1
+                unreachable: 1,
+                // The card served is the one on file, so there is nothing to
+                // adopt.
+                adopted: 0,
             }
         );
         assert_eq!(liveness_of(&registry, &up).await, Liveness::Live);
         assert_eq!(liveness_of(&registry, &down).await, Liveness::Unreachable);
+    }
+
+    /// A skill added to a running agent is invisible until something re-reads
+    /// its card. This loop already re-reads it, so it may as well keep it.
+    #[tokio::test]
+    async fn a_skill_added_while_running_becomes_discoverable() {
+        let registry: Arc<dyn AgentRegistry> = Arc::new(InMemoryAgentRegistry::new());
+        registered(&registry, "Weather", "forecasting", "http://weather").await;
+
+        let cards = InMemoryCardSource::new();
+        cards
+            .insert("http://weather", card("Weather", "storm-warnings"))
+            .await;
+
+        let report = CardRefresher::new(registry.clone(), Arc::new(cards))
+            .refresh_once()
+            .await
+            .unwrap();
+
+        assert_eq!(report.adopted, 1);
+        assert_eq!(
+            registry
+                .find_by_skill("storm-warnings")
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "the new skill has to be findable, which is the whole point"
+        );
+    }
+
+    /// The trap this deliberately does not fall into: adopting a renamed card
+    /// through `register` would file it under a second id and leave the old
+    /// entry behind, and the next skill lookup would hand work to whichever it
+    /// found first.
+    #[tokio::test]
+    async fn a_renamed_card_is_refused_rather_than_duplicated() {
+        let registry: Arc<dyn AgentRegistry> = Arc::new(InMemoryAgentRegistry::new());
+        let id = registered(&registry, "Weather", "forecasting", "http://weather").await;
+
+        let cards = InMemoryCardSource::new();
+        cards
+            .insert("http://weather", card("Weather Two", "forecasting"))
+            .await;
+
+        let report = CardRefresher::new(registry.clone(), Arc::new(cards))
+            .refresh_once()
+            .await
+            .unwrap();
+
+        // Still reachable — the card was readable, which is what liveness asks.
+        assert_eq!(report.live, 1);
+        assert_eq!(report.adopted, 0);
+        assert_eq!(registry.list().await.unwrap().len(), 1, "no duplicate");
+        assert_eq!(
+            registry
+                .get(&id)
+                .await
+                .unwrap()
+                .expect("still there")
+                .card
+                .name,
+            "Weather"
+        );
     }
 
     /// A dead agent stays registered. Its entry is the record that it exists,

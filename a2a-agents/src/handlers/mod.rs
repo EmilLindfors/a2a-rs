@@ -6,3 +6,6 @@ pub mod tools;
 #[cfg(feature = "llm")]
 pub mod context;
 pub mod llm;
+/// The state bag's two tools, and how it is worded in the prompt.
+#[cfg(feature = "llm")]
+pub mod memory;

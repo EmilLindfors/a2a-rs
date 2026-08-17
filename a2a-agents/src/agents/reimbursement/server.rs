@@ -51,24 +51,25 @@ impl ReimbursementServer {
     async fn create_sqlx_storage(
         &self,
         url: &str,
-        _max_connections: u32,
+        max_connections: u32,
         enable_logging: bool,
     ) -> Result<SqlxTaskStorage, Box<dyn std::error::Error>> {
         tracing::info!(
             "Using SQLx storage with URL: {} and push notification support",
             url
         );
-        if enable_logging {
-            tracing::info!("SQL query logging enabled");
-        }
 
         // Include reimbursement-specific migrations
-        let reimbursement_migrations = &[include_str!(
+        let reimbursement_migrations = [include_str!(
             "../../../migrations/001_create_reimbursements.sql"
         )];
 
         // SqlxTaskStorage uses HttpPushNotificationSender by default
-        let storage = SqlxTaskStorage::with_migrations(url, reimbursement_migrations)
+        let storage = SqlxTaskStorage::builder(url)
+            .max_connections(max_connections)
+            .log_statements(enable_logging)
+            .migrations(reimbursement_migrations)
+            .connect()
             .await
             .map_err(|e| format!("Failed to create SQLx storage: {}", e))?;
         Ok(storage)

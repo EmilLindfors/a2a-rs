@@ -139,6 +139,26 @@ pub enum RegistryError {
     /// No agent is registered under the given id.
     #[error("no agent registered with id '{0}'")]
     NotFound(AgentId),
+
+    /// A card offered for an existing agent calls it something that derives a
+    /// different id.
+    ///
+    /// Refused rather than resolved, because both resolutions are wrong to
+    /// choose on someone's behalf: keeping the old id leaves an entry whose id
+    /// and name disagree, and moving to the new one silently breaks every
+    /// config that refers to the agent by `agent_id`.
+    #[error(
+        "agent '{id}' now calls itself {name:?}, which is registry id '{derived}' — \
+         re-register it under the new name, or change the name back"
+    )]
+    Renamed {
+        /// The id the agent is registered under.
+        id: AgentId,
+        /// The name on the card that was offered.
+        name: String,
+        /// The id that name derives.
+        derived: AgentId,
+    },
 }
 
 /// The discovery capability the platform needs: register agents and find them
@@ -156,6 +176,20 @@ pub trait AgentRegistry: Send + Sync {
     /// Record what a liveness probe found. Returns [`RegistryError::NotFound`]
     /// if the agent was deregistered while the probe was in flight.
     async fn mark(&self, id: &AgentId, liveness: Liveness) -> Result<(), RegistryError>;
+
+    /// Replace the card held for an agent, keeping its id, endpoint and
+    /// liveness.
+    ///
+    /// Separate from [`register`](Self::register) because that derives the id
+    /// from the card's name: adopting a freshly fetched card through it would
+    /// file a renamed agent under a second id and leave the old entry behind,
+    /// which the next skill lookup would happily hand work to. Here the id is
+    /// the caller's, and a card that no longer derives it is
+    /// [`RegistryError::Renamed`] rather than a silent duplicate.
+    ///
+    /// This is what lets a skill added to a running agent become discoverable
+    /// without redeploying it — see [`CardRefresher`](super::CardRefresher).
+    async fn update_card(&self, id: &AgentId, card: AgentCard) -> Result<(), RegistryError>;
 
     /// Remove an agent. Returns [`RegistryError::NotFound`] if it was not
     /// registered.
@@ -217,6 +251,24 @@ impl AgentRegistry for InMemoryAgentRegistry {
         };
         self.agents.write().await.insert(id.clone(), entry);
         Ok(id)
+    }
+
+    async fn update_card(&self, id: &AgentId, card: AgentCard) -> Result<(), RegistryError> {
+        let derived = AgentId::from_name(&card.name);
+        if derived != *id {
+            return Err(RegistryError::Renamed {
+                id: id.clone(),
+                name: card.name,
+                derived,
+            });
+        }
+        match self.agents.write().await.get_mut(id) {
+            Some(agent) => {
+                agent.card = card;
+                Ok(())
+            }
+            None => Err(RegistryError::NotFound(id.clone())),
+        }
     }
 
     async fn mark(&self, id: &AgentId, liveness: Liveness) -> Result<(), RegistryError> {

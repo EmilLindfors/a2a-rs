@@ -113,7 +113,11 @@ description = "Echoes back whatever you send."
 # version = "0.1.0"
 
 [server]
-# Omit `host` to bind whatever HOST is set to (0.0.0.0 in the container image).
+# `host` is the interface to bind; omit it to take HOST instead (the container
+# image sets 0.0.0.0). What peers dial is a separate key, `advertised_url` —
+# unset, it follows `host`, and the control plane sets it for you in a
+# container:
+#   advertised_url = "http://this-machine.example:{port}"
 host = "127.0.0.1"
 http_port = {port}
 

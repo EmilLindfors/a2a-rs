@@ -8,6 +8,7 @@ pub mod events;
 pub mod generated;
 pub mod ids;
 pub mod retry;
+pub mod state;
 #[cfg(test)]
 mod tests;
 pub mod validation;
@@ -31,4 +32,5 @@ pub use events::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 pub use generated::{o_auth_flows, security_scheme};
 pub use ids::{ContextId, PushConfigId, TaskId};
 pub use retry::RetryPolicy;
+pub use state::{ContextState, StateKey, StateKeyError, StateScope};
 pub use validation::{Validate, ValidationResult};

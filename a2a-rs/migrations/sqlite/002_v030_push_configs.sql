@@ -1,10 +1,8 @@
--- v0.3.0 Migration: Update push notification configs to support multiple configs per task
--- This migration enhances the push_notification_configs table to support the v0.3.0 spec
-
--- Drop the old table (backing up data if needed in production)
-DROP TABLE IF EXISTS push_notification_configs;
-
--- Create new table with support for multiple configs per task
+-- v0.3.0 Migration: several push notification configs per task, SQLite dialect.
+--
+-- The v0.2 table this replaces is dropped by `run_base_migrations`, and only
+-- when it is still there — the drop used to live in this file, which re-runs on
+-- every startup, so every restart destroyed the configs it had stored.
 CREATE TABLE IF NOT EXISTS push_notification_configs (
     id TEXT PRIMARY KEY,  -- Unique config ID
     task_id TEXT NOT NULL,  -- Task this config belongs to

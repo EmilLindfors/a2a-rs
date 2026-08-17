@@ -17,7 +17,7 @@ use tracing::{info, warn};
 #[cfg(feature = "auth")]
 use a2a_rs::adapter::{JwtAuthenticator, OAuth2Authenticator};
 #[cfg(feature = "auth")]
-use oauth2::{AuthUrl, ClientId, ClientSecret, RedirectUrl, TokenUrl};
+use oauth2::{AuthUrl, ClientId, ClientSecret, IntrospectionUrl, RedirectUrl, TokenUrl};
 #[cfg(feature = "auth")]
 use std::collections::HashMap;
 
@@ -244,6 +244,17 @@ where
         self
     }
 
+    /// The streaming backend the transport will subscribe through, if one was
+    /// attached.
+    ///
+    /// Readable so the wire can be tested: a handler broadcasting into a
+    /// different instance than the transport subscribes through serves,
+    /// advertises streaming on its card, and delivers nothing — and there is
+    /// nowhere else that difference shows up.
+    pub fn streaming(&self) -> Option<&Arc<dyn AsyncStreamingHandler>> {
+        self.streaming.as_ref()
+    }
+
     /// Build agent info from this agent's configuration.
     fn build_agent_info(&self, base_url: String) -> SimpleAgentInfo {
         agent_info_from_config(&self.config, base_url)
@@ -382,6 +393,7 @@ where
                 client_secret,
                 authorization_url,
                 token_url,
+                introspection_url,
                 redirect_url,
                 flow,
                 scopes,
@@ -429,6 +441,28 @@ where
                         redirect_url,
                         scopes_map,
                     )
+                };
+
+                // Without this the agent knows a caller only by the token they
+                // presented, and a refreshed token is a different caller.
+                let authenticator = match introspection_url {
+                    Some(url) => {
+                        info!("   Introspection URL: {}", url);
+                        let url = IntrospectionUrl::new(url.clone()).map_err(|e| {
+                            ServerError::ServerError(format!("Invalid introspection URL: {}", e))
+                        })?;
+                        authenticator
+                            .with_introspection(url)
+                            .map_err(|e| ServerError::ServerError(e.to_string()))?
+                    }
+                    None => {
+                        warn!(
+                            "OAuth2 is configured without an introspection_url: presented tokens \
+                             cannot be validated or attributed to a user, so every request will \
+                             be rejected. Set [server.auth] introspection_url."
+                        );
+                        authenticator
+                    }
                 };
 
                 let server =
