@@ -247,13 +247,22 @@ full plan; the Terraform provider does **not** move yet (see §4).
       co-development
 - [x] In this repo: drop `a2a-agents` from the workspace `Cargo.toml`; point
       `README.md` / `CLAUDE.md` / CI at the new repo. Keeps `a2a-rs`, `a2a-ap2`,
-      `a2a-client`, `a2a-llm`, `a2a-mcp`, `a2acli`.
-- [ ] **Publish `a2a-llm` 0.1.0.** korps declares `a2a-llm = "0.1"` and only
-      builds because of its `[patch.crates-io]`; the crate is not on crates.io,
-      so korps CI cannot build without the patch.
+      `a2a-client`, `a2a-llm`, `a2a-mcp`, `a2acli` (directory `a2a-cli/`; the
+      package stays `a2acli` because `a2a-cli` on crates.io belongs to
+      a2aproject).
+- [x] **Publish `a2a-llm` 0.1.0** (2026-08-17). Every version korps declares now
+      resolves from crates.io — `a2a-rs` 0.6.0, `a2a-llm` 0.1.0, `a2a-mcp` 0.6.0,
+      `a2a-ap2` 0.4.1, `a2a-web-client` 0.6.0 — so its `[patch.crates-io]` is
+      back to being a co-development convenience rather than a build requirement.
+      Published off `refactor/protocol-platform-seam`: `a2a-llm` does not exist
+      on `master`, so there was no other source.
 - [ ] Downstream-canary CI job here that builds `korps` HEAD against each PR,
       replacing what the shared workspace used to catch
 - [ ] Split `NOTES.md` and `CHANGELOG.md` along the same seam
+- [ ] `release-binaries.yml` still triggers on `a2a-agents-v*` tags and builds
+      `-p a2a-agents --bin a2a`, neither of which exists here any more. Dead
+      rather than noisy (no such tag will be cut again), but it is either korps's
+      workflow now or it should be repointed at `a2acli`.
 
 ## 4. Terraform provider ⏸ (parked)
 
