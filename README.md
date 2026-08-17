@@ -15,7 +15,6 @@ The workspace is organized into several crates:
 |-------|-------------|
 | [a2a-rs](./a2a-rs/) | Core protocol library — types, traits, transports, storage |
 | [a2a-ap2](./a2a-ap2/) | Agent Payments Protocol (AP2) extension |
-| [a2a-agents](./a2a-agents/) | Declarative TOML agent framework + multi-agent platform (registry, runtime, control-plane) |
 | [a2a-llm](./a2a-llm/) | Provider-neutral LLM vocabulary and providers (OpenAI-compatible, Gemini) |
 | [a2a-client](./a2a-client/) | Web client library for building agent frontends |
 | [a2a-mcp](./a2a-mcp/) | Bidirectional A2A ↔ MCP bridge (Model Context Protocol) |
@@ -26,7 +25,7 @@ Define an agent in TOML and run it — no Rust required. The `echo` template nee
 no API keys and no external services:
 
 ```bash
-cargo install a2a-agents        # installs the `a2a` CLI
+cargo install korps             # installs the `korps` CLI (separate repo)
 
 a2a new "Weather Agent"                  # writes weather-agent.toml
 a2a validate --config weather-agent.toml # is the config well-formed?
@@ -43,7 +42,7 @@ cargo build --workspace
 
 # The reimbursement reference agent (agent + web UI on http://localhost:3000).
 # Opt-in: it is a sample, so it is not in the default build.
-cargo run -p a2a-agents --features reimbursement-agent --bin reimbursement_demo
+cargo run -p korps --features reimbursement-agent --bin reimbursement_demo   # in the korps repo
 ```
 
 ### Add to your project
@@ -127,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Declarative agent (TOML-based)
 
-The `a2a-agents` framework lets you define agents with minimal boilerplate:
+The [korps](https://github.com/EmilLindfors/korps) framework lets you define agents with minimal boilerplate:
 
 ```rust
 use a2a_agents::AgentBuilder;
@@ -144,11 +143,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-See [a2a-agents/examples/](./a2a-agents/examples/) for complete examples.
+See the [korps repo](https://github.com/EmilLindfors/korps) for complete examples.
 
 ### Multi-agent platform
 
-`a2a-agents` is more than a single-agent builder — it provides the platform
+`korps` is more than a single-agent builder — it provides the platform
 capabilities for running and orchestrating *many* agents, defined as **ports**
 in the platform layer (the pure `a2a-rs` protocol crate stays infrastructure-free):
 
@@ -166,14 +165,14 @@ in the platform layer (the pure `a2a-rs` protocol crate stays infrastructure-fre
 ```bash
 # The `a2a` binary needs the llm, mcp-server, and schema features.
 # Run one agent from a TOML config
-cargo run -p a2a-agents --bin a2a -- run --config agent.toml
+korps run --config agent.toml
 
 # Serve the control plane over local processes
-cargo run -p a2a-agents --bin a2a -- \
+korps-fleet \
   control-plane --bind 127.0.0.1:9090 --config-dir ./deployed --runtime local
 ```
 
-See [a2a-agents/README.md](./a2a-agents/README.md) for the full platform
+See the [korps README](https://github.com/EmilLindfors/korps) for the full platform
 documentation — fleets, pre-flight checks, the control plane, and the `a2a` CLI.
 
 ## Architecture
@@ -239,7 +238,7 @@ cargo test --workspace
 cd a2a-rs && cargo test --all-features
 
 # Agent framework
-cd a2a-agents && cargo test
+cargo test --workspace
 ```
 
 The test suite includes unit tests, integration tests, property-based tests, and spec compliance tests.

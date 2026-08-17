@@ -239,15 +239,18 @@ full plan; the Terraform provider does **not** move yet (see §4).
 
 ### Phase 1 — the move
 
-- [ ] `git filter-repo` `a2a-agents/` into `korps` so its history comes along
-- [ ] Rename the crate and the `a2a` binary to `korps`
-- [ ] Flip path deps to crates.io versions; add `[patch.crates-io]` for
+- [x] Extract `a2a-agents/` into `korps` with `git subtree split` (77 commits of
+      history came along as a merge parent)
+- [x] Rename the crate and the `a2a` binary to `korps`; split into
+      `korps` + `korps-fleet` on the one-agent/fleet line
+- [x] Flip path deps to crates.io versions; `[patch.crates-io]` for
       co-development
-- [ ] Split the generic handler into its own crate if wanted — it is co-located
-      in `a2a-agents/src/handlers/` today to avoid a circular dep with `a2a-mcp`.
-- [ ] In this repo: drop `a2a-agents` from the workspace `Cargo.toml`; point
-      `README.md` / `CLAUDE.md` at the new repo. Keep `a2a-rs`, `a2a-ap2`,
-      `a2a-client`, `a2a-llm`, `a2a-mcp`, `a2acli` here.
+- [x] In this repo: drop `a2a-agents` from the workspace `Cargo.toml`; point
+      `README.md` / `CLAUDE.md` / CI at the new repo. Keeps `a2a-rs`, `a2a-ap2`,
+      `a2a-client`, `a2a-llm`, `a2a-mcp`, `a2acli`.
+- [ ] **Publish `a2a-llm` 0.1.0.** korps declares `a2a-llm = "0.1"` and only
+      builds because of its `[patch.crates-io]`; the crate is not on crates.io,
+      so korps CI cannot build without the patch.
 - [ ] Downstream-canary CI job here that builds `korps` HEAD against each PR,
       replacing what the shared workspace used to catch
 - [ ] Split `NOTES.md` and `CHANGELOG.md` along the same seam

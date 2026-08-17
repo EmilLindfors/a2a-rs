@@ -89,10 +89,6 @@ jobs:
       - name: Run clippy (a2a-ap2, a2a-web-client, a2a-llm)
         run: cargo clippy -p a2a-ap2 -p a2a-web-client -p a2a-llm --all-targets --all-features -- -D warnings
 
-      # Run clippy on a2a-agents with specific features (mcp-server/mcp-client
-      # depend on a local path that is not available in CI)
-      - name: Run clippy (a2a-agents)
-        run: cargo clippy -p a2a-agents --all-targets --features "reimbursement-agent,sqlx,ap2,auth" -- -D warnings
 
   rustfmt:
     name: Format
@@ -127,8 +123,6 @@ jobs:
       - name: Check documentation (other crates)
         run: cargo doc --no-deps -p a2a-ap2 -p a2a-web-client -p a2a-llm
 
-      - name: Check documentation (a2a-agents)
-        run: cargo doc --no-deps -p a2a-agents --features "reimbursement-agent,ap2,auth"
 
   audit:
     name: Security Audit
