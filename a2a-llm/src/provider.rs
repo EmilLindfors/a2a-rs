@@ -13,12 +13,12 @@
 //! mistyped key started the agent anyway and it answered from its non-LLM
 //! fallback.
 //!
-//! Selection performs no I/O, so `a2a doctor` can run the same code as startup
+//! Selection performs no I/O, so `korps doctor` can run the same code as startup
 //! to decide what startup will do. The only output is a warning when a
 //! configured `reasoning` cannot reach the provider's wire.
 //!
 //! Settings are expressed with this crate's own [`LlmSettings`] type rather than
-//! a host's config struct so the helper takes no dependency on `a2a-agents`
+//! a host's config struct so the helper takes no dependency on `korps`
 //! (which would be circular).
 
 use std::sync::Arc;

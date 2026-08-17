@@ -129,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The [korps](https://github.com/EmilLindfors/korps) framework lets you define agents with minimal boilerplate:
 
 ```rust
-use a2a_agents::AgentBuilder;
+use korps::AgentBuilder;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

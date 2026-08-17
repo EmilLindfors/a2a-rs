@@ -216,8 +216,7 @@ a2a-client = { path = "../a2a-client" }  # With Axum components
 
 This library works seamlessly with agents built using:
 - `a2a-rs` - Core protocol implementation
-- `a2a-agents` - Declarative agent framework
-- `a2a-agent-reimbursement` - Example agent implementation
+- [`korps`](https://github.com/EmilLindfors/korps) - Declarative agent framework
 
 ## Development
 
@@ -259,5 +258,5 @@ MIT
 ## See Also
 
 - [a2a-rs](../a2a-rs) - Core A2A protocol implementation
-- [a2a-agents](../a2a-agents) - Declarative agent framework
+- [korps](https://github.com/EmilLindfors/korps) - Declarative agent framework (separate repo)
 - [A2A Protocol Specification](../spec) - Protocol documentation

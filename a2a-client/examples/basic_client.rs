@@ -7,8 +7,8 @@
 //!
 //! 1. Start an A2A agent (e.g., the reimbursement agent):
 //!    ```bash
-//!    cd ../a2a-agents
-//!    cargo run --bin reimbursement_demo
+//!    cd ../korps
+//!    cargo run -p korps --features reimbursement-agent --bin reimbursement_demo
 //!    ```
 //!
 //! 2. Run this example:
