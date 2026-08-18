@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "a2a-ap2"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "a2a-rs",
  "buffa",
@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-llm"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -32,7 +32,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-mcp"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "a2a-llm",
  "a2a-rs",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-rs"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "arbitrary",
  "async-trait",
@@ -102,7 +102,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-web-client"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "a2a-rs",
  "anyhow",
@@ -123,7 +123,7 @@ dependencies = [
 
 [[package]]
 name = "a2acli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "a2a-rs",
  "anyhow",
