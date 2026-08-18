@@ -117,11 +117,15 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       version. That stops being true the day stable moves on — from then the
       number is unproven again, and a `dtolnay/rust-toolchain@1.96` job is what
       makes it real.
-- [ ] **Downstream canary for korps.** Nothing here depends on korps, so the
-      compiler never sees a change that breaks it — the shared workspace used to
-      catch that and no longer can. A job that checks out korps' HEAD and builds
-      it against the PR is the replacement. Blocked until korps can build against
-      a published `a2a-rs`; today it needs the unreleased context-state API.
+- [ ] **Make the downstream canary blocking.**
+      `.github/workflows/downstream-korps.yml` exists and builds korps against
+      each PR by checking both repos out as siblings — korps'
+      `[patch.crates-io]` resolves to the PR's source, so it needs no release.
+      It is `continue-on-error` until two things hold: a `KORPS_CANARY_TOKEN`
+      secret with `repo` scope exists (korps is private, this repo is public,
+      and without the secret the job skips), and korps' master is current
+      (while it lags, the canary builds an old korps and can fail for reasons
+      unrelated to the PR).
 
 ---
 
