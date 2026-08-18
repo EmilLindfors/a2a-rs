@@ -239,11 +239,21 @@ async fn the_connectrpc_path_carries_the_caller_over_a_socket() {
     use a2a_rs::domain::SendCompletion;
     use a2a_rs::port::Transport;
 
+    // Bind an ephemeral port (0 = OS-assigned), read the address back, and
+    // release it so the server can bind the same one. The hard-coded 8199 was
+    // the first flake source: under a full workspace run another test binary
+    // can be holding the port when this test starts.
+    let probe = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("ephemeral port probe binds");
+    let addr = probe.local_addr().expect("bound probe reports its address");
+    drop(probe);
+
     let handler = RecordingHandler::default();
     let storage = InMemoryTaskStorage::new();
     let agent_info = SimpleAgentInfo::new(
         "principal-connect-test".to_string(),
-        "http://127.0.0.1:8199".to_string(),
+        format!("http://{addr}"),
     );
     let processor = ConnectRpcAdapter::new(
         handler.clone(),
@@ -254,7 +264,7 @@ async fn the_connectrpc_path_carries_the_caller_over_a_socket() {
     let server = HttpServer::with_auth(
         processor,
         agent_info,
-        "127.0.0.1:8199".to_string(),
+        addr.to_string(),
         BearerTokenAuthenticator::new(vec!["alice-token".to_string()]),
     );
 
@@ -265,12 +275,22 @@ async fn the_connectrpc_path_carries_the_caller_over_a_socket() {
             _ = stop => {}
         }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
 
-    let client = HttpClient::with_auth(
-        "http://127.0.0.1:8199".to_string(),
-        "alice-token".to_string(),
-    );
+    // The flat 200ms sleep was the second flake source: under load a full
+    // workspace run can take longer than that to come up. Poll the socket
+    // until it answers instead.
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match tokio::net::TcpStream::connect(addr).await {
+            Ok(_) => break,
+            Err(_) if tokio::time::Instant::now() < deadline => {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+            Err(err) => panic!("server never came up on {addr}: {err}"),
+        }
+    }
+
+    let client = HttpClient::with_auth(format!("http://{addr}"), "alice-token".to_string());
     let message = Message::user_text("hello".to_string(), "m1".to_string());
     client
         .send_task_message("t1", &message, None, None, SendCompletion::WhenCreated)

@@ -103,14 +103,15 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       validates our *client* against other SDKs.
 - [ ] Once both pass, capture the matrix (which transports and SDKs interoperate)
       in the `a2acli` README.
-- [ ] **`authenticated_principal_test` flakes under a full workspace run.**
-      `the_connectrpc_path_carries_the_caller_over_a_socket` binds a hard-coded
-      `127.0.0.1:8199` and waits a flat 200ms for the server to come up. Seen
-      failing once on 2026-08-17 under `cargo test --workspace --all-features`
-      and passing on its own and on a re-run, which is the shape of both
-      possible causes — the sleep being short under load, and another test
-      binary holding the port. Bind port 0 and read the address back, or poll
-      until the socket answers.
+- [x] **`authenticated_principal_test` flakes under a full workspace run.**
+      `the_connectrpc_path_carries_the_caller_over_a_socket` used to bind a
+      hard-coded `127.0.0.1:8199` and wait a flat 200ms for the server to come
+      up. Seen failing once on 2026-08-17 under
+      `cargo test --workspace --all-features` and passing on its own and on a
+      re-run — the shape of both causes: the sleep being short under load, and
+      another test binary holding the port. Now binds an ephemeral port
+      (probe on `127.0.0.1:0`, read the address back, release it) and polls
+      the socket until it answers, so neither cause can recur.
 - [ ] **Pin an MSRV CI job the moment the declared version drops below stable.**
       Not needed today: every workflow uses `dtolnay/rust-toolchain@stable` and
       1.96 is current stable, so CI already builds on exactly the declared
