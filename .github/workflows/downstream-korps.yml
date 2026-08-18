@@ -4,12 +4,16 @@ name: Downstream canary (korps)
 # that breaks it. The shared workspace used to catch that; since the platform
 # moved out, this job is the replacement.
 #
-# It does not wait on a release. korps carries `[patch.crates-io]` pointing at
-# `../a2a-rs`, so checking both repos out as siblings builds korps against *this
-# PR's* source:
+# korps depends on published a2a-rs, so it has to be *told* to build against
+# this PR. The job writes a `[patch.crates-io]` section into korps' workspace
+# manifest pointing at the PR checkout:
 #
 #   $GITHUB_WORKSPACE/a2a-rs   <- the PR
-#   $GITHUB_WORKSPACE/korps    <- built against it
+#   $GITHUB_WORKSPACE/korps    <- patched to build against it
+#
+# korps carried such a patch itself until 2026-08-18, which made this work
+# without the injection step. It does not any more, and a canary that builds
+# korps against the *published* a2a-rs would pass no matter what this PR does.
 #
 # Two setup steps are needed before this is worth trusting:
 #
@@ -76,10 +80,46 @@ jobs:
         with:
           workspaces: korps
 
-      # Deliberately not `--locked`. korps' lockfile pins the versions its
-      # patched checkout resolved to; a PR here that bumps one would fail on the
-      # lock rather than on the thing this job exists to find. Letting cargo
-      # re-resolve is the point — that is what a korps developer will hit.
+      # Point korps at this PR. Appended rather than templated over the file so
+      # the rest of korps' manifest — the version requirements it declares — is
+      # exactly what a real consumer has. A patch keeps those requirements and
+      # swaps the source, so a PR that breaks korps' *declared* API surface
+      # still fails here.
+      - name: Patch korps onto this checkout
+        if: steps.guard.outputs.run == 'true'
+        working-directory: korps
+        run: |
+          cat >> Cargo.toml <<'PATCH'
+
+          [patch.crates-io]
+          a2a-rs = { path = "../a2a-rs/a2a-rs" }
+          a2a-llm = { path = "../a2a-rs/a2a-llm" }
+          a2a-mcp = { path = "../a2a-rs/a2a-mcp" }
+          a2a-ap2 = { path = "../a2a-rs/a2a-ap2" }
+          a2a-web-client = { path = "../a2a-rs/a2a-client" }
+          PATCH
+          echo "--- appended:"; tail -8 Cargo.toml
+
+      # Prove the patch took, before spending a build on it. A canary that
+      # resolved a2a-rs from the registry would pass no matter what this PR
+      # does, which is worse than having no canary.
+      - name: Verify korps resolves a2a-rs to this PR
+        if: steps.guard.outputs.run == 'true'
+        working-directory: korps
+        run: |
+          set -euo pipefail
+          src=$(cargo metadata --format-version 1                 | python3 -c "import json,sys; print(next(p['manifest_path'] for p in json.load(sys.stdin)['packages'] if p['name']=='a2a-rs'))")
+          echo "a2a-rs resolves to: $src"
+          case "$src" in
+            "$GITHUB_WORKSPACE"/a2a-rs/a2a-rs/Cargo.toml)
+              echo "ok: building against this PR" ;;
+            *)
+              echo "::error::a2a-rs resolved to $src, not this PR's checkout — the patch did not take, so this job would prove nothing."
+              exit 1 ;;
+          esac
+
+      # Deliberately not `--locked`. The patch changes what resolves, so korps'
+      # committed lockfile no longer matches by construction.
       - name: Build korps against it
         if: steps.guard.outputs.run == 'true'
         working-directory: korps
