@@ -101,7 +101,7 @@
 //!
 //! This library integrates with:
 //! - [`a2a-rs`](https://docs.rs/a2a-rs) - Core A2A protocol implementation
-//! - [`a2a-agents`](https://docs.rs/a2a-agents) - Declarative agent framework
+//! - [`korps`](https://github.com/EmilLindfors/korps) - Declarative agent framework
 //! - Any agent implementing the A2A Protocol v1.0.0
 //!
 //! ## Examples

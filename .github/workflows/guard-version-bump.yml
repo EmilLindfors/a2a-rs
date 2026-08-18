@@ -36,9 +36,16 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --depth=1 origin "$BASE_REF"
+          # `--diff-filter=M` restricts this to manifests that already existed on
+          # the base branch. A *new* crate has to introduce a `version = "…"`
+          # line — there is no version to bump yet, and release-plz reads the
+          # first one from the manifest rather than computing it — so without
+          # this filter every crate addition fails the guard. That is what
+          # happened to a2a-llm 0.1.0 on the protocol/platform split.
+          #
           # Only the package `version = "…"` line at column 0 counts; dependency
           # specs (`foo = { version = "…" }`) are inline and don't match.
-          if git diff "origin/$BASE_REF...HEAD" -- '**/Cargo.toml' 'Cargo.toml' \
+          if git diff --diff-filter=M "origin/$BASE_REF...HEAD" -- '**/Cargo.toml' 'Cargo.toml' \
                | grep -E '^\+version = "'; then
             echo "::error::A crate package version was changed in this PR."
             echo "Crate versions are owned by release-plz — do not bump them by hand."

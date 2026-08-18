@@ -332,8 +332,13 @@ pub struct PushNotificationRegistry {
 impl PushNotificationRegistry {
     /// Create a new push notification registry
     pub fn new(sender: impl PushNotificationSender + 'static) -> Self {
+        Self::from_shared(Arc::new(sender))
+    }
+
+    /// Create a registry over a sender that is already behind an `Arc`.
+    pub fn from_shared(sender: Arc<dyn PushNotificationSender>) -> Self {
         Self {
-            sender: Arc::new(sender),
+            sender,
             registry: Arc::new(Mutex::new(std::collections::HashMap::new())),
         }
     }

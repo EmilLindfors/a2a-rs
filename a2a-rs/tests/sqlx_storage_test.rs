@@ -2,11 +2,11 @@
 
 #[cfg(feature = "sqlx-storage")]
 mod sqlx_tests {
-    use a2a_rs::adapter::storage::{DatabaseConfig, SqlxTaskStorage};
+    use a2a_rs::adapter::storage::{DatabaseConfig, SqlxStorageBuilder, SqlxTaskStorage};
     use a2a_rs::domain::TaskState;
     use a2a_rs::port::{
-        AsyncConversationStore, AsyncNotificationManager, AsyncStreamingHandler,
-        AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
+        AsyncContextStateStore, AsyncConversationStore, AsyncNotificationManager,
+        AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
     };
     use a2a_rs::{A2AError, TaskPushNotificationConfig};
     use std::sync::Arc;
@@ -26,7 +26,7 @@ mod sqlx_tests {
             .max_connections(1)
             .build();
 
-        SqlxTaskStorage::new(&config.url).await
+        SqlxStorageBuilder::from_config(&config).connect().await
     }
 
     /// Everything the conversation tests need to say something.
@@ -249,6 +249,46 @@ mod sqlx_tests {
             matches!(err, A2AError::ContextAccessDenied { .. }),
             "{err:?}"
         );
+        Ok(())
+    }
+
+    /// Claiming a context reads before it writes, so several callers can all
+    /// find it unheld and all try to claim it. Exactly one may end up owning it
+    /// — the rest have to be refused rather than proceeding on an insert that
+    /// was ignored.
+    #[tokio::test]
+    async fn concurrent_first_readers_do_not_all_get_the_context()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // A pool wider than one, so the claims actually overlap.
+        let config = DatabaseConfig::builder()
+            .url("sqlite::memory:".to_string())
+            .max_connections(8)
+            .build();
+        let storage = Arc::new(SqlxStorageBuilder::from_config(&config).connect().await?);
+        storage.create(&tid("t1"), &cid("c1")).await?;
+        storage
+            .update_status(&tid("t1"), TaskState::Completed, Some(said("private")))
+            .await?;
+
+        let mut claimants = tokio::task::JoinSet::new();
+        for n in 0..8 {
+            let storage = storage.clone();
+            claimants.spawn(async move {
+                storage
+                    .load(&cid("c1"), Some(&format!("principal-{n}")), None)
+                    .await
+            });
+        }
+
+        let mut allowed = 0;
+        while let Some(result) = claimants.join_next().await {
+            match result? {
+                Ok(_) => allowed += 1,
+                Err(A2AError::ContextAccessDenied { .. }) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        assert_eq!(allowed, 1, "one principal owns a context, not several");
         Ok(())
     }
 
@@ -552,6 +592,71 @@ mod sqlx_tests {
         Ok(())
     }
 
+    /// The pool is sized by what the caller asked for, not by sqlx's default.
+    #[tokio::test]
+    async fn pool_is_sized_by_the_builder() -> Result<(), Box<dyn std::error::Error>> {
+        let storage = SqlxTaskStorage::builder("sqlite::memory:")
+            .max_connections(3)
+            .connect()
+            .await?;
+        assert_eq!(storage.max_connections(), 3);
+
+        // Unconfigured stays on sqlx's default, so `new` is sized as it was.
+        let default = SqlxTaskStorage::new("sqlite::memory:").await?;
+        assert_eq!(default.max_connections(), 10);
+
+        Ok(())
+    }
+
+    /// `DatabaseConfig::max_connections` reaches the pool.
+    #[tokio::test]
+    async fn pool_is_sized_by_the_database_config() -> Result<(), Box<dyn std::error::Error>> {
+        let config = DatabaseConfig::builder()
+            .url("sqlite::memory:".to_string())
+            .max_connections(7)
+            .build();
+
+        let storage = SqlxStorageBuilder::from_config(&config).connect().await?;
+        assert_eq!(storage.max_connections(), 7);
+
+        Ok(())
+    }
+
+    /// A pool that hands out no connections would fail every query, so it is
+    /// refused where it is written rather than at the first read.
+    #[tokio::test]
+    async fn a_pool_of_no_connections_is_refused() {
+        let Err(err) = SqlxTaskStorage::builder("sqlite::memory:")
+            .max_connections(0)
+            .connect()
+            .await
+        else {
+            panic!("a zero-connection pool must not open");
+        };
+
+        assert!(
+            err.to_string().contains("max_connections"),
+            "error should name the setting: {err}"
+        );
+    }
+
+    /// Additional migrations are executed, not collected and dropped.
+    #[tokio::test]
+    async fn additional_migrations_run() {
+        let Err(err) = SqlxTaskStorage::builder("sqlite::memory:")
+            .migrations(["THIS IS NOT SQL"])
+            .connect()
+            .await
+        else {
+            panic!("a broken migration must fail construction");
+        };
+
+        assert!(
+            err.to_string().contains("Additional migration 1"),
+            "error should name the migration: {err}"
+        );
+    }
+
     /// Subscriber management is not a storage responsibility: it lives in
     /// `InMemoryStreamingHandler`. This pins the registry semantics on that
     /// adapter.
@@ -723,6 +828,181 @@ mod sqlx_tests {
         let page2 = storage.list(&params).await?;
         assert_eq!(page2.tasks.len(), 3, "Should return 3 tasks");
 
+        Ok(())
+    }
+
+    /// Migration 002 used to drop and recreate `push_notification_configs`, and
+    /// the base migrations re-run on every construction — so every restart threw
+    /// away the webhooks the agent had been told to call, silently. Reopening
+    /// the same file is that restart.
+    #[tokio::test]
+    async fn push_configs_survive_a_restart() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let url = format!("sqlite:{}?mode=rwc", dir.path().join("a2a.db").display());
+        let task_id = Uuid::new_v4().to_string();
+
+        let storage = SqlxTaskStorage::new(&url).await?;
+        storage
+            .create(&tid(&task_id), &cid("restart-context"))
+            .await?;
+        storage
+            .set_config(&TaskPushNotificationConfig {
+                task_id: task_id.clone(),
+                id: "kept".to_string(),
+                url: "https://example.com/kept".to_string(),
+                ..Default::default()
+            })
+            .await?;
+        drop(storage);
+
+        let restarted = SqlxTaskStorage::new(&url).await?;
+        let configs = restarted
+            .list_configs(&a2a_rs::domain::ListTaskPushNotificationConfigsParams {
+                id: task_id.clone(),
+                metadata: None,
+            })
+            .await?;
+
+        assert_eq!(configs.len(), 1, "the config must survive the restart");
+        assert_eq!(configs[0].url, "https://example.com/kept");
+        Ok(())
+    }
+
+    // --- the state bag -------------------------------------------------------
+
+    fn key(raw: &str) -> a2a_rs::domain::StateKey {
+        raw.parse().unwrap()
+    }
+
+    /// A bare key belongs to the conversation it was written in, and reads back
+    /// there and nowhere else.
+    #[tokio::test]
+    async fn a_context_scoped_value_stays_in_its_context() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let storage = create_test_storage().await?;
+
+        storage
+            .remember(&cid("c1"), None, &key("project"), "a2a-rs")
+            .await?;
+
+        let here = storage.load_state(&cid("c1"), None).await?;
+        assert_eq!(here.get(&key("project")), Some("a2a-rs"));
+        assert!(storage.load_state(&cid("c2"), None).await?.is_empty());
+        Ok(())
+    }
+
+    /// What `user:` is for: filed under the principal, so it reads back from a
+    /// conversation that has never seen it — and only for that principal.
+    #[tokio::test]
+    async fn a_user_scoped_value_follows_the_caller_across_contexts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+
+        storage
+            .remember(&cid("c1"), Some("alice"), &key("user:tone"), "brief")
+            .await?;
+
+        let elsewhere = storage.load_state(&cid("c2"), Some("alice")).await?;
+        assert_eq!(elsewhere.get(&key("user:tone")), Some("brief"));
+
+        let someone_else = storage.load_state(&cid("c3"), Some("bob")).await?;
+        assert!(someone_else.is_empty());
+        Ok(())
+    }
+
+    /// With no authenticator there is nothing to file it under, and filing it
+    /// against the context would promise a lifetime it does not have.
+    #[tokio::test]
+    async fn a_user_scoped_write_without_a_principal_is_refused()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+
+        let refused = storage
+            .remember(&cid("c1"), None, &key("user:tone"), "brief")
+            .await;
+        assert!(matches!(refused, Err(A2AError::InvalidParams(_))));
+        assert!(storage.load_state(&cid("c1"), None).await?.is_empty());
+        Ok(())
+    }
+
+    /// Writing the same key again replaces it rather than accumulating rows —
+    /// the upsert is what the primary key is there for.
+    #[tokio::test]
+    async fn writing_a_key_twice_replaces_it() -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+
+        storage
+            .remember(&cid("c1"), None, &key("project"), "old")
+            .await?;
+        storage
+            .remember(&cid("c1"), None, &key("project"), "new")
+            .await?;
+
+        let state = storage.load_state(&cid("c1"), None).await?;
+        assert_eq!(state.len(), 1);
+        assert_eq!(state.get(&key("project")), Some("new"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn forgetting_reports_whether_the_key_held_anything()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+
+        storage
+            .remember(&cid("c1"), None, &key("project"), "a2a-rs")
+            .await?;
+        assert!(storage.forget(&cid("c1"), None, &key("project")).await?);
+        assert!(!storage.forget(&cid("c1"), None, &key("project")).await?);
+        assert!(storage.load_state(&cid("c1"), None).await?.is_empty());
+        Ok(())
+    }
+
+    /// The state bag is behind the same ownership check as the transcript: a
+    /// context id that reads back what was remembered in it is a capability.
+    #[tokio::test]
+    async fn another_principal_cannot_read_or_write_a_claimed_context()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let storage = create_test_storage().await?;
+
+        storage
+            .remember(&cid("c1"), Some("alice"), &key("project"), "a2a-rs")
+            .await?;
+
+        assert!(matches!(
+            storage.load_state(&cid("c1"), Some("bob")).await,
+            Err(A2AError::ContextAccessDenied { .. })
+        ));
+        assert!(matches!(
+            storage
+                .remember(&cid("c1"), Some("bob"), &key("project"), "theirs")
+                .await,
+            Err(A2AError::ContextAccessDenied { .. })
+        ));
+        Ok(())
+    }
+
+    /// The reason the bag is in the database at all. The control plane restarts
+    /// agents on purpose, and a fact the model was asked to remember has to
+    /// still be there afterwards.
+    #[tokio::test]
+    async fn remembered_values_survive_a_restart() -> Result<(), Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let url = format!("sqlite:{}?mode=rwc", dir.path().join("a2a.db").display());
+
+        let storage = SqlxTaskStorage::new(&url).await?;
+        storage
+            .remember(&cid("c1"), Some("alice"), &key("project"), "a2a-rs")
+            .await?;
+        storage
+            .remember(&cid("c1"), Some("alice"), &key("user:tone"), "brief")
+            .await?;
+        drop(storage);
+
+        let restarted = SqlxTaskStorage::new(&url).await?;
+        let state = restarted.load_state(&cid("c1"), Some("alice")).await?;
+        assert_eq!(state.get(&key("project")), Some("a2a-rs"));
+        assert_eq!(state.get(&key("user:tone")), Some("brief"));
         Ok(())
     }
 

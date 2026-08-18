@@ -12,11 +12,14 @@
 //!   - `notification_manager`: Push notifications
 //!   - `streaming_handler`: Real-time updates
 //!   - `conversation_store`: Durable conversation memory for a context
+//!   - `context_state`: The facts an agent keeps about a context, apart from
+//!     the transcript
 //!   - `request_context`: Who is calling, carried from the transport inward
 
 // Business capability ports (focused domain interfaces)
 pub mod authenticator;
 pub mod client;
+pub mod context_state;
 pub mod conversation_store;
 pub mod interceptor;
 pub mod message_handler;
@@ -30,6 +33,7 @@ pub use authenticator::{
     AuthContext, AuthContextExtractor, AuthPrincipal, Authenticator, CompositeAuthenticator,
 };
 pub use client::{StreamEvent, StreamItem, Transport};
+pub use context_state::{AsyncContextStateStore, NoContextState};
 pub use conversation_store::{
     AsyncConversationStore, AsyncConversationStoreExt, NoConversationMemory,
 };

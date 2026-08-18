@@ -1,0 +1,27 @@
+[package]
+name = "a2a-llm"
+version = "0.1.0"
+edition = "2024"
+rust-version.workspace = true
+authors = ["Emil Lindfors <emil@lindfors.no>"]
+description = "Provider-neutral LLM vocabulary and chat-completion providers (OpenAI-compatible, Gemini)"
+license = "MIT"
+repository = "https://github.com/emillindfors/a2a-rs"
+keywords = ["llm", "openai", "gemini", "tool-calling", "streaming"]
+categories = ["api-bindings", "asynchronous"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true, features = ["json", "stream"] }
+uuid = { workspace = true, features = ["v4"] }
+async-trait = { workspace = true }
+futures = { workspace = true }
+eventsource-stream = "0.2"
+async-stream = "0.3"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

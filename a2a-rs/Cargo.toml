@@ -72,6 +72,9 @@ tower = { version = "0.5", features = ["util"] }
 # clock instead of spending it. Listed here rather than relied on via workspace
 # feature unification: `cargo test -p a2a-rs` alone would not get it otherwise.
 tokio = { workspace = true, features = ["test-util"] }
+# A SQLite file that outlives one `SqlxTaskStorage` and not the test, which is
+# how "does this survive a restart" is asked without an in-memory database.
+tempfile = "3"
 
 [features]
 default = ["server", "tracing"]
@@ -89,10 +92,12 @@ jsonrpc-server = ["server", "dep:axum"]
 tracing = ["dep:tracing", "dep:tracing-subscriber"]
 
 auth = ["dep:jsonwebtoken", "dep:oauth2", "dep:openidconnect", "dep:reqwest"]
-sqlx-storage = ["server", "dep:sqlx"]
+sqlx-storage = ["server", "dep:sqlx", "sqlx/any"]
+# One backend each. `SqlxTaskStorage` runs on sqlx's `Any` driver and picks the
+# backend from the URL scheme at runtime, so enabling both gives one binary that
+# serves either.
 sqlite = ["sqlx-storage", "sqlx/sqlite"]
 postgres = ["sqlx-storage", "sqlx/postgres"]
-mysql = ["sqlx-storage", "sqlx/mysql"]
 full = ["http-client", "http-server", "jsonrpc-server", "jsonrpc-client", "tracing", "auth", "sqlite", "postgres"]
 
 

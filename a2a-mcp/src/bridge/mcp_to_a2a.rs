@@ -4,7 +4,7 @@ use crate::{
     converters::{MessageConverter, llm_tool::LlmToolConverter},
     error::{A2aMcpError, Result},
 };
-use a2a_agents_common::llm::{ToolCall, ToolDefinition};
+use a2a_llm::{ToolCall, ToolDefinition};
 use a2a_rs::{
     domain::{Message, Part, Role, Task, TaskState, TaskStatus},
     port::{AsyncMessageHandler, RequestContext},

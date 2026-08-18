@@ -52,7 +52,6 @@ tokio = { workspace = true, features = ["full"] }
 wiremock = "0.6"
 axum = "0.7"
 futures-util = "0.3"
-a2a-agents = { path = "../a2a-agents" }
 async-trait = { workspace = true }
 
 [features]

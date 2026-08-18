@@ -1,7 +1,7 @@
 //! Converter between MCP Tools and LLM Tool Primitives
 
 use crate::error::{A2aMcpError, Result};
-use a2a_agents_common::llm::{ToolCall, ToolDefinition};
+use a2a_llm::{ToolCall, ToolDefinition};
 use rmcp::model::{CallToolRequestParams, Tool};
 use serde_json::Value;
 

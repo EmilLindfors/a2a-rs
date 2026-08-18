@@ -1,30 +1,54 @@
 # SQLx Storage Implementation
 
-The a2a-rs library now includes a persistent storage alternative to the in-memory storage using SQLx, supporting SQLite, PostgreSQL, and MySQL databases.
+`SqlxTaskStorage` persists tasks, history, push configs and conversations to
+**SQLite or PostgreSQL**. The backend follows from the URL scheme at runtime, so
+one binary serves either.
 
 ## Features
 
 - **Persistent task storage** - Tasks survive application restarts
 - **Multi-process support** - Multiple processes can share the same database
 - **ACID transactions** - Ensures data consistency
-- **Automatic migrations** - Database schema is set up automatically
-- **Database flexibility** - Supports SQLite, PostgreSQL, and MySQL
+- **Automatic migrations** - Database schema is set up automatically, and the
+  migrations re-run safely on every start (on PostgreSQL under an advisory lock,
+  so several agents starting at once is fine)
 - **Push notification persistence** - Notification configurations are stored in the database
 
 ## Setup
 
 ### Dependencies
 
-Add the SQLx storage feature to your `Cargo.toml`:
+Add the backend you need to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-a2a-rs = { version = "0.1", features = ["sqlite"] }  # For SQLite
-# or
-a2a-rs = { version = "0.1", features = ["postgres"] }  # For PostgreSQL  
-# or
-a2a-rs = { version = "0.1", features = ["mysql"] }     # For MySQL
+a2a-rs = { version = "0.6", features = ["sqlite"] }               # SQLite
+a2a-rs = { version = "0.6", features = ["postgres"] }             # PostgreSQL
+a2a-rs = { version = "0.6", features = ["sqlite", "postgres"] }   # decided by the URL
 ```
+
+MySQL is not supported. A `mysql:` URL is recognized so the error can say so
+rather than failing on an unknown scheme; there was a `mysql` cargo feature until
+0.6, and all it did was compile a driver nothing used.
+
+### Which backend the URL picks
+
+| URL | Backend |
+|---|---|
+| `sqlite::memory:` | SQLite, one database per store, gone when it is dropped |
+| `sqlite:tasks.db` | SQLite file |
+| `postgres://user:pass@host/db` | PostgreSQL |
+
+The schema is written twice, once per dialect, under `migrations/sqlite/` and
+`migrations/postgres/` — identity columns, timestamp defaults and the
+`updated_at` triggers cannot be spelled the same way. The *queries* are written
+once and the differences (parameter placeholders, the two upserts, the timestamp
+comparison) live in one internal `Dialect` type, so the two backends cannot
+drift apart the way two copies of a store would.
+
+JSON payloads are stored as text on both, including PostgreSQL. The store reads
+and writes them as serialized strings and never queries into them, and one query
+path across both backends is worth more than `jsonb` operators nothing uses.
 
 ### Database Configuration
 
@@ -52,6 +76,30 @@ let config = DatabaseConfig::builder()
 // From environment variables
 let config = DatabaseConfig::from_env()?;
 ```
+
+`SqlxTaskStorage::new` takes a URL and everything else at its default. To size
+the pool, turn statement logging on, swap the push sender, or run your own
+migrations, open the store through its builder:
+
+```rust
+use a2a_rs::adapter::storage::{SqlxStorageBuilder, SqlxTaskStorage};
+use std::time::Duration;
+
+let storage = SqlxTaskStorage::builder("postgres://user:pass@localhost/a2a")
+    .max_connections(20)
+    .acquire_timeout(Duration::from_secs(10))
+    .log_statements(true)
+    .migrations([include_str!("../migrations/001_my_agent.sql")])
+    .connect()
+    .await?;
+
+// Or take the pool settings from a `DatabaseConfig`:
+let storage = SqlxStorageBuilder::from_config(&config).connect().await?;
+```
+
+Unset, the pool is sized as sqlx sizes it: 10 connections, a 30-second acquire
+timeout. Statement logging is off unless asked for — sqlx logs every statement
+at `DEBUG` by default, and this crate makes that a choice.
 
 ### Environment Variables
 
@@ -159,25 +207,36 @@ The SQLx storage is optimized for data persistence and consistency rather than r
 ## Production Considerations
 
 1. **Connection Pooling**: Configure appropriate `max_connections` based on your workload
-2. **Database Maintenance**: Regular vacuuming/optimization for SQLite, standard maintenance for PostgreSQL/MySQL
+2. **Database Maintenance**: Regular vacuuming/optimization for SQLite, standard maintenance for PostgreSQL
 3. **Monitoring**: Enable query logging during development with `enable_logging: true`
 4. **Backup Strategy**: Implement regular database backups for production deployments
 5. **Migration Strategy**: The current implementation runs migrations on startup - consider external migration tools for production
 
 ## Limitations
 
-1. **Single Database Type**: Currently optimized for SQLite, PostgreSQL and MySQL support is experimental
-2. **Schema Evolution**: No migration strategy for schema changes beyond the initial setup
-3. **History Loading**: Full history reconstruction from database is not fully implemented
-4. **Concurrent Access**: While ACID-compliant, high-concurrency scenarios may need additional optimization
+1. **Schema Evolution**: No migration strategy for schema changes beyond the initial setup
+2. **Concurrent Access**: While ACID-compliant, high-concurrency scenarios may need additional optimization
 
 ## Testing
 
-Run the SQLx storage tests:
+The SQLite tests need nothing:
 
 ```bash
-cargo test --test sqlx_storage_test --features sqlite
+cargo test -p a2a-rs --test sqlx_storage_test --features sqlite
 ```
+
+The PostgreSQL tests need a server, and skip without one:
+
+```bash
+docker run --rm -e POSTGRES_PASSWORD=a2a -e POSTGRES_DB=a2a -p 5432:5432 postgres:17
+A2A_TEST_POSTGRES_URL=postgres://postgres:a2a@localhost/a2a \
+  cargo test -p a2a-rs --features full --test postgres_storage_test
+```
+
+They cover what can only differ by backend — the schema, the two upserts, the
+placeholder rewrite, the timestamp comparison, and every column the driver has
+to decode. The rest of the storage behaviour is the same code and is tested on
+SQLite. CI runs both.
 
 The tests cover:
 - Task lifecycle operations
