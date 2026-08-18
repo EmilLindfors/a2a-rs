@@ -226,7 +226,7 @@ async fn the_streaming_path_carries_the_caller_too() {
 
 /// The ConnectRPC path, over a real socket.
 ///
-/// This is the transport `a2a-agents` actually serves, and its principal takes a
+/// This is the transport korps actually serves, and its principal takes a
 /// different route than the JSON-RPC one: the middleware puts it in the request
 /// extensions, and `connectrpc` moves those onto its own `Context`. Nothing in
 /// the unit tests above covers that handoff, and it is exactly the kind of

@@ -373,7 +373,7 @@ async fn remembered_values_round_trip_through_both_scopes() {
         .expect("write a user-scoped value");
     // Again, to exercise the conflict branch rather than the insert.
     storage
-        .remember(&context, Some(&caller), &project, "a2a-agents")
+        .remember(&context, Some(&caller), &project, "korps")
         .await
         .expect("replace it");
 
@@ -381,7 +381,7 @@ async fn remembered_values_round_trip_through_both_scopes() {
         .load_state(&context, Some(&caller))
         .await
         .expect("read both scopes back");
-    assert_eq!(state.get(&project), Some("a2a-agents"));
+    assert_eq!(state.get(&project), Some("korps"));
     assert_eq!(state.get(&tone), Some("brief"));
 
     // The user-scoped half is filed under the principal, so another context of

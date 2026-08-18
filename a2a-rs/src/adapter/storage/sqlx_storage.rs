@@ -385,7 +385,7 @@ impl SqlxTaskStorage {
     /// Everything runs through the pool and never on a borrowed connection.
     /// sqlx implements `Executor` for `&'c mut AnyConnection` at a single
     /// lifetime, so a future holding such a borrow cannot be proved `Send` by a
-    /// caller that spawns — which `a2a up` does for every agent — and the whole
+    /// caller that spawns — which `korps-fleet up` does for every agent — and the whole
     /// construction path would stop compiling for anyone who spawns it.
     ///
     /// Owned `AnyPool` here and in every helper below, cloned per call — it is

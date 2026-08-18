@@ -163,7 +163,7 @@ impl LlmConfigError {
 ///
 /// Reasoning tokens are billed, so "asked for, and this provider has nowhere to
 /// put it" has to be tellable from "never asked for". Both used to resolve to
-/// the same `None` on [`SelectedLlm`], which left `a2a doctor` unable to report
+/// the same `None` on [`SelectedLlm`], which left `korps doctor` unable to report
 /// a setting the run would quietly discard.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum ReasoningPlan {
@@ -223,7 +223,7 @@ impl std::fmt::Display for ReasoningPlan {
     }
 }
 
-/// A resolved provider plus what a startup line or `a2a doctor` needs to
+/// A resolved provider plus what a startup line or `korps doctor` needs to
 /// describe it.
 ///
 /// [`model`](Self::model) is resolved here because a config often leaves it to
@@ -318,7 +318,7 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
 /// Warn when a configured [`LlmSettings::reasoning`] cannot reach the wire.
 ///
 /// Reasoning tokens are billed, so a provider that drops the setting says so at
-/// startup rather than leaving the caller to infer it from the bill. `a2a run`
+/// startup rather than leaving the caller to infer it from the bill. `korps run`
 /// has only this log line; a report reads [`SelectedLlm::reasoning`] instead.
 fn warn_unsupported_reasoning(settings: &LlmSettings) {
     if let Some(reasoning) = settings.reasoning {
@@ -618,7 +618,7 @@ mod tests {
     }
 
     /// A provider with no reasoning field reports what it discarded. This used
-    /// to resolve to the same `None` as "nobody asked", so `a2a doctor` could
+    /// to resolve to the same `None` as "nobody asked", so `korps doctor` could
     /// only repeat which variables were set and the setting was found out about
     /// on the bill.
     #[test]
@@ -662,7 +662,7 @@ mod tests {
     }
 
     /// The error lists the valid providers, since the usual cause is a typo.
-    /// These settings ride inside an `a2a doctor` requirement, and a report or a
+    /// These settings ride inside a `korps doctor` requirement, and a report or a
     /// test failure that prints one must not print the key.
     #[test]
     fn debug_output_redacts_the_api_key() {

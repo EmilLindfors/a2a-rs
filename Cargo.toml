@@ -8,7 +8,7 @@ exclude = ["a2a-mcp/rust-sdk"]
 # version number is seven chances to update six of them.
 [workspace.package]
 # The toolchain this workspace is built and tested with, and the one the agent
-# container image pins (`a2a-agents/Dockerfile`). Deliberately not the lowest
+# container image pins (korps' `Dockerfile`). Deliberately not the lowest
 # version that would compile: an MSRV nobody runs is a guess, and the previous
 # claim of 1.85 had already become false — the dependency graph now needs 1.87+
 # (`icu_*` want 1.86, `process-wrap` 1.87), which surfaced only when the

@@ -98,7 +98,7 @@ them are worth knowing before touching this again:
 - **Nothing may execute on a borrowed connection.** sqlx implements `Executor`
   for `&'c mut AnyConnection` at a single lifetime, so a future holding that
   borrow across an await can only be proved `Send` at a concrete lifetime — and
-  a caller that spawns asks for every lifetime. `a2a up` puts each agent on a
+  a caller that spawns asks for every lifetime. `korps-fleet up` puts each agent on a
   `JoinSet`, so the whole construction path stops compiling, reported as
   "implementation of `Executor` is not general enough" at the spawn site, a long
   way from the cause. Execute through `&AnyPool`, always. (Checked against sqlx
@@ -404,7 +404,7 @@ Name such predicates after the question the caller is actually asking
 (`settles_task`), not after the field they happen to read.
 
 **`EnvFilter::from_default_env()` enables nothing when `RUST_LOG` is unset.** It
-made `a2a run` start a server and print absolutely nothing. Any new binary needs
+made `korps run` start a server and print absolutely nothing. Any new binary needs
 an explicit fallback filter.
 
 **rustls ignores `SSL_CERT_FILE`, so a TLS-intercepting proxy breaks every
