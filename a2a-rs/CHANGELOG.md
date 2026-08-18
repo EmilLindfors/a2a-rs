@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.6.0...a2a-rs-v0.7.0) - 2026-08-18
+
+### Changed
+
+- Split the workspace along protocol vs platform
+
+### Documentation
+
+- The README described a workspace that no longer exists
+
+### Fixed
+
+- A2a-rs builds without its optional `tracing` feature again
+
+### Other
+
+- Context state, oauth2/oidc verification, postgres migrations
+
 ## [0.6.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.5.0...a2a-rs-v0.6.0) - 2026-08-15
 
 ### Added

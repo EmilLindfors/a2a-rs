@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/EmilLindfors/a2a-rs/compare/a2acli-v0.6.0...a2acli-v0.6.1) - 2026-08-18
+
+### Changed
+
+- Move a2acli into a2a-cli/, publish a2a-llm 0.1.0
+
 ## [0.6.0](https://github.com/EmilLindfors/a2a-rs/compare/a2acli-v0.5.0...a2acli-v0.6.0) - 2026-08-15
 
 ### Added

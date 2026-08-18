@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.6.0...a2a-mcp-v0.6.1) - 2026-08-18
+
+### Changed
+
+- Split the workspace along protocol vs platform
+
 ## [0.6.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.5.0...a2a-mcp-v0.6.0) - 2026-08-15
 
 ### Added
