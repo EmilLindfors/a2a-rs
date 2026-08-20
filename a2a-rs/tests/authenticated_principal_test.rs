@@ -273,7 +273,13 @@ async fn the_connectrpc_path_carries_the_caller_over_a_socket() {
     );
     let message = Message::user_text("hello".to_string(), "m1".to_string());
     client
-        .send_task_message(Some("t1"), &message, None, None, SendCompletion::WhenCreated)
+        .send_task_message(
+            Some("t1"),
+            &message,
+            None,
+            None,
+            SendCompletion::WhenCreated,
+        )
         .await
         .expect("the authenticated call is served");
 

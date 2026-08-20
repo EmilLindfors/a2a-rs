@@ -64,9 +64,11 @@ fn send_message_params_ids(task_id: Option<&str>, context_id: Option<&str>) -> V
 
 /// Send `params` and return the `result.task`, failing on a JSON-RPC error.
 async fn send_ok(a: &JsonRpcAdapter, params: Value) -> Value {
-    let value =
-        serde_json::to_value(a.handle_unary(request(methods::SEND_MESSAGE, params), None).await)
-            .unwrap();
+    let value = serde_json::to_value(
+        a.handle_unary(request(methods::SEND_MESSAGE, params), None)
+            .await,
+    )
+    .unwrap();
     assert!(value.get("error").is_none(), "unexpected error: {value:?}");
     value["result"]["task"].clone()
 }

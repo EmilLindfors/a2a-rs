@@ -376,7 +376,10 @@ async fn stream_without_a_task_id_gets_a_server_assigned_one() {
     // omitted-id rule has to hold on the streaming route too (issue #51).
     let a = streaming_adapter();
     let resp = rest_router(a.clone())
-        .oneshot(post("/message:stream", &send_message_body_without_task_id()))
+        .oneshot(post(
+            "/message:stream",
+            &send_message_body_without_task_id(),
+        ))
         .await
         .unwrap();
     let event = first_sse_event(resp).await;
