@@ -5,8 +5,9 @@
 # tag. The `release` job (see .github/workflows/release-plz.yml) runs on push to
 # master and publishes only the crates whose Cargo.toml version is ahead of
 # crates.io, tagging each one. An `a2acli-v*` tag is what release-binaries.yml
-# builds prebuilt binaries from — though it has to be dispatched by hand,
-# because a tag pushed with GITHUB_TOKEN does not start a workflow.
+# builds prebuilt binaries from; that trigger fires on its own once the
+# RELEASE_PLZ_APP_ID variable and RELEASE_PLZ_APP_PRIVATE_KEY secret are set,
+# since a tag pushed with the default GITHUB_TOKEN does not start a workflow.
 #
 # Why this file exists: 0.3.0 produced wrong changelog compare-links because the
 # repo carried both per-crate tags and a manual umbrella `v0.3.0` tag, so the
@@ -48,7 +49,12 @@ trim = true
 # changelog; the substance (feat/fix/perf/refactor/docs) is grouped.
 commit_parsers = [
   { message = "(?i)^(chore\\(release\\)|release v|prepare release)", skip = true },
-  { message = "(?i)(rustfmt|cargo fmt|^fmt\\b| fmt\\b|clippy|fixed ci|fix ci|ci:|^ci\\b)", skip = true },
+  # Non-conventional cleanup commits ("cargo fmt", "clippy fixes", "fixed CI").
+  # Anchored at the start on purpose: unanchored, this also swallowed real
+  # entries such as "fix: clippy-reported bug in the parser" — the commit still
+  # bumped the version but never appeared in the changelog. Well-formed
+  # `ci:`/`chore:`/`style:` commits are handled by the parsers below.
+  { message = '(?i)^(rustfmt|cargo fmt|fmt\b|clippy|fixed ci|fix ci)', skip = true },
   { message = "^feat", group = "Added" },
   { message = "^fix", group = "Fixed" },
   { message = "^perf", group = "Performance" },

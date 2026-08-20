@@ -1,0 +1,15 @@
+version: 2
+updates:
+  # The release workflow pins release-plz/action to an exact version so a
+  # compromised or broken upstream tag cannot silently reach the publish job.
+  # That pin only stays useful if something bumps it, which is this.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      # `ci:` keeps these out of the user-facing changelog (see release-plz.toml).
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]

@@ -6,18 +6,25 @@ name: Release Binaries
 # along with the rest of the platform, so this used to build `-p a2a-agents
 # --bin a2a`, a package that no longer exists here.
 #
-# Note the push trigger rarely fires on its own: release-plz pushes tags with
-# `GITHUB_TOKEN`, and a token-pushed tag does not start a workflow. In practice
-# this is run from `workflow_dispatch` with the tag release-plz just cut.
+# Invoked as a reusable workflow by release-plz.yml, as a dependent job of the
+# release that just published a2acli - see the `release-binaries` job there. The
+# tag comes in as an input rather than from a `push: tags:` event, because
+# release-plz pushes tags with GITHUB_TOKEN and a token-pushed tag does not start
+# a workflow; relying on that event is what made every release need a manual
+# dispatch. `workflow_dispatch` is kept for rebuilding assets on an existing tag.
 on:
-  push:
-    tags:
-      - "a2acli-v*"
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to build and upload binaries for (e.g. a2acli-v0.6.2)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag to build and upload binaries for (e.g. a2acli-v0.6.0)"
+        description: "Tag to build and upload binaries for (e.g. a2acli-v0.6.2)"
         required: true
+        type: string
 
 permissions:
   contents: write
@@ -51,9 +58,9 @@ jobs:
             use_cross: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
+          ref: ${{ inputs.tag }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -87,12 +94,12 @@ jobs:
         if: runner.os != 'Windows'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag }}
           files: a2acli-${{ matrix.target }}.tar.gz
 
       - name: Upload Release Asset (Windows)
         if: runner.os == 'Windows'
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
+          tag_name: ${{ inputs.tag }}
           files: a2acli-${{ matrix.target }}.zip
