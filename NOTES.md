@@ -483,23 +483,41 @@ what ships; tags are an *output*, never pushed by hand.
 - **The root `CHANGELOG.md` is hand-written.** It is the workspace-level record
   and the place to write prose about a change; that is where the `[Unreleased]`
   section lives.
-- The binary build (`release-binaries.yml`) needs manual dispatch —
-  `GITHUB_TOKEN` will not auto-trigger it from a release-plz tag.
-- **The publish job is gated on the head commit's subject, and both merge
-  shapes have to match.** `release-plz.yml` runs the release only for a merged
-  release PR or a manual dispatch, so an ordinary push — or a hand-edited
-  version bump on master — never publishes. The gate originally matched only
-  `chore: release`, the subject a *squash* merge produces. master is protected,
-  so the release lands through whichever PR button was pressed, and a merge
-  commit reads `Merge pull request #N from OWNER/release-plz-…` instead. On
-  2026-08-15 that skipped the publish twice: the bumps landed on master,
-  crates.io stayed on the previous release, and no tags were written. The gate
-  now accepts both subjects.
+- **The publish job runs on every push to master, with no commit-subject gate.**
+  `release-plz release` is a no-op unless a crate's version is ahead of
+  crates.io, so ordinary merges publish nothing and the merge button used for
+  the release PR no longer matters. The gate this replaced tried to recognize
+  the merged release PR by subject, and had to match both a squash merge
+  (`chore: release`) and a merge commit (`Merge pull request #N from
+  OWNER/release-plz-…`). On 2026-08-15 it skipped the publish twice: the bumps
+  landed on master, crates.io stayed on the previous release, no tags were
+  written, and the workflow still reported success. It also meant one transient
+  network failure stranded the release until someone dispatched the job by hand.
+  What actually prevents an uncontrolled publish is `guard-version-bump.yml`,
+  which fails any PR editing a package `version = "…"` outside the release PR,
+  plus branch protection requiring every change to arrive through a PR.
 - **A skipped publish looks like release-plz re-proposing the same bump.**
   Version numbers come from the last *published* release, not from the
   `Cargo.toml` on master, so an unpublished bump makes every later push open a
-  release PR proposing that identical bump again. Two symptoms, one cause: if a
-  release PR keeps reappearing with versions master already carries, check
-  crates.io and the tags before merging it again — merging changes nothing. The
-  way out is a manual `workflow_dispatch` of `Release-plz`, which the gate
-  allows precisely for this.
+  release PR proposing that identical bump again. If a release PR keeps
+  reappearing with versions master already carries, check crates.io and the tags
+  before merging it again — merging changes nothing. Now that the release job is
+  ungated the next push to master retries the publish by itself; a manual
+  `workflow_dispatch` of `Release-plz` forces it immediately.
+- **The binary build is a dependent job, not a tag trigger.** `release-plz.yml`
+  reads the release command's `releases` output (one object per published crate,
+  each with `package_name`/`version`/`tag`), pulls the `a2acli` tag out of it,
+  and calls `release-binaries.yml` as a reusable workflow in the same run. The
+  old `on: push: tags: a2acli-v*` never fired — release-plz pushes that tag with
+  `GITHUB_TOKEN`, and a token-pushed tag does not start a workflow — which is why
+  every release used to need a manual dispatch. `workflow_dispatch` is still
+  there for rebuilding assets on an existing tag.
+- **CI on the release PR needs a real credential; nothing else does.** A PR
+  opened with the default `GITHUB_TOKEN` starts no workflows, so release PRs ran
+  with zero checks — the bumped versions and the regenerated `Cargo.lock` went
+  in unverified. Both release-plz jobs now authenticate with the `RELEASE_TOKEN`
+  secret, a PAT with Contents + Pull requests write, via
+  `${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}`. The fallback means
+  removing the secret degrades the pipeline to bot-authored PRs rather than
+  breaking it. If `release-pr` starts failing with a 403 on `POST /pulls`, the
+  PAT lost Pull requests write or expired — that is the first thing to check.

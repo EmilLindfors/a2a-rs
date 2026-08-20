@@ -1,8 +1,34 @@
 name: Release-plz
 
-permissions:
-  pull-requests: write
-  contents: write
+# Standard two-job release-plz flow (https://release-plz.dev/docs/github/quickstart)
+# with per-crate tags (see release-plz.toml):
+#
+#  - `release-plz-pr` keeps an open "chore: release" PR carrying the pending
+#    version bumps and changelog. Merging it lands the new versions on master.
+#  - `release-plz-release` publishes each crate whose version is ahead of
+#    crates.io and pushes its `{package}-v{version}` tag.
+#
+# Both jobs run on every push to master. `release` is a no-op unless a version
+# in the workspace is ahead of the registry, so ordinary merges cost one
+# registry check and publish nothing.
+#
+# There is deliberately no commit-message gate on the release job any more. The
+# old `if:` tried to recognize the merged release PR by subject line and had to
+# match two different shapes (squash vs. merge commit); it silently skipped the
+# publish on 2026-08-15, leaving the version bumps on master with nothing on
+# crates.io, after which release-plz re-proposed the same bump on every push
+# because it reads the last *published* version. It also meant a transient
+# failure stranded the release until someone dispatched the job by hand.
+# Running unconditionally makes the next push to master retry automatically.
+#
+# What actually prevents an uncontrolled publish is guard-version-bump.yml: it
+# fails any PR that edits a package `version = "…"` outside the release PR, and
+# master is protected so every change arrives through a PR.
+#
+# Both jobs authenticate with the RELEASE_TOKEN secret (a PAT with Contents +
+# Pull requests write), falling back to GITHUB_TOKEN when it is absent. The PAT
+# exists because GitHub refuses to start workflows for anything the default
+# GITHUB_TOKEN created, which left every release PR with zero CI checks.
 
 on:
   push:
@@ -10,44 +36,36 @@ on:
       - master
   workflow_dispatch:
 
+# Grant per job rather than workflow-wide, so the release job never holds
+# pull-requests: write.
+permissions: {}
+
 env:
-  # Force Node 20-pinned JavaScript actions onto Node 24 (silences the
-  # deprecation annotation until the actions update).
+  # Force Node 20-pinned JavaScript actions (Swatinem/rust-cache,
+  # taiki-e/install-action) onto Node 24, silencing the deprecation annotation
+  # until they update.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-# Standard release-plz flow with per-crate tags (see release-plz.toml):
-#  - `release-plz-pr` keeps an open "release" PR with the pending version bumps
-#    and changelog. Merging it lands the new versions on master.
-#  - `release-plz-release` then publishes each crate whose version is ahead of
-#    crates.io and pushes its `{package}-v{version}` tag.
 jobs:
   release-plz-release:
     name: Release-plz release
     runs-on: ubuntu-latest
-    # Publish ONLY when the push is the merged release PR, or on an explicit
-    # manual dispatch. This is the release gate: ordinary pushes to master never
-    # attempt a publish, so a half-finished workspace state or an accidental
-    # hand-edited version bump on master can no longer auto-release. The actual
-    # version bumps are owned by the release PR (release-plz-pr below).
-    #
-    # Both merge shapes are accepted because master is a protected branch, so
-    # every release lands through the PR button and the commit subject depends on
-    # which one was pressed: a squash merge reads "chore: release", a merge commit
-    # reads "Merge pull request #N from OWNER/release-plz-<timestamp>". Matching
-    # only the first silently skipped the publish on 2026-08-15 — the version
-    # bumps landed on master, nothing reached crates.io, and release-plz then
-    # re-proposed the same bump every push, because it reads the last *published*
-    # version, not the one in Cargo.toml.
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      startsWith(github.event.head_commit.message, 'chore: release') ||
-      (startsWith(github.event.head_commit.message, 'Merge pull request') &&
-      contains(github.event.head_commit.message, '/release-plz-'))
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      # Empty unless this run actually published a2acli; drives the binary job.
+      a2acli_tag: ${{ steps.a2acli.outputs.tag }}
+    # No concurrency group here on purpose. The upstream docs omit it because a
+    # queued release job can be evicted by a newer one (GitHub holds only one
+    # pending run per group), and skipping a real release is worse than the race
+    # it would prevent — crates.io rejects a duplicate version outright.
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -55,30 +73,56 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-semver-checks
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-semver-checks
-
+      # The action installs cargo-semver-checks itself (pinned), so there is no
+      # separate install step.
       - name: Run release-plz (release)
-        uses: release-plz/action@v0.5
+        id: release-plz
+        uses: release-plz/action@v0.5.131
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # RELEASE_TOKEN is a PAT with Contents + Pull requests write. It falls
+          # back to GITHUB_TOKEN if the secret is ever removed, so the job still
+          # publishes - it just reverts to a bot identity on the tags and
+          # releases it creates.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      # `releases` is the JSON the release command emitted: one object per
+      # published crate, each carrying package_name/version/tag. Reading the tag
+      # from here is what lets the binary build run as a dependent job in this
+      # same run, instead of waiting on a `push: tags:` event that a
+      # GITHUB_TOKEN-pushed tag never fires.
+      - name: Find the a2acli tag, if this run published it
+        id: a2acli
+        env:
+          RELEASES: ${{ steps.release-plz.outputs.releases }}
+        run: |
+          set -euo pipefail
+          JQ='[.[]? | select(.package_name == "a2acli") | .tag] | first // ""'
+          tag=$(printf '%s' "${RELEASES:-[]}" | jq -r "$JQ")
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ -n "$tag" ]; then
+            echo "a2acli published as $tag - binaries will build."
+          else
+            echo "a2acli not published in this run - skipping binaries."
+          fi
 
   release-plz-pr:
     name: Release-plz PR
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
     concurrency:
       group: release-plz-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -86,17 +130,31 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Install cargo-semver-checks
-        # Lets release-plz auto-detect breaking API changes and bump the minor
-        # (0.x) without relying on `!`/`BREAKING CHANGE:` in commit messages.
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-semver-checks
-
       - name: Run release-plz (release-pr)
-        uses: release-plz/action@v0.5
+        uses: release-plz/action@v0.5.131
         with:
           command: release-pr
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # This is the one place the credential changes behaviour rather than
+          # just the author name: a PR opened with the default GITHUB_TOKEN
+          # starts no workflows, so rust.yml never validated the bumped versions
+          # or the regenerated Cargo.lock before merge. Opening it as
+          # RELEASE_TOKEN's owner makes the release PR run CI like any other.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  # The binary build used to rely on `on: push: tags: a2acli-v*`, which never
+  # fired: release-plz pushes that tag with GITHUB_TOKEN, and a token-pushed tag
+  # does not start a workflow, so every release needed a manual dispatch. Calling
+  # release-binaries.yml as a reusable workflow off the release job's own output
+  # sidesteps the event system entirely - same run, right after the publish, no
+  # credential involved.
+  release-binaries:
+    name: Build a2acli binaries
+    needs: release-plz-release
+    if: ${{ needs.release-plz-release.outputs.a2acli_tag != '' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release-binaries.yml
+    with:
+      tag: ${{ needs.release-plz-release.outputs.a2acli_tag }}

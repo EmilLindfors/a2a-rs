@@ -26,7 +26,7 @@ jobs:
     if: ${{ !startsWith(github.head_ref, 'release-plz-') }}
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -35,7 +35,10 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          git fetch --depth=1 origin "$BASE_REF"
+          # No --depth here: checkout ran with fetch-depth: 0, so the base branch
+          # is already present in full. A shallow fetch on top of it can mark the
+          # repo shallow and break the three-dot merge-base below.
+          git fetch --no-tags origin "$BASE_REF"
           # `--diff-filter=M` restricts this to manifests that already existed on
           # the base branch. A *new* crate has to introduce a `version = "…"`
           # line — there is no version to bump yet, and release-plz reads the
