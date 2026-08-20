@@ -33,7 +33,7 @@ impl Transport for DummyTransport {
     }
     async fn send_task_message(
         &self,
-        _: &str,
+        _: Option<&str>,
         _: &Message,
         _: Option<&str>,
         _: Option<u32>,

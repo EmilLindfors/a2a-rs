@@ -37,7 +37,7 @@
 //! // task finishes, so `task` carries the agent's reply rather than an ack.
 //! let task = client
 //!     .transport
-//!     .send_task_message("task-1", &message, None, None, SendCompletion::WhenSettled)
+//!     .send_task_message(None, &message, None, None, SendCompletion::WhenSettled)
 //!     .await?;
 //! println!("Task ID: {}", task.id);
 //! # Ok(())

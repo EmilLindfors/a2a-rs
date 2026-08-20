@@ -216,9 +216,6 @@ async fn main() -> anyhow::Result<()> {
             wait_timeout,
         } => {
             let transport = build_transport(&cli, &url).await?;
-            let task_id = task_id
-                .clone()
-                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let message = Message::user_text(read_text(text)?, uuid::Uuid::new_v4().to_string());
             // `--no-wait` has to reach the server too. Asking a conformant agent
             // to block and then declining to wait for it just moves the wait
@@ -230,7 +227,7 @@ async fn main() -> anyhow::Result<()> {
             };
             let mut task = transport
                 .send_task_message(
-                    &task_id,
+                    task_id.as_deref(),
                     &message,
                     session_id.as_deref(),
                     *history_length,
@@ -238,6 +235,9 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await
                 .context("sending message")?;
+            // Without `--task-id` the server named the task, so every follow-up
+            // has to use the id it sent back rather than one chosen here.
+            let task_id = task.id.clone();
             // A conformant agent has already settled the task by the time it
             // answers; this wait is the fallback for one that ignores
             // `return_immediately`.

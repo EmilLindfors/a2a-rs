@@ -209,9 +209,11 @@ impl Transport for RetryingTransport {
         self.inner.protocol()
     }
 
+    /// Forwarded, not retried. Retrying a `None`-id send would create a second
+    /// task on the server rather than reattempting the first.
     async fn send_task_message(
         &self,
-        task_id: &str,
+        task_id: Option<&str>,
         message: &Message,
         session_id: Option<&str>,
         history_length: Option<u32>,

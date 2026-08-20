@@ -124,8 +124,12 @@ fn service_for(settles_to: Option<TaskState>, delay: Duration) -> TaskService {
     )
 }
 
-fn message() -> Message {
-    Message::user_text("hello".to_string(), "m1".to_string())
+/// A client message addressed to `task_id`. The service reads the id off the
+/// message now, so each test names its own task here.
+fn message(task_id: &str) -> Message {
+    let mut message = Message::user_text("hello".to_string(), "m1".to_string());
+    message.task_id = task_id.to_string();
+    message
 }
 
 // ---------------------------------------------------------------------------
@@ -140,8 +144,7 @@ async fn send_message_waits_for_an_async_agent_by_default() {
 
     let task = service
         .send_message(
-            "t-default",
-            &message(),
+            message("t-default"),
             &RequestContext::anonymous(),
             SendOptions::default(),
         )
@@ -163,8 +166,7 @@ async fn an_interrupted_state_ends_the_wait() {
 
     let task = service
         .send_message(
-            "t-input",
-            &message(),
+            message("t-input"),
             &RequestContext::anonymous(),
             SendOptions::default(),
         )
@@ -185,8 +187,7 @@ async fn return_immediately_does_not_wait() {
     let started = Instant::now();
     let task = service
         .send_message(
-            "t-immediate",
-            &message(),
+            message("t-immediate"),
             &RequestContext::anonymous(),
             SendOptions {
                 completion: SendCompletion::WhenCreated,
@@ -216,8 +217,7 @@ async fn the_wait_is_bounded_when_the_agent_never_settles() {
     let started = Instant::now();
     let task = service
         .send_message(
-            "t-hang",
-            &message(),
+            message("t-hang"),
             &RequestContext::anonymous(),
             SendOptions::default(),
         )
@@ -292,8 +292,7 @@ async fn the_default_wait_expires_before_the_default_client_timeout() {
     let started = tokio::time::Instant::now();
     let task = service_for(None, Duration::ZERO)
         .send_message(
-            "t-default-bound",
-            &message(),
+            message("t-default-bound"),
             &RequestContext::anonymous(),
             SendOptions::default(),
         )
