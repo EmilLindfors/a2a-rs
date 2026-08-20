@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.7.0...a2a-rs-v0.8.0) - 2026-08-20
+
+### Fixed
+
+- Accept SendMessage with no task id ([#51](https://github.com/EmilLindfors/a2a-rs/pull/51))
+
 ## [0.7.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.6.0...a2a-rs-v0.7.0) - 2026-08-18
 
 ### Changed
