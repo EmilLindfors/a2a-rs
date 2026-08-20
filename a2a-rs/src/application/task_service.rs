@@ -27,7 +27,7 @@ use crate::application::{HasPushNotifier, HasStreaming, HasTaskLifecycle, TaskSt
 use crate::domain::SendCompletion;
 use crate::domain::core::task::TaskStateExt;
 use crate::domain::{
-    A2AError, AgentCard, DeleteTaskPushNotificationConfigParams,
+    A2AError, AgentCard, ContextId, DeleteTaskPushNotificationConfigParams,
     GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams, ListTasksParams,
     ListTasksResult, Message, Task, TaskId, TaskPushNotificationConfig,
 };
@@ -36,6 +36,16 @@ use crate::port::{
     AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskQuery, RequestContext, SeqEvent,
 };
 use crate::services::server::AgentInfoProvider;
+
+/// The id a client actually sent, or `None` when the field was omitted.
+///
+/// proto3 delivers an omitted string as `""`, and `TaskId`/`ContextId` reject
+/// blank input, so those are one test. The value passes through untrimmed: an
+/// id normalized here would key the task differently from a `GetTask` asking
+/// for the same string.
+fn supplied(id: &str) -> Option<&str> {
+    (!id.trim().is_empty()).then_some(id)
+}
 
 /// A stream of sequenced update events for a task. Each [`SeqEvent`] carries a
 /// per-task monotonic id (surfaced as the SSE `id:` field); the transport
@@ -189,6 +199,73 @@ impl TaskService {
         self
     }
 
+    /// Resolve the task and context ids for an incoming client message.
+    ///
+    /// Both are optional on the wire (`a2a.proto`'s `Message`), and proto3 has
+    /// no "absent" for a scalar string, so an omitted id arrives as `""`. The
+    /// rules, from the same paragraph of the spec:
+    ///
+    /// - No task id: the server assigns one, and a context id with it unless the
+    ///   caller supplied one.
+    /// - A task id naming a task we hold: that task's context wins. A caller
+    ///   that supplied a *different* context is rejected rather than silently
+    ///   re-homed — the spec requires the two to match.
+    /// - A task id we have never seen: the client picked the id; treat it as new.
+    async fn resolve_ids(&self, message: &Message) -> Result<(TaskId, ContextId), A2AError> {
+        let supplied_context = supplied(&message.context_id)
+            .map(str::parse::<ContextId>)
+            .transpose()?;
+
+        let Some(task_id) = supplied(&message.task_id) else {
+            return Ok((
+                TaskId::generate(),
+                supplied_context.unwrap_or_else(ContextId::generate),
+            ));
+        };
+        let task_id = task_id.parse::<TaskId>()?;
+
+        // `Some(0)` asks for no history: this read exists to learn the context,
+        // not to fetch the conversation.
+        let stored_context = match self.task_lifecycle.get(&task_id, Some(0)).await {
+            Ok(task) => Some(task.context_id.parse::<ContextId>()?),
+            Err(A2AError::TaskNotFound(_)) => None,
+            Err(e) => return Err(e),
+        };
+
+        let context_id = match (stored_context, supplied_context) {
+            (Some(stored), Some(supplied)) if stored != supplied => {
+                return Err(A2AError::ValidationError {
+                    field: "context_id".to_string(),
+                    message: format!(
+                        "context_id {supplied} does not match task {task_id}'s context {stored}"
+                    ),
+                });
+            }
+            (Some(stored), _) => stored,
+            (None, Some(supplied)) => supplied,
+            (None, None) => ContextId::generate(),
+        };
+
+        Ok((task_id, context_id))
+    }
+
+    /// [`resolve_ids`], then write the resolved ids back onto the message.
+    ///
+    /// The stamp matters because this message is what lands in task history: a
+    /// client that sent no ids reads them back off `history[i]`, and a handler
+    /// that forwards the message elsewhere carries them along.
+    ///
+    /// [`resolve_ids`]: TaskService::resolve_ids
+    async fn stamp_ids(
+        &self,
+        mut message: Message,
+    ) -> Result<(TaskId, ContextId, Message), A2AError> {
+        let (task_id, context_id) = self.resolve_ids(&message).await?;
+        message.task_id = task_id.to_string();
+        message.context_id = context_id.to_string();
+        Ok((task_id, context_id, message))
+    }
+
     /// Process a message for a task, optionally configuring push notifications
     /// and limiting the returned history.
     ///
@@ -209,11 +286,14 @@ impl TaskService {
     /// [`with_send_wait`]: TaskService::with_send_wait
     pub async fn send_message(
         &self,
-        task_id: &str,
-        message: &Message,
+        message: Message,
         ctx: &RequestContext,
         opts: SendOptions,
     ) -> Result<Task, A2AError> {
+        let (id, context_id, message) = self.stamp_ids(message).await?;
+        let ctx = ctx.clone().with_session(context_id.as_str());
+        let task_id = id.as_str();
+
         if let Some(mut push_config) = opts.push_config {
             push_config.task_id = task_id.to_string();
             self.notification_manager
@@ -236,7 +316,7 @@ impl TaskService {
 
         let mut task = self
             .message_handler
-            .process_message(task_id, message, ctx)
+            .process_message(task_id, &message, &ctx)
             .await?;
 
         if let Some(updates) = updates
@@ -300,12 +380,15 @@ impl TaskService {
     /// to a finished task.
     pub async fn send_streaming_message(
         &self,
-        task_id: &str,
-        message: &Message,
+        message: Message,
         ctx: &RequestContext,
         push_config: Option<TaskPushNotificationConfig>,
         history_limit: Option<u32>,
     ) -> Result<(Task, UpdateStream), A2AError> {
+        let (id, context_id, message) = self.stamp_ids(message).await?;
+        let ctx = ctx.clone().with_session(context_id.as_str());
+        let task_id = id.as_str();
+
         if let Some(mut push_config) = push_config {
             push_config.task_id = task_id.to_string();
             self.notification_manager
@@ -321,7 +404,7 @@ impl TaskService {
 
         let mut task = self
             .message_handler
-            .process_message(task_id, message, ctx)
+            .process_message(task_id, &message, &ctx)
             .await?;
 
         if let Some(limit) = history_limit {

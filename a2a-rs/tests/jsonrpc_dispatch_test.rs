@@ -40,14 +40,35 @@ fn request(method: &str, params: Value) -> JsonRpcRequest {
 }
 
 fn send_message_params(task_id: &str) -> Value {
-    json!({
-        "message": {
-            "messageId": "m1",
-            "role": "ROLE_USER",
-            "parts": [{ "text": "hello" }],
-            "taskId": task_id,
-        }
-    })
+    send_message_params_ids(Some(task_id), None)
+}
+
+/// `SendMessage` params carrying only the ids that are `Some`.
+///
+/// An absent id is *omitted* from the JSON rather than sent as `""`, which is
+/// what a client that wants the server to assign one puts on the wire.
+fn send_message_params_ids(task_id: Option<&str>, context_id: Option<&str>) -> Value {
+    let mut message = json!({
+        "messageId": "m1",
+        "role": "ROLE_USER",
+        "parts": [{ "text": "hello" }],
+    });
+    if let Some(id) = task_id {
+        message["taskId"] = id.into();
+    }
+    if let Some(id) = context_id {
+        message["contextId"] = id.into();
+    }
+    json!({ "message": message })
+}
+
+/// Send `params` and return the `result.task`, failing on a JSON-RPC error.
+async fn send_ok(a: &JsonRpcAdapter, params: Value) -> Value {
+    let value =
+        serde_json::to_value(a.handle_unary(request(methods::SEND_MESSAGE, params), None).await)
+            .unwrap();
+    assert!(value.get("error").is_none(), "unexpected error: {value:?}");
+    value["result"]["task"].clone()
 }
 
 #[tokio::test]
@@ -271,4 +292,89 @@ mod interceptors {
         );
         assert!(value.get("result").is_none() || value["result"].is_null());
     }
+}
+
+// ---------------------------------------------------------------------------
+// Server-assigned ids (issue #51)
+//
+// `a2a.proto` makes a client message's `task_id` and `context_id` optional, and
+// proto3 has no absent scalar — an omitted id arrives as `""`. These pin the
+// resolution rule the service applies.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn omitted_task_id_gets_a_server_assigned_one() {
+    let task = send_ok(&adapter(), send_message_params_ids(None, None)).await;
+
+    let id = task["id"].as_str().expect("task id");
+    let context_id = task["contextId"].as_str().expect("context id");
+    assert!(!id.is_empty(), "server must name the task");
+    assert!(!context_id.is_empty(), "server must name the context");
+
+    // The ids are stamped onto the stored message too: a client that sent none
+    // reads them back off history rather than getting `""`.
+    assert_eq!(task["history"][0]["taskId"], id);
+    assert_eq!(task["history"][0]["contextId"], context_id);
+}
+
+#[tokio::test]
+async fn each_id_less_send_starts_its_own_task() {
+    let a = adapter();
+    let first = send_ok(&a, send_message_params_ids(None, None)).await;
+    let second = send_ok(&a, send_message_params_ids(None, None)).await;
+
+    assert_ne!(first["id"], second["id"]);
+    assert_ne!(first["contextId"], second["contextId"]);
+}
+
+#[tokio::test]
+async fn a_supplied_context_id_survives_an_omitted_task_id() {
+    let task = send_ok(&adapter(), send_message_params_ids(None, Some("ctx-kept"))).await;
+
+    assert_eq!(task["contextId"], "ctx-kept");
+    assert!(!task["id"].as_str().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn omitted_context_id_is_inferred_from_the_task() {
+    let a = adapter();
+    send_ok(&a, send_message_params_ids(Some("t-ctx"), Some("ctx-1"))).await;
+
+    // Second turn names only the task. The spec has the server infer the
+    // context from it rather than inventing a new one.
+    let task = send_ok(&a, send_message_params_ids(Some("t-ctx"), None)).await;
+    assert_eq!(task["contextId"], "ctx-1");
+}
+
+#[tokio::test]
+async fn context_id_contradicting_the_task_is_rejected() {
+    let a = adapter();
+    send_ok(&a, send_message_params_ids(Some("t-clash"), Some("ctx-1"))).await;
+
+    let resp = a
+        .handle_unary(
+            request(
+                methods::SEND_MESSAGE,
+                send_message_params_ids(Some("t-clash"), Some("ctx-2")),
+            ),
+            None,
+        )
+        .await;
+    let value = serde_json::to_value(&resp).unwrap();
+    assert_eq!(value["error"]["code"], error_code::INVALID_PARAMS);
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("context_id")),
+        "error should name the field: {value:?}",
+    );
+}
+
+#[tokio::test]
+async fn a_client_chosen_task_id_is_kept() {
+    let task = send_ok(&adapter(), send_message_params_ids(Some("t-mine"), None)).await;
+
+    assert_eq!(task["id"], "t-mine");
+    // Nothing to infer from — the task is new — so the server names the context.
+    assert!(!task["contextId"].as_str().unwrap().is_empty());
 }

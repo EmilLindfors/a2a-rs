@@ -32,8 +32,10 @@
 //!     let message = Message::user_text("Hello, world!".to_string(), "msg-123".to_string());
 //!     // `SendCompletion::WhenSettled` is the A2A default: the server holds the
 //!     // response until the task finishes, so `task` carries the agent's reply.
+//!     // `None` for the task id starts a new task the server names; pass
+//!     // `Some(id)` to continue one the caller already holds.
 //!     let task = client
-//!         .send_task_message("task-123", &message, None, None, SendCompletion::WhenSettled)
+//!         .send_task_message(None, &message, None, None, SendCompletion::WhenSettled)
 //!         .await?;
 //!
 //!     println!("Task: {:?}", task);

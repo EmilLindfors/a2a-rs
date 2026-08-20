@@ -191,7 +191,7 @@ async fn subscribe_resumes_from_last_event_id() {
     // Create the task so subscribe emits an initial snapshot.
     client
         .send_task_message(
-            "task-resume",
+            Some("task-resume"),
             &message(),
             None,
             None,
@@ -370,6 +370,28 @@ async fn subscribe_stream_closes_on_interrupted_state() {
 // Tests
 // ---------------------------------------------------------------------------
 
+/// `None` for the task id is the client half of issue #51: the client sends no
+/// id, the server names the task, and the id comes back on the response — which
+/// is what every follow-up call has to use.
+#[tokio::test]
+async fn send_without_a_task_id_returns_the_server_assigned_one() {
+    let (base, _handler) = spawn_server_with_handler().await;
+    let client = JsonRpcClient::new(base);
+
+    let task = client
+        .send_task_message(None, &message(), None, None, SendCompletion::WhenSettled)
+        .await
+        .unwrap();
+
+    assert!(!task.id.is_empty(), "server must name the task");
+    assert!(!task.context_id.is_empty(), "server must name the context");
+
+    // The id is real: fetching by it returns the same task.
+    let got = client.get_task(&task.id, None).await.unwrap();
+    assert_eq!(got.id, task.id);
+    assert_eq!(got.context_id, task.context_id);
+}
+
 #[tokio::test]
 async fn unary_roundtrip_send_get_list_cancel() {
     let (base, handler) = spawn_server_with_handler().await;
@@ -378,7 +400,7 @@ async fn unary_roundtrip_send_get_list_cancel() {
     // send → returns a task
     let task = client
         .send_task_message(
-            "task-1",
+            Some("task-1"),
             &message(),
             None,
             None,
@@ -431,7 +453,7 @@ async fn cancelling_a_completed_task_is_refused_over_the_wire() {
 
     client
         .send_task_message(
-            "task-done",
+            Some("task-done"),
             &message(),
             None,
             None,
@@ -458,7 +480,7 @@ async fn push_config_lifecycle() {
 
     let task = client
         .send_task_message(
-            "task-pc",
+            Some("task-pc"),
             &message(),
             None,
             None,
@@ -503,7 +525,7 @@ async fn subscribe_yields_initial_task_over_sse() {
 
     let task = client
         .send_task_message(
-            "task-sub",
+            Some("task-sub"),
             &message(),
             None,
             None,
@@ -539,7 +561,7 @@ async fn connect_negotiates_jsonrpc_from_card() {
 
     let task = transport
         .send_task_message(
-            "task-neg",
+            Some("task-neg"),
             &message(),
             None,
             None,

@@ -31,6 +31,14 @@ macro_rules! define_id {
         pub struct $name(String);
 
         impl $name {
+            /// A fresh server-assigned identifier (UUID v4).
+            ///
+            /// The A2A wire makes a client's task and context ids optional; when
+            /// one is absent the server picks it.
+            pub fn generate() -> Self {
+                Self(uuid::Uuid::new_v4().to_string())
+            }
+
             /// Borrow the identifier as a string slice.
             pub fn as_str(&self) -> &str {
                 &self.0

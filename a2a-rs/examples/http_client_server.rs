@@ -113,9 +113,6 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
     // Test 3: Create and send message to task
     println!("📨 Testing task creation and messaging...");
 
-    let task_id = uuid::Uuid::new_v4().to_string();
-    let task_id = format!("task-{}", task_id);
-
     let message = Message::builder()
         .role(Role::User)
         .parts(vec![Part::text(
@@ -124,19 +121,22 @@ async fn run_client() -> Result<(), Box<dyn std::error::Error>> {
         .message_id(uuid::Uuid::new_v4().to_string())
         .build();
 
-    match client
-        .send_task_message(&task_id, &message, None, None, SendCompletion::WhenSettled)
+    // `None` lets the server name the task; the id comes back on the response
+    // and every follow-up below uses it.
+    let task_id = match client
+        .send_task_message(None, &message, None, None, SendCompletion::WhenSettled)
         .await
     {
         Ok(response) => {
-            println!("✅ Task created with ID: {}", task_id);
+            println!("✅ Task created with ID: {}", response.id);
             println!("   Status: {:?}", response.status.state);
+            response.id
         }
         Err(e) => {
             println!("❌ Failed to send message: {}", e);
             return Err(e.into());
         }
-    }
+    };
 
     // Test 4: Get task back
     println!("📤 Testing task retrieval...");

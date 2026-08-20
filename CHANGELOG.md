@@ -68,6 +68,13 @@ they were written with. Released sections below are untouched.
 
 ### Fixed
 
+- **`SendMessage` rejected a message with no task id ([#51], `a2a-rs`)**: `a2a.proto` marks a client message's `task_id` and `context_id` optional — a client with nothing to continue sends neither and the server names the task. Both transports instead read `message.task_id` straight through to `TaskId::from_str`, which rejects the empty string proto3 delivers for an omitted field, so every such request came back `-32602 task_id cannot be empty`. A conformant client could not open a conversation at all.
+  - `TaskService` now resolves both ids before the handler runs, and the whole rule lives in that one place: no task id means a generated one; a task id we hold means that task's context wins; a context id contradicting the stored task is refused rather than silently re-homing the message, since the spec requires the two to match. The `AsyncMessageHandler` port is unchanged — a handler still receives a resolved id.
+  - The resolved ids are written back onto the message before it lands in history, so a client that sent none reads them off `history[i]` instead of `""`.
+  - Removes the `"default"` context fallback in `ResponderMessageHandler`, which filed every context-less task on a server under one shared context id.
+  - **BREAKING**: `TaskService::send_message` and `send_streaming_message` take the `Message` by value and no longer take a separate `task_id` — both adapters were passing `message.task_id.clone()` into it.
+- **A client had to invent a task id (`a2a-rs`, `a2acli`, `a2a-mcp`, `a2a-web-client`)**: the other half of [#51]. `Transport::send_task_message` required a `&str`, so `a2acli` and both bridges generated a client-side UUID for a task the server was about to name — and a server that assigned a different id would have left the caller polling one that does not exist.
+  - **BREAKING**: it takes `Option<&str>` now. `None` starts a task the server names; read the id off the returned task. `Some(id)` continues one the caller holds. `RetryingTransport` still forwards sends rather than retrying them, which matters more with `None`: a retry would create a second task instead of reattempting the first.
 - **Push notification configs did not survive a restart (`a2a-rs`)**: migration 002 began with `DROP TABLE IF EXISTS push_notification_configs` before recreating it in the v0.3 shape, and the base migrations re-run on every `SqlxTaskStorage::new`. So every process start silently destroyed every webhook the agent had been told to call — persistent storage that dropped exactly the thing an operator configures once and expects to stay. The drop now happens only when the table is still the pre-v0.3 one, decided by probing for its `webhook_url` column, and a test reopens a database to prove the config is still there.
 - **A wrapped `reqwest::Error` dropped its cause (`a2a-agents-common`, `a2a-rs`)**: `reqwest::Error`'s `Display` deliberately omits its source chain, so `Network error: error sending request for url (…)` was the whole message for a DNS failure, a refused connection, and an untrusted certificate alike — which is what made a TLS-intercepting proxy indistinguishable from the network being down and cost a full investigation. Every site that flattens one into a string now walks `Error::source()` into the message: both LLM providers (including the SSE stream's wrapper), `HttpClientError`, and the new OAuth2 introspection call.
 
@@ -182,3 +189,5 @@ they were written with. Released sections below are untouched.
 
 ### Removed
 - Removed the printf-only `examples/minimal_example.rs` in `a2a-mcp`.
+
+[#51]: https://github.com/EmilLindfors/a2a-rs/issues/51

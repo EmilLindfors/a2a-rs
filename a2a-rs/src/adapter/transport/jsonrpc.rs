@@ -282,11 +282,8 @@ impl JsonRpcAdapter {
         params: Option<Value>,
         caller: Option<AuthPrincipal>,
     ) -> Result<Value, A2AError> {
-        let (task_id, message, ctx, opts) = decode_send_message(parse_params(params)?, caller)?;
-        let task = self
-            .service
-            .send_message(&task_id, &message, &ctx, opts)
-            .await?;
+        let (message, ctx, opts) = decode_send_message(parse_params(params)?, caller)?;
+        let task = self.service.send_message(message, &ctx, opts).await?;
         let response = SendMessageResponse {
             payload: Some(send_message_response::Payload::Task(Box::new(task))),
             ..Default::default()
@@ -387,17 +384,10 @@ impl JsonRpcAdapter {
             methods::SEND_STREAMING_MESSAGE => {
                 // As in the Connect adapter, `completion` does not apply to a
                 // streaming call: the stream is the wait.
-                let (task_id, message, ctx, opts) =
-                    decode_send_message(parse_params(params)?, caller)?;
+                let (message, ctx, opts) = decode_send_message(parse_params(params)?, caller)?;
                 let (task, updates) = self
                     .service
-                    .send_streaming_message(
-                        &task_id,
-                        &message,
-                        &ctx,
-                        opts.push_config,
-                        opts.history_limit,
-                    )
+                    .send_streaming_message(message, &ctx, opts.push_config, opts.history_limit)
                     .await?;
                 Ok(chain_initial_task(Some(task), updates))
             }
@@ -796,7 +786,10 @@ fn to_value<T: Serialize>(value: &T) -> Result<Value, A2AError> {
 
 /// Decode a [`SendMessageRequest`] into the arguments [`TaskService::send_message`]
 /// expects. Mirrors the Connect adapter's `send_message` decode exactly.
-type SendArgs = (String, crate::domain::Message, RequestContext, SendOptions);
+///
+/// The task and context ids stay on the message: resolving them (generating one
+/// when the client sent none) is the service's job, not the transport's.
+type SendArgs = (crate::domain::Message, RequestContext, SendOptions);
 fn decode_send_message(
     req: SendMessageRequest,
     caller: Option<AuthPrincipal>,
@@ -805,12 +798,11 @@ fn decode_send_message(
         .message
         .into_option()
         .ok_or_else(|| A2AError::InvalidParams("missing message".to_string()))?;
-    let task_id = message.task_id.clone();
     let ctx = RequestContext::anonymous()
         .with_session(message.context_id.clone())
         .with_principal(caller);
     let opts = decode_send_config(req.configuration.into_option());
-    Ok((task_id, message, ctx, opts))
+    Ok((message, ctx, opts))
 }
 
 /// Build the SSE stream: initial task snapshot (if present) followed by the

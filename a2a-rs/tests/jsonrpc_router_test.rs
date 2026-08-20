@@ -157,6 +157,18 @@ fn send_message_body(task_id: &str) -> Value {
     })
 }
 
+/// As [`send_message_body`], with the task id omitted entirely — the shape a
+/// client sends when it wants the server to name the task.
+fn send_message_body_without_task_id() -> Value {
+    json!({
+        "message": {
+            "messageId": "m1",
+            "role": "ROLE_USER",
+            "parts": [{ "text": "hello" }],
+        }
+    })
+}
+
 fn post(uri: &str, body: &Value) -> Request<Body> {
     Request::builder()
         .method("POST")
@@ -356,4 +368,23 @@ async fn rest_stream_frames_bare_protojson() {
         "REST SSE must not carry a JSON-RPC envelope"
     );
     assert_eq!(event["task"]["id"], "s2");
+}
+
+#[tokio::test]
+async fn stream_without_a_task_id_gets_a_server_assigned_one() {
+    // `message/stream` decodes through the same path as `message/send`, so the
+    // omitted-id rule has to hold on the streaming route too (issue #51).
+    let a = streaming_adapter();
+    let resp = rest_router(a.clone())
+        .oneshot(post("/message:stream", &send_message_body_without_task_id()))
+        .await
+        .unwrap();
+    let event = first_sse_event(resp).await;
+
+    let id = event["task"]["id"].as_str().expect("task id");
+    assert!(!id.is_empty(), "server must name the task");
+    assert!(
+        !event["task"]["contextId"].as_str().unwrap_or("").is_empty(),
+        "server must name the context: {event:?}",
+    );
 }

@@ -270,14 +270,18 @@ impl Transport for JsonRpcClient {
 
     async fn send_task_message(
         &self,
-        task_id: &str,
+        task_id: Option<&str>,
         message: &Message,
         session_id: Option<&str>,
         history_length: Option<u32>,
         completion: SendCompletion,
     ) -> Result<Task, A2AError> {
         let mut msg = message.clone();
-        msg.task_id = task_id.to_string();
+        // Left empty when the caller passed `None`: the wire treats an absent
+        // task id as "server assigns one".
+        if let Some(id) = task_id {
+            msg.task_id = id.to_string();
+        }
         if let Some(sid) = session_id {
             msg.context_id = sid.to_string();
         }

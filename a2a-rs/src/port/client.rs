@@ -31,7 +31,13 @@ pub trait Transport: Send + Sync {
     /// `protocol_binding` (e.g. `"JSONRPC"`, `"CONNECTRPC"`, `"GRPC"`).
     fn protocol(&self) -> &str;
 
-    /// Send a message to a task.
+    /// Send a message, continuing `task_id` or — with `None` — starting a task
+    /// the server names.
+    ///
+    /// The wire makes the id optional, so a caller with nothing to continue
+    /// passes `None` and reads the assigned id off the returned task's `id`
+    /// rather than inventing one client-side. Pass `Some` only to continue a
+    /// task the caller already holds.
     ///
     /// `completion` maps to the wire's
     /// `SendMessageConfiguration.return_immediately`, inverted:
@@ -45,7 +51,7 @@ pub trait Transport: Send + Sync {
     /// is longer wins.
     async fn send_task_message(
         &self,
-        task_id: &str,
+        task_id: Option<&str>,
         message: &Message,
         session_id: Option<&str>,
         history_length: Option<u32>,

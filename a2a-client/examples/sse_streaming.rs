@@ -94,12 +94,9 @@ async fn send_message_handler(
         .parts(vec![Part::text(payload.text)])
         .build();
 
-    // Create a new task ID for this conversation
-    let task_id = uuid::Uuid::new_v4().to_string();
-
     match client
         .transport
-        .send_task_message(&task_id, &message, None, None, SendCompletion::WhenCreated)
+        .send_task_message(None, &message, None, None, SendCompletion::WhenCreated)
         .await
     {
         Ok(task) => {

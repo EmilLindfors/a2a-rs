@@ -49,7 +49,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 2. Send a message — the server creates (or updates) the task and echoes it.
     let task = transport
         .send_task_message(
-            "demo-task",
+            None,
             &Message::user_text("hello".to_string(), "m1".to_string()),
             None,
             None,

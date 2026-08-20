@@ -235,12 +235,11 @@ impl A2aService for ConnectRpcAdapter {
         })?;
         let config = req.configuration.into_option();
 
-        let task_id = message.task_id.clone();
         let request_ctx = request_context(&ctx, &message.context_id);
 
         let task = self
             .service
-            .send_message(&task_id, &message, &request_ctx, decode_send_config(config))
+            .send_message(message, &request_ctx, decode_send_config(config))
             .await
             .map_err(map_err)?;
 
@@ -278,7 +277,6 @@ impl A2aService for ConnectRpcAdapter {
         })?;
         let config = req.configuration.into_option();
 
-        let task_id = message.task_id.clone();
         let request_ctx = request_context(&ctx, &message.context_id);
 
         // `completion` is deliberately dropped here rather than passed along:
@@ -289,13 +287,7 @@ impl A2aService for ConnectRpcAdapter {
 
         let (task, update_stream) = self
             .service
-            .send_streaming_message(
-                &task_id,
-                &message,
-                &request_ctx,
-                opts.push_config,
-                opts.history_limit,
-            )
+            .send_streaming_message(message, &request_ctx, opts.push_config, opts.history_limit)
             .await
             .map_err(map_err)?;
 

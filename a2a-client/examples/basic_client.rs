@@ -41,13 +41,11 @@ async fn main() -> anyhow::Result<()> {
 
     println!("Sending message to agent...");
 
-    // We need to use send_task_message with a new task ID
-    // For a new conversation, we create a unique task ID
-    let task_id = uuid::Uuid::new_v4().to_string();
-
+    // `None` starts a new conversation: the server names the task and sends the
+    // id back on the response.
     match client
         .transport
-        .send_task_message(&task_id, &message, None, None, SendCompletion::WhenSettled)
+        .send_task_message(None, &message, None, None, SendCompletion::WhenSettled)
         .await
     {
         Ok(task) => {

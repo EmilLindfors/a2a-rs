@@ -88,7 +88,7 @@ impl BridgeBackend for HttpBackend {
         // answer, not an acknowledgement, and has no poll loop of its own.
         self.client
             .send_task_message(
-                task_id,
+                Some(task_id),
                 message,
                 session_id,
                 None,

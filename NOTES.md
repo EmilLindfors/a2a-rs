@@ -299,6 +299,30 @@ subscriptions never closed — is gone); see `TODO.md`.
 
 ---
 
+### Where a task id comes from
+
+Both `task_id` and `context_id` are optional on a client message, and proto3
+gives an omitted string field the value `""` — so "absent" and "empty" are the
+same thing on the wire, and neither transport can tell them apart. The rule
+lives in `TaskService`, not in the adapters and not in the handlers:
+
+- No task id: generate one, and a context id with it.
+- A task id naming a task we hold: that task's context wins. A caller that also
+  supplied a different one gets a `ValidationError` rather than having its
+  message re-homed — the spec requires the two to match, and silently moving a
+  message between conversations is the failure that is hardest to notice.
+- A task id we have not seen: the client picked it; treat the task as new.
+
+The resolved ids are stamped onto the message before it reaches the handler, so
+task history carries them and a handler still receives a resolved `&str`. Two
+consequences worth keeping in mind. The lookup costs one storage read per send
+that names a task, which is what buys the context inference. And a client cannot
+be given back a task id it did not send unless it reads the response — which is
+why `Transport::send_task_message` takes `Option<&str>` and callers use
+`task.id` afterwards, rather than the id they passed in.
+
+---
+
 ## Hazards that will recur
 
 **Cargo silently skips a binary whose `required-features` are not all enabled.**
