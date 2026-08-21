@@ -38,8 +38,8 @@ jobs:
     runs-on: ubuntu-latest
     # The SQLite half of `SqlxTaskStorage` runs in the job above. This is the
     # other backend, and it is the one that needs a server: the schema, the two
-    # upserts, the placeholder rewrite and every column the driver decodes are
-    # per-dialect, and nothing else proves them.
+    # upserts, the placeholder rewrite, the retention sweep and every column the
+    # driver decodes are per-dialect, and nothing else proves them.
     services:
       postgres:
         image: postgres:17
@@ -65,7 +65,13 @@ jobs:
       - name: Run the PostgreSQL storage tests
         env:
           A2A_TEST_POSTGRES_URL: postgres://postgres:a2a@localhost:5432/a2a
-        run: cargo test -p a2a-rs --features full --locked --test postgres_storage_test
+        # `retention_test` skips its PostgreSQL cases without the URL, so it runs
+        # in the job above too — with only the in-memory and SQLite stores. Here
+        # it creates a database per case (the sweep is global) and sweeps for
+        # real.
+        run: |
+          cargo test -p a2a-rs --features full --locked --test postgres_storage_test
+          cargo test -p a2a-rs --features full --locked --test retention_test
 
   clippy:
     name: Clippy

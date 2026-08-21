@@ -94,17 +94,17 @@ pub use domain::{
     ContextId, DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow, ErrorDetail, ErrorInfo,
     FieldViolation, GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams,
     ListTasksParams, ListTasksResult, Message, OAuthFlows, Part, PushConfigId,
-    PushNotificationAuthenticationInfo, Result, RetryPolicy, Role, SecurityScheme, Task,
-    TaskArtifactUpdateEvent, TaskId, TaskIdParams, TaskPushNotificationConfig, TaskQueryParams,
-    TaskState, TaskStatus, TaskStatusUpdateEvent, VersionedTask,
+    PushNotificationAuthenticationInfo, Result, RetentionPolicy, RetryPolicy, Role, SecurityScheme,
+    Swept, Task, TaskArtifactUpdateEvent, TaskId, TaskIdParams, TaskPushNotificationConfig,
+    TaskQueryParams, TaskState, TaskStatus, TaskStatusUpdateEvent, VersionedTask,
 };
 
 // Port traits for better separation of concerns
 pub use port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier,
-    AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery,
-    AsyncTaskVersioning, CallContext, CallInterceptor, CallSide, NoopPushNotifier, RequestContext,
-    SeqEvent, StreamEvent, StreamItem, StreamingSubscriber, Transport, UpdateEvent,
+    AsyncRetention, AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt,
+    AsyncTaskQuery, AsyncTaskVersioning, CallContext, CallInterceptor, CallSide, NoopPushNotifier,
+    RequestContext, SeqEvent, StreamEvent, StreamItem, StreamingSubscriber, Transport, UpdateEvent,
 };
 
 #[cfg(feature = "http-client")]

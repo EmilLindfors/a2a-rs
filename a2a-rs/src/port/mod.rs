@@ -25,6 +25,7 @@ pub mod interceptor;
 pub mod message_handler;
 pub mod notification_manager;
 pub mod request_context;
+pub mod retention;
 pub mod streaming_handler;
 pub mod task_manager;
 
@@ -43,6 +44,7 @@ pub use notification_manager::{
     AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier, NoopPushNotifier,
 };
 pub use request_context::RequestContext;
+pub use retention::AsyncRetention;
 pub use streaming_handler::{
     AsyncStreamingHandler, SeqEvent, Subscriber as StreamingSubscriber, UpdateEvent,
 };

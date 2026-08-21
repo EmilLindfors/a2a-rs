@@ -7,6 +7,7 @@ pub mod error_details;
 pub mod events;
 pub mod generated;
 pub mod ids;
+pub mod retention;
 pub mod retry;
 pub mod state;
 #[cfg(test)]
@@ -31,6 +32,7 @@ pub use error_details::{ErrorDetail, ErrorInfo, FieldViolation};
 pub use events::{TaskArtifactUpdateEvent, TaskStatusUpdateEvent};
 pub use generated::{o_auth_flows, security_scheme};
 pub use ids::{ContextId, PushConfigId, TaskId};
+pub use retention::{RetentionPolicy, Swept};
 pub use retry::RetryPolicy;
 pub use state::{ContextState, StateKey, StateKeyError, StateScope};
 pub use validation::{Validate, ValidationResult};

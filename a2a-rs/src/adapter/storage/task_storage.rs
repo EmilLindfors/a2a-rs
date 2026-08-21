@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use tokio::sync::Mutex; // Changed from std::sync::Mutex
 
 use crate::adapter::business::push_notification::{
@@ -18,13 +19,14 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
-    A2AError, ContextId, ContextState, Conversation, Digest, Message, Seq, SequencedMessage,
-    StateKey, StateScope, Task, TaskId, TaskPushNotificationConfig, TaskState, TaskStateExt,
-    VersionedTask,
+    A2AError, ContextId, ContextState, Conversation, Digest, Message, RetentionPolicy, Seq,
+    SequencedMessage, StateKey, StateScope, Swept, Task, TaskId, TaskPushNotificationConfig,
+    TaskState, TaskStateExt, VersionedTask,
 };
 use crate::port::{
     AsyncContextStateStore, AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier,
-    AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning, context_state::scope_key,
+    AsyncRetention, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
+    context_state::scope_key,
 };
 
 /// The state bag's buckets: a scope and what that scope files under, to the
@@ -55,10 +57,11 @@ pub struct InMemoryTaskStorage {
     /// need a total order across tasks that `Task` does not carry, and the point
     /// of having both adapters is that they model the same thing.
     ///
-    /// The only nesting that exists is `tasks` → `versions` → `conversations`,
-    /// taken in that order by `update_status`. `digests` and `context_owners`
-    /// are always taken alone, and `load` releases the digest lock before
-    /// acquiring this one.
+    /// The lock order is `tasks` → `versions` → `conversations` → `digests` →
+    /// `context_owners` → `context_state` → `context_touched` →
+    /// `principal_touched`. `update_status` takes the first three in that order
+    /// and [`sweep`](AsyncRetention::sweep) takes all of them; every other
+    /// caller takes one at a time.
     pub(crate) conversations: Arc<Mutex<HashMap<String, Vec<SequencedMessage>>>>,
     /// Appended digests, keyed by context id. Newest wins on load, by watermark
     /// rather than by position, since two concurrent compactions can append out
@@ -71,9 +74,23 @@ pub struct InMemoryTaskStorage {
     /// and by whatever that scope files under — a context id for
     /// [`StateScope::Context`], a principal for [`StateScope::User`]. Held apart
     /// from `conversations` because a `user:` bucket belongs to no context.
-    ///
-    /// Always taken alone, like `digests` and `context_owners`.
     pub(crate) context_state: Arc<Mutex<StateBuckets>>,
+    /// When each context was last **written** to, which is what
+    /// [`RetentionPolicy`] measures idleness from.
+    ///
+    /// A separate map because nothing else here carries a wall-clock time a
+    /// sweep could read: `SequencedMessage` has a `Seq` and no timestamp, and
+    /// the state bag has values and no timestamps. It mirrors what the SQL
+    /// adapter gets for free from `updated_at` columns — including that reads
+    /// do not bump it, so both stores expire a read-only context alike.
+    pub(crate) context_touched: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
+    /// When each principal's `user:`-scoped state was last written.
+    ///
+    /// Apart from `context_touched` for the reason the scope exists: a `user:`
+    /// bucket outlives every context it was written from, so no context's
+    /// idleness says whether it is stale. The SQL adapter reads the same thing
+    /// as `MAX(updated_at)` over the principal's rows.
+    pub(crate) principal_touched: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
     /// Hands out conversation sequence numbers. Shared across contexts, which is
     /// harmless: `Seq` only has to be monotonic *within* one.
     pub(crate) next_seq: Arc<AtomicU64>,
@@ -99,6 +116,8 @@ impl InMemoryTaskStorage {
             digests: Arc::new(Mutex::new(HashMap::new())),
             context_owners: Arc::new(Mutex::new(HashMap::new())),
             context_state: Arc::new(Mutex::new(HashMap::new())),
+            context_touched: Arc::new(Mutex::new(HashMap::new())),
+            principal_touched: Arc::new(Mutex::new(HashMap::new())),
             next_seq: Arc::new(AtomicU64::new(1)),
             push_notification_registry: Arc::new(push_registry),
         }
@@ -115,6 +134,8 @@ impl InMemoryTaskStorage {
             digests: Arc::new(Mutex::new(HashMap::new())),
             context_owners: Arc::new(Mutex::new(HashMap::new())),
             context_state: Arc::new(Mutex::new(HashMap::new())),
+            context_touched: Arc::new(Mutex::new(HashMap::new())),
+            principal_touched: Arc::new(Mutex::new(HashMap::new())),
             next_seq: Arc::new(AtomicU64::new(1)),
             push_notification_registry: Arc::new(push_registry),
         }
@@ -161,6 +182,32 @@ impl InMemoryTaskStorage {
             .push(SequencedMessage { seq, message });
     }
 
+    /// Record that `context_id` was written to, for the retention sweep.
+    ///
+    /// Called from the mutators only. A read must not refresh idleness — the SQL
+    /// adapter's `updated_at` columns are not bumped by one either, and two
+    /// stores that disagree about what "idle" means are two retention policies.
+    async fn touch_context(&self, context_id: &str) {
+        let now = Utc::now();
+        let mut touched = self.context_touched.lock().await;
+        // `max`, not overwrite: two turns of one conversation can land out of
+        // order, and the newer write is the one idleness is measured from.
+        touched
+            .entry(context_id.to_string())
+            .and_modify(|at| *at = (*at).max(now))
+            .or_insert(now);
+    }
+
+    /// Record that `principal` had a `user:`-scoped key written.
+    async fn touch_principal(&self, principal: &str) {
+        let now = Utc::now();
+        let mut touched = self.principal_touched.lock().await;
+        touched
+            .entry(principal.to_string())
+            .and_modify(|at| *at = (*at).max(now))
+            .or_insert(now);
+    }
+
     /// Claim `context_id` for `caller` if nobody holds it, then refuse a caller
     /// that is not the holder.
     ///
@@ -182,6 +229,11 @@ impl InMemoryTaskStorage {
             }),
             None => {
                 owners.insert(context_id.to_string(), caller.map(str::to_string));
+                drop(owners);
+                // The claim itself is a write — it is what inserts the SQL
+                // adapter's `contexts` row — so a context opened and then only
+                // read is idle from the moment it was opened, not never.
+                self.touch_context(context_id).await;
                 Ok(())
             }
         }
@@ -253,11 +305,14 @@ impl AsyncConversationStore for InMemoryTaskStorage {
         let context_id = context_id.as_str();
         self.claim_or_check_context(context_id, caller).await?;
 
-        let mut digests = self.digests.lock().await;
-        digests
-            .entry(context_id.to_string())
-            .or_default()
-            .push(digest);
+        {
+            let mut digests = self.digests.lock().await;
+            digests
+                .entry(context_id.to_string())
+                .or_default()
+                .push(digest);
+        }
+        self.touch_context(context_id).await;
         Ok(())
     }
 }
@@ -315,11 +370,20 @@ impl AsyncContextStateStore for InMemoryTaskStorage {
             return Ok(());
         };
 
-        let mut state = self.context_state.lock().await;
-        state
-            .entry((key.scope(), scope_key.to_string()))
-            .or_default()
-            .insert(key.name().to_string(), value.to_string());
+        {
+            let mut state = self.context_state.lock().await;
+            state
+                .entry((key.scope(), scope_key.to_string()))
+                .or_default()
+                .insert(key.name().to_string(), value.to_string());
+        }
+
+        // Which clock this write advances follows the scope, not the context it
+        // was written from: a `user:` key outlives every context that touches it.
+        match key.scope() {
+            StateScope::User => self.touch_principal(scope_key).await,
+            _ => self.touch_context(context_id).await,
+        }
         Ok(())
     }
 
@@ -360,6 +424,8 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
         let task = Task::new(task_id.to_string(), context_id.to_string());
         tasks_guard.insert(task_id.to_string(), task.clone());
         self.bump_version(task_id).await; // version 0 -> 1
+        drop(tasks_guard);
+        self.touch_context(context_id).await;
 
         Ok(task)
     }
@@ -391,6 +457,8 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
         if let Some(message) = logged {
             self.append_to_conversation(&context_id, message).await;
         }
+        drop(tasks_guard);
+        self.touch_context(&context_id).await;
 
         // Persistence only: announcing the change to streaming subscribers is
         // the orchestration layer's job (see `TaskStatusBroadcast`), not a side
@@ -457,8 +525,11 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
 
         // Update the status with the cancellation message to track in history
         updated_task.update_status(TaskState::Canceled, Some(cancel_message));
+        let context_id = updated_task.context_id.clone();
         tasks_guard.insert(task_id.to_string(), updated_task.clone());
         self.bump_version(task_id).await;
+        drop(tasks_guard);
+        self.touch_context(&context_id).await;
 
         // Persistence only: the orchestration layer announces the cancellation
         // to streaming subscribers (see `TaskStatusBroadcast`).
@@ -700,6 +771,122 @@ impl AsyncNotificationManager for InMemoryTaskStorage {
     }
 }
 
+#[async_trait]
+impl AsyncRetention for InMemoryTaskStorage {
+    /// Sweep under one set of guards.
+    ///
+    /// Every map is locked for the whole sweep, in the order documented on
+    /// `conversations`. Phasing it — pick the ids, release, then delete — would
+    /// let a turn arrive on a context between the two and leave that context
+    /// with its tasks deleted and its conversation intact. A sweep runs once a
+    /// night against contexts nothing has touched for days, so holding the
+    /// store still for it costs nothing anyone will notice.
+    async fn sweep(&self, policy: &RetentionPolicy, now: DateTime<Utc>) -> Result<Swept, A2AError> {
+        let mut swept = Swept::default();
+
+        if let Some(cutoff) = policy.context_cutoff(now) {
+            let mut tasks = self.tasks.lock().await;
+            let mut versions = self.versions.lock().await;
+            let mut conversations = self.conversations.lock().await;
+            let mut digests = self.digests.lock().await;
+            let mut owners = self.context_owners.lock().await;
+            let mut state = self.context_state.lock().await;
+            let mut touched = self.context_touched.lock().await;
+
+            // A context is idle when its last write is older than the cutoff.
+            // One with no entry at all was never written and has nothing to
+            // sweep, so it is skipped rather than treated as infinitely old.
+            let idle: Vec<String> = touched
+                .iter()
+                .filter(|(_, at)| **at < cutoff)
+                .map(|(context_id, _)| context_id.clone())
+                .collect();
+
+            // Every task of every idle context, in one pass over `tasks` rather
+            // than one pass per context.
+            let mut by_context: HashMap<&str, Vec<&Task>> = HashMap::new();
+            for task in tasks.values() {
+                by_context
+                    .entry(task.context_id.as_str())
+                    .or_default()
+                    .push(task);
+            }
+
+            let mut sweepable = Vec::new();
+            for context_id in &idle {
+                let held = by_context.get(context_id.as_str());
+
+                // Leave a context alone while anything in it might still be
+                // running. `is_settled` counts `input-required` and
+                // `auth-required` as settled — those wait on a caller, and after
+                // the retention window the caller is not coming back — so this
+                // holds back exactly `submitted`, `working`, and a state this
+                // build cannot read.
+                let running = held
+                    .is_some_and(|tasks| tasks.iter().any(|task| !task.status.state.is_settled()));
+                if running {
+                    continue;
+                }
+
+                let doomed: Vec<String> = held
+                    .map(|tasks| tasks.iter().map(|task| task.id.clone()).collect())
+                    .unwrap_or_default();
+                sweepable.push((context_id.clone(), doomed));
+            }
+            // `by_context` borrows `tasks`, which the deletes below need mutably.
+            drop(by_context);
+
+            for (context_id, doomed) in sweepable {
+                for task_id in &doomed {
+                    tasks.remove(task_id);
+                    versions.remove(task_id);
+                    // The SQL sweep deletes `push_notification_configs` with the
+                    // task; this is the same delete. A webhook left registered
+                    // against a task that no longer exists is a URL the agent
+                    // would keep as long as the process lives. The registry has
+                    // a lock of its own and takes none of the store's, so
+                    // calling it under these guards cannot deadlock.
+                    self.push_notification_registry.unregister(task_id).await?;
+                }
+                swept.tasks += doomed.len() as u64;
+
+                swept.messages += conversations
+                    .remove(&context_id)
+                    .map_or(0, |log| log.len() as u64);
+                swept.digests += digests
+                    .remove(&context_id)
+                    .map_or(0, |appended| appended.len() as u64);
+                swept.state_keys += state
+                    .remove(&(StateScope::Context, context_id.clone()))
+                    .map_or(0, |bucket| bucket.len() as u64);
+                owners.remove(&context_id);
+                touched.remove(&context_id);
+                swept.contexts += 1;
+            }
+        }
+
+        if let Some(cutoff) = policy.user_state_cutoff(now) {
+            let mut state = self.context_state.lock().await;
+            let mut touched = self.principal_touched.lock().await;
+
+            let expired: Vec<String> = touched
+                .iter()
+                .filter(|(_, at)| **at < cutoff)
+                .map(|(principal, _)| principal.clone())
+                .collect();
+
+            for principal in expired {
+                swept.state_keys += state
+                    .remove(&(StateScope::User, principal.clone()))
+                    .map_or(0, |bucket| bucket.len() as u64);
+                touched.remove(&principal);
+            }
+        }
+
+        Ok(swept)
+    }
+}
+
 impl Clone for InMemoryTaskStorage {
     fn clone(&self) -> Self {
         Self {
@@ -709,6 +896,8 @@ impl Clone for InMemoryTaskStorage {
             digests: self.digests.clone(),
             context_owners: self.context_owners.clone(),
             context_state: self.context_state.clone(),
+            context_touched: self.context_touched.clone(),
+            principal_touched: self.principal_touched.clone(),
             next_seq: self.next_seq.clone(),
             push_notification_registry: self.push_notification_registry.clone(),
         }

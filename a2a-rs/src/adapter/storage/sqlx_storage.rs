@@ -31,14 +31,15 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
-    A2AError, ContextId, ContextState, Conversation, Digest, Message, Seq, SequencedMessage,
-    StateKey, StateScope, Task, TaskId, TaskPushNotificationConfig, TaskState, TaskStateExt,
-    TaskStatus, VersionedTask,
+    A2AError, ContextId, ContextState, Conversation, Digest, Message, RetentionPolicy, Seq,
+    SequencedMessage, StateKey, StateScope, Swept, Task, TaskId, TaskPushNotificationConfig,
+    TaskState, TaskStateExt, TaskStatus, VersionedTask,
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
     AsyncContextStateStore, AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier,
-    AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning, context_state::scope_key,
+    AsyncRetention, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
+    context_state::scope_key,
 };
 
 #[cfg(feature = "sqlx-storage")]
@@ -1755,6 +1756,190 @@ impl AsyncContextStateStore for SqlxTaskStorage {
             .await
             .map_err(|e| A2AError::DatabaseError(format!("Failed to drop context state: {}", e)))?;
         Ok(deleted.rows_affected() > 0)
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+#[async_trait]
+impl AsyncRetention for SqlxTaskStorage {
+    async fn sweep(
+        &self,
+        policy: &RetentionPolicy,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Swept, A2AError> {
+        let mut swept = Swept::default();
+
+        if let Some(cutoff) = policy.context_cutoff(now) {
+            for context_id in self.idle_contexts(cutoff).await? {
+                swept += self.delete_context(&context_id).await?;
+            }
+        }
+
+        if let Some(cutoff) = policy.user_state_cutoff(now) {
+            for principal in self.idle_principals(cutoff).await? {
+                swept.state_keys += self.delete_user_state(&principal).await?;
+            }
+        }
+
+        Ok(swept)
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl SqlxTaskStorage {
+    /// Contexts nothing has written to since `cutoff`, skipping any that still
+    /// hold an unfinished task.
+    async fn idle_contexts(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<String>, A2AError> {
+        let rows = sqlx::query(self.dialect.idle_contexts())
+            .bind(self.dialect.format_timestamp(cutoff))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to find idle contexts: {e}")))?;
+
+        rows.iter()
+            .map(|row| {
+                row.try_get("ctx").map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to read idle context id: {e}"))
+                })
+            })
+            .collect()
+    }
+
+    /// Principals whose `user:`-scoped state has not been written since `cutoff`.
+    async fn idle_principals(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<String>, A2AError> {
+        let rows = sqlx::query(self.dialect.idle_principals())
+            .bind(self.dialect.format_timestamp(cutoff))
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to find idle principals: {e}")))?;
+
+        rows.iter()
+            .map(|row| {
+                row.try_get("scope_key").map_err(|e| {
+                    A2AError::DatabaseError(format!("Failed to read idle principal: {e}"))
+                })
+            })
+            .collect()
+    }
+
+    /// Delete one context and everything filed under it, in one transaction.
+    ///
+    /// Every table is named explicitly rather than left to the `ON DELETE
+    /// CASCADE` clauses in the schema. The cascades do fire on both backends —
+    /// PostgreSQL enforces its constraints unasked, and `pool_options` turns
+    /// SQLite's `foreign_keys` pragma on — but only some of what a sweep
+    /// deletes is reachable through them: `context_state` has no foreign key at
+    /// all, since half its rows are keyed by principal rather than by context.
+    /// The per-table counts in [`Swept`] need the statements anyway.
+    ///
+    /// Order follows the references: push configs and history name a task, so
+    /// they go before `tasks`.
+    async fn delete_context(&self, context_id: &str) -> Result<Swept, A2AError> {
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to open a sweep transaction: {e}"))
+        })?;
+
+        let fail = |table: &str, e: sqlx::Error| {
+            A2AError::DatabaseError(format!("Failed to sweep {table} for {context_id}: {e}"))
+        };
+
+        let sql = self.sql(
+            "DELETE FROM push_notification_configs              WHERE task_id IN (SELECT id FROM tasks WHERE context_id = ?)",
+        );
+        sqlx::query(&sql)
+            .bind(context_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| fail("push configs", e))?;
+
+        // `task_history` holds status transitions as well as messages, and only
+        // the rows carrying a message are the conversation — the same
+        // `message IS NOT NULL` that `load` reads by. Counted before the delete
+        // so `Swept::messages` means the same quantity in both adapters, where
+        // `rows_affected` would report a number the in-memory store has no
+        // equivalent of.
+        let sql = self.sql(
+            "SELECT COUNT(*) AS count FROM task_history              WHERE message IS NOT NULL AND (context_id = ?              OR task_id IN (SELECT id FROM tasks WHERE context_id = ?))",
+        );
+        let messages: i64 = sqlx::query(&sql)
+            .bind(context_id)
+            .bind(context_id)
+            .fetch_one(&mut *tx)
+            .await
+            .and_then(|row| row.try_get("count"))
+            .map_err(|e| fail("history", e))?;
+
+        // The `OR` catches history written before migration 004 added
+        // `context_id`, which the backfill only reaches for rows whose task
+        // still exists.
+        let sql = self.sql(
+            "DELETE FROM task_history WHERE context_id = ?              OR task_id IN (SELECT id FROM tasks WHERE context_id = ?)",
+        );
+        sqlx::query(&sql)
+            .bind(context_id)
+            .bind(context_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| fail("history", e))?;
+
+        let sql = self.sql("DELETE FROM tasks WHERE context_id = ?");
+        let tasks = sqlx::query(&sql)
+            .bind(context_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| fail("tasks", e))?;
+
+        let sql = self.sql("DELETE FROM context_digests WHERE context_id = ?");
+        let digests = sqlx::query(&sql)
+            .bind(context_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| fail("digests", e))?;
+
+        let sql = self.sql("DELETE FROM context_state WHERE scope = 'context' AND scope_key = ?");
+        let state_keys = sqlx::query(&sql)
+            .bind(context_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| fail("state", e))?;
+
+        let sql = self.sql("DELETE FROM contexts WHERE id = ?");
+        sqlx::query(&sql)
+            .bind(context_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| fail("the context row", e))?;
+
+        tx.commit().await.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to commit the sweep of {context_id}: {e}"))
+        })?;
+
+        Ok(Swept {
+            contexts: 1,
+            tasks: tasks.rows_affected(),
+            messages: messages.max(0) as u64,
+            digests: digests.rows_affected(),
+            state_keys: state_keys.rows_affected(),
+        })
+    }
+
+    /// Delete every `user:`-scoped key one principal holds, returning how many.
+    async fn delete_user_state(&self, principal: &str) -> Result<u64, A2AError> {
+        let sql = self.sql("DELETE FROM context_state WHERE scope = 'user' AND scope_key = ?");
+        let deleted = sqlx::query(&sql)
+            .bind(principal)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to sweep user state for {principal}: {e}"))
+            })?;
+        Ok(deleted.rows_affected())
     }
 }
 
