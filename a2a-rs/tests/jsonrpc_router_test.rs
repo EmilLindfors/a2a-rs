@@ -4,8 +4,8 @@
 //! [`jsonrpc_dispatch_test`] drives [`JsonRpcAdapter::handle_unary`] directly;
 //! this file stands up the real `axum` routers and drives them with
 //! `tower::ServiceExt::oneshot`, so it covers the parts that only exist at the
-//! router layer: REST path/query extraction, the `/tasks/{id}/cancel` slash
-//! alias, HTTP status mapping, and — most importantly — the two **SSE framings**
+//! router layer: REST path/query extraction, the canonical `/tasks/{id}:cancel`
+//! colon paths and their slash aliases, HTTP status mapping, and — most importantly — the two **SSE framings**
 //! (`jsonrpc_sse` wraps each event in a JSON-RPC envelope; `rest_sse` emits the
 //! bare ProtoJSON `StreamResponse`).
 
@@ -25,6 +25,7 @@ use futures::{Stream, StreamExt, stream};
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
+use a2a_rs::adapter::streaming::InMemoryStreamingHandler;
 use a2a_rs::adapter::{
     InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router, rest_router,
 };
@@ -277,11 +278,73 @@ async fn rest_cancel_slash_alias_works() {
         .await
         .unwrap();
 
-    // The canonical `/tasks/{id}:cancel` colon form is unroutable in matchit;
-    // the adapter serves the slash alias instead. Official clients accept both.
     let (status, body) = rest_call(&a, post("/tasks/t2/cancel", &json!({}))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["id"], "t2");
+}
+
+/// The canonical spec path, which is the one the official client sends.
+///
+/// matchit cannot register `/tasks/{id}:cancel` — `{id}` already claims the
+/// whole segment — so the request lands on `/tasks/{id}` with the verb inside
+/// the captured id. Before that was split off, the route was `GET`-only and the
+/// official `a2acli` got a bare `405`.
+#[tokio::test]
+async fn rest_cancel_accepts_the_canonical_colon_path() {
+    let (a, handler) = adapter_with_handler();
+    let id: TaskId = "t9".parse().unwrap();
+    handler
+        .create(&id, &"ctx".parse::<ContextId>().unwrap())
+        .await
+        .unwrap();
+    handler
+        .update_status(&id, TaskState::Working, None)
+        .await
+        .unwrap();
+
+    let (status, body) = rest_call(&a, post("/tasks/t9:cancel", &json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["id"], "t9");
+}
+
+/// The same shape on the subscribe path, where the failure was quieter: `GET
+/// /tasks/{id}:subscribe` matched `/tasks/{id}` and answered with the *task* as
+/// JSON to a client that was waiting on an event stream.
+#[tokio::test]
+async fn rest_subscribe_accepts_the_canonical_colon_path() {
+    // A task still running: subscribing to a finished one is refused, which
+    // would fail this test for a reason that has nothing to do with routing.
+    let (a, handler) = adapter_with_handler();
+    let id: TaskId = "s9".parse().unwrap();
+    handler
+        .create(&id, &"ctx".parse::<ContextId>().unwrap())
+        .await
+        .unwrap();
+
+    let resp = rest_router(a.clone())
+        .oneshot(get("/tasks/s9:subscribe"))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        resp.headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.split(';').next().unwrap_or(v).trim().to_string()),
+        Some("text/event-stream".to_string()),
+        "the canonical subscribe path must open a stream, not return the task"
+    );
+}
+
+/// A task id that merely contains a colon is not a verb.
+#[tokio::test]
+async fn a_colon_in_a_task_id_is_not_a_verb() {
+    let a = adapter();
+    rest_call(&a, post("/message:send", &send_message_body("urn:uuid:7"))).await;
+
+    let (status, body) = rest_call(&a, get("/tasks/urn:uuid:7")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["id"], "urn:uuid:7");
 }
 
 #[tokio::test]
@@ -389,5 +452,48 @@ async fn stream_without_a_task_id_gets_a_server_assigned_one() {
     assert!(
         !event["task"]["contextId"].as_str().unwrap_or("").is_empty(),
         "server must name the context: {event:?}",
+    );
+}
+
+/// A live streaming backend plus a handler that answers synchronously.
+///
+/// The task is `COMPLETED` before the stream is handed over, so no settling
+/// event can arrive on it — and `InMemoryStreamingHandler` hands back a
+/// broadcast receiver, which parks rather than ending. The SSE response
+/// therefore stayed open forever; the official `a2acli` hung on exactly this
+/// until its own timeout fired. Reading the body to completion is the
+/// assertion.
+#[tokio::test]
+async fn a_synchronously_answered_stream_ends() {
+    let handler = TestBusinessHandler::with_storage(InMemoryTaskStorage::new());
+    let agent_info =
+        SimpleAgentInfo::new("router-test".to_string(), "http://localhost".to_string());
+    let a = Arc::new(
+        JsonRpcAdapter::with_handler(handler, agent_info)
+            .with_streaming_handler(InMemoryStreamingHandler::new()),
+    );
+
+    // `a` is deliberately still held while the body is read. Dropping the
+    // adapter drops the streaming handler, which drops the broadcast sender,
+    // which ends the receiver — so a test that lets the router own the only
+    // reference passes whatever the stream logic does. A served agent outlives
+    // its responses, and that is the case that hung.
+    let resp = rest_router(a.clone())
+        .oneshot(post("/message:stream", &send_message_body("s11")))
+        .await
+        .unwrap();
+    let body = tokio::time::timeout(
+        Duration::from_secs(2),
+        to_bytes(resp.into_body(), 64 * 1024),
+    )
+    .await
+    .expect("the stream has to end on its own")
+    .expect("body");
+    drop(a);
+
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("TASK_STATE_COMPLETED"),
+        "the task snapshot still has to be delivered: {text}"
     );
 }
