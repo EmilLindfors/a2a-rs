@@ -113,7 +113,51 @@ A2A_URL=http://localhost:8137 cargo run -p a2acli -- card
 A2A_URL=http://localhost:8137 cargo run -p a2acli -- --transport jsonrpc send "hello"
 ```
 
-Then point the **official** `a2aproject/a2acli` at the same server, and/or point
-this CLI at a stock A2A agent, to validate against other implementations.
-(`a2a-rs/tests/jsonrpc_client_interop_test.rs` already proves our-client ↔
-our-server byte-compat; this validates against *other* SDKs.)
+`a2a-rs/tests/jsonrpc_client_interop_test.rs` proves our-client ↔ our-server
+byte-compat in process. Crossing the SDKs is what validates against *other*
+implementations, and it is the part that has found real bugs.
+
+### What has been crossed
+
+Run on 2026-08-21 against `a2aproject/a2a-rs` at `7676ec9` (`a2acli` 0.1.5,
+`helloworld-server`). Clone it next to this repo — the path `a2aproject/` is
+gitignored for exactly this.
+
+| Direction | Transport | Result |
+|---|---|---|
+| official `a2acli` → our `examples/jsonrpc_server` | JSONRPC | `card`, `send` (with and without a client-supplied task id), `get-task`, `list-tasks`, `stream` pass |
+| official `a2acli` → our `examples/jsonrpc_server` | HTTP+JSON | same set passes |
+| our `a2acli` → upstream `helloworld-server` | JSONRPC, negotiated from the card | `card`, `send`, `get`, `list`, `stream` pass |
+| our `a2acli` → upstream `helloworld-server` | JSONRPC, `--transport jsonrpc` | `send`, `list` pass |
+| either direction | GRPC | not crossed — upstream serves gRPC on `:50051`, we do not speak it |
+
+`subscribe` and `cancel` are absent from the table because neither echo agent
+leaves a task in a state where they apply: both answer synchronously, so a task
+is finished by the time either call reaches it, and both correctly return the
+spec's refusals (`-32004` unsupported-operation for subscribe, `-32002`
+not-cancelable). Exercise them against an agent that takes its time.
+
+### Known upstream bug
+
+The official `a2acli` drops a JSON-RPC error on the *streaming* path. Such an
+error is HTTP 200 with a JSON body, and its SSE reader finds no frames, so the
+command prints nothing and exits 0. Visible two ways against our server: a
+`subscribe` on a finished task reports the refusal over HTTP+JSON (where the
+status is 501) and says nothing over JSON-RPC, and `stream` against a server
+with no streaming backend says nothing on either. Our client had the same bug
+until 2026-08-21 — see `CHANGELOG.md`.
+
+```sh
+# Terminal 1: the upstream agent (JSON-RPC on :3000/jsonrpc, REST on /rest)
+cd a2aproject/a2a-rs && cargo run -p examples --bin helloworld-server
+
+# Terminal 2: our CLI, negotiating the transport from its card
+cargo run -p a2acli -- --url http://localhost:3000 card
+cargo run -p a2acli -- --url http://localhost:3000 send "hello"
+
+# ...and the official CLI against ours
+cd a2aproject/a2a-rs && cargo run -p a2a-cli -- --base-url http://localhost:8137 card
+```
+
+Note the upstream package is `a2a-cli` and its binary is `a2acli`; ours is the
+other way round.
