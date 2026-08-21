@@ -190,50 +190,6 @@ pub struct TaskQueryParams {
     pub metadata: Option<Map<String, Value>>,
 }
 
-/// Configuration options for sending messages including output modes and notifications.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageSendConfiguration {
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        rename = "acceptedOutputModes"
-    )]
-    pub accepted_output_modes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "historyLength")]
-    pub history_length: Option<u32>,
-    #[serde(
-        skip_serializing_if = "Option::is_none",
-        rename = "pushNotificationConfig"
-    )]
-    pub push_notification_config: Option<TaskPushNotificationConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blocking: Option<bool>,
-}
-
-/// Parameters for sending a message with optional configuration.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MessageSendParams {
-    pub message: Message,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub configuration: Option<MessageSendConfiguration>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Map<String, Value>>,
-}
-
-/// Parameters for sending a task (legacy)
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TaskSendParams {
-    pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "sessionId")]
-    pub session_id: Option<String>,
-    pub message: Message,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "pushNotification")]
-    pub push_notification: Option<TaskPushNotificationConfig>,
-    #[serde(skip_serializing_if = "Option::is_none", rename = "historyLength")]
-    pub history_length: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<Map<String, Value>>,
-}
-
 /// Parameters for listing tasks with filtering and pagination.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ListTasksParams {

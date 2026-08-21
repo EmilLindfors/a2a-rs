@@ -14,8 +14,7 @@ pub use agent::{
 pub use message::{Artifact, FilePartBuilder, Message, Part, PartBuilder, Role, part};
 pub use task::{
     DeleteTaskPushNotificationConfigParams, GetTaskPushNotificationConfigParams,
-    ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult,
-    MessageSendConfiguration, MessageSendParams, SendCompletion, Task, TaskIdParams,
-    TaskPushNotificationConfig, TaskQueryParams, TaskSendParams, TaskState, TaskStateExt,
-    TaskStatus, VersionedTask,
+    ListTaskPushNotificationConfigsParams, ListTasksParams, ListTasksResult, SendCompletion, Task,
+    TaskIdParams, TaskPushNotificationConfig, TaskQueryParams, TaskState, TaskStateExt, TaskStatus,
+    VersionedTask,
 };
