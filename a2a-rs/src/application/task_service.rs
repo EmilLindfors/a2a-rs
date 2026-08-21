@@ -92,6 +92,34 @@ fn until_settled(stream: UpdateStream) -> UpdateStream {
     }))
 }
 
+/// Deliver what the stream already holds, then end.
+///
+/// The companion to [`until_settled`] for a task that was **already settled**
+/// when its stream was handed over. No settling event can arrive to close that
+/// stream — whatever would have sent one has finished — so `until_settled`
+/// waits forever on it. That is not hypothetical: a handler that answers
+/// synchronously, which is what the echo handlers and every quick agent do,
+/// returns a `COMPLETED` task having broadcast nothing, and the SSE response
+/// then never ended. The official `a2acli` hung on it until its timeout.
+///
+/// Whatever the handler *did* broadcast on the way is queued and still worth
+/// delivering — an artifact chunk it streamed without attaching to the task
+/// exists nowhere else — so this drains the queue rather than dropping the
+/// stream outright. `poll_immediate` never parks, so the `take_while` here has
+/// none of the "decides one item late" problem described on [`until_settled`].
+fn ready_queued(stream: UpdateStream) -> UpdateStream {
+    Box::pin(
+        futures::stream::poll_immediate(stream)
+            .take_while(|item| futures::future::ready(item.is_ready()))
+            .filter_map(|item| {
+                futures::future::ready(match item {
+                    std::task::Poll::Ready(item) => Some(item),
+                    std::task::Poll::Pending => None,
+                })
+            }),
+    )
+}
+
 /// Use-case orchestration over the A2A ports.
 ///
 /// Constructed at the composition edge with concrete adapters injected; the
@@ -377,7 +405,9 @@ impl TaskService {
     ///
     /// The stream ends once the task settles (see [`until_settled`]), so a
     /// caller that reads to completion is not left holding an open connection
-    /// to a finished task.
+    /// to a finished task. A handler that settles the task before returning
+    /// never broadcasts such an event, so that case drains what is queued and
+    /// ends instead (see [`ready_queued`]).
     pub async fn send_streaming_message(
         &self,
         message: Message,
@@ -411,7 +441,16 @@ impl TaskService {
             task = task.with_limited_history(Some(limit));
         }
 
-        Ok((task, until_settled(update_stream)))
+        // A handler that answered synchronously has already settled the task,
+        // and nothing will broadcast for it again — the same case `subscribe`
+        // short-circuits. Waiting for a settling event here hangs the response.
+        let updates = if task.status.state.is_terminal() {
+            ready_queued(update_stream)
+        } else {
+            until_settled(update_stream)
+        };
+
+        Ok((task, updates))
     }
 
     /// Get a task by ID with optional history length limit.
@@ -441,17 +480,21 @@ impl TaskService {
     /// set, the handler replays buffered events with a greater id before
     /// streaming live updates.
     ///
-    /// The stream ends once the task settles (see [`until_settled`]). If the
-    /// task is *already* terminal and no resumption point was given, the caller
-    /// gets its snapshot and an empty stream, because nothing further can ever
-    /// be broadcast for it.
+    /// The stream ends once the task settles (see [`until_settled`]).
     ///
-    /// That short-circuit is conditional on `from_event_id` being unset, and
-    /// that condition is load-bearing: resuming after a disconnect on a task
-    /// that has since finished is precisely when the replay buffer matters —
-    /// the events the client missed are the ones it reconnected for. Skipping
-    /// the handler because the task looks finished would turn resumption into
-    /// silence.
+    /// Subscribing to a task that is *already* terminal is an
+    /// [`A2AError::UnsupportedOperation`], which is what `a2a.proto` specifies
+    /// for this call. An earlier version answered with the task's snapshot and
+    /// an empty stream; that reads on the wire as a subscription that opened
+    /// and closed with nothing to say, and a client cannot tell it apart from
+    /// an agent that has yet to speak. The error names the state instead.
+    ///
+    /// The check is conditional on `from_event_id` being unset, and that
+    /// condition is load-bearing: resuming after a disconnect on a task that
+    /// has since finished is precisely when the replay buffer matters — the
+    /// events the client missed are the ones it reconnected for. Refusing
+    /// because the task looks finished would turn resumption into an error on
+    /// exactly the call that exists to recover from one.
     ///
     /// A task already sitting in an interrupted state (`INPUT_REQUIRED`,
     /// `AUTH_REQUIRED`) deliberately does **not** short-circuit: it resumes
@@ -478,7 +521,10 @@ impl TaskService {
             && let Some(task) = &initial_task
             && task.status.state.is_terminal()
         {
-            return Ok((initial_task, Box::pin(futures::stream::empty())));
+            return Err(A2AError::UnsupportedOperation(format!(
+                "Task {} has already finished in state {:?}; subscribe is for tasks still running, use GetTask for its result",
+                task_id, task.status.state
+            )));
         }
 
         let update_stream = self

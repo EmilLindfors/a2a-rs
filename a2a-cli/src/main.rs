@@ -530,16 +530,20 @@ async fn poll_until_settled(
 ) -> anyhow::Result<Task> {
     const INTERVAL: Duration = Duration::from_millis(250);
 
+    // Read before sleeping. This is the path a task that finished before the
+    // subscription opened takes — the server refuses to subscribe to a settled
+    // task — so sleeping first would charge every fast agent an interval it
+    // does not need.
     loop {
-        let now = tokio::time::Instant::now();
-        tokio::time::sleep(INTERVAL.min(deadline.saturating_duration_since(now))).await;
         let task = transport
             .get_task(task_id, history_length)
             .await
             .context("polling task")?;
-        if is_settled(&task) || tokio::time::Instant::now() >= deadline {
+        let now = tokio::time::Instant::now();
+        if is_settled(&task) || now >= deadline {
             return Ok(task);
         }
+        tokio::time::sleep(INTERVAL.min(deadline.saturating_duration_since(now))).await;
     }
 }
 
