@@ -35,6 +35,7 @@ use axum::{Json, Router, extract::State, response::IntoResponse, routing::get};
 
 use a2a_rs::adapter::{
     InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router, rest_router,
+    streaming::InMemoryStreamingHandler,
 };
 use a2a_rs::services::server::AgentInfoProvider;
 
@@ -46,10 +47,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let address = "127.0.0.1:8137";
 
     // 1. Inner application: an in-memory handler behind the JSON-RPC adapter.
+    //    The streaming backend is what makes `SendStreamingMessage` and
+    //    `SubscribeToTask` work — without it both methods answer
+    //    `UnsupportedOperation`, and this server exists for clients to point at.
     let handler = SimpleAgentHandler::with_storage(InMemoryTaskStorage::new());
     let adapter_card =
         SimpleAgentInfo::new("jsonrpc-agent".to_string(), format!("http://{address}"));
-    let adapter = Arc::new(JsonRpcAdapter::with_handler(handler, adapter_card));
+    let adapter = Arc::new(
+        JsonRpcAdapter::with_handler(handler, adapter_card)
+            .with_streaming_handler(InMemoryStreamingHandler::new()),
+    );
 
     // 2. Agent card served for client transport negotiation. The primary
     //    interface (from `new`) already advertises JSON-RPC at `base`; we add the
@@ -59,12 +66,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let card_info = Arc::new(
         SimpleAgentInfo::new("Example JSON-RPC A2A Agent".to_string(), base.clone())
             .with_description("Wire-compatible JSON-RPC 2.0 + HTTP+JSON A2A server".to_string())
+            .with_streaming()
             .with_preferred_transport("JSONRPC".to_string())
             .add_interface(base, "HTTP+JSON".to_string())
             .add_skill(
                 "echo".to_string(),
                 "Echo".to_string(),
                 Some("Echoes input".to_string()),
+                vec!["echo".to_string()],
             ),
     );
 

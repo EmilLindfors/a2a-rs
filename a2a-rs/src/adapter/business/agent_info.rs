@@ -252,27 +252,42 @@ impl SimpleAgentInfo {
         self
     }
 
-    /// Add a basic skill
-    pub fn add_skill(mut self, id: String, name: String, description: Option<String>) -> Self {
+    /// Add a skill.
+    ///
+    /// `tags` is a parameter rather than a default because the spec marks it
+    /// REQUIRED (`a2a.proto`, `AgentSkill.tags`) and an empty list cannot be
+    /// sent: ProtoJSON omits an empty repeated field, so a skill with no tags
+    /// serializes without the key at all. The official `a2acli` then fails to
+    /// decode the card — every command, not only discovery, since it fetches
+    /// the card first. Pass at least one keyword describing what the skill does.
+    pub fn add_skill(
+        mut self,
+        id: String,
+        name: String,
+        description: Option<String>,
+        tags: Vec<String>,
+    ) -> Self {
         let skill = AgentSkill::new(
             id,
             name,
             description.unwrap_or_else(|| "Skill description".to_string()),
-            Vec::new(), // empty tags
+            tags,
         );
 
         self.card.skills.push(skill);
         self
     }
 
-    /// Add a comprehensive skill with all details
+    /// Add a skill with every optional detail filled in.
+    ///
+    /// `tags` is required for the reason given on [`add_skill`](Self::add_skill).
     #[allow(clippy::too_many_arguments)]
     pub fn add_comprehensive_skill(
         mut self,
         id: String,
         name: String,
         description: Option<String>,
-        tags: Option<Vec<String>>,
+        tags: Vec<String>,
         examples: Option<Vec<String>>,
         input_modes: Option<Vec<String>>,
         output_modes: Option<Vec<String>>,
@@ -281,7 +296,7 @@ impl SimpleAgentInfo {
             id,
             name,
             description.unwrap_or_else(|| "Skill description".to_string()),
-            tags.unwrap_or_default(),
+            tags,
             examples,
             input_modes,
             output_modes,

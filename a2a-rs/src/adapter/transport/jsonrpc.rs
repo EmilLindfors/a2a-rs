@@ -23,10 +23,10 @@
 //! (`decode_send_config`, `list_request_to_params`, `map_update_event`) are
 //! **shared with the Connect adapter** so both transports agree on the wire.
 //!
-//! The hand-written A2A param types in `domain/core/task.rs` (`MessageSendParams`
-//! with `pushNotificationConfig`/`blocking`) are the *legacy* JSON-RPC v0.x shape
-//! and are intentionally **not** used here — the proto request types are the
-//! v1.0 contract.
+//! The proto request types are the v1.0 contract on this path. The legacy
+//! JSON-RPC v0.x param shape (`MessageSendParams` with
+//! `pushNotificationConfig`/`blocking`) was never read here and has been
+//! deleted.
 
 use std::convert::Infallible;
 use std::pin::Pin;
@@ -509,11 +509,18 @@ fn jsonrpc_sse(
 ///
 /// The canonical custom-method paths use a `:`-suffix on a collection segment
 /// (`/message:send`) — those work as pure-literal segments. The *task*
-/// custom-method paths (`/tasks/{id}:cancel`) would put a `:`-suffix on the
-/// **same segment as a path parameter**, which axum's matchit router rejects
-/// (it conflicts with `/tasks/{id}`). We therefore serve the equivalent
-/// slash-form aliases (`/tasks/{id}/cancel`) for those, which official clients
-/// also accept.
+/// custom-method paths (`/tasks/{id}:cancel`, `/tasks/{id}:subscribe`) put the
+/// `:`-suffix on the **same segment as a path parameter**, which axum's matchit
+/// router cannot express: `{id}` already claims the whole segment, so the
+/// literal form conflicts with `/tasks/{id}`. The verb therefore arrives inside
+/// the captured id and is split off by the `/tasks/{id}` handlers (see
+/// [`strip_verb`]). Slash-form aliases (`/tasks/{id}/cancel`) are served too.
+///
+/// Registering only the aliases was not enough, and failed in the two ways this
+/// shape fails. The official `a2acli` sends the canonical path: `POST
+/// /tasks/{id}:cancel` matched the `GET`-only `/tasks/{id}` route and came back
+/// `405`, and `GET /tasks/{id}:subscribe` matched it outright and returned the
+/// *task* — a JSON body to a client waiting on an event stream.
 pub fn rest_router(adapter: Arc<JsonRpcAdapter>) -> Router {
     Router::new()
         .route("/message:send", post(rest_send_message))
@@ -521,7 +528,7 @@ pub fn rest_router(adapter: Arc<JsonRpcAdapter>) -> Router {
         .route("/message:stream", post(rest_stream_message))
         .route("/message/stream", post(rest_stream_message))
         .route("/tasks", get(rest_list_tasks))
-        .route("/tasks/{id}", get(rest_get_task))
+        .route("/tasks/{id}", get(rest_task_get).post(rest_task_post))
         .route("/tasks/{id}/cancel", post(rest_cancel_task))
         .route("/tasks/{id}/subscribe", get(rest_subscribe))
         .route(
@@ -579,6 +586,46 @@ async fn rest_list_tasks(
         a.dispatch_intercepted(methods::LIST_TASKS, Some(query_to_list_request(&q)), caller)
             .await,
     )
+}
+
+/// Strip a canonical `:verb` suffix off a captured task id.
+///
+/// Returns the id without the verb, or `None` if this request is not that verb.
+/// Only an exact `:{verb}` ending counts, so a task id that merely contains a
+/// colon (`urn:uuid:…`) is left alone. An id that genuinely ends in `:cancel`
+/// is ambiguous in the spec's own path template too; the verb wins.
+fn strip_verb<'a>(id: &'a str, verb: &str) -> Option<&'a str> {
+    id.strip_suffix(verb)?.strip_suffix(':')
+}
+
+/// `GET /tasks/{id}`, and the canonical `GET /tasks/{id}:subscribe` that lands
+/// on the same route.
+async fn rest_task_get(
+    state: State<Arc<JsonRpcAdapter>>,
+    headers: HeaderMap,
+    caller: Caller,
+    Path(id): Path<String>,
+    query: Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    match strip_verb(&id, "subscribe") {
+        Some(task_id) => rest_subscribe(state, headers, caller, Path(task_id.to_string())).await,
+        None => rest_get_task(state, caller, Path(id), query).await,
+    }
+}
+
+/// The canonical `POST /tasks/{id}:cancel`, which lands on `/tasks/{id}`
+/// because the verb is part of the captured segment.
+async fn rest_task_post(
+    state: State<Arc<JsonRpcAdapter>>,
+    caller: Caller,
+    Path(id): Path<String>,
+) -> Response {
+    match strip_verb(&id, "cancel") {
+        Some(task_id) => rest_cancel_task(state, caller, Path(task_id.to_string())).await,
+        None => a2a_to_http(&A2AError::MethodNotFound(format!(
+            "POST /tasks/{id} is not a method; the only task-scoped POST is /tasks/{{id}}:cancel"
+        ))),
+    }
 }
 
 async fn rest_get_task(

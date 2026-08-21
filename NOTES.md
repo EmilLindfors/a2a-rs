@@ -337,8 +337,11 @@ when the *toolchain* is below a dependency's floor, never when the declared
 `rust-version` is — so a false MSRV claim surfaces only somewhere exotic (for us,
 a container build on a pinned builder image). The number now lives once in
 `[workspace.package]` and is set to the toolchain we actually build and test
-with, not the bare minimum, so it is a claim we exercise. It stops being proven
-the day stable moves past it; that is when an MSRV CI job earns its place.
+with, not the bare minimum, so it is a claim we exercise. Stable moved to 1.98 on
+2026-08-18 and stopped exercising it, so `rust.yml` gained a job pinned to 1.96
+— library targets only, since the dev-dependencies behind `--all-targets` have
+floors of their own. The number now lives in two places that have to move
+together: `[workspace.package] rust-version` and that job's toolchain.
 
 **An empty text part is indistinguishable from a file part on the wire.** proto3
 omits a default value, so `Part::text("")` serializes as `{}` and a client
@@ -426,6 +429,130 @@ working and may emit several more. The old `UpdateEvent::is_final` merged both
 and would have truncated a streaming response mid-task had anything used it.
 Name such predicates after the question the caller is actually asking
 (`settles_task`), not after the field they happen to read.
+
+**Subscribing to a finished task is an error, not an empty subscription.**
+`a2a.proto` says `SubscribeToTask` returns `UnsupportedOperationError` on a
+terminal task, and we answered with the snapshot plus an empty stream instead —
+defensible in isolation (nothing further can ever be broadcast for it) and
+wrong on the wire, because a subscription that opens and closes without an
+event is indistinguishable from an agent that has not spoken yet. A caller that
+only reads events, which is what subscribing is for, saw nothing at all.
+Changed 2026-08-21. Two things fell out of it. The check stays conditional on
+`from_event_id` being unset — resuming after a disconnect on a task that has
+since finished is exactly when the replay buffer matters, so refusing there
+would break the call that exists to recover. And `a2acli`'s wait now takes the
+polling fallback whenever the task settled before the subscription opened,
+which is why `poll_until_settled` reads before it sleeps: sleeping first
+charged every fast agent an interval it did not need.
+
+**An error answering a streaming call is not a stream, and status codes will
+not tell you.** A JSON-RPC error is HTTP 200 with a JSON body, so a client that
+gates only on `status().is_success()` hands it to its SSE reader, which finds
+no frames and reports a subscription that ended. The caller sees silence and
+exits 0 — the one response the server took care to explain is the one that gets
+thrown away. Both CLIs did this: ours against the upstream agent, and the
+official `a2acli` against a server with no streaming backend. Wherever a call
+can answer either with a stream or with an error over the same 200, the content
+type is the discriminator; and a response carrying none has to keep being read
+as a stream, because reading a body to inspect it hangs on a stream that has
+nothing to say yet.
+
+**ProtoJSON omits an empty REQUIRED field, so the default value is off the
+wire.** `AgentSkill.tags` is `REQUIRED` in `a2a.proto` and `SimpleAgentInfo`
+built every skill with an empty one, so the served card had no `tags` key —
+and the official `a2acli`, which models it as non-optional, refused the card.
+It fetches the card before every call, so *every* subcommand failed with
+"error decoding response body", which reads like a broken server rather than
+one missing field. The class is wider than that field: any REQUIRED string,
+list or message left at its default disappears the same way, and the failure
+always lands on the consumer. Where a field is REQUIRED, make the API demand a
+value rather than defaulting one — a builder that accepts no tags is a builder
+that produces uncallable agents. `agent_card_required_fields_test` pins the
+card's list.
+
+**matchit cannot route the spec's `{id}:verb` paths, and the workaround has to
+live in the handler.** `POST /tasks/{id=*}:cancel` and `GET
+/tasks/{id=*}:subscribe` put the verb on the same segment as the parameter;
+`{id}` already claims that segment, so the literal form conflicts with
+`/tasks/{id}` and axum rejects it. Serving only the slash aliases
+(`/tasks/{id}/cancel`) is not a substitute — official clients send the
+canonical form, and it *matches* `/tasks/{id}`, so the failures are `405` on
+cancel and, worse, a task returned as JSON to a subscriber waiting on an event
+stream. The verb therefore arrives inside the captured id and is split off
+there. A rewriting middleware would be tidier and does not work: axum layers
+run after routing, and wrapping the router in an outer service stops it being a
+`Router` that `merge` accepts.
+
+**A stream that can only be closed by an event nobody will send stays open.**
+`send_streaming_message` ended its stream on the settling update — correct for
+an agent that works in the background, and a hang for one that finishes inside
+`process_message`, which returns a `COMPLETED` task having broadcast nothing.
+The subscription is a broadcast receiver: with the sender alive it parks
+forever rather than ending. Whenever a stream's termination depends on an event
+from elsewhere, ask what closes it when that elsewhere has already finished —
+`subscribe` had the answer (short-circuit a terminal task) and the send path
+did not.
+
+**A `oneshot` test that lets the router own the adapter cannot prove a stream
+ends.** The first version of the regression test for the hang above passed
+without the fix. `rest_router(a)` moves the only `Arc`, so the router — and the
+streaming handler, and its broadcast sender — drops when the response is
+produced, which ends the receiver by itself. A served agent outlives its
+responses. Hold the adapter across the body read (`rest_router(a.clone())`), or
+the assertion is about the test's own drop order.
+
+**A test that sleeps for a server to start has two bugs, and polling fixes one.**
+`authenticated_principal_test` bound `127.0.0.1:8199` and slept 200ms; it failed
+once under a full workspace run and passed alone. Either cause explains that —
+the sleep being short under load, or another test binary holding the port — and
+polling the socket only answers the first. Binding the listener in the test and
+handing it to `HttpServer::serve_on` answers both: port 0 picks whatever is
+free, `local_addr()` says which, and the kernel queues connections from the bind
+onward, so a client can connect before the serve future is polled. There is no
+readiness window left to wait out. A `free_port()` helper that binds and
+releases is the same trap with a smaller window — the port is free when it is
+read and can be taken before it is claimed.
+
+**Retention measures idleness from writes, and a read does not count.**
+`SqlxTaskStorage` gets its timestamps from `updated_at` columns, which a `SELECT`
+does not touch; `InMemoryTaskStorage` had no timestamps at all and needed a map
+of its own. Making that map bump on reads was tempting and would have made the
+two stores disagree about what "idle" means — two retention policies wearing one
+name. So both expire a context that is only ever read, and the rule is on
+`RetentionPolicy` rather than in either adapter. The cost is real: a long-lived
+`user:` fact that is read on every turn and rewritten never will expire. That is
+the price of not recording reads, which is the thing worth not paying for.
+
+**SQLite's `foreign_keys` is a per-connection pragma, and the cascades depend on
+it.** SQLite defaults it *off*, so `ON DELETE CASCADE` in `migrations/sqlite/` is
+decoration until each connection says otherwise. It has been on all along —
+sqlx's `SqliteConnectOptions` defaults it true and the `Any` driver inherits
+that — but nothing in this repo said so, which made it a guarantee borrowed from
+a dependency's default for a schema that cannot work without it. Set explicitly
+in `after_connect` as of 2026-08-21, with a test that reads the pragma back off a
+pooled connection and one that deletes a task and checks its history went too.
+There is no other place to put it: the `Any` driver parses URLs itself and
+rejects SQLite's own parameters, so `?foreign_keys=…` does not reach the driver
+in either direction.
+
+**A sweep counts what both stores can count.** `Swept::messages` first came off
+`rows_affected` on the `task_history` delete, and the SQLite store reported three
+where the in-memory store reported two — `task_history` holds status transitions
+as well as messages, and the in-memory conversation log holds only messages. The
+number was accurate about rows and useless for comparing the adapters. It is now
+a `COUNT(*) … WHERE message IS NOT NULL` taken inside the sweep transaction,
+which is the same predicate `load` reads the conversation by. Where two adapters
+report a number under one name, the name has to be a quantity they both have.
+
+**A sweep is global, so a test that sweeps needs a database to itself.** The
+in-memory and SQLite cases get one for free — a fresh store is a fresh database.
+PostgreSQL is a server, and eight cases sweeping one database delete each other's
+contexts and then disagree about the counts. `retention_test.rs` creates a
+database per case, named after the case, so a run reuses the same eight rather
+than accumulating them and no case can drop one another is using. The
+alternative — unique ids per case and assertions that count only their own rows —
+was rejected because `Swept` counts what the sweep deleted, and the sweep does
+not know whose rows they were.
 
 **`EnvFilter::from_default_env()` enables nothing when `RUST_LOG` is unset.** It
 made `korps run` start a server and print absolutely nothing. Any new binary needs

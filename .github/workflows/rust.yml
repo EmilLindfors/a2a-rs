@@ -33,13 +33,37 @@ jobs:
       - name: Run tests
         run: cargo test --verbose --workspace --locked --all-targets
 
+  msrv:
+    name: MSRV (1.96)
+    runs-on: ubuntu-latest
+    # `rust-version` is a claim cargo never checks against the dependency graph:
+    # it errors when the *toolchain* is below a dependency's floor, never when
+    # the declared number is. Every other job runs on stable, which proved the
+    # claim only while stable *was* 1.96. It no longer is, so this job is what
+    # keeps the number true. Bump it and `[workspace.package] rust-version`
+    # together — they are the same claim written twice.
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.96
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      # Library targets only. `rust-version` is what a consumer needs to build
+      # the published crates; the dev-dependencies behind `--all-targets` have
+      # their own floors and would raise ours for nobody's benefit.
+      - name: Check the workspace on the declared MSRV
+        run: cargo check --workspace --all-features --locked
+
   postgres:
     name: PostgreSQL storage
     runs-on: ubuntu-latest
     # The SQLite half of `SqlxTaskStorage` runs in the job above. This is the
     # other backend, and it is the one that needs a server: the schema, the two
-    # upserts, the placeholder rewrite and every column the driver decodes are
-    # per-dialect, and nothing else proves them.
+    # upserts, the placeholder rewrite, the retention sweep and every column the
+    # driver decodes are per-dialect, and nothing else proves them.
     services:
       postgres:
         image: postgres:17
@@ -65,7 +89,13 @@ jobs:
       - name: Run the PostgreSQL storage tests
         env:
           A2A_TEST_POSTGRES_URL: postgres://postgres:a2a@localhost:5432/a2a
-        run: cargo test -p a2a-rs --features full --locked --test postgres_storage_test
+        # `retention_test` skips its PostgreSQL cases without the URL, so it runs
+        # in the job above too — with only the in-memory and SQLite stores. Here
+        # it creates a database per case (the sweep is global) and sweeps for
+        # real.
+        run: |
+          cargo test -p a2a-rs --features full --locked --test postgres_storage_test
+          cargo test -p a2a-rs --features full --locked --test retention_test
 
   clippy:
     name: Clippy

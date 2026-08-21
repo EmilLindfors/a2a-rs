@@ -171,6 +171,67 @@ impl Dialect {
         }
     }
 
+    /// Context ids whose last write is older than the bound cutoff and that hold
+    /// no unfinished task.
+    ///
+    /// "Last write" is the newest timestamp any table carries for the context,
+    /// which is why this is a `UNION ALL` rather than a read of
+    /// `contexts.updated_at`: nothing updates that row after the claim, and a
+    /// context that only ever held tasks has no row there at all.
+    ///
+    /// The `EXCEPT` is the running-task guard, kept out of the `HAVING` so
+    /// neither dialect has to resolve a correlated reference to the grouped
+    /// derived table. `input-required` and `auth-required` are deliberately not
+    /// in the list — they wait on a caller who, past the retention window, is
+    /// not coming back.
+    pub(super) fn idle_contexts(self) -> &'static str {
+        match self {
+            Self::Sqlite => concat!(
+                "SELECT ctx FROM (",
+                "SELECT id AS ctx, updated_at AS last_write FROM contexts",
+                " UNION ALL SELECT context_id, updated_at FROM tasks",
+                " UNION ALL SELECT context_id, \"timestamp\" FROM task_history",
+                " WHERE context_id IS NOT NULL",
+                " UNION ALL SELECT context_id, created_at FROM context_digests",
+                " UNION ALL SELECT scope_key, updated_at FROM context_state",
+                " WHERE scope = 'context'",
+                ") AS activity GROUP BY ctx HAVING MAX(last_write) < ?",
+                " EXCEPT SELECT context_id FROM tasks",
+                " WHERE status_state IN ('submitted', 'working', 'unknown')",
+            ),
+            Self::Postgres => concat!(
+                "SELECT ctx FROM (",
+                "SELECT id AS ctx, updated_at AS last_write FROM contexts",
+                " UNION ALL SELECT context_id, updated_at FROM tasks",
+                " UNION ALL SELECT context_id, \"timestamp\" FROM task_history",
+                " WHERE context_id IS NOT NULL",
+                " UNION ALL SELECT context_id, created_at FROM context_digests",
+                " UNION ALL SELECT scope_key, updated_at FROM context_state",
+                " WHERE scope = 'context'",
+                ") AS activity GROUP BY ctx HAVING MAX(last_write) < $1::timestamptz",
+                " EXCEPT SELECT context_id FROM tasks",
+                " WHERE status_state IN ('submitted', 'working', 'unknown')",
+            ),
+        }
+    }
+
+    /// Principals whose `user:`-scoped state has not been written since the
+    /// bound cutoff.
+    ///
+    /// Grouped by principal rather than filtered per row: the bag is expired
+    /// whole or not at all (see
+    /// [`RetentionPolicy::delete_user_state_idle_for`](crate::domain::RetentionPolicy::delete_user_state_idle_for)).
+    pub(super) fn idle_principals(self) -> &'static str {
+        match self {
+            Self::Sqlite => {
+                "SELECT scope_key FROM context_state WHERE scope = 'user'                  GROUP BY scope_key HAVING MAX(updated_at) < ?"
+            }
+            Self::Postgres => {
+                "SELECT scope_key FROM context_state WHERE scope = 'user'                  GROUP BY scope_key HAVING MAX(updated_at) < $1::timestamptz"
+            }
+        }
+    }
+
     /// Keep other processes out while the schema is created, if this backend has
     /// anything to keep them out with.
     ///
@@ -343,6 +404,43 @@ mod tests {
             Dialect::Postgres.bind_params(Dialect::Postgres.updated_since_predicate()),
             "updated_at >= $1::timestamptz"
         );
+    }
+
+    /// Both retention queries take exactly one bound cutoff, spelled the way
+    /// that dialect needs it. They bypass [`Dialect::bind_params`] — they are
+    /// written per dialect already — so a stray `?` in the PostgreSQL spelling
+    /// would reach the server verbatim.
+    #[test]
+    fn the_retention_queries_bind_one_cutoff_each() {
+        for query in [
+            Dialect::Sqlite.idle_contexts(),
+            Dialect::Sqlite.idle_principals(),
+        ] {
+            assert_eq!(query.matches('?').count(), 1, "{query}");
+        }
+        for query in [
+            Dialect::Postgres.idle_contexts(),
+            Dialect::Postgres.idle_principals(),
+        ] {
+            assert_eq!(query.matches('?').count(), 0, "{query}");
+            assert_eq!(query.matches("$1::timestamptz").count(), 1, "{query}");
+        }
+    }
+
+    /// The running-task guard is what keeps a sweep from deleting work in
+    /// progress, and it turns on a list of state names that the schema's CHECK
+    /// constraint also spells. `input-required` and `auth-required` are
+    /// deliberately absent: they wait on a caller.
+    #[test]
+    fn only_unfinished_states_hold_a_context_back() {
+        for dialect in [Dialect::Sqlite, Dialect::Postgres] {
+            let query = dialect.idle_contexts();
+            assert!(
+                query.contains("'submitted', 'working', 'unknown'"),
+                "{query}"
+            );
+            assert!(!query.contains("input-required"), "{query}");
+        }
     }
 
     /// MySQL is recognized from a URL so the error can name it, and there is no

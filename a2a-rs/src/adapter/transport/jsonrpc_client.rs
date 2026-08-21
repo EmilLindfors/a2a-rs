@@ -258,6 +258,38 @@ impl JsonRpcClient {
             .into());
         }
 
+        // A JSON-RPC error to a streaming call is HTTP 200 with a JSON body —
+        // the transport succeeded, the call did not. Handing that body to the
+        // SSE reader finds no `data:` frames, so the caller gets an empty
+        // stream and reports nothing at all: the server said why, and the
+        // client threw it away. Seen against the upstream a2aproject agent,
+        // which answers `SubscribeToTask` on a finished task with
+        // `-32001 task not found`.
+        //
+        // The content type is the discriminator. A server that sends none is
+        // still read as a stream: consuming a body to inspect it would hang on
+        // a stream that has nothing to say yet.
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.split(';').next().unwrap_or(v).trim().to_ascii_lowercase());
+        if let Some(content_type) = content_type.as_deref()
+            && content_type != "text/event-stream"
+        {
+            let body = response.text().await.unwrap_or_default();
+            return Err(serde_json::from_str::<JsonRpcResponse>(&body)
+                .ok()
+                .and_then(|resp| resp.error)
+                .map(|e| jsonrpc_to_a2a(&e))
+                .unwrap_or_else(|| {
+                    let shown: String = body.chars().take(500).collect();
+                    A2AError::Internal(format!(
+                        "expected an event stream, got a {content_type} response: {shown}"
+                    ))
+                }));
+        }
+
         Ok(Box::pin(sse_stream(response)))
     }
 }

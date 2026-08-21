@@ -52,13 +52,23 @@ What is left on this side of the seam — the handler-side remainder is in korps
       written and read by nobody. A history table nobody reads is not the fix;
       surfacing the change to whoever is talking to the agent is, and that needs
       somewhere to surface it.
-- [ ] **Retention.** The conversation log is durable now, so storage growth is
-      the real cost — and `InMemoryTaskStorage` never evicts its tasks,
-      conversations, digests or state at all, which matters for a long-lived
-      process. Contexts idle beyond N days. Separate policy and opt-in, since
-      `tasks/get` with history is a protocol feature and deleting history breaks
-      it. `user:`-scoped state is the awkward part: it belongs to a principal
-      rather than to a context, so no context going idle says it is stale.
+- [ ] **Retention has a sweep and no schedule.** The `a2a-rs` half landed on
+      2026-08-21: `RetentionPolicy` (two knobs, both off by default) and the
+      `AsyncRetention` port, implemented by both storage adapters. See
+      `CHANGELOG.md`; `NOTES.md` has why idleness is measured from writes only
+      and why `now` is a parameter. Nothing calls it — deliberately, since there
+      is no timer in the library — so the remainder is korps': a config key for
+      the two windows and a supervisor that sweeps on a schedule and logs what
+      `Swept` reports. Until then a store still grows without bound, which is
+      what the default policy asks for.
+      - **A fact that is only ever read expires.** Idleness is measured from
+        writes, because a read that recorded itself would be a write per turn —
+        which is the cost the ownership item above is trying to remove. So a
+        `user:` key the model reads on every turn and never rewrites is deleted
+        after the window, and the agent forgets something it was using. Refreshing
+        only when a key is close to its cutoff would bound the extra writes; so
+        would recording reads per principal rather than per key. Neither is free,
+        and nothing is scheduled to sweep yet, so this bites nobody today.
 - [ ] **Retrieval memory is deferred, not forgotten.** The tier-3 shape (embed,
       index, search — ADK `MemoryService`, LangGraph `BaseStore`, Letta
       archival) needs a vector index and is its own pass. Define the config key
@@ -69,6 +79,15 @@ What is left on this side of the seam — the handler-side remainder is in korps
 Work whose two halves land on opposite sides of the seam. Also listed in korps'
 `TODO.md`; whoever picks one up should check the other copy.
 
+- [ ] **A skill with no keywords serves an undecodable card.** The `a2a-rs` half
+      landed on 2026-08-21: `SimpleAgentInfo::add_skill` and
+      `add_comprehensive_skill` now require `tags`, because the spec marks the
+      field REQUIRED and ProtoJSON drops an empty list, which makes the official
+      client refuse the whole card. korps' `core/server.rs` still passes `None`
+      when a skill's `[[skills]] keywords` is empty — a config `korps validate`
+      accepts and no conformant client can talk to. Two halves: take the
+      signature change (it does not compile otherwise), and decide whether an
+      empty `keywords` is a config error or gets a default.
 - [ ] **Reasoning for non-OpenRouter providers.** The provider mappings are
       `a2a-llm`'s; the config key and the `doctor` warning are korps'.
       `[llm] reasoning` reaches the wire on `openrouter` only. The drop is now
@@ -92,41 +111,45 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
 
 ## 3. Interop and CI
 
-- [ ] **Retire the legacy `MessageSendConfiguration.blocking`**
-      (`domain/core/task.rs`) — the v0.x spelling of `return_immediately`, still
-      read nowhere. The whole hand-written `MessageSendParams` family is
-      re-exported but unused by the v1.0 path; decide whether it is deleted or
-      documented as legacy-only.
-- [ ] Point the **official** `a2aproject/a2acli` at our `examples/jsonrpc_server`
-      (`:8137`) — validates our *server* against the canonical client.
-- [ ] Point **our** `JsonRpcClient` / `a2acli` at a stock upstream A2A agent —
-      validates our *client* against other SDKs.
-- [ ] Once both pass, capture the matrix (which transports and SDKs interoperate)
-      in the `a2acli` README.
-- [x] **`authenticated_principal_test` flakes under a full workspace run.**
-      `the_connectrpc_path_carries_the_caller_over_a_socket` used to bind a
-      hard-coded `127.0.0.1:8199` and wait a flat 200ms for the server to come
-      up. Seen failing once on 2026-08-17 under
-      `cargo test --workspace --all-features` and passing on its own and on a
-      re-run — the shape of both causes: the sleep being short under load, and
-      another test binary holding the port. Now binds an ephemeral port
-      (probe on `127.0.0.1:0`, read the address back, release it) and polls
-      the socket until it answers, so neither cause can recur.
-- [ ] **Pin an MSRV CI job the moment the declared version drops below stable.**
-      Not needed today: every workflow uses `dtolnay/rust-toolchain@stable` and
-      1.96 is current stable, so CI already builds on exactly the declared
-      version. That stops being true the day stable moves on — from then the
-      number is unproven again, and a `dtolnay/rust-toolchain@1.96` job is what
-      makes it real.
+- [x] Point the **official** `a2aproject/a2acli` at our `examples/jsonrpc_server`
+      (`:8137`) — done 2026-08-21 against `a2acli` 0.1.5, and it found three
+      bugs on our side (missing `tags`, the `:verb` task paths, a stream that
+      never ended). `card`, `send` with and without a client-supplied task id,
+      `get-task`, `list-tasks`, `subscribe` and `stream` now all pass over both
+      the `jsonrpc` and `http-json` bindings. See `CHANGELOG.md`.
+      - One upstream bug to report: `a2acli stream` against a server with no
+        streaming backend prints nothing and exits 0, swallowing the JSON-RPC
+        error (`-32004`, HTTP 200) that says why.
+- [x] Point **our** `JsonRpcClient` / `a2acli` at a stock upstream A2A agent —
+      done 2026-08-21 against upstream's `helloworld-server`. `card`, `send`,
+      `get`, `list` and `stream` pass, both negotiated from the card (its
+      JSON-RPC interface is a sub-path, `:3000/jsonrpc`) and with
+      `--transport jsonrpc` forced. It found one bug on our side: the client
+      turned a JSON-RPC error on the *streaming* path into an empty stream.
+- [x] Capture the matrix (which transports and SDKs interoperate) in the
+      `a2acli` README — done, with the upstream commit it was run against.
+      gRPC is the gap: upstream serves it on `:50051`, we do not speak it.
+- [x] **`SubscribeToTask` on a terminal task is an error.** Done 2026-08-21:
+      `a2a.proto:75` specifies `UnsupportedOperationError` and we answered with
+      an empty stream. Resumption (`Last-Event-ID`) still opens. See
+      `NOTES.md`. Upstream errors here too but with `-32001 TASK_NOT_FOUND`
+      rather than the spec's code, so crossing this case still shows a
+      difference — theirs, now.
+- [x] **Pin an MSRV CI job.** Done 2026-08-21, on the condition this item was
+      waiting for: stable moved to 1.98, so `dtolnay/rust-toolchain@stable` no
+      longer builds the declared 1.96 and the number went unproven. `rust.yml`
+      now has a job pinned to 1.96 running `cargo check --workspace
+      --all-features --locked`. The workspace builds on it as declared —
+      nothing had to move. See `NOTES.md`.
 - [ ] **Make the downstream canary blocking.**
-      `.github/workflows/downstream-korps.yml` exists and builds korps against
-      each PR by checking both repos out as siblings — korps'
-      `[patch.crates-io]` resolves to the PR's source, so it needs no release.
-      It is `continue-on-error` until two things hold: a `KORPS_CANARY_TOKEN`
-      secret with `repo` scope exists (korps is private, this repo is public,
-      and without the secret the job skips), and korps' master is current
-      (while it lags, the canary builds an old korps and can fail for reasons
-      unrelated to the PR).
+      `.github/workflows/downstream-korps.yml` builds korps against each PR by
+      checking both repos out as siblings, so korps' `[patch.crates-io]`
+      resolves to the PR's source and it needs no release. It is
+      `continue-on-error` until two things hold: a `KORPS_CANARY_TOKEN` secret
+      with `repo` scope exists (korps is private, this repo is public, and
+      without the secret the job skips), and korps' master is current (while it
+      lags, the canary builds an old korps and can fail for reasons unrelated
+      to the PR).
 
 ---
 

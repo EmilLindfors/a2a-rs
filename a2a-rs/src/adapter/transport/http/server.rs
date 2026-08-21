@@ -72,14 +72,40 @@ where
         }
     }
 
-    /// Start the HTTP server
+    /// Start the HTTP server on the configured address.
     #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
         server.address = %self.address,
         server.has_auth = self.authenticator.is_some()
     )))]
     pub async fn start(&self) -> Result<(), A2AError> {
+        let listener = tokio::net::TcpListener::bind(&self.address)
+            .await
+            .map_err(HttpServerError::Io)?;
+        self.serve_on(listener).await
+    }
+
+    /// Serve on a listener the caller has already bound.
+    ///
+    /// [`start`](Self::start) binds the address itself, which leaves a caller
+    /// that asked for port 0 no way to learn which port it got, and any caller
+    /// no way to know the socket is accepting yet. Binding first answers both:
+    /// `listener.local_addr()` reports the real address, and the kernel queues
+    /// connections from the moment of the bind, so a client may connect before
+    /// this future is ever polled. That is what a test needs to skip the
+    /// "sleep and hope" step, and what lets a supervisor hand out port 0 and
+    /// report back the port the agent actually listens on.
+    #[cfg_attr(feature = "tracing", instrument(skip(self, listener), fields(
+        server.has_auth = self.authenticator.is_some()
+    )))]
+    pub async fn serve_on(&self, listener: tokio::net::TcpListener) -> Result<(), A2AError> {
         #[cfg(feature = "tracing")]
-        info!("Starting HTTP server");
+        info!(
+            "HTTP server listening on {}",
+            listener
+                .local_addr()
+                .map(|addr| addr.to_string())
+                .unwrap_or_else(|_| self.address.clone())
+        );
 
         let processor = self.processor.clone();
         let agent_info = self.agent_info.clone();
@@ -107,13 +133,6 @@ where
             // Create an auth router with the authenticator
             app = with_auth(app, (*auth_clone).clone());
         }
-
-        let listener = tokio::net::TcpListener::bind(&self.address)
-            .await
-            .map_err(HttpServerError::Io)?;
-
-        #[cfg(feature = "tracing")]
-        info!("HTTP server listening on {}", self.address);
 
         axum::serve(listener, app).await.map_err(|e| {
             #[cfg(feature = "tracing")]

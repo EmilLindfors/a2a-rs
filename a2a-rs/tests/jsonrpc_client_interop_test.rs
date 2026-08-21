@@ -17,11 +17,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use axum::{Json, Router, routing::get};
+use axum::{Json, Router, routing::get, routing::post};
 use common::TestBusinessHandler;
 use futures::{Stream, StreamExt, stream};
 
 use a2a_rs::adapter::{InMemoryTaskStorage, JsonRpcAdapter, SimpleAgentInfo, jsonrpc_router};
+use a2a_rs::domain::TaskStateExt;
 use a2a_rs::domain::{
     A2AError, AgentCard, AgentInterface, ContextId, Message, SendCompletion,
     TaskArtifactUpdateEvent, TaskId, TaskPushNotificationConfig, TaskState, TaskStatus,
@@ -520,22 +521,21 @@ async fn push_config_lifecycle() {
 
 #[tokio::test]
 async fn subscribe_yields_initial_task_over_sse() {
-    let base = spawn_server().await;
+    let (base, handler) = spawn_server_with_handler().await;
     let client = JsonRpcClient::new(base);
 
-    let task = client
-        .send_task_message(
-            Some("task-sub"),
-            &message(),
-            None,
-            None,
-            SendCompletion::WhenSettled,
-        )
+    // A task still running: subscribing to a finished one is refused (below),
+    // and the echo handler finishes anything sent to it.
+    let id: TaskId = "task-sub".parse().unwrap();
+    handler
+        .create(&id, &"ctx".parse::<ContextId>().unwrap())
         .await
         .unwrap();
-    let id = task.id.clone();
 
-    let mut stream = client.subscribe_to_task(&id, None, None).await.unwrap();
+    let mut stream = client
+        .subscribe_to_task("task-sub", None, None)
+        .await
+        .unwrap();
 
     // First SSE event must be the initial task snapshot — proving the client's
     // SSE reassembly + JSON-RPC frame + StreamResponse union decode all work.
@@ -546,9 +546,46 @@ async fn subscribe_yields_initial_task_over_sse() {
         .expect("first event should be Ok");
 
     match first.item {
-        StreamItem::Task(t) => assert_eq!(t.id, id),
+        StreamItem::Task(t) => assert_eq!(t.id, "task-sub"),
         other => panic!("expected initial Task snapshot, got {other:?}"),
     }
+}
+
+/// `a2a.proto`: `SubscribeToTask` "Returns `UnsupportedOperationError` if the
+/// task is already in a terminal state".
+///
+/// The earlier behaviour was a snapshot plus an empty stream, which a client
+/// cannot tell apart from an agent that has not spoken yet — and a caller that
+/// only reads events (which is what a subscription is for) saw nothing at all.
+#[tokio::test]
+async fn subscribing_to_a_finished_task_is_refused() {
+    let base = spawn_server().await;
+    let client = JsonRpcClient::new(base);
+
+    let task = client
+        .send_task_message(
+            Some("task-done"),
+            &message(),
+            None,
+            None,
+            SendCompletion::WhenSettled,
+        )
+        .await
+        .unwrap();
+    assert!(
+        task.status.state.is_terminal(),
+        "the echo handler has to have finished it: {:?}",
+        task.status.state
+    );
+
+    let err = match client.subscribe_to_task(&task.id, None, None).await {
+        Ok(_) => panic!("a finished task must not be subscribable"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(err, A2AError::UnsupportedOperation(_)),
+        "expected UnsupportedOperation, got {err:?}"
+    );
 }
 
 #[tokio::test]
@@ -582,5 +619,46 @@ async fn get_task_not_found_maps_to_typed_error() {
     assert!(
         matches!(err, A2AError::TaskNotFound(_)),
         "expected TaskNotFound, got {err:?}"
+    );
+}
+
+/// A JSON-RPC error answering a *streaming* call must reach the caller.
+///
+/// Such an error is HTTP 200 with a JSON body — the transport succeeded and the
+/// call did not — so the SSE reader finds no frames and yields an empty stream.
+/// The caller then sees a subscription that ended immediately and reports
+/// nothing, which is what `a2acli stream` did against the upstream
+/// a2aproject agent: it answers `SubscribeToTask` on a finished task with
+/// `-32001 task not found`, and our client printed silence and exited 0.
+#[tokio::test]
+async fn a_jsonrpc_error_on_the_stream_path_is_not_an_empty_stream() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+
+    // Deliberately not our own adapter: the point is what an *other* server's
+    // error response does to our client.
+    let app = Router::new().route(
+        "/",
+        post(|| async {
+            Json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": { "code": -32001, "message": "task not found: t1" }
+            }))
+        }),
+    );
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+
+    let client = JsonRpcClient::new(base);
+    // Not `expect_err`: the Ok side is a boxed stream, which is not `Debug`.
+    let err = match client.subscribe_to_task("t1", None, None).await {
+        Ok(_) => panic!("an error response must not arrive as an empty stream"),
+        Err(e) => e,
+    };
+    assert!(
+        matches!(err, A2AError::TaskNotFound(_)),
+        "expected the mapped JSON-RPC error, got {err:?}"
     );
 }

@@ -12,46 +12,32 @@
 
 #![cfg(all(feature = "http-server", feature = "http-client"))]
 
-use std::time::Duration;
-
 use a2a_rs::adapter::{ConnectRpcAdapter, HttpServer, SimpleAgentInfo};
 use a2a_rs::domain::PROTOCOL_BINDING_CONNECTRPC;
 
 mod common;
 use common::TestBusinessHandler;
 
-/// Bind an ephemeral port, then release it for the server to claim.
-fn free_port() -> u16 {
-    std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
-
-/// Poll the well-known card endpoint until the server is up.
-async fn wait_for_card(base_url: &str) -> a2a_rs::domain::AgentCard {
-    for _ in 0..50 {
-        if let Ok(card) = a2a_rs::fetch_agent_card(base_url).await {
-            return card;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("agent card never became available at {base_url}");
-}
-
 #[tokio::test]
 async fn served_card_advertises_the_mounted_transport() {
-    let port = free_port();
-    let base_url = format!("http://127.0.0.1:{port}");
+    // Bind first: the card has to carry the url, so the port must be known
+    // before the agent info is built — and a listener handed to `serve_on` is
+    // already accepting, so there is nothing to wait for afterwards.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind an ephemeral port");
+    let addr = listener.local_addr().expect("local addr");
+    let base_url = format!("http://{addr}");
 
     let agent_info = SimpleAgentInfo::new("Card Transport Agent".to_string(), base_url.clone());
     let processor = ConnectRpcAdapter::with_handler(TestBusinessHandler::new(), agent_info.clone());
-    let server = HttpServer::new(processor, agent_info, format!("127.0.0.1:{port}"));
+    let server = HttpServer::new(processor, agent_info, addr.to_string());
 
-    let handle = tokio::spawn(async move { server.start().await });
+    let handle = tokio::spawn(async move { server.serve_on(listener).await });
 
-    let card = wait_for_card(&base_url).await;
+    let card = a2a_rs::fetch_agent_card(&base_url)
+        .await
+        .expect("the bound server serves its card");
 
     assert_eq!(
         card.preferred_transport(),
