@@ -231,6 +231,7 @@ fn bench_agent_operations(c: &mut Criterion) {
                 black_box(format!("skill-{}", uuid::Uuid::new_v4())),
                 black_box("Test Skill".to_string()),
                 black_box(Some("A test skill for benchmarking".to_string())),
+                black_box(vec!["bench".to_string()]),
             );
             black_box(result)
         })

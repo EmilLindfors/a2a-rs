@@ -75,7 +75,7 @@ async fn run_server() -> Result<(), Box<dyn std::error::Error>> {
         "echo".to_string(),
         "Echo Skill".to_string(),
         Some("Echoes back the user's message".to_string()),
-        Some(vec!["echo".to_string(), "respond".to_string()]),
+        vec!["echo".to_string(), "respond".to_string()],
         Some(vec!["Echo: Hello World".to_string()]),
         Some(vec!["text".to_string()]),
         Some(vec!["text".to_string()]),

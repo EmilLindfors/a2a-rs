@@ -254,7 +254,12 @@ proptest! {
 
         // Add skills
         for skill in skills {
-            agent_info = agent_info.add_skill(skill.id, skill.name, Some(skill.description));
+            agent_info = agent_info.add_skill(
+                skill.id,
+                skill.name,
+                Some(skill.description),
+                vec!["test".to_string()],
+            );
         }
 
         prop_assert!(true);

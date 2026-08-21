@@ -270,6 +270,7 @@ async fn main() -> anyhow::Result<()> {
                 "Parse natural-language math (e.g. 'add 5 7') and delegate to an MCP tool"
                     .to_string(),
             ),
+            vec!["math".to_string(), "compute".to_string()],
         );
 
     let processor = ConnectRpcAdapter::new(

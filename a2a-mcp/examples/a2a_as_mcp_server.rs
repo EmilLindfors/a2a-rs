@@ -99,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
             "echo".to_string(),
             "Echo".to_string(),
             Some("Repeat the input back".to_string()),
+            vec!["echo".to_string()],
         );
 
     let processor = ConnectRpcAdapter::new(

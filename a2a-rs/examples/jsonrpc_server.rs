@@ -65,6 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "echo".to_string(),
                 "Echo".to_string(),
                 Some("Echoes input".to_string()),
+                vec!["echo".to_string()],
             ),
     );
 
