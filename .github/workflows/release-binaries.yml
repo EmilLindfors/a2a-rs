@@ -92,14 +92,14 @@ jobs:
 
       - name: Upload Release Asset (Unix)
         if: runner.os != 'Windows'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           files: a2acli-${{ matrix.target }}.tar.gz
 
       - name: Upload Release Asset (Windows)
         if: runner.os == 'Windows'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ inputs.tag }}
           files: a2acli-${{ matrix.target }}.zip

@@ -54,13 +54,13 @@ jobs:
 
       - name: Check out a2a-rs (this PR)
         if: steps.guard.outputs.run == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           path: a2a-rs
 
       - name: Check out korps
         if: steps.guard.outputs.run == 'true'
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
         with:
           repository: EmilLindfors/korps
           token: ${{ secrets.KORPS_CANARY_TOKEN }}
