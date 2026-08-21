@@ -291,6 +291,32 @@ impl SqlxTaskStorage {
         ))
     }
 
+    /// Pool options carrying whatever this backend has to be told on every
+    /// connection.
+    ///
+    /// Only SQLite has anything: `foreign_keys` is a per-*connection* pragma
+    /// that SQLite itself defaults to off, so a schema with `ON DELETE CASCADE`
+    /// in it means nothing until each connection turns it on. The cascades do
+    /// work today, because sqlx's `SqliteConnectOptions` defaults it on — but
+    /// that is sqlx's default rather than this crate's, and the `Any` driver
+    /// rejects SQLite's URL parameters, so there is nowhere else a caller or
+    /// this adapter could say it. The migrations write the constraints; this is
+    /// what makes them hold. PostgreSQL enforces its own without being asked,
+    /// and would not accept a `PRAGMA`.
+    fn pool_options(dialect: Dialect) -> AnyPoolOptions {
+        match dialect {
+            Dialect::Sqlite => AnyPoolOptions::new().after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query("PRAGMA foreign_keys = ON")
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            }),
+            Dialect::Postgres => AnyPoolOptions::new(),
+        }
+    }
+
     /// Open the pool and bring the schema up to date.
     async fn connect(
         database_url: &str,
@@ -307,7 +333,7 @@ impl SqlxTaskStorage {
             Dialect::Sqlite => Self::pooled_url(database_url),
             Dialect::Postgres => std::borrow::Cow::Borrowed(database_url),
         };
-        let pool = AnyPoolOptions::new()
+        let pool = Self::pool_options(dialect)
             .max_connections(settings.max_connections)
             .acquire_timeout(settings.acquire_timeout)
             .connect_with(settings.connect_options(&url)?)
@@ -321,7 +347,7 @@ impl SqlxTaskStorage {
         // `run_base_migrations`). Opened after the main pool so an in-memory
         // SQLite database, which lives only as long as something is connected to
         // it, is already held open by the pool that will keep using it.
-        let migrations = AnyPoolOptions::new()
+        let migrations = Self::pool_options(dialect)
             .max_connections(1)
             .acquire_timeout(settings.acquire_timeout)
             .connect_with(settings.connect_options(&url)?)
@@ -1761,6 +1787,88 @@ mod tests {
             !has_state_column(&restarted).await,
             "the unused column should be gone after the migration runs"
         );
+    }
+
+    /// The schema's `ON DELETE CASCADE` clauses are only worth anything while
+    /// `foreign_keys` is on, and it is a per-connection pragma that SQLite
+    /// itself defaults to off. Asserted against a pooled connection rather than
+    /// a fresh one, since the pool is the only way anything here reaches the
+    /// database.
+    #[tokio::test]
+    async fn sqlite_connections_enforce_foreign_keys() {
+        let storage = SqlxTaskStorage::new("sqlite::memory:").await.unwrap();
+
+        let on: i64 = sqlx::query("PRAGMA foreign_keys")
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap()
+            .try_get(0)
+            .unwrap();
+        assert_eq!(on, 1);
+    }
+
+    /// The `Any` driver parses URLs itself and rejects SQLite's own parameters,
+    /// so `foreign_keys` cannot be set — either way — through the one knob a
+    /// caller of this adapter has. That is what leaves `after_connect` as the
+    /// only place this crate can state it.
+    #[tokio::test]
+    async fn the_url_cannot_speak_for_foreign_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite:{}?mode=rwc&foreign_keys=off",
+            dir.path().join("a2a.db").display()
+        );
+
+        let refused = SqlxTaskStorage::new(&url).await;
+        assert!(
+            refused.is_err(),
+            "a SQLite-specific URL parameter should not reach the driver"
+        );
+    }
+
+    /// What the pragma actually buys: deleting a task takes its history with it.
+    /// This is the behaviour the retention sweep deliberately does not rely on,
+    /// and it is worth knowing which of the two is true.
+    #[tokio::test]
+    async fn deleting_a_task_cascades_to_its_history() {
+        let storage = SqlxTaskStorage::new("sqlite::memory:").await.unwrap();
+        let (task, context) = (tid("task-cascade"), cid("ctx-cascade"));
+
+        storage.create(&task, &context).await.unwrap();
+        storage
+            .update_status(&task, TaskState::Working, None)
+            .await
+            .unwrap();
+        assert!(history_rows(&storage, "task-cascade").await > 0);
+
+        sqlx::query("DELETE FROM tasks WHERE id = ?")
+            .bind("task-cascade")
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            history_rows(&storage, "task-cascade").await,
+            0,
+            "history should go with the task it references"
+        );
+    }
+
+    async fn history_rows(storage: &SqlxTaskStorage, task_id: &str) -> i64 {
+        sqlx::query("SELECT COUNT(*) AS count FROM task_history WHERE task_id = ?")
+            .bind(task_id)
+            .fetch_one(&storage.pool)
+            .await
+            .unwrap()
+            .try_get("count")
+            .unwrap()
+    }
+
+    fn tid(s: &str) -> TaskId {
+        s.parse().unwrap()
+    }
+    fn cid(s: &str) -> ContextId {
+        s.parse().unwrap()
     }
 
     async fn has_state_column(storage: &SqlxTaskStorage) -> bool {
