@@ -50,6 +50,43 @@ be acting correctly; if not, the state is wrong no matter how it is documented.
 
 ## Choices that had a real alternative
 
+**The stream log is a port, not a field on the streaming handler.** (2026-08-23)
+
+`InMemoryStreamingHandler` owned both halves of streaming: who is listening, and
+what has been said. The first is this process's business and a restart may
+forget it. The second a resuming client still needs, and forgetting it is what
+made ids restart at 1 — handing a reconnecting client ids it had already seen,
+for different events.
+
+The alternative was a second streaming-handler adapter that talked to a
+database. That would have duplicated the fan-out, because live readers still
+need an in-process broadcast channel whichever store the events are in. Making
+the log a port instead leaves one fan-out (`StreamingFanout<L>`) and makes
+durability a matter of which log it was given.
+
+The id is assigned by the log, inside the insert. A counter in the process
+cannot be right across a restart, and reading `MAX(id)` first and binding it
+leaves a window where two appends pick the same number; computing it in the
+statement means the primary key settles a collision rather than one event
+overwriting another.
+
+`task_events` has no foreign key to `tasks`. The two are separate ports and need
+not be the same database, and an append rejected because the task row had not
+landed yet would drop an event on the one path whose job is not to drop events.
+The cost is that nothing reclaims the rows implicitly, so `delete_context` names
+the table like every other one it sweeps.
+
+**A replay that cannot cover the gap is dropped, not sent.** (2026-08-23)
+
+A bounded log discards its oldest events, so a client disconnected long enough
+asks for a tail that is no longer whole. What is left starts partway through the
+gap. Sending it looks like a successful resume and is not: those events are
+older than the task snapshot the service sends ahead of the stream, so a status
+update re-applies stale state and an artifact update with `append` duplicates
+content. `Replay::complete` is what lets the fan-out tell the two cases apart,
+and the incomplete one streams live from the snapshot — which is what a client
+that never sent `Last-Event-ID` gets, and is coherent.
+
 **A ConnectRPC event id rides in the payload's metadata, and only when asked
 for.** (2026-08-23)
 

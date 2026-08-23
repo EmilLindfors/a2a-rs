@@ -115,8 +115,8 @@ pub struct Swept {
     /// Contexts swept whole, counting one per context id — including a context
     /// that only ever held tasks and so had no row of its own.
     pub contexts: u64,
-    /// Tasks deleted with their contexts. Their push-notification configs go
-    /// with them and are not counted separately.
+    /// Tasks deleted with their contexts. Their push-notification configs and
+    /// stream events go with them and are not counted separately.
     pub tasks: u64,
     /// Conversation messages deleted with their contexts.
     pub messages: u64,

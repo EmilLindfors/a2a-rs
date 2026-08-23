@@ -37,9 +37,9 @@ use crate::domain::{
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
-    AsyncContextStateStore, AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier,
-    AsyncRetention, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
-    context_state::scope_key,
+    AsyncContextStateStore, AsyncConversationStore, AsyncEventLog, AsyncNotificationManager,
+    AsyncPushNotifier, AsyncRetention, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
+    Replay, SeqEvent, UpdateEvent, context_state::scope_key,
 };
 
 #[cfg(feature = "sqlx-storage")]
@@ -61,6 +61,8 @@ pub struct SqlxTaskStorage {
     dialect: Dialect,
     /// Push notification registry (config store + delivery backend)
     push_notification_registry: Arc<PushNotificationRegistry>,
+    /// How many events per task the stream log keeps; `None` keeps all of them.
+    event_log_capacity: Option<u64>,
 }
 
 #[cfg(feature = "sqlx-storage")]
@@ -75,6 +77,14 @@ use super::dialect::Dialect;
 /// selecting a column nobody reads fails the query on PostgreSQL.
 #[cfg(feature = "sqlx-storage")]
 const TASK_COLUMNS: &str = "id, context_id, status_state, status_message, metadata, artifacts";
+
+/// How many events per task [`SqlxTaskStorage`] keeps for stream resumption.
+///
+/// Four times what the in-memory log holds: rows are cheaper than process
+/// memory, and the reason to persist the log at all is to cover a disconnection
+/// long enough that the process may not be the same one afterwards.
+#[cfg(feature = "sqlx-storage")]
+pub const DEFAULT_EVENT_LOG_CAPACITY: u64 = 1024;
 
 /// How the pool is opened. Applied to both the main pool and the
 /// one-connection migration pool, which connect to the same database.
@@ -121,6 +131,7 @@ pub struct SqlxStorageBuilder {
     pool: PoolSettings,
     push_sender: Option<Arc<dyn PushNotificationSender>>,
     additional_migrations: Vec<String>,
+    event_log_capacity: Option<u64>,
 }
 
 #[cfg(feature = "sqlx-storage")]
@@ -163,6 +174,22 @@ impl SqlxStorageBuilder {
         self
     }
 
+    /// How many of a task's stream events to keep for resumption, past which
+    /// the oldest are dropped as new ones arrive. Defaults to
+    /// [`DEFAULT_EVENT_LOG_CAPACITY`].
+    ///
+    /// The cap is what bounds one task; a retention sweep is what bounds their
+    /// number. A client disconnected for longer than this many events is told
+    /// the log cannot cover it and resumes from the task snapshot instead, so
+    /// raising it buys longer disconnections and costs rows.
+    ///
+    /// `None` keeps every event, which leaves the table growing with nothing but
+    /// the sweep to reclaim it.
+    pub fn event_log_capacity(mut self, capacity: Option<u64>) -> Self {
+        self.event_log_capacity = capacity.map(|capacity| capacity.max(1));
+        self
+    }
+
     /// Run these statements after the framework's own migrations.
     ///
     /// The caller's own SQL, run verbatim, so it has to be written in the
@@ -201,6 +228,7 @@ impl SqlxStorageBuilder {
             pool,
             dialect,
             push_notification_registry: Arc::new(push_registry),
+            event_log_capacity: self.event_log_capacity,
         })
     }
 }
@@ -393,6 +421,7 @@ impl SqlxTaskStorage {
             pool: PoolSettings::default(),
             push_sender: None,
             additional_migrations: Vec::new(),
+            event_log_capacity: Some(DEFAULT_EVENT_LOG_CAPACITY),
         }
     }
 
@@ -1479,6 +1508,7 @@ impl Clone for SqlxTaskStorage {
             pool: self.pool.clone(),
             dialect: self.dialect,
             push_notification_registry: self.push_notification_registry.clone(),
+            event_log_capacity: self.event_log_capacity,
         }
     }
 }
@@ -1759,6 +1789,151 @@ impl AsyncContextStateStore for SqlxTaskStorage {
     }
 }
 
+/// How an [`UpdateEvent`] variant is spelled in `task_events.kind`.
+///
+/// Written out rather than derived from the payload so the column stays
+/// readable, and so a variant added later has to name itself here rather than
+/// round-tripping as whichever variant happened to deserialize.
+#[cfg(feature = "sqlx-storage")]
+const KIND_STATUS: &str = "status-update";
+#[cfg(feature = "sqlx-storage")]
+const KIND_ARTIFACT: &str = "artifact-update";
+
+#[cfg(feature = "sqlx-storage")]
+#[async_trait]
+impl AsyncEventLog for SqlxTaskStorage {
+    async fn append(&self, task_id: &str, event: UpdateEvent) -> Result<SeqEvent, A2AError> {
+        let (kind, payload) = match &event {
+            UpdateEvent::StatusUpdate(update) => (KIND_STATUS, serde_json::to_string(update)),
+            UpdateEvent::ArtifactUpdate(update) => (KIND_ARTIFACT, serde_json::to_string(update)),
+        };
+        let payload = payload.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to serialize a stream event: {e}"))
+        })?;
+
+        let sql = self.dialect.insert_task_event();
+        let id: i64 = sqlx::query(sql)
+            .bind(task_id)
+            .bind(kind)
+            .bind(&payload)
+            .bind(task_id)
+            .fetch_one(&self.pool)
+            .await
+            .and_then(|row| row.try_get("id"))
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to log a stream event for {task_id}: {e}"))
+            })?;
+        let id = id as u64;
+
+        if let Some(capacity) = self.event_log_capacity
+            && let Some(cutoff) = id.checked_sub(capacity)
+        {
+            let sql = self.sql("DELETE FROM task_events WHERE task_id = ? AND id <= ?");
+            sqlx::query(&sql)
+                .bind(task_id)
+                .bind(cutoff as i64)
+                .execute(&self.pool)
+                .await
+                .map_err(|e| {
+                    A2AError::DatabaseError(format!(
+                        "Failed to trim the stream log for {task_id}: {e}"
+                    ))
+                })?;
+        }
+
+        Ok(SeqEvent::new(id, event))
+    }
+
+    async fn replay(&self, task_id: &str, from: u64) -> Result<Replay, A2AError> {
+        // The oldest retained id is what says whether the tail below is the
+        // remainder of the client's gap or a fragment of it, so it is read in
+        // the same breath rather than inferred from the rows that come back.
+        let sql = self.sql("SELECT MIN(id) AS oldest FROM task_events WHERE task_id = ?");
+        let oldest: Option<i64> = sqlx::query(&sql)
+            .bind(task_id)
+            .fetch_one(&self.pool)
+            .await
+            .and_then(|row| row.try_get("oldest"))
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to read the stream log for {task_id}: {e}"))
+            })?;
+
+        let sql = self.sql(
+            "SELECT id, kind, payload FROM task_events \
+             WHERE task_id = ? AND id > ? ORDER BY id",
+        );
+        let rows = sqlx::query(&sql)
+            .bind(task_id)
+            .bind(from as i64)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to replay the log for {task_id}: {e}"))
+            })?;
+
+        let events = rows
+            .iter()
+            .map(Self::row_to_seq_event)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Replay::bounded_by(
+            oldest.map(|oldest| oldest as u64),
+            from,
+            events,
+        ))
+    }
+
+    async fn discard(&self, task_id: &str) -> Result<(), A2AError> {
+        let sql = self.sql("DELETE FROM task_events WHERE task_id = ?");
+        sqlx::query(&sql)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| {
+                A2AError::DatabaseError(format!(
+                    "Failed to discard the stream log for {task_id}: {e}"
+                ))
+            })?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl SqlxTaskStorage {
+    /// Rebuild one logged event from its row.
+    fn row_to_seq_event(row: &sqlx::any::AnyRow) -> Result<SeqEvent, A2AError> {
+        let read = |column: &str| -> Result<String, A2AError> {
+            row.try_get(column).map_err(|e| {
+                A2AError::DatabaseError(format!("Failed to read stream event {column}: {e}"))
+            })
+        };
+        let id: i64 = row
+            .try_get("id")
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to read stream event id: {e}")))?;
+        let kind = read("kind")?;
+        let payload = read("payload")?;
+
+        fn parse(what: &'static str) -> impl Fn(serde_json::Error) -> A2AError {
+            move |e| A2AError::DatabaseError(format!("Failed to parse a logged {what}: {e}"))
+        }
+        let event = match kind.as_str() {
+            KIND_STATUS => UpdateEvent::StatusUpdate(
+                serde_json::from_str(&payload).map_err(parse("status update"))?,
+            ),
+            KIND_ARTIFACT => UpdateEvent::ArtifactUpdate(
+                serde_json::from_str(&payload).map_err(parse("artifact update"))?,
+            ),
+            other => {
+                return Err(A2AError::DatabaseError(format!(
+                    "Unknown stream event kind {other:?} in task_events"
+                )));
+            }
+        };
+
+        Ok(SeqEvent::new(id as u64, event))
+    }
+}
+
 #[cfg(feature = "sqlx-storage")]
 #[async_trait]
 impl AsyncRetention for SqlxTaskStorage {
@@ -1838,8 +2013,8 @@ impl SqlxTaskStorage {
     /// all, since half its rows are keyed by principal rather than by context.
     /// The per-table counts in [`Swept`] need the statements anyway.
     ///
-    /// Order follows the references: push configs and history name a task, so
-    /// they go before `tasks`.
+    /// Order follows the references: push configs, history and stream events
+    /// name a task, so they go before `tasks`.
     async fn delete_context(&self, context_id: &str) -> Result<Swept, A2AError> {
         let mut tx = self.pool.begin().await.map_err(|e| {
             A2AError::DatabaseError(format!("Failed to open a sweep transaction: {e}"))
@@ -1887,6 +2062,17 @@ impl SqlxTaskStorage {
             .execute(&mut *tx)
             .await
             .map_err(|e| fail("history", e))?;
+
+        // Before `tasks`, which is what names them: `task_events` has no foreign
+        // key, so nothing deletes these once the task rows are gone.
+        let sql = self.sql(
+            "DELETE FROM task_events              WHERE task_id IN (SELECT id FROM tasks WHERE context_id = ?)",
+        );
+        sqlx::query(&sql)
+            .bind(context_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| fail("stream events", e))?;
 
         let sql = self.sql("DELETE FROM tasks WHERE context_id = ?");
         let tasks = sqlx::query(&sql)

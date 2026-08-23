@@ -180,6 +180,19 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       `metadata`, since ConnectRPC has no SSE `id:` field — and only for a
       client that asked with `a2a-rs-event-ids`, because that is a change to the
       payload rather than an inert protocol field. See `NOTES.md`.
+- [x] **Durable streaming resumption.** Done 2026-08-23: ids and retained events
+      moved out of `InMemoryStreamingHandler` into the `AsyncEventLog` port, and
+      `SqlxTaskStorage` implements it (migration 007, `task_events`), so a
+      restart no longer starts every task's ids at 1. The fan-out is
+      `StreamingFanout<L>`; `InMemoryStreamingHandler` is the in-memory pairing
+      and is unchanged for callers. See `CHANGELOG.md`; `NOTES.md` has why the
+      log is a port rather than a second streaming adapter, why the id is
+      assigned inside the insert, and why a replay that cannot cover the gap is
+      dropped instead of sent.
+      - Nothing schedules `AsyncEventLog::discard`, the same gap the retention
+        item in §1 describes: a sweep of the context takes its events, so this
+        rides on korps growing a timer. Until then the per-task cap
+        (`event_log_capacity`, 1024 by default) is what bounds the table.
 - [ ] **Make the downstream canary blocking.**
       `.github/workflows/downstream-korps.yml` builds korps against each PR by
       checking both repos out as siblings, so korps' `[patch.crates-io]`
@@ -213,9 +226,6 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
         travels from the transport to the message handler, and a `tenant` field
         on it costs no new parameter. The task, notification and storage ports
         still take none.
-- [ ] **Durable streaming resumption.** The replay buffer is in-memory and
-      bounded (256 events/task); past it, resume falls back to the initial
-      snapshot. A sqlx-backed event log would make resumption survive restarts.
 - [ ] **AP2 expansion (`a2a-ap2`).** Full support for the AP2 primitives
       (Payment Request, Receipt); bridge AP2 with native LLM tool calling so a
       model can request and verify payments; tests and error handling for the

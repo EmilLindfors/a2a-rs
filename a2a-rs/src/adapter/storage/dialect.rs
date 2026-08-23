@@ -127,6 +127,25 @@ impl Dialect {
         }
     }
 
+    /// Append one event to a task's log, taking the next per-task id and
+    /// handing it back.
+    ///
+    /// The id is computed inside the insert rather than read first and bound:
+    /// a read-then-write leaves a window where two appends pick the same id,
+    /// and this way the composite primary key is what settles a collision.
+    /// `RETURNING` is what makes the assigned id observable without a second
+    /// round trip; both backends support it.
+    pub(super) fn insert_task_event(self) -> &'static str {
+        match self {
+            Self::Sqlite => {
+                "INSERT INTO task_events (task_id, id, kind, payload)                  SELECT ?, COALESCE(MAX(id), 0) + 1, ?, ? FROM task_events                  WHERE task_id = ? RETURNING id"
+            }
+            Self::Postgres => {
+                "INSERT INTO task_events (task_id, id, kind, payload)                  SELECT $1, COALESCE(MAX(id), 0) + 1, $2, $3 FROM task_events                  WHERE task_id = $4 RETURNING id"
+            }
+        }
+    }
+
     /// Does `contexts` still carry the unused `state` column?
     ///
     /// Migration 005 created it for a state bag that was never written; 006
@@ -268,7 +287,7 @@ impl Dialect {
     }
 
     /// The base migrations, in order.
-    pub(super) fn migrations(self) -> [Migration; 6] {
+    pub(super) fn migrations(self) -> [Migration; 7] {
         match self {
             Self::Sqlite => [
                 Migration {
@@ -301,6 +320,11 @@ impl Dialect {
                     sql: include_str!("../../../migrations/sqlite/006_context_state.sql"),
                     tolerates_existing_column: false,
                 },
+                Migration {
+                    name: "007_task_events",
+                    sql: include_str!("../../../migrations/sqlite/007_task_events.sql"),
+                    tolerates_existing_column: false,
+                },
             ],
             Self::Postgres => [
                 Migration {
@@ -331,6 +355,11 @@ impl Dialect {
                 Migration {
                     name: "006_context_state",
                     sql: include_str!("../../../migrations/postgres/006_context_state.sql"),
+                    tolerates_existing_column: false,
+                },
+                Migration {
+                    name: "007_task_events",
+                    sql: include_str!("../../../migrations/postgres/007_task_events.sql"),
                     tolerates_existing_column: false,
                 },
             ],

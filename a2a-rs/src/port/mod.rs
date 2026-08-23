@@ -11,6 +11,7 @@
 //!   - `task_manager`: Task lifecycle management  
 //!   - `notification_manager`: Push notifications
 //!   - `streaming_handler`: Real-time updates
+//!   - `event_log`: What a task's stream already said, for resuming it
 //!   - `conversation_store`: Durable conversation memory for a context
 //!   - `context_state`: The facts an agent keeps about a context, apart from
 //!     the transcript
@@ -21,6 +22,7 @@ pub mod authenticator;
 pub mod client;
 pub mod context_state;
 pub mod conversation_store;
+pub mod event_log;
 pub mod interceptor;
 pub mod message_handler;
 pub mod notification_manager;
@@ -38,6 +40,7 @@ pub use context_state::{AsyncContextStateStore, NoContextState};
 pub use conversation_store::{
     AsyncConversationStore, AsyncConversationStoreExt, NoConversationMemory,
 };
+pub use event_log::{AsyncEventLog, Replay};
 pub use interceptor::{CallContext, CallInterceptor, CallSide, run_after, run_before};
 pub use message_handler::AsyncMessageHandler;
 pub use notification_manager::{
