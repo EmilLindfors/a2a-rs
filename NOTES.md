@@ -50,6 +50,30 @@ be acting correctly; if not, the state is wrong no matter how it is documented.
 
 ## Choices that had a real alternative
 
+**A ConnectRPC event id rides in the payload's metadata, and only when asked
+for.** (2026-08-23)
+
+The SSE transports carry the per-task event id in the W3C `id:` field, which is
+protocol-level and invisible to a client that does not read it. ConnectRPC has
+no equivalent: `StreamResponse` is a payload oneof with no room for anything
+else, and a per-message value cannot go in a header or a trailer. So the id goes
+into `TaskStatusUpdateEvent.metadata` / `TaskArtifactUpdateEvent.metadata` under
+`a2a_rs_event_id`.
+
+That is a change to the agent's own metadata bag, not an inert field, so it is
+gated on the `a2a-rs-event-ids` request header: a client that does not send it
+gets the bytes the spec describes, and our client strips the key before the
+event reaches the caller. The alternative — stamp it for everyone — would put a
+key nobody wrote into every third-party SDK's view of the payload, and the id is
+only useful to a client that knows to look.
+
+The gate cannot be "the client is resuming". Resuming needs the id of the last
+event received *before* the disconnect, so ids have to flow from the first
+event; a header sent only on reconnect would arrive one connection too late.
+
+The id is a string. `google.protobuf.Struct` numbers are doubles and an event id
+is a `u64`, so a number would round past 2^53.
+
 **Conversation memory lives in the protocol, not in the handler.** (2026-08-14)
 
 The alternative was a `HashMap<ContextId, Vec<ChatMessage>>` on `LlmHandler`:

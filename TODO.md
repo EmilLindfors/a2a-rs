@@ -90,24 +90,56 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       empty `keywords` is a config error or gets a default.
 - [ ] **Reasoning for non-OpenRouter providers.** The provider mappings are
       `a2a-llm`'s; the config key and the `doctor` warning are korps'.
-      `[llm] reasoning` reaches the wire on `openrouter` only. The drop is now
-      reported — `SelectedLlm` carries a `ReasoningPlan` and `korps doctor` warns on
-      `ReasoningPlan::Unsupported` — so the mistake is caught before it is
-      billed; what is left is actually sending it. Both mappings turn on a
-      question about the *model*, not the provider, which is why neither is a
-      small change:
-      - **OpenAI** takes `reasoning_effort`, and models that do not reason
-        reject the parameter outright. The default model here is `gpt-4o-mini`,
-        so sending it on provider kind alone breaks the common case; it needs to
-        know whether the configured model reasons, i.e. a model-name list that
-        goes stale with every release. `Budget` has no field at all.
-      - **Gemini** takes a thinking budget under `generationConfig.thinkingConfig`,
-        but the spelling differs by model generation (2.5's `thinkingBudget`
-        against 3's `thinkingLevel`, which are mutually exclusive) and the
-        minimum is model-dependent — `Off` is expressible on Flash and not on
-        Pro. `Effort` has no direct field.
-      Whatever shape this takes, `ReasoningPlan` is where it lands: a mapping
-      that covers some models and not others has to keep saying which is which.
+      `[llm] reasoning` reaches the wire on `openrouter` only. The drop is
+      reported — `SelectedLlm` carries a `ReasoningPlan` and `korps doctor`
+      warns on `ReasoningPlan::Unsupported` — so the mistake is caught before it
+      is billed. What is left is actually sending it.
+
+      Both mappings turn on a question about the *model*, not the provider,
+      which is what makes them more than a field each. Provider facts below were
+      checked on 2026-08-23; an earlier version of this entry had gone stale, so
+      re-check before building against it.
+      - **OpenAI** takes `reasoning_effort` on Chat Completions. Values have
+        grown to `none`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max`,
+        and each model accepts a different subset (`none` starts at gpt-5.1;
+        gpt-5-pro only accepts `high`). A model that does not reason rejects the
+        parameter with a 400 `Unsupported parameter`, and our default model is
+        still `gpt-4o-mini`, so sending it on provider kind alone breaks the
+        common case. `Reasoning::Budget` has no field on this API at all.
+      - **Gemini** now documents `generationConfig.thinkingLevel` (`minimal` /
+        `low` / `medium` / `high`) as the control, and Google's table lists
+        2.5-generation models under it as well as 3.x — which is new, and
+        contradicts third-party reports that 2.5 rejects `thinkingLevel` and
+        takes only `thinkingBudget`. `thinkingBudget` still exists and is still
+        accepted on 3.x for compatibility; the two are mutually exclusive and
+        sending both is an error. Supported levels differ per model
+        (`gemini-3-pro-preview` takes only `low` and `high`), and turning
+        thinking off is not offered on most of them. Verify against a live
+        endpoint before choosing a mapping; the docs and the field reports do
+        not agree.
+
+      Two shapes are worth weighing, and neither is obviously right:
+      - **A model-name table.** Explicit and reportable, and it goes stale with
+        every model release — which is exactly what happened to this entry.
+      - **Send it and recover.** OpenAI names the rejection precisely enough to
+        catch the 400 and retry once without the field. Costs a round trip on
+        the first call against an unknown model, needs no list, and cannot be
+        wrong about a model nobody has told us about. Whether Gemini's rejection
+        is as identifiable is unchecked.
+
+      Whichever it is, `ReasoningPlan` is where it lands: a mapping that covers
+      some models and not others has to keep saying which is which. A recovery
+      shape means the plan is only known after the first call, so it would need
+      a state `korps doctor` can report as "not known until it runs".
+- [ ] **The Gemini default model is one Google no longer lists.**
+      `GEMINI_DEFAULT_MODEL` is `gemini-1.5-pro`, which is absent from the
+      current models page (checked 2026-08-23) and absent from the deprecation
+      schedule too, so nothing has been announced about it either way. Every
+      korps config that names `provider = "gemini"` without a `model` gets it.
+      The fix is `a2a-llm`'s alone, but it changes which model an existing
+      config runs on, so it is worth deciding together with korps whether the
+      default moves or the model becomes required. Found while re-checking the
+      entry above; separable from it.
 
 ## 3. Interop and CI
 
@@ -141,6 +173,13 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       now has a job pinned to 1.96 running `cargo check --workspace
       --all-features --locked`. The workspace builds on it as declared —
       nothing had to move. See `NOTES.md`.
+- [x] **ConnectRPC streams resume too.** Done 2026-08-23: the transport ignored
+      `last_event_id` and tagged every event `None`, so `RetryingTransport` over
+      it reconnected from current state and dropped the gap. `Last-Event-ID`
+      goes in as an ordinary request header; the id comes back in the update's
+      `metadata`, since ConnectRPC has no SSE `id:` field — and only for a
+      client that asked with `a2a-rs-event-ids`, because that is a change to the
+      payload rather than an inert protocol field. See `NOTES.md`.
 - [ ] **Make the downstream canary blocking.**
       `.github/workflows/downstream-korps.yml` builds korps against each PR by
       checking both repos out as siblings, so korps' `[patch.crates-io]`
@@ -177,9 +216,6 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
 - [ ] **Durable streaming resumption.** The replay buffer is in-memory and
       bounded (256 events/task); past it, resume falls back to the initial
       snapshot. A sqlx-backed event log would make resumption survive restarts.
-- [ ] **ConnectRPC SSE `Last-Event-ID`.** The ConnectRPC transport has none, so
-      `RetryingTransport` over it reconnects from scratch rather than resuming
-      gap-free.
 - [ ] **AP2 expansion (`a2a-ap2`).** Full support for the AP2 primitives
       (Payment Request, Receipt); bridge AP2 with native LLM tool calling so a
       model can request and verify payments; tests and error handling for the

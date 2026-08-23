@@ -70,6 +70,11 @@ use crate::{
 use super::connectrpc::{
     NoopStreamingHandler, decode_send_config, list_request_to_params, map_update_event,
 };
+// Spec-compliant clients never send `Last-Event-ID`, so they always get a fresh
+// stream from current state — the `SubscribeToTask` behavior the spec defines.
+// The complementary SSE `id:` field is emitted by `jsonrpc_sse` / `rest_sse` and
+// is inert for clients that don't use it.
+use super::resume::parse_last_event_id;
 // Re-exported so existing `transport::jsonrpc::{methods, error_code, JsonRpc*}`
 // paths keep working now that these live in the shared wire module.
 pub use super::jsonrpc_wire::{
@@ -769,20 +774,6 @@ async fn rest_subscribe(
         Ok(stream) => rest_sse(stream).into_response(),
         Err(e) => a2a_to_http(&e),
     }
-}
-
-/// Parse the SSE `Last-Event-ID` header into a per-task event id for resumption.
-///
-/// This is the server half of the a2a-rs resumption enhancement (not an A2A v1.0
-/// spec feature). Spec-compliant clients never send the header, so they always
-/// get a fresh stream from current state — the `SubscribeToTask` behavior the
-/// spec defines. The complementary SSE `id:` field is emitted by [`jsonrpc_sse`]
-/// / [`rest_sse`] and is inert for clients that don't use it.
-fn parse_last_event_id(headers: &HeaderMap) -> Option<u64> {
-    headers
-        .get("last-event-id")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.trim().parse::<u64>().ok())
 }
 
 /// Frame a [`StreamResponseStream`] as bare-ProtoJSON SSE (REST has no envelope).

@@ -16,7 +16,9 @@
 //! (`SubscribeToTask`), which re-attaches from the task's *current* state; it
 //! does **not** define `Last-Event-ID` gap-replay, and `SubscribeToTaskRequest`
 //! has no resume field. The gap-free resumption here is an a2a-rs enhancement
-//! built on the **W3C SSE-standard** `id:` field and `Last-Event-ID` header:
+//! built on the **W3C SSE-standard** `id:` field and `Last-Event-ID` header
+//! (ConnectRPC, which has no `id:` field, carries the id in the update's
+//! metadata for a client that asks — see the `resume` module):
 //!
 //! - **Interop is preserved.** Against a spec-compliant server that ignores
 //!   `Last-Event-ID`, [`subscribe_resilient`] still reconnects via the spec's
