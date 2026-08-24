@@ -88,49 +88,25 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       accepts and no conformant client can talk to. Two halves: take the
       signature change (it does not compile otherwise), and decide whether an
       empty `keywords` is a config error or gets a default.
-- [ ] **Reasoning for non-OpenRouter providers.** The provider mappings are
-      `a2a-llm`'s; the config key and the `doctor` warning are korps'.
-      `[llm] reasoning` reaches the wire on `openrouter` only. The drop is
-      reported — `SelectedLlm` carries a `ReasoningPlan` and `korps doctor`
-      warns on `ReasoningPlan::Unsupported` — so the mistake is caught before it
-      is billed. What is left is actually sending it.
-
-      Both mappings turn on a question about the *model*, not the provider,
-      which is what makes them more than a field each. Provider facts below were
-      checked on 2026-08-23; an earlier version of this entry had gone stale, so
-      re-check before building against it.
-      - **OpenAI** takes `reasoning_effort` on Chat Completions. Values have
-        grown to `none`, `minimal`, `low`, `medium`, `high`, `xhigh` and `max`,
-        and each model accepts a different subset (`none` starts at gpt-5.1;
-        gpt-5-pro only accepts `high`). A model that does not reason rejects the
-        parameter with a 400 `Unsupported parameter`, and our default model is
-        still `gpt-4o-mini`, so sending it on provider kind alone breaks the
-        common case. `Reasoning::Budget` has no field on this API at all.
-      - **Gemini** now documents `generationConfig.thinkingLevel` (`minimal` /
-        `low` / `medium` / `high`) as the control, and Google's table lists
-        2.5-generation models under it as well as 3.x — which is new, and
-        contradicts third-party reports that 2.5 rejects `thinkingLevel` and
-        takes only `thinkingBudget`. `thinkingBudget` still exists and is still
-        accepted on 3.x for compatibility; the two are mutually exclusive and
-        sending both is an error. Supported levels differ per model
-        (`gemini-3-pro-preview` takes only `low` and `high`), and turning
-        thinking off is not offered on most of them. Verify against a live
-        endpoint before choosing a mapping; the docs and the field reports do
-        not agree.
-
-      Two shapes are worth weighing, and neither is obviously right:
-      - **A model-name table.** Explicit and reportable, and it goes stale with
-        every model release — which is exactly what happened to this entry.
-      - **Send it and recover.** OpenAI names the rejection precisely enough to
-        catch the 400 and retry once without the field. Costs a round trip on
-        the first call against an unknown model, needs no list, and cannot be
-        wrong about a model nobody has told us about. Whether Gemini's rejection
-        is as identifiable is unchecked.
-
-      Whichever it is, `ReasoningPlan` is where it lands: a mapping that covers
-      some models and not others has to keep saying which is which. A recovery
-      shape means the plan is only known after the first call, so it would need
-      a state `korps doctor` can report as "not known until it runs".
+- [ ] **Reasoning for non-OpenRouter providers — korps' half is left.** The
+      `a2a-llm` half landed on 2026-08-24: `[llm] reasoning` now reaches
+      OpenAI's `reasoning_effort` and Gemini's `generationConfig.thinkingConfig`,
+      by the send-it-and-recover shape rather than a model-name table. See
+      `CHANGELOG.md`; `NOTES.md` has why the endpoint is asked instead of a list
+      consulted, and why the refusal is only remembered after the retry works.
+      What is left is korps':
+      - `korps doctor` reports `ReasoningPlan::unsupported()`, which now answers
+        only for a token budget on OpenAI. The new `ReasoningPlan::Attempted`
+        (`attempting()`) is the state a report should say "sent, and the model
+        has the last word" about, and nothing says it yet.
+      - Whether a refusal *happened* is only in the provider's `warn!` log.
+        `Arc<dyn LlmProvider>` erases the concrete provider, so a report has no
+        way to read it back after a run; giving it one means a channel that does
+        not exist today.
+      - `[llm] reasoning` on an `openai` provider with the default
+        `gpt-4o-mini` now costs one wasted round trip on the first call of the
+        process. Nothing is wrong with it, but a `doctor` line saying so would
+        save the question.
 - [ ] **The Gemini default model is one Google no longer lists.**
       `GEMINI_DEFAULT_MODEL` is `gemini-1.5-pro`, which is absent from the
       current models page (checked 2026-08-23) and absent from the deprecation

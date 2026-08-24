@@ -51,10 +51,24 @@ not where the value is.
 
 `provider_from_env` and `provider_from_settings` perform no network calls, so a
 pre-flight check can run the same code that startup will run and report the same
-answer. The one thing they report is a `reasoning` setting the chosen provider
-cannot put on the wire: `SelectedLlm` carries a `ReasoningPlan`, and
-`ReasoningPlan::Unsupported` names the drop rather than letting it be discovered
-on the bill. `reasoning` reaches the wire on `openrouter` today.
+answer. The one thing they report is what a configured `reasoning` will do:
+`SelectedLlm` carries a `ReasoningPlan`, and `ReasoningPlan::Unsupported` names a
+setting dropped before any request rather than letting it be discovered on the
+bill. There is one of those — a token budget on OpenAI, whose Chat Completions
+API has no field for one.
+
+## Reasoning is sent, and a refusal is recovered from
+
+Every provider carries `reasoning`, each in its own dialect: OpenRouter's
+`reasoning` object, OpenAI's `reasoning_effort`, Gemini's
+`generationConfig.thinkingConfig`. Whether a given *model* accepts it is another
+matter — `reasoning_effort` is a 400 on `gpt-4o-mini` and mandatory on
+`gpt-5-pro` — and a table of model names is wrong about every model released
+after it was written. So the parameter is sent, a refusal is recognized from the
+400 that names the field, and the request is retried once without it. A 400
+generated nothing, so that costs a round trip and no tokens, and the answer is
+remembered for the life of the provider. `ReasoningPlan::Attempted` is what
+selection reports for that: sent, with the model getting the last word.
 
 A variable set to whitespace reads as unset — `.env` files leave those behind,
 and an empty `OPENROUTER_API_KEY` would otherwise select a provider that cannot

@@ -414,6 +414,30 @@ transport thinks. The class is wider than that one call site: the same silence
 awaits any artifact, status message, or tool result assembled from a string that
 can come back empty.
 
+**Ask the endpoint which reasoning parameter a model takes; do not keep a
+table.** Support turns on the *model*, not the provider: `reasoning_effort` is a
+400 on `gpt-4o-mini` and mandatory on `gpt-5-pro`, and Google's docs list
+`thinkingLevel` for the 2.5 generation while the field reports say those models
+take only `thinkingBudget`. A model-name table is explicit and reportable and
+goes stale with every release — the `TODO.md` entry describing the providers had
+itself gone stale before it was implemented. So the parameter is sent, a refusal
+is recognized from the 400 that names the field, and the request is retried once
+without it. A 400 generated nothing, so the recovery costs a round trip and no
+tokens.
+
+Two details make it safe rather than clever. The refusal is remembered only after
+the retry *succeeded*: a 400 naming the field can be about something else, and
+remembering that would disable reasoning for the rest of the process over an
+unrelated failure. And only a 400 counts — a 5xx that happens to name the field
+is an outage, and treating it as a refusal would leave the model thinking at its
+default long after the outage ended.
+
+What this costs is that the plan is no longer known before the run.
+`ReasoningPlan::Attempted` is that state, and a report has to be able to say
+"sent, and the model has the last word" — which is why `unsupported()` now
+answers only for the drops decided by selection. There is one of those left: a
+token budget on OpenAI, whose Chat Completions API has no field for one at all.
+
 **Asking a model to think is a request, never a guarantee.** `Reasoning::Off`
 sends OpenRouter's `enabled: false`; a model with no way to turn reasoning off
 may ignore it, and reasoning tokens are billed even when the text is not

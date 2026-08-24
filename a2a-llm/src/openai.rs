@@ -1,6 +1,6 @@
 use super::{
-    Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning, TokenUsage,
-    classify_api_error, describe_transport_error,
+    Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning, ReasoningSupport,
+    TokenUsage, classify_api_error, describe_transport_error, refuses_reasoning,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -18,12 +18,10 @@ pub struct OpenAiConfig {
     /// the OpenAI-compatible adapter carries e.g. OpenRouter's `HTTP-Referer` /
     /// `X-Title` attribution headers without knowing what they mean.
     pub extra_headers: Vec<(String, String)>,
-    /// Whether this endpoint speaks OpenRouter's `reasoning` request object
-    /// (true for OpenRouter, false for plain OpenAI / local servers, which
-    /// reject unknown parameters). Requests that ask for reasoning are sent
-    /// without it elsewhere — the wire dialect is the adapter's business, not
-    /// something every caller should have to ask about first.
-    pub supports_reasoning: bool,
+    /// How this endpoint spells the reasoning parameter. The wire dialect is the
+    /// adapter's business, not something every caller should have to ask about
+    /// first.
+    pub reasoning_dialect: ReasoningDialect,
     /// Reasoning applied to requests that don't ask for their own — the model's
     /// setting, configured where the model is. `None` sends nothing.
     pub reasoning: Option<Reasoning>,
@@ -35,6 +33,43 @@ pub struct OpenAiConfig {
     /// fails the whole call. A non-streaming response reports usage either way,
     /// so this only gates the streaming path.
     pub stream_usage: bool,
+}
+
+/// Which reasoning parameter an OpenAI-compatible endpoint takes.
+///
+/// The two dialects are not interchangeable: OpenRouter's is a `reasoning`
+/// object that also carries a token budget, OpenAI's is a bare
+/// `reasoning_effort` string with no budget at all.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ReasoningDialect {
+    /// OpenRouter's unified `reasoning` object, which it normalizes per model
+    /// and ignores where a model cannot reason. See
+    /// <https://openrouter.ai/docs/use-cases/reasoning-tokens>.
+    OpenRouter,
+    /// OpenAI's `reasoning_effort` string, which is what the compatible servers
+    /// copied. Whether a *model* accepts it is only known from the 400 it
+    /// answers with, which is what [`ReasoningSupport`] is for.
+    #[default]
+    OpenAi,
+}
+
+/// OpenAI's `reasoning_effort` for a requested [`Reasoning`], or `None` when the
+/// setting has no spelling on that API.
+///
+/// [`Reasoning::Budget`] is the gap: Chat Completions has no reasoning-token cap
+/// field, so a budget cannot be asked for there at all. Public so provider
+/// selection can report that drop before any request is made, rather than
+/// discovering it per call.
+///
+/// `Reasoning::Off` maps to `none`, which only models from gpt-5.1 on accept —
+/// an older model refuses it, the request is retried without it, and a model
+/// that does not reason satisfies "off" anyway.
+pub fn reasoning_effort(reasoning: Reasoning) -> Option<&'static str> {
+    match reasoning {
+        Reasoning::Off => Some("none"),
+        Reasoning::Effort(effort) => Some(effort.as_str()),
+        Reasoning::Budget(_) => None,
+    }
 }
 
 /// Default base URL for the OpenRouter API (OpenAI-compatible surface).
@@ -70,7 +105,7 @@ impl OpenAiConfig {
                 .unwrap_or_else(|| "ministral".to_string()),
             api_key: env.get("OPENAI_API_KEY").or_else(|| env.get("AI_API_KEY")),
             extra_headers: Vec::new(),
-            supports_reasoning: false,
+            reasoning_dialect: ReasoningDialect::OpenAi,
             reasoning: None,
             // This path defaults to a local server (Ollama), which is exactly
             // the population that varies on `stream_options`.
@@ -102,7 +137,7 @@ impl OpenAiConfig {
             model,
             api_key: Some(api_key),
             extra_headers,
-            supports_reasoning: true,
+            reasoning_dialect: ReasoningDialect::OpenRouter,
             reasoning: None,
             stream_usage: true,
         }
@@ -176,12 +211,44 @@ struct OpenAiChatRequest {
     /// when `OpenAiConfig::stream_usage` says the endpoint accepts it.
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
-    /// OpenRouter's unified reasoning control, as resolved by
-    /// [`OpenAiProvider::reasoning_for`] — the request's own setting, else the
-    /// configured model default, and never for an endpoint that has no such
-    /// field.
+    /// OpenRouter's unified reasoning control. At most one of this and
+    /// `reasoning_effort` is ever set — see [`ReasoningParam`].
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<OpenRouterReasoning>,
+    /// OpenAI's reasoning control.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
+}
+
+impl OpenAiChatRequest {
+    /// Put `param` on the request in whichever field its dialect uses.
+    fn with_reasoning(mut self, param: Option<ReasoningParam>) -> Self {
+        match param {
+            Some(ReasoningParam::Unified(reasoning)) => self.reasoning = Some(reasoning),
+            Some(ReasoningParam::Effort(effort)) => self.reasoning_effort = Some(effort),
+            None => {}
+        }
+        self
+    }
+
+    /// Whether this request asks for reasoning at all, in either dialect.
+    fn asks_for_reasoning(&self) -> bool {
+        self.reasoning.is_some() || self.reasoning_effort.is_some()
+    }
+
+    /// Drop the reasoning parameter, for the retry after an endpoint refuses it.
+    fn clear_reasoning(&mut self) {
+        self.reasoning = None;
+        self.reasoning_effort = None;
+    }
+}
+
+/// The reasoning parameter as one endpoint's dialect spells it.
+enum ReasoningParam {
+    /// OpenRouter's `reasoning` object.
+    Unified(OpenRouterReasoning),
+    /// OpenAI's `reasoning_effort` string.
+    Effort(&'static str),
 }
 
 #[derive(Debug, Serialize)]
@@ -344,13 +411,21 @@ struct StreamFunctionCall {
 pub struct OpenAiProvider {
     config: OpenAiConfig,
     client: reqwest::Client,
+    /// Whether this endpoint's model has already refused the reasoning
+    /// parameter. Shared across clones.
+    reasoning_support: ReasoningSupport,
 }
+
+/// The one word every message about a refused `reasoning` / `reasoning_effort`
+/// contains, in either dialect.
+const REASONING_FIELD: &str = "reasoning";
 
 impl OpenAiProvider {
     pub fn new(config: OpenAiConfig) -> Self {
         Self {
             config,
             client: reqwest::Client::new(),
+            reasoning_support: ReasoningSupport::default(),
         }
     }
 
@@ -359,23 +434,122 @@ impl OpenAiProvider {
         Ok(Self::new(config))
     }
 
-    /// What to put in the request's `reasoning` field, if anything.
+    /// What reasoning parameter this request carries, if any.
     ///
-    /// The request wins over the configured default, and an endpoint that does
-    /// not speak the parameter carries neither — sending it to plain OpenAI
-    /// fails the whole call, so a caller asking for reasoning it cannot have
-    /// gets an answer, not an error.
-    fn reasoning_for(&self, request: &LlmRequest) -> Option<OpenRouterReasoning> {
+    /// The request's own setting wins over the model's configured default. A
+    /// budget is dropped on the OpenAI dialect, which has no field for one, and
+    /// so is everything once the model has refused the parameter — the point of
+    /// remembering that is not to keep paying a round trip to learn it again.
+    fn reasoning_for(&self, request: &LlmRequest) -> Option<ReasoningParam> {
         let reasoning = request.reasoning.or(self.config.reasoning)?;
-        if !self.config.supports_reasoning {
-            debug!(
-                base_url = %self.config.base_url,
-                %reasoning,
-                "endpoint does not accept a reasoning parameter; sending the request without it"
-            );
+        if self.reasoning_support.refused() {
             return None;
         }
-        Some(reasoning.into())
+        match self.config.reasoning_dialect {
+            ReasoningDialect::OpenRouter => Some(ReasoningParam::Unified(reasoning.into())),
+            ReasoningDialect::OpenAi => match reasoning_effort(reasoning) {
+                Some(effort) => Some(ReasoningParam::Effort(effort)),
+                None => {
+                    debug!(
+                        base_url = %self.config.base_url,
+                        %reasoning,
+                        "`reasoning_effort` has no field for a token budget; sending the request without it"
+                    );
+                    None
+                }
+            },
+        }
+    }
+
+    /// POST `body`, with the configured key and attribution headers.
+    async fn post(
+        &self,
+        url: &str,
+        body: &OpenAiChatRequest,
+    ) -> Result<reqwest::Response, LlmError> {
+        let mut req_builder = self.client.post(url).json(body);
+
+        if let Some(ref api_key) = self.config.api_key {
+            req_builder = req_builder.bearer_auth(api_key);
+        }
+
+        for (name, value) in &self.config.extra_headers {
+            req_builder = req_builder.header(name.as_str(), value.as_str());
+        }
+
+        req_builder.send().await.map_err(|e| {
+            error!(url = %url, error = %e, "Failed to send request to OpenAI API");
+            LlmError::NetworkError(describe_transport_error(&e))
+        })
+    }
+
+    /// Read a failed response's body and turn it into the error it becomes.
+    async fn api_error(&self, label: &str, response: reqwest::Response) -> LlmError {
+        let status = response.status();
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+        error!(status = %status, error = %error_text, "OpenAI API returned error");
+        classify_api_error(format!("{label} ({status}): {error_text}"))
+    }
+
+    /// POST `body`, and if the model refuses the reasoning parameter it carries,
+    /// send it once more without one.
+    ///
+    /// Which models take `reasoning_effort` is not knowable from the endpoint,
+    /// so the alternative to this is a model-name table that is wrong about
+    /// every model released after it was written. Nothing was generated on a
+    /// 400, so the retry costs a round trip and no tokens, and only the first
+    /// refused call pays it.
+    async fn send_chat_request(
+        &self,
+        url: &str,
+        mut body: OpenAiChatRequest,
+        label: &str,
+    ) -> Result<reqwest::Response, LlmError> {
+        let response = self.post(url, &body).await?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+
+        // Read here rather than in `api_error`, because the decision to retry is
+        // made from this body.
+        let status = response.status();
+        let error_text = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unknown error".to_string());
+
+        if !(body.asks_for_reasoning()
+            && refuses_reasoning(status.as_u16(), &error_text, REASONING_FIELD))
+        {
+            error!(status = %status, error = %error_text, "OpenAI API returned error");
+            return Err(classify_api_error(format!(
+                "{label} ({status}): {error_text}"
+            )));
+        }
+
+        warn!(
+            model = %self.config.model,
+            %status,
+            error = %error_text,
+            "model refused the reasoning parameter; retrying without it"
+        );
+        body.clear_reasoning();
+
+        let retried = self.post(url, &body).await?;
+        if retried.status().is_success() {
+            // Dropping it fixed the call, so the parameter was the problem and
+            // this endpoint gets no more of them. A retry that fails the same
+            // way says the 400 was about something else, and remembering it
+            // would disable reasoning for the rest of the process over an
+            // unrelated failure.
+            self.reasoning_support.record_refusal();
+            Ok(retried)
+        } else {
+            Err(self.api_error(label, retried).await)
+        }
     }
 }
 
@@ -447,8 +621,10 @@ impl LlmProvider for OpenAiProvider {
             tools,
             stream: None,
             stream_options: None,
-            reasoning,
-        };
+            reasoning: None,
+            reasoning_effort: None,
+        }
+        .with_reasoning(reasoning);
 
         debug!(
             model = %self.config.model,
@@ -457,33 +633,9 @@ impl LlmProvider for OpenAiProvider {
             "Sending chat completion request"
         );
 
-        let mut req_builder = self.client.post(&url).json(&api_request);
-
-        if let Some(ref api_key) = self.config.api_key {
-            req_builder = req_builder.bearer_auth(api_key);
-        }
-
-        for (name, value) in &self.config.extra_headers {
-            req_builder = req_builder.header(name.as_str(), value.as_str());
-        }
-
-        let response = req_builder.send().await.map_err(|e| {
-            error!(error = %e, "Failed to send request to OpenAI API");
-            LlmError::NetworkError(describe_transport_error(&e))
-        })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            error!(status = %status, error = %error_text, "OpenAI API returned error");
-            return Err(classify_api_error(format!(
-                "OpenAI API error ({}): {}",
-                status, error_text
-            )));
-        }
+        let response = self
+            .send_chat_request(&url, api_request, "OpenAI API error")
+            .await?;
 
         let completion: OpenAiChatResponse = response.json().await.map_err(|e| {
             error!(error = %e, "Failed to parse OpenAI API response");
@@ -598,8 +750,10 @@ impl LlmProvider for OpenAiProvider {
             stream_options: self.config.stream_usage.then_some(StreamOptions {
                 include_usage: true,
             }),
-            reasoning,
-        };
+            reasoning: None,
+            reasoning_effort: None,
+        }
+        .with_reasoning(reasoning);
 
         debug!(
             model = %self.config.model,
@@ -607,33 +761,9 @@ impl LlmProvider for OpenAiProvider {
             "Sending streaming chat completion request"
         );
 
-        let mut req_builder = self.client.post(&url).json(&api_request);
-
-        if let Some(ref api_key) = self.config.api_key {
-            req_builder = req_builder.bearer_auth(api_key);
-        }
-
-        for (name, value) in &self.config.extra_headers {
-            req_builder = req_builder.header(name.as_str(), value.as_str());
-        }
-
-        let response = req_builder.send().await.map_err(|e| {
-            error!(error = %e, "Failed to send streaming request to OpenAI API");
-            LlmError::NetworkError(describe_transport_error(&e))
-        })?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let error_text = response
-                .text()
-                .await
-                .unwrap_or_else(|_| "Unknown error".to_string());
-            error!(status = %status, error = %error_text, "OpenAI API returned error on stream");
-            return Err(classify_api_error(format!(
-                "OpenAI stream error ({}): {}",
-                status, error_text
-            )));
-        }
+        let response = self
+            .send_chat_request(&url, api_request, "OpenAI stream error")
+            .await?;
 
         let mut event_stream = response.bytes_stream().eventsource();
 
@@ -742,13 +872,13 @@ mod tests {
     use super::*;
     use crate::{ChatMessage, Reasoning, ReasoningEffort};
 
-    fn provider(supports_reasoning: bool, reasoning: Option<Reasoning>) -> OpenAiProvider {
+    fn provider(dialect: ReasoningDialect, reasoning: Option<Reasoning>) -> OpenAiProvider {
         OpenAiProvider::new(OpenAiConfig {
             base_url: "http://localhost/v1".to_string(),
             model: "test-model".to_string(),
             api_key: None,
             extra_headers: Vec::new(),
-            supports_reasoning,
+            reasoning_dialect: dialect,
             reasoning,
             stream_usage: false,
         })
@@ -762,8 +892,30 @@ mod tests {
         }
     }
 
-    fn wire(reasoning: Option<OpenRouterReasoning>) -> serde_json::Value {
-        serde_json::to_value(reasoning).expect("serializes")
+    /// Whatever the request body carries about reasoning, in whichever dialect —
+    /// serialized, so the field names and the "send nothing" case are the wire's
+    /// and not a restatement of the mapping.
+    fn wire(provider: &OpenAiProvider, request: &LlmRequest) -> serde_json::Value {
+        let body = OpenAiChatRequest {
+            model: provider.config.model.clone(),
+            messages: Vec::new(),
+            temperature: None,
+            max_tokens: None,
+            response_format: None,
+            tools: None,
+            stream: None,
+            stream_options: None,
+            reasoning: None,
+            reasoning_effort: None,
+        }
+        .with_reasoning(provider.reasoning_for(request));
+
+        let mut value = serde_json::to_value(&body).expect("serializes");
+        value
+            .as_object_mut()
+            .expect("an object")
+            .retain(|key, _| key.starts_with("reasoning"));
+        value
     }
 
     /// The configured model's setting applies to every request that doesn't
@@ -771,47 +923,137 @@ mod tests {
     /// model rather than something each handler has to remember to pass.
     #[test]
     fn the_configured_reasoning_applies_when_a_request_asks_for_nothing() {
-        let sent = provider(true, Some(Reasoning::Off)).reasoning_for(&request(None));
-        assert_eq!(wire(sent), serde_json::json!({ "enabled": false }));
+        let provider = provider(ReasoningDialect::OpenRouter, Some(Reasoning::Off));
+        assert_eq!(
+            wire(&provider, &request(None)),
+            serde_json::json!({ "reasoning": { "enabled": false } })
+        );
     }
 
     /// …and a request that does ask overrides it, so a caller with a reason
     /// (`complex_agent` streaming its thinking) is not overruled by config.
     #[test]
     fn a_request_overrides_the_configured_reasoning() {
-        let sent = provider(true, Some(Reasoning::Off))
-            .reasoning_for(&request(Some(Reasoning::Effort(ReasoningEffort::High))));
+        let provider = provider(ReasoningDialect::OpenRouter, Some(Reasoning::Off));
         assert_eq!(
-            wire(sent),
-            serde_json::json!({ "effort": "high", "enabled": true })
+            wire(
+                &provider,
+                &request(Some(Reasoning::Effort(ReasoningEffort::High)))
+            ),
+            serde_json::json!({ "reasoning": { "effort": "high", "enabled": true } })
         );
     }
 
     #[test]
     fn a_budget_is_sent_as_a_reasoning_token_cap() {
-        let sent = provider(true, None).reasoning_for(&request(Some(Reasoning::Budget(2000))));
+        let provider = provider(ReasoningDialect::OpenRouter, None);
         assert_eq!(
-            wire(sent),
-            serde_json::json!({ "max_tokens": 2000, "enabled": true })
+            wire(&provider, &request(Some(Reasoning::Budget(2000)))),
+            serde_json::json!({ "reasoning": { "max_tokens": 2000, "enabled": true } })
         );
     }
 
-    /// Plain OpenAI and local servers reject unknown parameters, so a request
-    /// carrying reasoning must still be *answerable* there: the adapter drops
-    /// the parameter rather than failing the call or making every caller check
-    /// first.
+    /// OpenAI's own parameter is a bare string beside the messages, not an
+    /// object — sending OpenRouter's shape there is a 400.
     #[test]
-    fn an_endpoint_without_the_parameter_sends_the_request_without_it() {
-        let sent = provider(false, Some(Reasoning::Effort(ReasoningEffort::High)))
-            .reasoning_for(&request(Some(Reasoning::Budget(2000))));
-        assert!(
-            sent.is_none(),
-            "nothing may be sent to an endpoint that has no such field"
+    fn the_openai_dialect_sends_a_bare_effort_string() {
+        let provider = provider(ReasoningDialect::OpenAi, None);
+        assert_eq!(
+            wire(
+                &provider,
+                &request(Some(Reasoning::Effort(ReasoningEffort::Medium)))
+            ),
+            serde_json::json!({ "reasoning_effort": "medium" })
         );
+    }
+
+    /// `off` has a spelling on this API too, and it is the one an operator with
+    /// a small fast model wants. Only gpt-5.1 and later accept it; an older
+    /// model refuses it and the request is retried without it, which leaves a
+    /// non-reasoning model doing what was asked anyway.
+    #[test]
+    fn turning_thinking_off_is_asked_for_as_none() {
+        let provider = provider(ReasoningDialect::OpenAi, Some(Reasoning::Off));
+        assert_eq!(
+            wire(&provider, &request(None)),
+            serde_json::json!({ "reasoning_effort": "none" })
+        );
+    }
+
+    /// Chat Completions has no reasoning-token cap at all, so a budget cannot be
+    /// asked for — and a request carrying one must still be answerable.
+    #[test]
+    fn a_token_budget_has_no_openai_spelling_and_is_not_sent() {
+        let provider = provider(ReasoningDialect::OpenAi, None);
+        assert_eq!(
+            wire(&provider, &request(Some(Reasoning::Budget(2000)))),
+            serde_json::json!({}),
+            "nothing may be sent for a setting this API cannot express"
+        );
+    }
+
+    /// The two dialects are mutually exclusive: a body carrying both is a 400 on
+    /// either endpoint.
+    #[test]
+    fn only_one_dialect_reaches_the_body() {
+        for dialect in [ReasoningDialect::OpenRouter, ReasoningDialect::OpenAi] {
+            let provider = provider(dialect, None);
+            let sent = wire(
+                &provider,
+                &request(Some(Reasoning::Effort(ReasoningEffort::Low))),
+            );
+            assert_eq!(
+                sent.as_object().expect("an object").len(),
+                1,
+                "exactly one reasoning field for {dialect:?}, got {sent}"
+            );
+        }
+    }
+
+    /// Whether a model takes the parameter is only knowable from the 400 it
+    /// answers with. Once one has come back, sending it again would buy a wasted
+    /// round trip on every call for the life of the process.
+    #[test]
+    fn a_model_that_refused_the_parameter_is_not_asked_again() {
+        let provider = provider(
+            ReasoningDialect::OpenAi,
+            Some(Reasoning::Effort(ReasoningEffort::High)),
+        );
+        assert_eq!(
+            wire(&provider, &request(None)),
+            serde_json::json!({ "reasoning_effort": "high" })
+        );
+
+        provider.reasoning_support.record_refusal();
+        assert_eq!(
+            wire(&provider, &request(None)),
+            serde_json::json!({}),
+            "a refusal is remembered, not rediscovered per call"
+        );
+    }
+
+    /// The memory is shared by clones: a provider is cloned per handler and they
+    /// all call the same model.
+    #[test]
+    fn the_refusal_is_shared_across_clones() {
+        let provider = provider(
+            ReasoningDialect::OpenAi,
+            Some(Reasoning::Effort(ReasoningEffort::High)),
+        );
+        let clone = provider.clone();
+        provider.reasoning_support.record_refusal();
+        assert_eq!(wire(&clone, &request(None)), serde_json::json!({}));
     }
 
     #[test]
     fn nothing_is_sent_when_nobody_asked() {
-        assert!(provider(true, None).reasoning_for(&request(None)).is_none());
+        for dialect in [ReasoningDialect::OpenRouter, ReasoningDialect::OpenAi] {
+            let provider = provider(dialect, None);
+            assert_eq!(
+                wire(&provider, &request(None)),
+                serde_json::json!({}),
+                "for {dialect:?}"
+            );
+        }
     }
 }
