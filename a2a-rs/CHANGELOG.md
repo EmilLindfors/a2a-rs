@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.7.0...a2a-rs-v0.8.0) - 2026-08-25
+
+### Added
+
+- *(a2a-rs)* Report replaced state, refresh read bags, cache the claim
+- An AsyncEventLog port so stream resumption survives a restart
+- Resume ConnectRPC streams with Last-Event-ID
+- A retention policy and a sweep behind the AsyncRetention port
+- HttpServer::serve_on takes a listener the caller already bound
+
+### Changed
+
+- Drop the legacy v0.x send-params types
+
+### Fixed
+
+- Tell SQLite connections to enforce foreign keys
+- Decode a JSON-RPC error that arrives on the streaming path
+- End a stream the agent already answered, and refuse SubscribeToTask on a settled task
+- Route the canonical :verb task paths
+- Require tags on every skill
+- Accept SendMessage with no task id ([#51](https://github.com/EmilLindfors/a2a-rs/pull/51))
+
+### Other
+
+- Merge pull request #50 from changshenhan/fix/flaky-authenticated-principal-test
+
 ## [0.7.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.6.0...a2a-rs-v0.7.0) - 2026-08-18
 
 ### Changed
