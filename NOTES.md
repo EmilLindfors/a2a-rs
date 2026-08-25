@@ -50,6 +50,93 @@ be acting correctly; if not, the state is wrong no matter how it is documented.
 
 ## Choices that had a real alternative
 
+**The CI here does not build korps.** (2026-08-25) A downstream canary existed
+from 2026-08-18: it checked both repos out as siblings and wrote a
+`[patch.crates-io]` so korps built against the PR's source. It is gone, and the
+repos stay separate.
+
+It had two failure modes, and they are worth recording because they are what
+this kind of canary costs rather than accidents of this one. korps is private
+and this repo is public, so cloning it needed a `KORPS_CANARY_TOKEN` secret;
+without one the job skipped and reported success, which is a green tick that
+means nothing. And when korps dropped its own `[patch.crates-io]` to build from
+crates.io, the sibling checkout silently stopped meaning anything — cargo
+resolved published `a2a-rs` and the job went green regardless of the PR, for a
+week, with nothing saying so.
+
+Both were fixable, and the second was fixed. The reason to remove it anyway is
+that it wires a public repo's CI to a private repo's source: a coupling this
+repo has nowhere else and does not want, given that the protocol crates are MIT
+and korps is not. **Nothing here depends on korps, so nothing here should need
+to know korps exists in order to go green.**
+
+The cost is real and is accepted: no automated signal here says when a change
+breaks korps. Checking is a manual step and stays one — point korps'
+`[patch.crates-io]` at a local checkout of this repo and build, which is one
+edit-compile loop. The place that signal belongs is korps' own CI, which builds
+this repo's crates by definition.
+
+**The stream log is a port, not a field on the streaming handler.** (2026-08-23)
+
+`InMemoryStreamingHandler` owned both halves of streaming: who is listening, and
+what has been said. The first is this process's business and a restart may
+forget it. The second a resuming client still needs, and forgetting it is what
+made ids restart at 1 — handing a reconnecting client ids it had already seen,
+for different events.
+
+The alternative was a second streaming-handler adapter that talked to a
+database. That would have duplicated the fan-out, because live readers still
+need an in-process broadcast channel whichever store the events are in. Making
+the log a port instead leaves one fan-out (`StreamingFanout<L>`) and makes
+durability a matter of which log it was given.
+
+The id is assigned by the log, inside the insert. A counter in the process
+cannot be right across a restart, and reading `MAX(id)` first and binding it
+leaves a window where two appends pick the same number; computing it in the
+statement means the primary key settles a collision rather than one event
+overwriting another.
+
+`task_events` has no foreign key to `tasks`. The two are separate ports and need
+not be the same database, and an append rejected because the task row had not
+landed yet would drop an event on the one path whose job is not to drop events.
+The cost is that nothing reclaims the rows implicitly, so `delete_context` names
+the table like every other one it sweeps.
+
+**A replay that cannot cover the gap is dropped, not sent.** (2026-08-23)
+
+A bounded log discards its oldest events, so a client disconnected long enough
+asks for a tail that is no longer whole. What is left starts partway through the
+gap. Sending it looks like a successful resume and is not: those events are
+older than the task snapshot the service sends ahead of the stream, so a status
+update re-applies stale state and an artifact update with `append` duplicates
+content. `Replay::complete` is what lets the fan-out tell the two cases apart,
+and the incomplete one streams live from the snapshot — which is what a client
+that never sent `Last-Event-ID` gets, and is coherent.
+
+**A ConnectRPC event id rides in the payload's metadata, and only when asked
+for.** (2026-08-23)
+
+The SSE transports carry the per-task event id in the W3C `id:` field, which is
+protocol-level and invisible to a client that does not read it. ConnectRPC has
+no equivalent: `StreamResponse` is a payload oneof with no room for anything
+else, and a per-message value cannot go in a header or a trailer. So the id goes
+into `TaskStatusUpdateEvent.metadata` / `TaskArtifactUpdateEvent.metadata` under
+`a2a_rs_event_id`.
+
+That is a change to the agent's own metadata bag, not an inert field, so it is
+gated on the `a2a-rs-event-ids` request header: a client that does not send it
+gets the bytes the spec describes, and our client strips the key before the
+event reaches the caller. The alternative — stamp it for everyone — would put a
+key nobody wrote into every third-party SDK's view of the payload, and the id is
+only useful to a client that knows to look.
+
+The gate cannot be "the client is resuming". Resuming needs the id of the last
+event received *before* the disconnect, so ids have to flow from the first
+event; a header sent only on reconnect would arrive one connection too late.
+
+The id is a string. `google.protobuf.Struct` numbers are doubles and an event id
+is a `u64`, so a number would round past 2^53.
+
 **Conversation memory lives in the protocol, not in the handler.** (2026-08-14)
 
 The alternative was a `HashMap<ContextId, Vec<ChatMessage>>` on `LlmHandler`:
@@ -219,6 +306,57 @@ driver that counted an ignored insert as a row would admit the loser to a
 conversation it does not own. One statement is not worth resting an
 authorization decision on how each backend reports a no-op.
 
+**A cache of an ownership answer is safe because the answer cannot change.**
+(2026-08-25)
+
+The read-before-claim above got a turn to one statement per port call, and a
+turn makes several: the conversation read, the state-bag read, and one more per
+key it remembers. The obvious next step — remember the answer — is the one that
+needs an argument, because it is an input to an authorization decision, and a
+cache of one is normally a second source of truth about who may read what.
+
+It is not one here, and the reason is narrow enough to write down. `contexts.owner`
+is written once, by the claim, and never reassigned: `Open` stays open and
+`Owner(x)` stays `x`. A cache entry therefore cannot disagree with the row —
+only be *absent* from it, if a retention sweep deleted the context and a
+different principal claimed the id afresh.
+
+So the memo is a memo of an immutable value, bounded three ways. Only settled
+answers go in, which leaves the claiming path exactly as it was — the absent row
+is the one case a caller acts on by writing, and a decision nobody has made yet
+is not one to remember. The store evicts what its own sweep deletes, after the
+commit rather than before, so a rolled-back sweep cannot drop an entry that is
+still true. And the TTL is what covers a sweep run by another replica: it is
+seconds rather than the process lifetime, because the duplication worth removing
+is *within one turn*, and a window that short needs a sweep of a
+context idle for days, a re-claim by a different principal, and a request served
+against it, all inside it.
+
+What is cached is the claim, never the verdict. `ContextClaim::verdict` still
+runs per request, so one entry cannot admit the wrong caller — only save
+re-reading which caller it belongs to.
+
+Bounded at 1024 contexts and cleared whole when it fills. A miss costs one
+`SELECT`; that is not worth an LRU, and certainly not the dependency one would
+arrive with.
+
+**Neither dialect will hand back the row an upsert replaced.** (2026-08-25)
+
+`remember` reports what the key held, and getting that out of one statement
+looked possible from either end and is not. PostgreSQL 17 added `RETURNING
+OLD.value`, which is too new to make a floor. The version that works on every
+PostgreSQL — `WITH prev AS (SELECT …) INSERT … ON CONFLICT DO UPDATE …
+RETURNING (SELECT value FROM prev)` — has no SQLite spelling, because
+`RETURNING` there can only name columns of the row that was modified.
+
+So it is a `SELECT` and an upsert, in a transaction. The transaction is not
+decoration: without it a concurrent write landing between the two makes
+`previous` name a value this call never overwrote, which is a report about
+somebody else's write wearing ours. Two round trips on a path that already costs
+an LLM call is the cheapest honest answer, and splitting the dialect to save one
+of them on PostgreSQL is not worth two code paths through an authorization
+boundary's neighbour.
+
 **Wiring conversation memory makes `context_id` an authorization boundary.**
 Worth stating because it changes what an existing field means. Nothing reads by
 context today, so a guessed `context_id` gets you nothing; once a handler
@@ -325,6 +463,62 @@ why `Transport::send_task_message` takes `Option<&str>` and callers use
 
 ## Hazards that will recur
 
+**A default that names somebody else's product goes stale silently.**
+(2026-08-25) `GEMINI_DEFAULT_MODEL` was `gemini-1.5-pro`. By the time anyone
+looked, Google had stopped listing that model on its current models page — and
+had not put it on the deprecation schedule either, so there was no announcement
+in either direction and nothing failed. Every config naming `provider =
+"gemini"` without a `model` had been running on it the whole time.
+
+The failure mode is the point, not the wrong name. A default model is a
+one-entry table of a vendor's product line, and it is the one value nobody
+writes down: when it stops being true, no config mentions it, no error names
+it, and the only symptom is a model you did not choose and cannot see. Moving
+it to a current name buys a year and then fails in exactly the same way. So
+the Gemini model is required now, and its absence is an error at startup naming
+the variable to set.
+
+This is the second time this crate has reached the same conclusion from the
+other end. `reasoning` support deliberately refuses a table of which models
+accept `reasoning_effort`, and sends the parameter to find out, because a table
+answers for the models it lists and is wrong about every one released after it
+was written. A default model is that table with one row. **Where a vendor's
+product line is the moving part, ask or require — do not record.**
+
+The cost is real and worth naming: Gemini is now the only provider without a
+default, and configs that omitted the model break. That is affordable because
+the alternative was never "a correct default" but "a default that goes wrong at
+a moment nobody picks". `openai` and `openrouter` keep theirs while their
+vendors still list those models; when one stops, this is the treatment rather
+than a rename.
+
+**A feature is only proven in the direction CI builds it.** (2026-08-25)
+`a2a-web-client` gated its `axum` dependency behind `axum-components` and then
+declared `pub mod streaming;` — the module that imports axum — with no `cfg`.
+So `default-features = false` did not drop the module, it failed to compile. The
+flag had been advertised as optional for as long as it existed and never was.
+
+Nothing caught it because nothing turns features off. `build`, `msrv`, `clippy`
+and `docs` all run with features on or `--all-features`; a gate that is missing
+is invisible to every one of them, and a gate that is *wrong* only misbehaves in
+the configuration nobody builds. `cargo check --workspace
+--no-default-features` is now a job of its own. The general answer is
+`cargo-hack --feature-powerset`, which costs minutes and wants a schedule rather
+than a per-PR slot; this is the cheap half, and it covers the mistake that has
+actually happened.
+
+The second-order cost is what makes it worth a note. The feature was the only
+way out of this crate's axum 0.7, and it did not work — so the version reached
+every dependent that wanted `create_sse_stream`, whose return type is an `Sse`.
+korps carried a dev-dependency alias for a year to hold two axums apart, and the
+crate that made it necessary looked like it had an opt-out. **An integration
+point that returns a framework's type decides that framework's version for
+everyone downstream**; the escape hatch has to be tested, or it is decoration.
+The axum here is 0.8 now, matching the rest of the workspace. `askama_web` is
+the shape that avoids the question entirely — a feature per framework *version*,
+so the dependent picks — and is worth copying if this crate ever grows a second
+integration.
+
 **Cargo silently skips a binary whose `required-features` are not all enabled.**
 It does not warn on `cargo install`; you simply do not get the binary. This is
 why `required-features` for `a2a` must stay a subset of `default`, pinned by a
@@ -352,6 +546,30 @@ because a task that finishes with nothing to show is a failed task whatever the
 transport thinks. The class is wider than that one call site: the same silence
 awaits any artifact, status message, or tool result assembled from a string that
 can come back empty.
+
+**Ask the endpoint which reasoning parameter a model takes; do not keep a
+table.** Support turns on the *model*, not the provider: `reasoning_effort` is a
+400 on `gpt-4o-mini` and mandatory on `gpt-5-pro`, and Google's docs list
+`thinkingLevel` for the 2.5 generation while the field reports say those models
+take only `thinkingBudget`. A model-name table is explicit and reportable and
+goes stale with every release — the `TODO.md` entry describing the providers had
+itself gone stale before it was implemented. So the parameter is sent, a refusal
+is recognized from the 400 that names the field, and the request is retried once
+without it. A 400 generated nothing, so the recovery costs a round trip and no
+tokens.
+
+Two details make it safe rather than clever. The refusal is remembered only after
+the retry *succeeded*: a 400 naming the field can be about something else, and
+remembering that would disable reasoning for the rest of the process over an
+unrelated failure. And only a 400 counts — a 5xx that happens to name the field
+is an outage, and treating it as a refusal would leave the model thinking at its
+default long after the outage ended.
+
+What this costs is that the plan is no longer known before the run.
+`ReasoningPlan::Attempted` is that state, and a report has to be able to say
+"sent, and the model has the last word" — which is why `unsupported()` now
+answers only for the drops decided by selection. There is one of those left: a
+token budget on OpenAI, whose Chat Completions API has no field for one at all.
 
 **Asking a model to think is a request, never a guarantee.** `Reasoning::Off`
 sends OpenRouter's `enabled: false`; a model with no way to turn reasoning off
@@ -522,6 +740,39 @@ name. So both expire a context that is only ever read, and the rule is on
 `RetentionPolicy` rather than in either adapter. The cost is real: a long-lived
 `user:` fact that is read on every turn and rewritten never will expire. That is
 the price of not recording reads, which is the thing worth not paying for.
+
+**The price above is now optional, and the window is what makes it payable.**
+(2026-08-25)
+
+The entry above is unchanged as the default and as the reasoning: a read that
+recorded itself would be a write per turn, and that is the cost worth refusing.
+What `ReadRefresh` adds is that the refusal only has to be total if the refresh
+is unconditional. A read refreshes a principal's `user:` bag only once the bag
+is already older than a window, so however often it is read the extra writes are
+one per principal per window — which is a different quantity from "one per turn",
+and the only reason the knob exists.
+
+It lives on the domain next to `RetentionPolicy`, for the reason quoted above:
+two stores deciding separately what keeps a bag alive would be the same two
+policies wearing one name. Both adapters read one value, in the two shapes they
+can use — the SQL store binds `cutoff` into a statement, the in-memory store
+asks `due` about a timestamp it is already holding. `halfway_through` derives
+the window from the policy a sweep will run under, because two numbers that have
+to stay in a fixed relation are one number and a mistake waiting.
+
+Only the `user:` bucket. A context in use is written to by its own task history,
+so its idleness maintains itself; the `user:` bag is the one that can be read
+every turn for a week and written never. And the unit is the principal rather
+than the key, matching `delete_user_state_idle_for` — refreshing one key at a
+time would keep a bag that remembers somebody's city and not their name.
+
+The SQL side writes blind — one conditional `UPDATE` rather than a read to
+decide followed by a write. Not an optimization: `updated_at` is a
+`timestamptz`, the `Any` driver decodes text, integers, floats, booleans and
+bytes, and it converts a row whole, so selecting it alongside the bag would fail
+every `load_state` on PostgreSQL. The `UPDATE` matches the primary key's
+`(scope, scope_key)` prefix, usually touches nothing, and leaves no dead tuple
+when it does not.
 
 **SQLite's `foreign_keys` is a per-connection pragma, and the cascades depend on
 it.** SQLite defaults it *off*, so `ON DELETE CASCADE` in `migrations/sqlite/` is

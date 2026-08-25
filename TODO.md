@@ -34,24 +34,23 @@ mapping is protocol-native rather than invented here: ADK `Session` is A2A's
 per-context scratchpad, and `MemoryService` is the deferred retrieval tier.
 
 What is left on this side of the seam — the handler-side remainder is in korps'
-`TODO.md`.
+`TODO.md` §3, and the retention item below has its other half in korps' §2.
 
-- [ ] **Both reads on one turn ask the same question about ownership.** The
-      claim and the check are one statement now (`claim_or_check_context`, see
-      `CHANGELOG.md`), so a turn with `mode = "context"` *and* `remember = true`
-      asks twice rather than four times — but it is the same question, and
-      every `remember` asks it again. A context's owner never changes once the
-      row exists, so the answer is cacheable; what stops that being free is that
-      the cache is unbounded and becomes a second source of truth for an
-      authorization decision. Not urgent — these are indexed primary-key
-      lookups — but it is the per-turn floor, and it grows with each thing a
-      turn remembers.
-- [ ] **A remembered value is replaced in place, leaving no trace.** An agent
-      that overwrites `user:name` with the wrong thing loses what it held, and
-      nothing tells the caller it happened — `context_state.updated_at` is
-      written and read by nobody. A history table nobody reads is not the fix;
-      surfacing the change to whoever is talking to the agent is, and that needs
-      somewhere to surface it.
+- [x] **A turn asks who owns a context once.** Done 2026-08-25: `SqlxTaskStorage`
+      keeps the settled claim for a few seconds (`SqlxStorageBuilder::claim_cache`,
+      5s by default), so a turn with `mode = "context"` and two `remember` calls
+      asks once rather than four times. What made it safe is narrow enough to be
+      worth repeating: `contexts.owner` is written by the claim and never
+      reassigned, so the cached value cannot disagree with the row — only be
+      absent from it after a sweep. See `NOTES.md` for the three bounds that
+      close that (settled answers only, evict what this store's own sweep
+      deletes, and a TTL for a sweep run by another replica).
+- [x] **A remembered value says what it replaced.** The `a2a-rs` half landed on
+      2026-08-25: `AsyncContextStateStore::remember` returns `Remembered`
+      (`Stored` | `Unchanged` | `Replaced { previous }` | `NotStored`) instead of
+      `()`, so the value overwritten in place is reported rather than lost. See
+      `CHANGELOG.md`; `NOTES.md` has why it is a `SELECT` and an upsert in a
+      transaction rather than one statement. Surfacing it is korps' half — see §2.
 - [ ] **Retention has a sweep and no schedule.** The `a2a-rs` half landed on
       2026-08-21: `RetentionPolicy` (two knobs, both off by default) and the
       `AsyncRetention` port, implemented by both storage adapters. See
@@ -61,14 +60,13 @@ What is left on this side of the seam — the handler-side remainder is in korps
       the two windows and a supervisor that sweeps on a schedule and logs what
       `Swept` reports. Until then a store still grows without bound, which is
       what the default policy asks for.
-      - **A fact that is only ever read expires.** Idleness is measured from
-        writes, because a read that recorded itself would be a write per turn —
-        which is the cost the ownership item above is trying to remove. So a
-        `user:` key the model reads on every turn and never rewrites is deleted
-        after the window, and the agent forgets something it was using. Refreshing
-        only when a key is close to its cutoff would bound the extra writes; so
-        would recording reads per principal rather than per key. Neither is free,
-        and nothing is scheduled to sweep yet, so this bites nobody today.
+      - [x] **A fact that is only ever read expires.** Fixed 2026-08-25 by
+        `ReadRefresh`, which lets a read refresh a principal's `user:` bag once
+        the bag is already older than a window — bounding the extra writes at one
+        per principal per window rather than one per turn, which is the cost the
+        write-only rule exists to refuse. Off by default; `halfway_through` takes
+        the window from the `RetentionPolicy` a sweep will run under. The rule
+        lives on the domain so both adapters cannot mean different things by it.
 - [ ] **Retrieval memory is deferred, not forgotten.** The tier-3 shape (embed,
       index, search — ADK `MemoryService`, LangGraph `BaseStore`, Letta
       archival) needs a vector index and is its own pass. Define the config key
@@ -77,7 +75,7 @@ What is left on this side of the seam — the handler-side remainder is in korps
 ## 2. Shared with korps
 
 Work whose two halves land on opposite sides of the seam. Also listed in korps'
-`TODO.md`; whoever picks one up should check the other copy.
+`TODO.md` §2; whoever picks one up should check the other copy.
 
 - [ ] **A skill with no keywords serves an undecodable card.** The `a2a-rs` half
       landed on 2026-08-21: `SimpleAgentInfo::add_skill` and
@@ -88,26 +86,68 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       accepts and no conformant client can talk to. Two halves: take the
       signature change (it does not compile otherwise), and decide whether an
       empty `keywords` is a config error or gets a default.
-- [ ] **Reasoning for non-OpenRouter providers.** The provider mappings are
-      `a2a-llm`'s; the config key and the `doctor` warning are korps'.
-      `[llm] reasoning` reaches the wire on `openrouter` only. The drop is now
-      reported — `SelectedLlm` carries a `ReasoningPlan` and `korps doctor` warns on
-      `ReasoningPlan::Unsupported` — so the mistake is caught before it is
-      billed; what is left is actually sending it. Both mappings turn on a
-      question about the *model*, not the provider, which is why neither is a
-      small change:
-      - **OpenAI** takes `reasoning_effort`, and models that do not reason
-        reject the parameter outright. The default model here is `gpt-4o-mini`,
-        so sending it on provider kind alone breaks the common case; it needs to
-        know whether the configured model reasons, i.e. a model-name list that
-        goes stale with every release. `Budget` has no field at all.
-      - **Gemini** takes a thinking budget under `generationConfig.thinkingConfig`,
-        but the spelling differs by model generation (2.5's `thinkingBudget`
-        against 3's `thinkingLevel`, which are mutually exclusive) and the
-        minimum is model-dependent — `Off` is expressible on Flash and not on
-        Pro. `Effort` has no direct field.
-      Whatever shape this takes, `ReasoningPlan` is where it lands: a mapping
-      that covers some models and not others has to keep saying which is which.
+- [x] **`a2a-web-client`'s `axum-components` feature did not turn off.** Done
+      2026-08-25. `components/mod.rs` declared `pub mod streaming;` ungated
+      while the axum it imports was behind the flag, so `default-features =
+      false` failed to compile instead of dropping the module — the flag was
+      advertised as optional and was not. Gated now; `axum` also moves 0.7 → 0.8
+      (**breaking**), which was the reason anyone wanted the flag: this crate
+      was the workspace's last 0.7, and `create_sse_stream` returning an `Sse`
+      pushed that version onto every dependent. The dead `async-stream` dep went
+      too. A `--no-default-features` CI job is what would have caught it and now
+      does. See `CHANGELOG.md` and `NOTES.md`.
+      - korps' half stands until this is released: it builds against published
+        `a2a-web-client` 0.6.1, so its inlined SSE serializer and the `axum7`
+        dev-dep alias stay for now. Both are deletions when the release lands —
+        korps' `TODO.md` §2 tracks them, and this is one of the changes the
+        release item in that repo's §1 covers.
+- [ ] **Reasoning for non-OpenRouter providers — korps' half is left.** The
+      `a2a-llm` half landed on 2026-08-24: `[llm] reasoning` now reaches
+      OpenAI's `reasoning_effort` and Gemini's `generationConfig.thinkingConfig`,
+      by the send-it-and-recover shape rather than a model-name table. See
+      `CHANGELOG.md`; `NOTES.md` has why the endpoint is asked instead of a list
+      consulted, and why the refusal is only remembered after the retry works.
+      What is left is korps':
+      - `korps doctor` reports `ReasoningPlan::unsupported()`, which now answers
+        only for a token budget on OpenAI. The new `ReasoningPlan::Attempted`
+        (`attempting()`) is the state a report should say "sent, and the model
+        has the last word" about, and nothing says it yet.
+      - Whether a refusal *happened* is only in the provider's `warn!` log.
+        `Arc<dyn LlmProvider>` erases the concrete provider, so a report has no
+        way to read it back after a run; giving it one means a channel that does
+        not exist today.
+      - `[llm] reasoning` on an `openai` provider with the default
+        `gpt-4o-mini` now costs one wasted round trip on the first call of the
+        process. Nothing is wrong with it, but a `doctor` line saying so would
+        save the question.
+- [ ] **An overwritten fact has nowhere to surface — korps' half is left.** The
+      `a2a-rs` half landed on 2026-08-25 (§1): `remember` now returns
+      `Remembered`, so `Replaced { previous }` carries the value that used to be
+      lost. Two halves on korps' side: `AutoStorage` in `core/server.rs`'s
+      builder delegates `remember` and must take the new return type (it does not
+      compile otherwise), and `handlers/memory.rs` builds the `remember` tool
+      result — which is the "somewhere to surface it" this item was waiting for.
+      Whether the model is the right audience or the user is, is the open part:
+      an agent told it overwrote something may just apologise, where a caller
+      would want to know.
+- [ ] **Gemini has no default model now — korps' half is left.** The `a2a-llm`
+      half landed on 2026-08-25: `GEMINI_DEFAULT_MODEL` was `gemini-1.5-pro`,
+      absent from Google's current models page and from the deprecation
+      schedule both, so nothing had been announced either way and every config
+      naming `provider = "gemini"` without a `model` ran on it regardless.
+      Resolved by **removing the default** rather than moving it — a default
+      model is a one-entry table of a vendor's product line and goes stale
+      invisibly, where a missing one is an error at startup. `model` is now
+      required for Gemini, from the config or `GEMINI_MODEL`. See
+      `CHANGELOG.md` (**breaking**); `NOTES.md` has why this is the same
+      conclusion the `reasoning` work reached from the other end.
+      - korps' half is a config decision this cannot make for it: a `[llm]`
+        block with `provider = "gemini"` and no `model` is a startup error now,
+        so `korps validate` should catch it before a run does — the same shape
+        as the empty-`keywords` question above. Whether korps supplies its own
+        default instead is its call; nothing here stops it.
+      - Like the `axum` item, korps only feels this when the release lands; it
+        builds against published `a2a-llm` today.
 
 ## 3. Interop and CI
 
@@ -141,15 +181,26 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       now has a job pinned to 1.96 running `cargo check --workspace
       --all-features --locked`. The workspace builds on it as declared —
       nothing had to move. See `NOTES.md`.
-- [ ] **Make the downstream canary blocking.**
-      `.github/workflows/downstream-korps.yml` builds korps against each PR by
-      checking both repos out as siblings, so korps' `[patch.crates-io]`
-      resolves to the PR's source and it needs no release. It is
-      `continue-on-error` until two things hold: a `KORPS_CANARY_TOKEN` secret
-      with `repo` scope exists (korps is private, this repo is public, and
-      without the secret the job skips), and korps' master is current (while it
-      lags, the canary builds an old korps and can fail for reasons unrelated
-      to the PR).
+- [x] **ConnectRPC streams resume too.** Done 2026-08-23: the transport ignored
+      `last_event_id` and tagged every event `None`, so `RetryingTransport` over
+      it reconnected from current state and dropped the gap. `Last-Event-ID`
+      goes in as an ordinary request header; the id comes back in the update's
+      `metadata`, since ConnectRPC has no SSE `id:` field — and only for a
+      client that asked with `a2a-rs-event-ids`, because that is a change to the
+      payload rather than an inert protocol field. See `NOTES.md`.
+- [x] **Durable streaming resumption.** Done 2026-08-23: ids and retained events
+      moved out of `InMemoryStreamingHandler` into the `AsyncEventLog` port, and
+      `SqlxTaskStorage` implements it (migration 007, `task_events`), so a
+      restart no longer starts every task's ids at 1. The fan-out is
+      `StreamingFanout<L>`; `InMemoryStreamingHandler` is the in-memory pairing
+      and is unchanged for callers. See `CHANGELOG.md`; `NOTES.md` has why the
+      log is a port rather than a second streaming adapter, why the id is
+      assigned inside the insert, and why a replay that cannot cover the gap is
+      dropped instead of sent.
+      - Nothing schedules `AsyncEventLog::discard`, the same gap the retention
+        item in §1 describes: a sweep of the context takes its events, so this
+        rides on korps growing a timer. Until then the per-task cap
+        (`event_log_capacity`, 1024 by default) is what bounds the table.
 
 ---
 
@@ -174,12 +225,6 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
         travels from the transport to the message handler, and a `tenant` field
         on it costs no new parameter. The task, notification and storage ports
         still take none.
-- [ ] **Durable streaming resumption.** The replay buffer is in-memory and
-      bounded (256 events/task); past it, resume falls back to the initial
-      snapshot. A sqlx-backed event log would make resumption survive restarts.
-- [ ] **ConnectRPC SSE `Last-Event-ID`.** The ConnectRPC transport has none, so
-      `RetryingTransport` over it reconnects from scratch rather than resuming
-      gap-free.
 - [ ] **AP2 expansion (`a2a-ap2`).** Full support for the AP2 primitives
       (Payment Request, Receipt); bridge AP2 with native LLM tool calling so a
       model can request and verify payments; tests and error handling for the

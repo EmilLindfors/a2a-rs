@@ -27,6 +27,8 @@ use crate::{
     port::{StreamEvent, Transport},
 };
 
+use crate::adapter::transport::resume;
+
 fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
     let code = match err.code {
         connectrpc::ErrorCode::NotFound => crate::domain::error::TASK_NOT_FOUND,
@@ -474,17 +476,27 @@ impl Transport for HttpClient {
         &self,
         task_id: &str,
         _history_length: Option<u32>,
-        // ConnectRPC streaming has no SSE `Last-Event-ID`; resumption is not
-        // supported on this transport, so the hint is ignored.
-        _last_event_id: Option<&str>,
+        last_event_id: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent, A2AError>> + Send>>, A2AError> {
         let request = SubscribeToTaskRequest {
             id: task_id.to_string(),
             ..Default::default()
         };
+
+        // ConnectRPC has no SSE `id:` field, so ids ride in the update's
+        // metadata — but only for a client that asks, since that changes the
+        // payload. See the `resume` module.
+        let mut options =
+            connectrpc::client::CallOptions::default().with_header(resume::EVENT_IDS_HEADER, "1");
+        if let Some(id) = last_event_id {
+            options = options
+                .try_with_header("last-event-id", id)
+                .map_err(map_connect_err)?;
+        }
+
         let stream = self
             .connect_client
-            .subscribe_to_task(request)
+            .subscribe_to_task_with_options(request, options)
             .await
             .map_err(map_connect_err)?;
 
@@ -492,8 +504,9 @@ impl Transport for HttpClient {
             match s.message().await {
                 Ok(Some(view)) => {
                     let resp = view.to_owned_message();
-                    if let Some(item) = stream_response_to_item(resp) {
-                        Some((Ok(StreamEvent::untagged(item)), s))
+                    if let Some(mut item) = stream_response_to_item(resp) {
+                        let event_id = resume::take_event_id(&mut item);
+                        Some((Ok(StreamEvent::new(event_id, item)), s))
                     } else {
                         Some((
                             Err(A2AError::Internal(

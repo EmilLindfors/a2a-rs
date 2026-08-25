@@ -231,6 +231,52 @@ impl ContextState {
     }
 }
 
+/// What a [`remember`] did to the key it was given.
+///
+/// The same argument the `bool` from [`forget`] carries: "there was nothing
+/// there" and "something else was" are different answers to give whoever is
+/// talking to the agent. A value replaced in place otherwise leaves no trace —
+/// an agent that overwrites `user:name` with the wrong thing loses what it held
+/// and nothing can say so.
+///
+/// [`remember`]: crate::port::AsyncContextStateStore::remember
+/// [`forget`]: crate::port::AsyncContextStateStore::forget
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Remembered {
+    /// The key held nothing, and now holds this value.
+    Stored,
+    /// The key already held exactly this value.
+    ///
+    /// Apart from [`Stored`](Self::Stored) because an agent re-asserting a fact
+    /// it was told several turns ago is not overwriting anything, and reporting
+    /// that as a replacement would make the common case wear the shape of the
+    /// one worth noticing.
+    Unchanged,
+    /// The key held something else, and this call replaced it.
+    Replaced {
+        /// What the key held before. Nothing else records it: the row is
+        /// overwritten in place.
+        previous: String,
+    },
+    /// Nothing was stored — a [`StateScope::Temp`] key, or a store that keeps
+    /// nothing.
+    ///
+    /// Not folded into [`Stored`](Self::Stored): a caller that reads back
+    /// `temp:draft` and finds nothing is owed an answer saying why, rather than
+    /// one that claimed the write landed.
+    NotStored,
+}
+
+impl Remembered {
+    /// What this call overwrote, if it overwrote anything.
+    pub fn replaced_value(&self) -> Option<&str> {
+        match self {
+            Self::Replaced { previous } => Some(previous),
+            _ => None,
+        }
+    }
+}
+
 impl FromIterator<(StateKey, String)> for ContextState {
     fn from_iter<I: IntoIterator<Item = (StateKey, String)>>(iter: I) -> Self {
         Self {

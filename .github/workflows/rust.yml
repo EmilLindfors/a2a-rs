@@ -33,6 +33,30 @@ jobs:
       - name: Run tests
         run: cargo test --verbose --workspace --locked --all-targets
 
+  features-off:
+    name: Optional features are actually optional
+    runs-on: ubuntu-latest
+    # Every other job builds with features *on*, so a feature is only ever
+    # proven in one direction. `a2a-web-client`'s `axum-components` was
+    # advertised as optional and did not compile without it — `components/mod.rs`
+    # declared `pub mod streaming;` ungated while the axum it imports was behind
+    # the flag — and nothing here noticed for as long as the flag existed.
+    #
+    # A full `--feature-powerset` is the general answer and costs minutes; this
+    # is the cheap half of it, and it covers the mistake that has actually
+    # happened: a module gated by nothing.
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check every crate with its default features off
+        run: cargo check --workspace --no-default-features --locked
+
   msrv:
     name: MSRV (1.96)
     runs-on: ubuntu-latest

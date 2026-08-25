@@ -1,6 +1,9 @@
 //! Storage adapter implementations
 
 #[cfg(feature = "server")]
+pub mod event_log;
+
+#[cfg(feature = "server")]
 pub mod task_storage;
 
 #[cfg(feature = "sqlx-storage")]
@@ -13,6 +16,9 @@ pub mod database_config;
 /// dialect is in use follows from the URL, and nothing outside picks one.
 #[cfg(feature = "sqlx-storage")]
 mod dialect;
+
+#[cfg(feature = "server")]
+pub use event_log::InMemoryEventLog;
 
 #[cfg(feature = "server")]
 pub use task_storage::InMemoryTaskStorage;

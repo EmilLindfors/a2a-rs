@@ -42,7 +42,7 @@
 //! let client = Arc::new(WebA2AClient::new_http("http://localhost:8080".to_string()));
 //!
 //! let app = Router::new()
-//!     .route("/stream/:task_id", get(|
+//!     .route("/stream/{task_id}", get(|
 //!         State(client): State<Arc<WebA2AClient>>,
 //!         Path(task_id): Path<String>
 //!     | async move {
@@ -53,8 +53,15 @@
 //! # }
 //! ```
 
+// Gated to match the dependency it is built on. Without this the feature is
+// advertised as optional and is not: `streaming` imports `axum`, which
+// `axum-components` makes optional, so `default-features = false` failed to
+// compile rather than dropping the module. The view models below have no
+// framework dependency and are always available.
+#[cfg(feature = "axum-components")]
 pub mod streaming;
 pub mod task_viewer;
 
+#[cfg(feature = "axum-components")]
 pub use streaming::create_sse_stream;
 pub use task_viewer::{MessageView, TaskView};

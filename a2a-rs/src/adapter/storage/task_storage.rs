@@ -19,9 +19,9 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
-    A2AError, ContextId, ContextState, Conversation, Digest, Message, RetentionPolicy, Seq,
-    SequencedMessage, StateKey, StateScope, Swept, Task, TaskId, TaskPushNotificationConfig,
-    TaskState, TaskStateExt, VersionedTask,
+    A2AError, ContextId, ContextState, Conversation, Digest, Message, ReadRefresh, Remembered,
+    RetentionPolicy, Seq, SequencedMessage, StateKey, StateScope, Swept, Task, TaskId,
+    TaskPushNotificationConfig, TaskState, TaskStateExt, VersionedTask,
 };
 use crate::port::{
     AsyncContextStateStore, AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier,
@@ -91,6 +91,12 @@ pub struct InMemoryTaskStorage {
     /// idleness says whether it is stale. The SQL adapter reads the same thing
     /// as `MAX(updated_at)` over the principal's rows.
     pub(crate) principal_touched: Arc<Mutex<HashMap<String, DateTime<Utc>>>>,
+    /// Whether a read of a principal's `user:` bag refreshes `principal_touched`.
+    ///
+    /// [`ReadRefresh::never`] by default, which is the behaviour every other
+    /// timestamp here has: reads record nothing. The SQL adapter carries the
+    /// same value and applies it to the same bucket.
+    pub(crate) read_refresh: ReadRefresh,
     /// Hands out conversation sequence numbers. Shared across contexts, which is
     /// harmless: `Seq` only has to be monotonic *within* one.
     pub(crate) next_seq: Arc<AtomicU64>,
@@ -118,6 +124,7 @@ impl InMemoryTaskStorage {
             context_state: Arc::new(Mutex::new(HashMap::new())),
             context_touched: Arc::new(Mutex::new(HashMap::new())),
             principal_touched: Arc::new(Mutex::new(HashMap::new())),
+            read_refresh: ReadRefresh::never(),
             next_seq: Arc::new(AtomicU64::new(1)),
             push_notification_registry: Arc::new(push_registry),
         }
@@ -136,9 +143,22 @@ impl InMemoryTaskStorage {
             context_state: Arc::new(Mutex::new(HashMap::new())),
             context_touched: Arc::new(Mutex::new(HashMap::new())),
             principal_touched: Arc::new(Mutex::new(HashMap::new())),
+            read_refresh: ReadRefresh::never(),
             next_seq: Arc::new(AtomicU64::new(1)),
             push_notification_registry: Arc::new(push_registry),
         }
+    }
+
+    /// Let a read of a principal's `user:` bag count as keeping it alive.
+    ///
+    /// Off by default. See [`ReadRefresh`] for what it costs and why the window
+    /// is not a bool; pair it with the [`RetentionPolicy`] a sweep will run
+    /// under, which [`ReadRefresh::halfway_through`] does from the policy
+    /// itself.
+    #[must_use]
+    pub fn with_read_refresh(mut self, read_refresh: ReadRefresh) -> Self {
+        self.read_refresh = read_refresh;
+        self
     }
 
     /// Bump (or initialize) the stored version for a task, returning the new
@@ -206,6 +226,30 @@ impl InMemoryTaskStorage {
             .entry(principal.to_string())
             .and_modify(|at| *at = (*at).max(now))
             .or_insert(now);
+    }
+
+    /// Let this read count as keeping `principal`'s `user:` bag alive, if the
+    /// store was configured to and the bag is old enough to need it.
+    ///
+    /// The one place a read writes a timestamp, and it does so under a rule the
+    /// domain owns rather than one this adapter invented — see [`ReadRefresh`].
+    /// Bumps only an entry that exists: a principal that never wrote a `user:`
+    /// key has no bag to keep alive, and inserting one here would invent a
+    /// write that never happened.
+    ///
+    /// Takes `principal_touched` last, which is the order documented on
+    /// `conversations`.
+    async fn refresh_principal(&self, principal: &str) {
+        if self.read_refresh.after_window().is_none() {
+            return;
+        }
+        let now = Utc::now();
+        let mut touched = self.principal_touched.lock().await;
+        if let Some(at) = touched.get_mut(principal)
+            && self.read_refresh.due(*at, now)
+        {
+            *at = now;
+        }
     }
 
     /// Claim `context_id` for `caller` if nobody holds it, then refuse a caller
@@ -352,6 +396,11 @@ impl AsyncContextStateStore for InMemoryTaskStorage {
                 }
             }
         }
+        drop(state);
+
+        if let Some(caller) = caller {
+            self.refresh_principal(caller).await;
+        }
         Ok(loaded)
     }
 
@@ -361,30 +410,37 @@ impl AsyncContextStateStore for InMemoryTaskStorage {
         caller: Option<&str>,
         key: &StateKey,
         value: &str,
-    ) -> Result<(), A2AError> {
+    ) -> Result<Remembered, A2AError> {
         let context_id = context_id.as_str();
         self.claim_or_check_context(context_id, caller).await?;
 
         // `None` is `temp:`, which is stored nowhere.
         let Some(scope_key) = scope_key(key.scope(), context_id, caller, key)? else {
-            return Ok(());
+            return Ok(Remembered::NotStored);
         };
 
-        {
+        let previous = {
             let mut state = self.context_state.lock().await;
             state
                 .entry((key.scope(), scope_key.to_string()))
                 .or_default()
-                .insert(key.name().to_string(), value.to_string());
-        }
+                .insert(key.name().to_string(), value.to_string())
+        };
 
         // Which clock this write advances follows the scope, not the context it
         // was written from: a `user:` key outlives every context that touches it.
+        // Advanced even when the value did not move: a write reached the store,
+        // and idleness measures writes.
         match key.scope() {
             StateScope::User => self.touch_principal(scope_key).await,
             _ => self.touch_context(context_id).await,
         }
-        Ok(())
+
+        Ok(match previous {
+            None => Remembered::Stored,
+            Some(previous) if previous == value => Remembered::Unchanged,
+            Some(previous) => Remembered::Replaced { previous },
+        })
     }
 
     async fn forget(
@@ -898,6 +954,7 @@ impl Clone for InMemoryTaskStorage {
             context_state: self.context_state.clone(),
             context_touched: self.context_touched.clone(),
             principal_touched: self.principal_touched.clone(),
+            read_refresh: self.read_refresh,
             next_seq: self.next_seq.clone(),
             push_notification_registry: self.push_notification_registry.clone(),
         }
@@ -914,6 +971,119 @@ mod tests {
     }
     fn cid(s: &str) -> ContextId {
         s.parse().unwrap()
+    }
+
+    /// Ageing a bag needs a timestamp in the past, which no port lets a caller
+    /// write — so the half of `ReadRefresh` that says a read *saves* something
+    /// is asserted here, against `principal_touched` directly. The shared body
+    /// in `tests/context_state_test.rs` covers what a caller can reach.
+    async fn age_the_bag(store: &InMemoryTaskStorage, principal: &str, to: DateTime<Utc>) {
+        store
+            .principal_touched
+            .lock()
+            .await
+            .insert(principal.to_string(), to);
+    }
+
+    async fn bag_written_at(store: &InMemoryTaskStorage, principal: &str) -> DateTime<Utc> {
+        store.principal_touched.lock().await[principal]
+    }
+
+    #[tokio::test]
+    async fn a_read_refreshes_a_bag_that_is_old_enough() {
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        let store = InMemoryTaskStorage::new().with_read_refresh(ReadRefresh::after(day));
+        let context = cid("ctx-refresh");
+
+        store
+            .remember(
+                &context,
+                Some("alice"),
+                &StateKey::scoped(StateScope::User, "name").unwrap(),
+                "Emil",
+            )
+            .await
+            .unwrap();
+
+        let long_ago = Utc::now() - chrono::TimeDelta::days(7);
+        age_the_bag(&store, "alice", long_ago).await;
+
+        store.load_state(&context, Some("alice")).await.unwrap();
+
+        assert!(
+            bag_written_at(&store, "alice").await > long_ago,
+            "a read of a week-old bag should have refreshed it"
+        );
+    }
+
+    /// The bound the design claims: however often it is read, a bag is written
+    /// at most once per window. A second read straight after the first finds it
+    /// fresh and leaves it alone.
+    #[tokio::test]
+    async fn a_second_read_inside_the_window_writes_nothing() {
+        let day = std::time::Duration::from_secs(24 * 60 * 60);
+        let store = InMemoryTaskStorage::new().with_read_refresh(ReadRefresh::after(day));
+        let context = cid("ctx-refresh-twice");
+
+        store
+            .remember(
+                &context,
+                Some("alice"),
+                &StateKey::scoped(StateScope::User, "name").unwrap(),
+                "Emil",
+            )
+            .await
+            .unwrap();
+        age_the_bag(&store, "alice", Utc::now() - chrono::TimeDelta::days(7)).await;
+
+        store.load_state(&context, Some("alice")).await.unwrap();
+        let after_first = bag_written_at(&store, "alice").await;
+        store.load_state(&context, Some("alice")).await.unwrap();
+
+        assert_eq!(
+            bag_written_at(&store, "alice").await,
+            after_first,
+            "the bag was already fresh, so the second read wrote nothing"
+        );
+    }
+
+    /// The default, from the inside: a week-old bag stays week-old however
+    /// often it is read.
+    #[tokio::test]
+    async fn without_a_refresh_a_read_writes_nothing() {
+        let store = InMemoryTaskStorage::new();
+        let context = cid("ctx-no-refresh");
+
+        store
+            .remember(
+                &context,
+                Some("alice"),
+                &StateKey::scoped(StateScope::User, "name").unwrap(),
+                "Emil",
+            )
+            .await
+            .unwrap();
+        let long_ago = Utc::now() - chrono::TimeDelta::days(7);
+        age_the_bag(&store, "alice", long_ago).await;
+
+        store.load_state(&context, Some("alice")).await.unwrap();
+
+        assert_eq!(bag_written_at(&store, "alice").await, long_ago);
+    }
+
+    /// A principal that never wrote a `user:` key has no bag, and a refresh
+    /// must not invent one — an entry here is a claim that a write happened.
+    #[tokio::test]
+    async fn a_refresh_does_not_invent_a_bag_that_was_never_written() {
+        let store = InMemoryTaskStorage::new()
+            .with_read_refresh(ReadRefresh::after(std::time::Duration::ZERO));
+
+        store
+            .load_state(&cid("ctx-empty"), Some("alice"))
+            .await
+            .unwrap();
+
+        assert!(store.principal_touched.lock().await.is_empty());
     }
 
     fn said(text: &str) -> Message {

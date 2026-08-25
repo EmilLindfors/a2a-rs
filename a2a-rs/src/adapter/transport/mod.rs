@@ -22,6 +22,10 @@ pub mod jsonrpc_wire;
 /// Client-side transport negotiation from an agent card.
 #[cfg(feature = "client")]
 pub mod negotiation;
+/// Wire details of the streaming-resumption enhancement, shared by the
+/// transports that implement it.
+#[cfg(any(feature = "server", feature = "http-client"))]
+mod resume;
 /// Resilient streaming: reconnect-with-backoff over the `Transport` port.
 #[cfg(feature = "client")]
 pub mod retry;

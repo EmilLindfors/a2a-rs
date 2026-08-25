@@ -97,6 +97,90 @@ impl RetentionPolicy {
     }
 }
 
+/// Whether reading a principal's `user:` state counts as keeping it alive.
+///
+/// [`RetentionPolicy`] measures idleness from writes alone, which is what keeps
+/// a read from costing one. The cost of that rule is a `user:` fact the model
+/// reads on every turn and rewrites never: it expires under the agent, and the
+/// agent forgets something it was using.
+///
+/// This buys the fact back without paying a write per turn. A read refreshes
+/// the bag only once it is already `after` old, so the extra writes are bounded
+/// at one per principal per window however often it is read — which is the
+/// whole reason there is a window here rather than a bool.
+///
+/// Off by default, so a store that is not told otherwise behaves exactly as it
+/// did: a read records nothing. It lives here rather than in either adapter for
+/// the reason the policy does — two stores deciding separately what keeps a bag
+/// alive would be two retention rules wearing one name.
+///
+/// The unit is the principal, matching
+/// [`RetentionPolicy::delete_user_state_idle_for`]. Contexts need none of this:
+/// one that is in use is written to by its own task history, so its idleness
+/// maintains itself.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ReadRefresh {
+    after: Option<Duration>,
+}
+
+impl ReadRefresh {
+    /// The default: a read records nothing.
+    pub const fn never() -> Self {
+        Self { after: None }
+    }
+
+    /// Refresh a principal's `user:` bag when a read finds it `after` old.
+    ///
+    /// Shorter than the policy's `user:` window, or the bag expires between the
+    /// refresh and the sweep and the knob buys nothing.
+    /// [`halfway_through`](Self::halfway_through) picks such a value from the
+    /// policy rather than leaving the two numbers to be kept in step by hand.
+    #[must_use]
+    pub const fn after(after: Duration) -> Self {
+        Self { after: Some(after) }
+    }
+
+    /// Refresh once a bag is halfway to the cutoff `policy` would sweep it at.
+    ///
+    /// The wiring worth having: an operator names one window — the one they
+    /// were going to name anyway — and a read-kept bag is refreshed with half
+    /// the window still to spare. A policy that never sweeps `user:` state
+    /// gives [`never`](Self::never), since there is nothing to keep it ahead of.
+    pub fn halfway_through(policy: &RetentionPolicy) -> Self {
+        Self {
+            after: policy.idle_user_state_after().map(|window| window / 2),
+        }
+    }
+
+    /// How old a bag must be before a read refreshes it, if ever.
+    pub const fn after_window(&self) -> Option<Duration> {
+        self.after
+    }
+
+    /// The instant a bag must have been written after to need no refresh at
+    /// `now`, or `None` when reads refresh nothing.
+    ///
+    /// What a store binds into a conditional update. Shares the policy's
+    /// arithmetic, including that a window too long to subtract reads as
+    /// "nothing to do" rather than refreshing everything.
+    pub fn cutoff(&self, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
+        cutoff(self.after, now)
+    }
+
+    /// Whether a bag last written at `last_write` is due a refresh at `now`.
+    ///
+    /// The same question [`cutoff`](Self::cutoff) asks, for a store that
+    /// already holds the timestamp and has nothing to bind it into.
+    ///
+    /// Inclusive at the boundary where a sweep's is exclusive, and the
+    /// asymmetry is deliberate: a sweep deletes, so a bag exactly at its cutoff
+    /// is kept; a refresh writes, so one exactly at this cutoff is refreshed.
+    /// Erring early costs a write nobody notices, erring late costs the bag.
+    pub fn due(&self, last_write: DateTime<Utc>, now: DateTime<Utc>) -> bool {
+        self.cutoff(now).is_some_and(|cutoff| last_write <= cutoff)
+    }
+}
+
 /// `now - window`, or `None` if there is no window or the result is not a
 /// representable instant.
 fn cutoff(window: Option<Duration>, now: DateTime<Utc>) -> Option<DateTime<Utc>> {
@@ -115,8 +199,8 @@ pub struct Swept {
     /// Contexts swept whole, counting one per context id — including a context
     /// that only ever held tasks and so had no row of its own.
     pub contexts: u64,
-    /// Tasks deleted with their contexts. Their push-notification configs go
-    /// with them and are not counted separately.
+    /// Tasks deleted with their contexts. Their push-notification configs and
+    /// stream events go with them and are not counted separately.
     pub tasks: u64,
     /// Conversation messages deleted with their contexts.
     pub messages: u64,
@@ -153,6 +237,7 @@ impl std::ops::AddAssign for Swept {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeDelta;
 
     #[test]
     fn the_default_policy_deletes_nothing() {
@@ -198,6 +283,72 @@ mod tests {
             DateTime::<Utc>::from_timestamp(1_700_000_000 - 86_400, 0)
         );
         assert_eq!(policy.user_state_cutoff(now), None);
+    }
+
+    #[test]
+    fn a_read_refreshes_nothing_by_default() {
+        let refresh = ReadRefresh::default();
+        assert_eq!(refresh, ReadRefresh::never());
+        assert_eq!(refresh.after_window(), None);
+
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let ancient = DateTime::<Utc>::from_timestamp(0, 0).unwrap();
+        assert_eq!(refresh.cutoff(now), None);
+        assert!(
+            !refresh.due(ancient, now),
+            "nothing is old enough when nothing is refreshed"
+        );
+    }
+
+    #[test]
+    fn a_bag_is_due_only_once_it_is_older_than_the_window() {
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let day = Duration::from_secs(24 * 60 * 60);
+        let refresh = ReadRefresh::after(day);
+
+        let cutoff = refresh.cutoff(now).unwrap();
+        assert_eq!(
+            cutoff,
+            DateTime::<Utc>::from_timestamp(1_700_000_000 - 86_400, 0).unwrap()
+        );
+
+        assert!(refresh.due(cutoff - TimeDelta::seconds(1), now));
+        assert!(refresh.due(cutoff, now), "the boundary refreshes");
+        assert!(
+            !refresh.due(cutoff + TimeDelta::seconds(1), now),
+            "a bag written since the cutoff is still fresh"
+        );
+    }
+
+    /// One number, not two that have to be kept in a fixed relation.
+    #[test]
+    fn the_refresh_window_is_half_the_policys() {
+        let week = Duration::from_secs(7 * 24 * 60 * 60);
+        let policy = RetentionPolicy::keep_everything().delete_user_state_idle_for(week);
+
+        assert_eq!(
+            ReadRefresh::halfway_through(&policy).after_window(),
+            Some(week / 2)
+        );
+        // Nothing to stay ahead of, so nothing to refresh.
+        assert_eq!(
+            ReadRefresh::halfway_through(&RetentionPolicy::keep_everything()),
+            ReadRefresh::never()
+        );
+        // A policy that only sweeps contexts says nothing about a `user:` bag.
+        let contexts_only = RetentionPolicy::keep_everything().delete_contexts_idle_for(week);
+        assert_eq!(
+            ReadRefresh::halfway_through(&contexts_only),
+            ReadRefresh::never()
+        );
+    }
+
+    /// The same edge the policy has, answered the same way: a window that
+    /// cannot be subtracted refreshes nothing rather than everything.
+    #[test]
+    fn an_unrepresentable_refresh_window_refreshes_nothing() {
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        assert_eq!(ReadRefresh::after(Duration::MAX).cutoff(now), None);
     }
 
     /// A window longer than the calendar expires nothing rather than panicking

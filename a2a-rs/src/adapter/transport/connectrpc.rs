@@ -39,6 +39,34 @@ use crate::{
     services::server::AgentInfoProvider,
 };
 
+use super::resume;
+
+/// Tag each event in `stream` with its id, for a client that asked for one, and
+/// map it onto the wire.
+///
+/// Both streaming methods carry ids the same way. See [`resume`] for why the id
+/// travels in the payload's metadata here and in the SSE `id:` field elsewhere.
+// As on the handlers themselves: `ConnectError` is the wire error type, and its
+// size is not ours to change.
+#[allow(clippy::result_large_err)]
+fn wire_stream(
+    stream: crate::application::UpdateStream,
+    stamp_ids: bool,
+) -> impl ::futures::Stream<Item = Result<StreamResponse, ::connectrpc::ConnectError>> + Send {
+    use futures::StreamExt;
+
+    stream.map(move |item| {
+        item.map(|seq| {
+            let mut event = seq.event;
+            if stamp_ids {
+                resume::stamp_event_id(&mut event, seq.id);
+            }
+            map_update_event(event)
+        })
+        .map_err(map_err)
+    })
+}
+
 /// ConnectRPC transport adapter over a [`TaskService`].
 ///
 /// Holds no ports directly — it owns the inner application service and forwards
@@ -278,6 +306,7 @@ impl A2aService for ConnectRpcAdapter {
         let config = req.configuration.into_option();
 
         let request_ctx = request_context(&ctx, &message.context_id);
+        let stamp_ids = resume::wants_event_ids(&ctx.headers);
 
         // `completion` is deliberately dropped here rather than passed along:
         // on a streaming call the stream itself is the wait, so blocking the
@@ -298,11 +327,10 @@ impl A2aService for ConnectRpcAdapter {
             ..Default::default()
         };
 
-        let mapped_stream =
-            update_stream.map(|item| item.map(|seq| map_update_event(seq.event)).map_err(map_err));
-
-        let chained_stream =
-            futures::stream::once(async { Ok(initial_response) }).chain(mapped_stream);
+        // The snapshot carries no id — there is nothing to resume from before
+        // the first update, same as the SSE transports.
+        let chained_stream = futures::stream::once(async { Ok(initial_response) })
+            .chain(wire_stream(update_stream, stamp_ids));
 
         Ok((Box::pin(chained_stream), ctx))
     }
@@ -373,17 +401,18 @@ impl A2aService for ConnectRpcAdapter {
         ::connectrpc::ConnectError,
     > {
         let req = request.to_owned_message();
+        let from_event_id = resume::parse_last_event_id(&ctx.headers);
+        let stamp_ids = resume::wants_event_ids(&ctx.headers);
 
         let (initial_task, update_stream) = self
             .service
-            .subscribe(&req.id, None)
+            .subscribe(&req.id, from_event_id)
             .await
             .map_err(map_err)?;
 
         use futures::StreamExt;
 
-        let mapped_stream =
-            update_stream.map(|item| item.map(|seq| map_update_event(seq.event)).map_err(map_err));
+        let mapped_stream = wire_stream(update_stream, stamp_ids);
 
         if let Some(task) = initial_task {
             let initial_response = StreamResponse {

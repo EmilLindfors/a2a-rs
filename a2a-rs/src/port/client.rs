@@ -107,10 +107,10 @@ pub trait Transport: Send + Sync {
     ///
     /// `last_event_id = Some(..)` opts into the a2a-rs **`Last-Event-ID`
     /// resumption enhancement** (not part of the A2A v1.0 spec): a resumable
-    /// transport sends it as the SSE `Last-Event-ID` header so an a2a-rs server
-    /// replays the events after that id before streaming live. A spec-compliant
-    /// server ignores the header and simply streams from current state, so this
-    /// stays interoperable either way.
+    /// transport sends it as the `Last-Event-ID` request header so an a2a-rs
+    /// server replays the events after that id before streaming live. A
+    /// spec-compliant server ignores the header and simply streams from current
+    /// state, so this stays interoperable either way.
     async fn subscribe_to_task(
         &self,
         task_id: &str,
@@ -128,9 +128,10 @@ pub trait Transport: Send + Sync {
 /// read `item` are unaffected.
 #[derive(Debug, Clone)]
 pub struct StreamEvent {
-    /// The server-assigned per-task event id, parsed from the SSE `id:` field.
-    /// `None` for the initial task snapshot, for transports without event ids,
-    /// or when talking to a spec-compliant server that does not emit `id:`.
+    /// The server-assigned per-task event id: the SSE `id:` field on the
+    /// JSON-RPC and REST transports, a namespaced metadata key on ConnectRPC,
+    /// which has no protocol-level field for it. `None` for the initial task
+    /// snapshot and for a spec-compliant server, which sends neither.
     pub event_id: Option<u64>,
     /// The update payload.
     pub item: StreamItem,

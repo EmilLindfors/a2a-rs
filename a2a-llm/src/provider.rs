@@ -15,7 +15,8 @@
 //!
 //! Selection performs no I/O, so `korps doctor` can run the same code as startup
 //! to decide what startup will do. The only output is a warning when a
-//! configured `reasoning` cannot reach the provider's wire.
+//! configured `reasoning` has no field to go in on the selected provider — the
+//! cases the model decides are the provider's to report, and only at run time.
 //!
 //! Settings are expressed with this crate's own [`LlmSettings`] type rather than
 //! a host's config struct so the helper takes no dependency on `korps`
@@ -25,8 +26,11 @@ use std::sync::Arc;
 
 use super::{
     Env, LlmProvider, Reasoning,
-    gemini::{GEMINI_BASE_URL, GEMINI_DEFAULT_MODEL, GeminiConfig, GeminiProvider},
-    openai::{OPENAI_BASE_URL, OPENROUTER_DEFAULT_MODEL, OpenAiConfig, OpenAiProvider},
+    gemini::{GEMINI_BASE_URL, GeminiConfig, GeminiProvider},
+    openai::{
+        OPENAI_BASE_URL, OPENROUTER_DEFAULT_MODEL, OpenAiConfig, OpenAiProvider, ReasoningDialect,
+        reasoning_effort,
+    },
 };
 
 /// Provider-agnostic LLM settings sourced from a host's configuration
@@ -50,8 +54,13 @@ pub struct LlmSettings {
     pub x_title: Option<String>,
     /// What to ask this model to do with its thinking, for every request that
     /// doesn't ask for its own. `None` leaves the model's default alone.
-    /// OpenRouter only today; elsewhere it is dropped, and the resulting
-    /// [`SelectedLlm::reasoning`] says so as [`ReasoningPlan::Unsupported`].
+    ///
+    /// Every provider carries it now, in its own dialect. What differs is when
+    /// the answer is known: OpenRouter takes any of it
+    /// ([`ReasoningPlan::Sent`]), OpenAI has no field for a token budget
+    /// ([`ReasoningPlan::Unsupported`]), and elsewhere it is the model that
+    /// accepts or refuses, which only the first call finds out
+    /// ([`ReasoningPlan::Attempted`]).
     pub reasoning: Option<Reasoning>,
     /// Whether the endpoint accepts `stream_options.include_usage`, which is
     /// what makes a *streaming* response report what it cost.
@@ -172,7 +181,17 @@ pub enum ReasoningPlan {
     Unset,
     /// Configured, and this provider puts it on the wire.
     Sent(Reasoning),
-    /// Configured, and this provider has no field that carries it. Dropped.
+    /// Configured, and this provider sends it — but whether the *model* accepts
+    /// it is not known until the first call.
+    ///
+    /// OpenAI's `reasoning_effort` and Gemini's `thinkingConfig` are refused by
+    /// the models that do not reason, and which models those are changes with
+    /// every release. So the parameter is sent, a refusal is recognized from the
+    /// 400, and the request is retried without it — meaning this setting may
+    /// still end up dropped, and only the run knows.
+    Attempted(Reasoning),
+    /// Configured, and this provider has no field that carries it. Dropped
+    /// before any request is made.
     Unsupported(Reasoning),
 }
 
@@ -182,16 +201,22 @@ impl ReasoningPlan {
         reasoning.map_or(Self::Unset, Self::Sent)
     }
 
+    /// The plan for a provider that sends it and finds out from the model.
+    pub fn attempted(reasoning: Option<Reasoning>) -> Self {
+        reasoning.map_or(Self::Unset, Self::Attempted)
+    }
+
     /// The plan for a provider with no reasoning field.
     pub fn dropped(reasoning: Option<Reasoning>) -> Self {
         reasoning.map_or(Self::Unset, Self::Unsupported)
     }
 
-    /// What reaches the wire, if anything. A dropped setting reads as nothing
-    /// here, because nothing is what gets sent.
+    /// What reaches the wire, if anything. A setting dropped before the request
+    /// reads as nothing here, because nothing is what gets sent; an attempted
+    /// one reads as sent, because it is on the first request.
     pub fn sent(self) -> Option<Reasoning> {
         match self {
-            Self::Sent(reasoning) => Some(reasoning),
+            Self::Sent(reasoning) | Self::Attempted(reasoning) => Some(reasoning),
             Self::Unset | Self::Unsupported(_) => None,
         }
     }
@@ -200,15 +225,28 @@ impl ReasoningPlan {
     pub fn requested(self) -> Option<Reasoning> {
         match self {
             Self::Unset => None,
-            Self::Sent(reasoning) | Self::Unsupported(reasoning) => Some(reasoning),
+            Self::Sent(reasoning) | Self::Attempted(reasoning) | Self::Unsupported(reasoning) => {
+                Some(reasoning)
+            }
         }
     }
 
-    /// What this provider was asked for and will not send.
+    /// What this provider was asked for and will not send. Only the settings
+    /// answered before a request is made — see [`Self::attempted`] for the ones
+    /// the model gets the last word on.
     pub fn unsupported(self) -> Option<Reasoning> {
         match self {
             Self::Unsupported(reasoning) => Some(reasoning),
-            Self::Unset | Self::Sent(_) => None,
+            Self::Unset | Self::Sent(_) | Self::Attempted(_) => None,
+        }
+    }
+
+    /// What this provider will send and may still have refused. `None` when the
+    /// answer is already known either way.
+    pub fn attempting(self) -> Option<Reasoning> {
+        match self {
+            Self::Attempted(reasoning) => Some(reasoning),
+            Self::Unset | Self::Sent(_) | Self::Unsupported(_) => None,
         }
     }
 }
@@ -218,6 +256,7 @@ impl std::fmt::Display for ReasoningPlan {
         match self {
             Self::Unset => f.write_str("(model default)"),
             Self::Sent(reasoning) => write!(f, "{reasoning}"),
+            Self::Attempted(reasoning) => write!(f, "{reasoning} (if the model takes it)"),
             Self::Unsupported(reasoning) => write!(f, "{reasoning} (dropped)"),
         }
     }
@@ -315,19 +354,19 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
     Ok(None)
 }
 
-/// Warn when a configured [`LlmSettings::reasoning`] cannot reach the wire.
+/// Warn that a configured token budget has nowhere to go on OpenAI.
 ///
-/// Reasoning tokens are billed, so a provider that drops the setting says so at
-/// startup rather than leaving the caller to infer it from the bill. `korps run`
-/// has only this log line; a report reads [`SelectedLlm::reasoning`] instead.
-fn warn_unsupported_reasoning(settings: &LlmSettings) {
-    if let Some(reasoning) = settings.reasoning {
-        tracing::warn!(
-            provider = %settings.provider,
-            %reasoning,
-            "`reasoning` is only sent to the openrouter provider today; ignoring it"
-        );
-    }
+/// The one reasoning drop selection can still report: every other case is the
+/// model's answer, given at run time. Reasoning tokens are billed, so this says
+/// it at startup rather than leaving the caller to infer it from the bill.
+/// `korps run` has only this log line; a report reads
+/// [`SelectedLlm::reasoning`] instead.
+fn warn_budget_has_no_openai_field(reasoning: Reasoning) {
+    tracing::warn!(
+        provider = "openai",
+        %reasoning,
+        "the OpenAI chat-completions API has no field for a reasoning token budget; ignoring it"
+    );
 }
 
 /// Build a provider from explicit [`LlmSettings`].
@@ -392,7 +431,6 @@ fn build_from_settings(
             })
         }
         "openai" => {
-            warn_unsupported_reasoning(settings);
             // No key is a valid OpenAI-compatible setup (a local Ollama), so
             // there is nothing to require here — and nothing to report either.
             let model = or_env(&settings.model, env, &["OPENAI_MODEL", "AI_MODEL"])
@@ -414,38 +452,64 @@ fn build_from_settings(
                 model: model.clone(),
                 api_key: or_env(&settings.api_key, env, &["OPENAI_API_KEY", "AI_API_KEY"]),
                 extra_headers: Vec::new(),
-                supports_reasoning: false,
-                reasoning: None,
+                reasoning_dialect: ReasoningDialect::OpenAi,
+                reasoning: settings.reasoning,
+            };
+            // A token budget has no `reasoning_effort` to go in, so that one is
+            // answered here; a level is the model's to accept or refuse.
+            let plan = match settings.reasoning {
+                Some(reasoning) if reasoning_effort(reasoning).is_none() => {
+                    warn_budget_has_no_openai_field(reasoning);
+                    ReasoningPlan::Unsupported(reasoning)
+                }
+                reasoning => ReasoningPlan::attempted(reasoning),
             };
             Ok(SelectedLlm {
                 kind: "openai",
                 model,
                 selected_by: SELECTED_BY_CONFIG,
-                reasoning: ReasoningPlan::dropped(settings.reasoning),
+                reasoning: plan,
                 provider: Arc::new(OpenAiProvider::new(config)),
             })
         }
         "gemini" => {
-            warn_unsupported_reasoning(settings);
-            let model = or_env(&settings.model, env, &["GEMINI_MODEL"])
-                .unwrap_or_else(|| GEMINI_DEFAULT_MODEL.to_string());
+            // The key first, so a config supplying neither reports the
+            // credential rather than the model: without a key nothing about
+            // this provider is reachable, and naming the model would send a
+            // caller to fix the second thing wrong with it.
+            let api_key = or_env(&settings.api_key, env, &["GEMINI_API_KEY"]).ok_or_else(|| {
+                LlmConfigError::unusable(
+                    "gemini",
+                    SELECTED_BY_CONFIG,
+                    "no `api_key` in the config and GEMINI_API_KEY is not set",
+                )
+            })?;
+            // The one provider with no default model, for the reason
+            // `gemini.rs` gives: the default it used to carry named a model
+            // Google stopped listing, and a stale default is invisible in a way
+            // a missing one is not. `openai` and `openrouter` keep theirs,
+            // which still name models their vendors list.
+            let model = or_env(&settings.model, env, &["GEMINI_MODEL"]).ok_or_else(|| {
+                LlmConfigError::unusable(
+                    "gemini",
+                    SELECTED_BY_CONFIG,
+                    "no `model` in the config and GEMINI_MODEL is not set",
+                )
+            })?;
             let config = GeminiConfig {
                 base_url: or_env(&settings.base_url, env, &["GEMINI_API_BASE_URL"])
                     .unwrap_or_else(|| GEMINI_BASE_URL.to_string()),
-                api_key: or_env(&settings.api_key, env, &["GEMINI_API_KEY"]).ok_or_else(|| {
-                    LlmConfigError::unusable(
-                        "gemini",
-                        SELECTED_BY_CONFIG,
-                        "no `api_key` in the config and GEMINI_API_KEY is not set",
-                    )
-                })?,
+                api_key,
                 model: model.clone(),
+                reasoning: settings.reasoning,
             };
             Ok(SelectedLlm {
                 kind: "gemini",
                 model,
                 selected_by: SELECTED_BY_CONFIG,
-                reasoning: ReasoningPlan::dropped(settings.reasoning),
+                // Every `Reasoning` has a `thinkingConfig` spelling, so nothing
+                // is dropped here — the model decides.
+                reasoning: ReasoningPlan::attempted(settings.reasoning),
                 provider: Arc::new(GeminiProvider::new(config)),
             })
         }
@@ -595,6 +659,48 @@ mod tests {
         assert!(error.to_string().contains("GEMINI_API_KEY"), "{error}");
     }
 
+    /// Gemini is the one provider that names no default model. The default it
+    /// used to carry was `gemini-1.5-pro`, which Google stopped listing while
+    /// every config that omitted a model went on running it — so the absence
+    /// has to be an error a caller sees, not a value this crate invents. Both
+    /// entry points have to agree, since a config and a bare environment reach
+    /// the provider by different code.
+    #[test]
+    fn gemini_names_no_default_model() {
+        let settings = LlmSettings {
+            provider: "gemini".to_string(),
+            api_key: Some("gemini-key".to_string()),
+            ..Default::default()
+        };
+        let error = build_from_settings(&settings, Env::new(&env_of(&[])))
+            .expect_err("a key without a model cannot pick one");
+        assert!(error.to_string().contains("GEMINI_MODEL"), "{error}");
+
+        // The environment supplies it just as the config would.
+        let selected = build_from_settings(
+            &settings,
+            Env::new(&env_of(&[("GEMINI_MODEL", "gemini-2.5-pro")])),
+        )
+        .expect("the env names the model");
+        assert_eq!(selected.model, "gemini-2.5-pro");
+
+        // Selection from a bare environment is the other path in, and a key on
+        // its own is enough to *choose* gemini — so it must fail here too
+        // rather than fall through to another provider or a made-up model.
+        let error = select_from_env(Env::new(&env_of(&[("GEMINI_API_KEY", "gemini-key")])))
+            .expect_err("a key selects gemini, which then has no model");
+        assert!(error.to_string().contains("GEMINI_MODEL"), "{error}");
+
+        let selected = select_from_env(Env::new(&env_of(&[
+            ("GEMINI_API_KEY", "gemini-key"),
+            ("GEMINI_MODEL", "gemini-2.5-pro"),
+        ])))
+        .unwrap()
+        .expect("both halves present");
+        assert_eq!(selected.kind, "gemini");
+        assert_eq!(selected.model, "gemini-2.5-pro");
+    }
+
     #[test]
     fn the_config_wins_over_the_environment() {
         let settings = LlmSettings {
@@ -617,32 +723,65 @@ mod tests {
         );
     }
 
-    /// A provider with no reasoning field reports what it discarded. This used
-    /// to resolve to the same `None` as "nobody asked", so `korps doctor` could
-    /// only repeat which variables were set and the setting was found out about
-    /// on the bill.
+    /// A level reaches every provider now, but only OpenRouter's answer is known
+    /// before the call: the other two send it and find out from the model.
     #[test]
-    fn a_provider_that_cannot_send_reasoning_reports_what_it_dropped() {
-        for provider in ["openai", "gemini"] {
+    fn a_level_is_carried_by_openrouter_and_attempted_elsewhere() {
+        let plan_for = |provider: &str| {
             let settings = LlmSettings {
                 provider: provider.to_string(),
                 api_key: Some("key".to_string()),
+                // Named because `gemini` has no default to fall back on; the
+                // subject here is the plan, not where the model came from.
+                model: Some("a-model".to_string()),
                 reasoning: Some(Reasoning::Effort(ReasoningEffort::High)),
                 ..Default::default()
             };
-            let selected = build_from_settings(&settings, Env::new(&env_of(&[]))).unwrap();
-            assert_eq!(
-                selected.reasoning,
-                ReasoningPlan::Unsupported(Reasoning::Effort(ReasoningEffort::High)),
-                "for {provider}"
-            );
-            assert_eq!(selected.reasoning.sent(), None, "for {provider}");
-            assert_eq!(
-                selected.reasoning.requested(),
-                Some(Reasoning::Effort(ReasoningEffort::High)),
-                "for {provider}"
-            );
+            build_from_settings(&settings, Env::new(&env_of(&[])))
+                .unwrap()
+                .reasoning
+        };
+
+        let high = Reasoning::Effort(ReasoningEffort::High);
+        assert_eq!(plan_for("openrouter"), ReasoningPlan::Sent(high));
+        for provider in ["openai", "gemini"] {
+            let plan = plan_for(provider);
+            assert_eq!(plan, ReasoningPlan::Attempted(high), "for {provider}");
+            // On the wire on the first call, so `sent` says so; and not a drop,
+            // so `korps doctor` does not warn about a setting that may well work.
+            assert_eq!(plan.sent(), Some(high), "for {provider}");
+            assert_eq!(plan.unsupported(), None, "for {provider}");
+            assert_eq!(plan.attempting(), Some(high), "for {provider}");
         }
+    }
+
+    /// A token budget is the one setting answered without asking a model:
+    /// `reasoning_effort` has no field for it, so `korps doctor` can still warn
+    /// before a request is billed. Gemini has `thinkingBudget` and takes it.
+    #[test]
+    fn a_token_budget_is_a_drop_on_openai_and_carried_on_gemini() {
+        let plan_for = |provider: &str| {
+            let settings = LlmSettings {
+                provider: provider.to_string(),
+                api_key: Some("key".to_string()),
+                model: Some("a-model".to_string()),
+                reasoning: Some(Reasoning::Budget(2000)),
+                ..Default::default()
+            };
+            build_from_settings(&settings, Env::new(&env_of(&[])))
+                .unwrap()
+                .reasoning
+        };
+
+        let openai = plan_for("openai");
+        assert_eq!(openai, ReasoningPlan::Unsupported(Reasoning::Budget(2000)));
+        assert_eq!(openai.sent(), None);
+        assert_eq!(openai.requested(), Some(Reasoning::Budget(2000)));
+
+        assert_eq!(
+            plan_for("gemini"),
+            ReasoningPlan::Attempted(Reasoning::Budget(2000))
+        );
     }
 
     /// Nothing configured stays nothing. A plan that reported a drop here would
@@ -653,6 +792,7 @@ mod tests {
             let settings = LlmSettings {
                 provider: provider.to_string(),
                 api_key: Some("key".to_string()),
+                model: Some("a-model".to_string()),
                 ..Default::default()
             };
             let selected = build_from_settings(&settings, Env::new(&env_of(&[]))).unwrap();

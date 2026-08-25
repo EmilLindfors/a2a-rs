@@ -51,9 +51,9 @@ pub use business::SimpleAgentInfo;
 #[cfg(feature = "server")]
 pub use business::{NoopPushNotificationSender, PushNotificationRegistry, PushNotificationSender};
 #[cfg(feature = "server")]
-pub use storage::InMemoryTaskStorage;
+pub use storage::{InMemoryEventLog, InMemoryTaskStorage};
 #[cfg(feature = "server")]
-pub use streaming::InMemoryStreamingHandler;
+pub use streaming::{InMemoryStreamingHandler, StreamingFanout};
 #[cfg(feature = "server")]
 pub use transport::connectrpc::ConnectRpcAdapter;
 #[cfg(feature = "server")]

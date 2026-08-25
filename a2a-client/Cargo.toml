@@ -22,8 +22,10 @@ buffa = { version = "0.3.0", features = ["json"] }
 # Async runtime
 tokio = { workspace = true, features = ["time"] }
 
-# Web framework
-axum = { version = "0.7", optional = true }
+# Web framework. 0.8 matches `a2a-rs` and `a2a-cli`; this crate was the last
+# 0.7 in the workspace, and its version reached every dependent that wanted the
+# SSE helper.
+axum = { version = "0.8", optional = true }
 
 # Serialization
 serde = { workspace = true }
@@ -38,7 +40,6 @@ tracing = { workspace = true }
 
 # Async streams
 futures = { workspace = true }
-async-stream = { version = "0.3", optional = true }
 
 # UUID generation
 uuid = { workspace = true }
@@ -50,10 +51,12 @@ rustdoc-args = ["--cfg", "docsrs"]
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
 wiremock = "0.6"
-axum = "0.7"
+axum = "0.8"
 futures-util = "0.3"
 async-trait = { workspace = true }
 
 [features]
 default = ["axum-components"]
-axum-components = ["dep:axum", "dep:async-stream"]
+# `async-stream` used to be listed here and is not imported anywhere in the
+# crate; dropped rather than carried.
+axum-components = ["dep:axum"]

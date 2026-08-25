@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index_handler))
         .route("/send", post(send_message_handler))
-        .route("/stream/:task_id", get(stream_handler))
+        .route("/stream/{task_id}", get(stream_handler))
         .with_state(client);
 
     // Start the server

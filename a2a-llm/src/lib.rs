@@ -138,6 +138,52 @@ pub(crate) fn classify_api_error(message: String) -> LlmError {
     LlmError::ApiError(message)
 }
 
+/// Whether the model behind an endpoint accepts the reasoning parameter its
+/// adapter sends.
+///
+/// Support turns on the *model*, not the provider: `reasoning_effort` is a 400
+/// on `gpt-4o-mini` and mandatory on `gpt-5-pro`, and Gemini's `thinkingLevel`
+/// is accepted by some 2.5-generation models and refused by others. A table of
+/// model names answers that for the models it lists and goes stale with every
+/// release, so the parameter is sent instead, the refusal is read back off the
+/// 400, and the request is retried once without it.
+///
+/// The answer is remembered here, so only the first refused call of a process
+/// pays the extra round trip — and only once the retry has confirmed it, since a
+/// 400 that names the field can still be about something else. Shared across
+/// clones of a provider, since a provider is cloned per handler and they all
+/// call the same model.
+#[derive(Clone, Default)]
+pub(crate) struct ReasoningSupport(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl ReasoningSupport {
+    /// Whether a refusal has already been seen. Nothing is sent after one.
+    pub(crate) fn refused(&self) -> bool {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Remember that this endpoint refused the parameter. `Relaxed` because a
+    /// racing caller re-sending once is the cost of being wrong.
+    pub(crate) fn record_refusal(&self) {
+        self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Whether a failed request is the endpoint refusing the reasoning parameter,
+/// rather than the request failing on its own merits.
+///
+/// Both providers answer 400 and name the field: OpenAI with
+/// `Unsupported parameter: 'reasoning_effort' is not supported with this model`,
+/// Gemini with `Unknown name "thinkingLevel": Cannot find field`. A refused
+/// *value* reads the same way (`Invalid value: 'none'. Supported values are …`)
+/// and wants the same recovery, so the test is the field name rather than the
+/// prose. `field` is the one word every such message contains — `reasoning`,
+/// `thinking` — which is specific enough because this is only asked when that
+/// field was actually sent.
+pub(crate) fn refuses_reasoning(status: u16, body: &str, field: &str) -> bool {
+    status == 400 && body.to_lowercase().contains(field)
+}
+
 /// Tokens a provider reported for one request.
 ///
 /// Reported rather than estimated: a caller's own token estimate decides what to
@@ -532,6 +578,64 @@ mod error_tests {
                 "should stay an API error: {body}"
             );
         }
+    }
+
+    /// The recovery turns on recognizing this one failure, so it is checked
+    /// against the bodies the two APIs actually answer with — an unsupported
+    /// parameter, an unknown field, and a value the model does not offer, which
+    /// wants the same retry as the other two.
+    #[test]
+    fn a_refused_reasoning_parameter_is_recognized_from_the_body() {
+        let openai = [
+            r#"{"error":{"message":"Unsupported parameter: 'reasoning_effort' is not supported with this model.","type":"invalid_request_error","param":"reasoning_effort","code":"unsupported_parameter"}}"#,
+            r#"{"error":{"message":"Invalid value: 'none'. Supported values are: 'low', 'medium' and 'high'.","type":"invalid_request_error","param":"reasoning_effort","code":"invalid_value"}}"#,
+            r#"{"error":{"message":"Unrecognized request argument supplied: reasoning_effort"}}"#,
+        ];
+        for body in openai {
+            assert!(refuses_reasoning(400, body, "reasoning"), "{body}");
+        }
+
+        let gemini = [
+            r#"{"error":{"code":400,"message":"Invalid JSON payload received. Unknown name \"thinkingLevel\" at 'generation_config': Cannot find field.","status":"INVALID_ARGUMENT"}}"#,
+            r#"{"error":{"code":400,"message":"Budget 128 is invalid. thinkingBudget must be 0 or in the range [128, 32768]","status":"INVALID_ARGUMENT"}}"#,
+        ];
+        for body in gemini {
+            assert!(refuses_reasoning(400, body, "thinking"), "{body}");
+        }
+    }
+
+    /// Everything else is the request failing on its own merits, and retrying it
+    /// without reasoning would waste a round trip and hide the real cause. A 5xx
+    /// that happens to name the field is the same: dropping the setting on an
+    /// outage would leave the model thinking at its default long after.
+    #[test]
+    fn other_failures_are_not_read_as_a_refusal() {
+        assert!(!refuses_reasoning(
+            400,
+            r#"{"error":{"message":"Incorrect API key provided"}}"#,
+            "reasoning"
+        ));
+        assert!(!refuses_reasoning(
+            429,
+            r#"{"error":{"message":"Rate limit reached"}}"#,
+            "reasoning"
+        ));
+        assert!(!refuses_reasoning(
+            503,
+            r#"{"error":{"message":"reasoning_effort backend unavailable"}}"#,
+            "reasoning"
+        ));
+    }
+
+    /// A refusal is remembered once, and every clone of the provider sees it:
+    /// they all call the same model.
+    #[test]
+    fn a_recorded_refusal_is_shared() {
+        let support = ReasoningSupport::default();
+        let clone = support.clone();
+        assert!(!support.refused());
+        clone.record_refusal();
+        assert!(support.refused());
     }
 
     #[test]
