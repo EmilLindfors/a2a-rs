@@ -22,17 +22,22 @@ pub struct GeminiConfig {
 /// Default base URL for the Gemini generative-language API.
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
-/// Model used when neither a config nor `GEMINI_MODEL` names one. Shared by
-/// both paths so they cannot default differently.
-pub const GEMINI_DEFAULT_MODEL: &str = "gemini-1.5-pro";
+// There is deliberately no `GEMINI_DEFAULT_MODEL`. It was `gemini-1.5-pro`
+// until 2026-08-25, by which point Google had stopped listing that model at
+// all — so every config naming `gemini` without a model ran on something the
+// vendor's own documentation no longer described, and nothing said so. A
+// default model is a one-entry table of somebody else's product line: it goes
+// stale in place, and it goes stale silently, because the value that is wrong
+// is the one nobody wrote down. The model is required instead.
 
 impl GeminiConfig {
     pub fn from_env() -> Result<Self, String> {
         Self::from_lookup(Env::os())
     }
 
-    /// Read a Gemini config from `env`. The key is required; there is no
-    /// keyless Gemini endpoint.
+    /// Read a Gemini config from `env`. The key and the model are both
+    /// required: there is no keyless Gemini endpoint, and no model this crate
+    /// is willing to choose on a caller's behalf.
     pub(crate) fn from_lookup(env: Env<'_>) -> Result<Self, String> {
         Ok(Self {
             base_url: env
@@ -40,7 +45,7 @@ impl GeminiConfig {
                 .unwrap_or_else(|| GEMINI_BASE_URL.to_string()),
             model: env
                 .get("GEMINI_MODEL")
-                .unwrap_or_else(|| GEMINI_DEFAULT_MODEL.to_string()),
+                .ok_or_else(|| "GEMINI_MODEL environment variable is required".to_string())?,
             api_key: env
                 .get("GEMINI_API_KEY")
                 .ok_or_else(|| "GEMINI_API_KEY environment variable is required".to_string())?,

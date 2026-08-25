@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use super::{
     Env, LlmProvider, Reasoning,
-    gemini::{GEMINI_BASE_URL, GEMINI_DEFAULT_MODEL, GeminiConfig, GeminiProvider},
+    gemini::{GEMINI_BASE_URL, GeminiConfig, GeminiProvider},
     openai::{
         OPENAI_BASE_URL, OPENROUTER_DEFAULT_MODEL, OpenAiConfig, OpenAiProvider, ReasoningDialect,
         reasoning_effort,
@@ -473,18 +473,33 @@ fn build_from_settings(
             })
         }
         "gemini" => {
-            let model = or_env(&settings.model, env, &["GEMINI_MODEL"])
-                .unwrap_or_else(|| GEMINI_DEFAULT_MODEL.to_string());
+            // The key first, so a config supplying neither reports the
+            // credential rather than the model: without a key nothing about
+            // this provider is reachable, and naming the model would send a
+            // caller to fix the second thing wrong with it.
+            let api_key = or_env(&settings.api_key, env, &["GEMINI_API_KEY"]).ok_or_else(|| {
+                LlmConfigError::unusable(
+                    "gemini",
+                    SELECTED_BY_CONFIG,
+                    "no `api_key` in the config and GEMINI_API_KEY is not set",
+                )
+            })?;
+            // The one provider with no default model, for the reason
+            // `gemini.rs` gives: the default it used to carry named a model
+            // Google stopped listing, and a stale default is invisible in a way
+            // a missing one is not. `openai` and `openrouter` keep theirs,
+            // which still name models their vendors list.
+            let model = or_env(&settings.model, env, &["GEMINI_MODEL"]).ok_or_else(|| {
+                LlmConfigError::unusable(
+                    "gemini",
+                    SELECTED_BY_CONFIG,
+                    "no `model` in the config and GEMINI_MODEL is not set",
+                )
+            })?;
             let config = GeminiConfig {
                 base_url: or_env(&settings.base_url, env, &["GEMINI_API_BASE_URL"])
                     .unwrap_or_else(|| GEMINI_BASE_URL.to_string()),
-                api_key: or_env(&settings.api_key, env, &["GEMINI_API_KEY"]).ok_or_else(|| {
-                    LlmConfigError::unusable(
-                        "gemini",
-                        SELECTED_BY_CONFIG,
-                        "no `api_key` in the config and GEMINI_API_KEY is not set",
-                    )
-                })?,
+                api_key,
                 model: model.clone(),
                 reasoning: settings.reasoning,
             };
@@ -644,6 +659,48 @@ mod tests {
         assert!(error.to_string().contains("GEMINI_API_KEY"), "{error}");
     }
 
+    /// Gemini is the one provider that names no default model. The default it
+    /// used to carry was `gemini-1.5-pro`, which Google stopped listing while
+    /// every config that omitted a model went on running it — so the absence
+    /// has to be an error a caller sees, not a value this crate invents. Both
+    /// entry points have to agree, since a config and a bare environment reach
+    /// the provider by different code.
+    #[test]
+    fn gemini_names_no_default_model() {
+        let settings = LlmSettings {
+            provider: "gemini".to_string(),
+            api_key: Some("gemini-key".to_string()),
+            ..Default::default()
+        };
+        let error = build_from_settings(&settings, Env::new(&env_of(&[])))
+            .expect_err("a key without a model cannot pick one");
+        assert!(error.to_string().contains("GEMINI_MODEL"), "{error}");
+
+        // The environment supplies it just as the config would.
+        let selected = build_from_settings(
+            &settings,
+            Env::new(&env_of(&[("GEMINI_MODEL", "gemini-2.5-pro")])),
+        )
+        .expect("the env names the model");
+        assert_eq!(selected.model, "gemini-2.5-pro");
+
+        // Selection from a bare environment is the other path in, and a key on
+        // its own is enough to *choose* gemini — so it must fail here too
+        // rather than fall through to another provider or a made-up model.
+        let error = select_from_env(Env::new(&env_of(&[("GEMINI_API_KEY", "gemini-key")])))
+            .expect_err("a key selects gemini, which then has no model");
+        assert!(error.to_string().contains("GEMINI_MODEL"), "{error}");
+
+        let selected = select_from_env(Env::new(&env_of(&[
+            ("GEMINI_API_KEY", "gemini-key"),
+            ("GEMINI_MODEL", "gemini-2.5-pro"),
+        ])))
+        .unwrap()
+        .expect("both halves present");
+        assert_eq!(selected.kind, "gemini");
+        assert_eq!(selected.model, "gemini-2.5-pro");
+    }
+
     #[test]
     fn the_config_wins_over_the_environment() {
         let settings = LlmSettings {
@@ -674,6 +731,9 @@ mod tests {
             let settings = LlmSettings {
                 provider: provider.to_string(),
                 api_key: Some("key".to_string()),
+                // Named because `gemini` has no default to fall back on; the
+                // subject here is the plan, not where the model came from.
+                model: Some("a-model".to_string()),
                 reasoning: Some(Reasoning::Effort(ReasoningEffort::High)),
                 ..Default::default()
             };
@@ -704,6 +764,7 @@ mod tests {
             let settings = LlmSettings {
                 provider: provider.to_string(),
                 api_key: Some("key".to_string()),
+                model: Some("a-model".to_string()),
                 reasoning: Some(Reasoning::Budget(2000)),
                 ..Default::default()
             };
@@ -731,6 +792,7 @@ mod tests {
             let settings = LlmSettings {
                 provider: provider.to_string(),
                 api_key: Some("key".to_string()),
+                model: Some("a-model".to_string()),
                 ..Default::default()
             };
             let selected = build_from_settings(&settings, Env::new(&env_of(&[]))).unwrap();
