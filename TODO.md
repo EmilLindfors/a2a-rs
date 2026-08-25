@@ -201,26 +201,6 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         item in §1 describes: a sweep of the context takes its events, so this
         rides on korps growing a timer. Until then the per-task cap
         (`event_log_capacity`, 1024 by default) is what bounds the table.
-- [ ] **Make the downstream canary blocking.**
-      `.github/workflows/downstream-korps.yml` builds korps against each PR by
-      checking both repos out as siblings, and it needs no release.
-      - The mechanism was silently broken between 2026-08-18 and 2026-08-25.
-        It relied on korps carrying `[patch.crates-io]` itself; korps dropped
-        that when it started building from crates.io, and the sibling checkout
-        alone stopped meaning anything — cargo resolved published a2a-rs and the
-        job went green regardless of the PR. Fixed 2026-08-25: the job writes
-        the patch section itself, and then checks it applied
-        (`cargo metadata --all-features` must report all five crates with a null
-        `source`). The check is the durable half — a canary that cannot fail is
-        worse than none, and this one could not fail for a week without saying
-        so.
-      - It stays `continue-on-error` until a `KORPS_CANARY_TOKEN` secret with
-        `repo` scope exists: korps is private, this repo is public, and without
-        the secret the job skips. That is the only remaining blocker; korps'
-        master is current as of 2026-08-25.
-      - A korps master that lags this repo can still fail for reasons unrelated
-        to the PR. The patch decides which a2a-rs is built, not which korps —
-        so this is a property to live with rather than a thing to fix here.
 
 ---
 

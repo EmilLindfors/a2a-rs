@@ -50,6 +50,32 @@ be acting correctly; if not, the state is wrong no matter how it is documented.
 
 ## Choices that had a real alternative
 
+**The CI here does not build korps.** (2026-08-25) A downstream canary existed
+from 2026-08-18: it checked both repos out as siblings and wrote a
+`[patch.crates-io]` so korps built against the PR's source. It is gone, and the
+repos stay separate.
+
+It had two failure modes, and they are worth recording because they are what
+this kind of canary costs rather than accidents of this one. korps is private
+and this repo is public, so cloning it needed a `KORPS_CANARY_TOKEN` secret;
+without one the job skipped and reported success, which is a green tick that
+means nothing. And when korps dropped its own `[patch.crates-io]` to build from
+crates.io, the sibling checkout silently stopped meaning anything — cargo
+resolved published `a2a-rs` and the job went green regardless of the PR, for a
+week, with nothing saying so.
+
+Both were fixable, and the second was fixed. The reason to remove it anyway is
+that it wires a public repo's CI to a private repo's source: a coupling this
+repo has nowhere else and does not want, given that the protocol crates are MIT
+and korps is not. **Nothing here depends on korps, so nothing here should need
+to know korps exists in order to go green.**
+
+The cost is real and is accepted: no automated signal here says when a change
+breaks korps. Checking is a manual step and stays one — point korps'
+`[patch.crates-io]` at a local checkout of this repo and build, which is one
+edit-compile loop. The place that signal belongs is korps' own CI, which builds
+this repo's crates by definition.
+
 **The stream log is a port, not a field on the streaming handler.** (2026-08-23)
 
 `InMemoryStreamingHandler` owned both halves of streaming: who is listening, and
