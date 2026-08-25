@@ -69,7 +69,7 @@
 //! let client = Arc::new(WebA2AClient::new_http("http://localhost:8080".to_string()));
 //!
 //! let app = Router::new()
-//!     .route("/stream/:task_id", get(stream_handler))
+//!     .route("/stream/{task_id}", get(stream_handler))
 //!     .with_state(client);
 //!
 //! // Start your Axum server...
