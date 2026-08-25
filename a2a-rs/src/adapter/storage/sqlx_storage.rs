@@ -15,7 +15,11 @@ use sqlx::{
     any::{AnyConnectOptions, AnyPoolOptions},
 };
 #[cfg(feature = "sqlx-storage")]
-use std::{str::FromStr, time::Duration};
+use std::{
+    collections::HashMap,
+    str::FromStr,
+    time::{Duration, Instant},
+};
 
 #[cfg(feature = "sqlx-storage")]
 use crate::adapter::business::push_notification::{
@@ -31,9 +35,9 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
-    A2AError, ContextId, ContextState, Conversation, Digest, Message, RetentionPolicy, Seq,
-    SequencedMessage, StateKey, StateScope, Swept, Task, TaskId, TaskPushNotificationConfig,
-    TaskState, TaskStateExt, TaskStatus, VersionedTask,
+    A2AError, ContextId, ContextState, Conversation, Digest, Message, ReadRefresh, Remembered,
+    RetentionPolicy, Seq, SequencedMessage, StateKey, StateScope, Swept, Task, TaskId,
+    TaskPushNotificationConfig, TaskState, TaskStateExt, TaskStatus, VersionedTask,
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
@@ -63,6 +67,17 @@ pub struct SqlxTaskStorage {
     push_notification_registry: Arc<PushNotificationRegistry>,
     /// How many events per task the stream log keeps; `None` keeps all of them.
     event_log_capacity: Option<u64>,
+    /// Whether a read of a principal's `user:` bag counts as keeping it alive.
+    /// [`ReadRefresh::never`] by default, matching the in-memory store.
+    read_refresh: ReadRefresh,
+    /// The settled ownership answers this store has already read back, if it
+    /// was given a window to remember them for. See [`ClaimCache`].
+    ///
+    /// Behind an `Arc` so a clone shares it. Two clones with a cache each would
+    /// each hold entries the other's sweep evicted, which is the one way this
+    /// could hold an answer the row no longer agrees with for longer than the
+    /// TTL.
+    claim_cache: Option<Arc<ClaimCache>>,
 }
 
 #[cfg(feature = "sqlx-storage")]
@@ -85,6 +100,85 @@ const TASK_COLUMNS: &str = "id, context_id, status_state, status_message, metada
 /// long enough that the process may not be the same one afterwards.
 #[cfg(feature = "sqlx-storage")]
 pub const DEFAULT_EVENT_LOG_CAPACITY: u64 = 1024;
+
+/// How long [`SqlxTaskStorage`] remembers a context's settled owner.
+///
+/// Seconds, not the process lifetime, and that is the whole design: the memo
+/// exists to collapse the several ownership questions *one turn* asks, not to
+/// stop asking across turns. See [`SqlxStorageBuilder::claim_cache`].
+#[cfg(feature = "sqlx-storage")]
+pub const DEFAULT_CLAIM_CACHE_TTL: Duration = Duration::from_secs(5);
+
+/// How many contexts a [`ClaimCache`] holds before it starts over.
+#[cfg(feature = "sqlx-storage")]
+const CLAIM_CACHE_CAPACITY: usize = 1024;
+
+/// The settled ownership answers this process has already read back.
+///
+/// A cache of an authorization input needs an argument, and this is it: the
+/// value cached cannot change. `contexts.owner` is written once, by the claim,
+/// and never reassigned — `Open` stays open and `Owner(x)` stays `x`. So a hit
+/// is not a second opinion about who owns a context, it is the same answer read
+/// less often.
+///
+/// What *can* happen to a row is deletion, by a retention sweep, after which a
+/// different principal may claim the id afresh. Three things bound that:
+///
+/// - Only settled answers go in. The absent row — the one case a caller has to
+///   act on by writing — is never cached, so the claiming path is unchanged.
+/// - This store evicts what it deletes, so a sweep it runs itself cannot leave
+///   a stale entry behind.
+/// - A sweep run by *another* replica cannot, which is what the TTL is for. The
+///   window it leaves needs that replica to sweep a context idle for days, a
+///   different principal to re-claim the same id, and this replica to serve a
+///   request against it — all within a few seconds.
+///
+/// Storing the claim rather than the verdict is what keeps one entry from
+/// admitting the wrong caller: [`ContextClaim::verdict`] still runs per request.
+#[cfg(feature = "sqlx-storage")]
+struct ClaimCache {
+    /// Cleared whole at [`CLAIM_CACHE_CAPACITY`] rather than evicted one at a
+    /// time. A miss costs one `SELECT`, and for a memo measured in seconds that
+    /// is not worth an LRU — or the dependency one would come with.
+    entries: std::sync::Mutex<HashMap<String, (ContextClaim, Instant)>>,
+    ttl: Duration,
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl ClaimCache {
+    fn new(ttl: Duration) -> Self {
+        Self {
+            entries: std::sync::Mutex::new(HashMap::new()),
+            ttl,
+        }
+    }
+
+    /// What this process last read for `context_id`, if that was recent enough.
+    ///
+    /// A poisoned lock reads as a miss: the fallback is the `SELECT` this exists
+    /// to skip, and failing a request over a cache is the wrong trade.
+    fn get(&self, context_id: &str) -> Option<ContextClaim> {
+        let entries = self.entries.lock().ok()?;
+        let (claim, at) = entries.get(context_id)?;
+        (at.elapsed() < self.ttl).then(|| claim.clone())
+    }
+
+    fn insert(&self, context_id: &str, claim: &ContextClaim) {
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        if entries.len() >= CLAIM_CACHE_CAPACITY {
+            entries.clear();
+        }
+        entries.insert(context_id.to_string(), (claim.clone(), Instant::now()));
+    }
+
+    fn forget(&self, context_id: &str) {
+        if let Ok(mut entries) = self.entries.lock() {
+            entries.remove(context_id);
+        }
+    }
+}
 
 /// How the pool is opened. Applied to both the main pool and the
 /// one-connection migration pool, which connect to the same database.
@@ -132,6 +226,8 @@ pub struct SqlxStorageBuilder {
     push_sender: Option<Arc<dyn PushNotificationSender>>,
     additional_migrations: Vec<String>,
     event_log_capacity: Option<u64>,
+    read_refresh: ReadRefresh,
+    claim_cache_ttl: Option<Duration>,
 }
 
 #[cfg(feature = "sqlx-storage")]
@@ -190,6 +286,37 @@ impl SqlxStorageBuilder {
         self
     }
 
+    /// How long to remember a context's settled owner, past which it is read
+    /// again. Defaults to [`DEFAULT_CLAIM_CACHE_TTL`]; `None` reads it every
+    /// time.
+    ///
+    /// Ownership is checked on every conversation read, every state-bag read
+    /// and every `remember`, so a turn asks it several times and gets the same
+    /// answer — one that, once the context's row exists, can never change. This
+    /// is what stops that costing a statement each.
+    ///
+    /// What the window buys back is a sweep run by *another* process. This
+    /// store evicts what its own sweep deletes, but a second replica deleting a
+    /// context that is then re-claimed by a different principal leaves this one
+    /// admitting the old answer until the entry expires. Set `None` where that
+    /// matters more than the statements — an audited store, or one whose
+    /// contexts are swept aggressively enough to be recycled.
+    pub fn claim_cache(mut self, ttl: Option<Duration>) -> Self {
+        self.claim_cache_ttl = ttl;
+        self
+    }
+
+    /// Let a read of a principal's `user:` bag count as keeping it alive.
+    ///
+    /// Off by default. See [`ReadRefresh`] for what it costs — one conditional
+    /// `UPDATE` per `load_state`, writing at most once per principal per window
+    /// — and [`ReadRefresh::halfway_through`] for wiring it from the
+    /// [`RetentionPolicy`] a sweep will run under.
+    pub fn read_refresh(mut self, read_refresh: ReadRefresh) -> Self {
+        self.read_refresh = read_refresh;
+        self
+    }
+
     /// Run these statements after the framework's own migrations.
     ///
     /// The caller's own SQL, run verbatim, so it has to be written in the
@@ -229,6 +356,10 @@ impl SqlxStorageBuilder {
             dialect,
             push_notification_registry: Arc::new(push_registry),
             event_log_capacity: self.event_log_capacity,
+            read_refresh: self.read_refresh,
+            claim_cache: self
+                .claim_cache_ttl
+                .map(|ttl| Arc::new(ClaimCache::new(ttl))),
         })
     }
 }
@@ -240,6 +371,7 @@ impl SqlxStorageBuilder {
 /// writing, and folding it in would let a call site treat "nothing holds this
 /// yet" as a decision that had been made.
 #[cfg(feature = "sqlx-storage")]
+#[derive(Clone)]
 enum ContextClaim {
     /// A row with no owner — an agent running without an authenticator. Open to
     /// anyone.
@@ -422,6 +554,8 @@ impl SqlxTaskStorage {
             push_sender: None,
             additional_migrations: Vec::new(),
             event_log_capacity: Some(DEFAULT_EVENT_LOG_CAPACITY),
+            read_refresh: ReadRefresh::never(),
+            claim_cache_ttl: Some(DEFAULT_CLAIM_CACHE_TTL),
         }
     }
 
@@ -830,7 +964,18 @@ impl SqlxTaskStorage {
     }
 
     /// Read the claim on a context, or `None` if it has no row yet.
+    ///
+    /// The one place the [`ClaimCache`] is consulted, which is what keeps it out
+    /// of the claiming path's structure: `claim_or_check_context` still reads
+    /// before it writes and still reads back afterwards rather than trusting
+    /// `rows_affected`, and the read-back is what puts a newly opened context in
+    /// the cache. Only a settled answer is cached — `None` here means the caller
+    /// has to write, and a decision nobody has made yet is not one to remember.
     async fn read_claim(&self, context_id: &str) -> Result<Option<ContextClaim>, A2AError> {
+        if let Some(claim) = self.claim_cache.as_ref().and_then(|c| c.get(context_id)) {
+            return Ok(Some(claim));
+        }
+
         let sql = self.sql("SELECT owner FROM contexts WHERE id = ?");
         let row = sqlx::query(&sql)
             .bind(context_id)
@@ -845,10 +990,38 @@ impl SqlxTaskStorage {
             .try_get("owner")
             .map_err(|e| A2AError::DatabaseError(format!("Failed to get context owner: {}", e)))?;
 
-        Ok(Some(match owner {
+        let claim = match owner {
             Some(owner) => ContextClaim::Owner(owner),
             None => ContextClaim::Open,
-        }))
+        };
+        if let Some(cache) = self.claim_cache.as_ref() {
+            cache.insert(context_id, &claim);
+        }
+        Ok(Some(claim))
+    }
+
+    /// Let this read count as keeping `principal`'s `user:` bag alive, if the
+    /// store was configured to and the bag is old enough to need it.
+    ///
+    /// The one place a read writes, and it writes at most once per principal per
+    /// window however often it is read — the whole point of
+    /// [`ReadRefresh`] carrying a window rather than a flag. Off by default, so
+    /// a store that was not told otherwise runs the statement never.
+    ///
+    /// The cutoff goes in through [`Dialect::format_timestamp`], the same way a
+    /// sweep's does, so the two compare against `updated_at` identically.
+    async fn refresh_user_state(&self, principal: &str) -> Result<(), A2AError> {
+        let Some(cutoff) = self.read_refresh.cutoff(chrono::Utc::now()) else {
+            return Ok(());
+        };
+
+        sqlx::query(self.dialect.refresh_user_state())
+            .bind(principal)
+            .bind(self.dialect.format_timestamp(cutoff))
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to refresh user state: {}", e)))?;
+        Ok(())
     }
 
     /// Hand out this store's push-notification registry as an
@@ -1509,6 +1682,8 @@ impl Clone for SqlxTaskStorage {
             dialect: self.dialect,
             push_notification_registry: self.push_notification_registry.clone(),
             event_log_capacity: self.event_log_capacity,
+            read_refresh: self.read_refresh,
+            claim_cache: self.claim_cache.clone(),
         }
     }
 }
@@ -1727,6 +1902,10 @@ impl AsyncContextStateStore for SqlxTaskStorage {
                 }
             }
         }
+
+        if let Some(caller) = caller {
+            self.refresh_user_state(caller).await?;
+        }
         Ok(state)
     }
 
@@ -1736,7 +1915,7 @@ impl AsyncContextStateStore for SqlxTaskStorage {
         caller: Option<&str>,
         key: &StateKey,
         value: &str,
-    ) -> Result<(), A2AError> {
+    ) -> Result<Remembered, A2AError> {
         let context_id = context_id.as_str();
         self.claim_or_check_context(context_id, caller).await?;
 
@@ -1744,20 +1923,55 @@ impl AsyncContextStateStore for SqlxTaskStorage {
             scope_key(key.scope(), context_id, caller, key)?,
             scope_column(key.scope()),
         ) else {
-            return Ok(());
+            return Ok(Remembered::NotStored);
         };
+
+        // Read and write in one transaction. Without it a concurrent write
+        // landing between the two makes `previous` name a value this call never
+        // overwrote — a report about somebody else's write, wearing ours.
+        //
+        // Two statements rather than one because neither dialect will hand back
+        // the old row: PostgreSQL 17's `RETURNING OLD.value` is too new to
+        // require, and the `WITH prev AS (…) … RETURNING (SELECT …)` form it
+        // would take on PostgreSQL has no SQLite spelling — `RETURNING` there
+        // can only name the row that was modified.
+        let mut tx = self.pool.begin().await.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to open a state transaction: {}", e))
+        })?;
+
+        let read = self
+            .sql("SELECT value FROM context_state WHERE scope = ? AND scope_key = ? AND name = ?");
+        let previous: Option<String> = sqlx::query(&read)
+            .bind(scope)
+            .bind(scope_key)
+            .bind(key.name())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to read context state: {}", e)))?
+            .map(|row| row.try_get("value"))
+            .transpose()
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to read context state: {}", e)))?;
 
         sqlx::query(self.dialect.upsert_context_state())
             .bind(scope)
             .bind(scope_key)
             .bind(key.name())
             .bind(value)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| {
                 A2AError::DatabaseError(format!("Failed to write context state: {}", e))
             })?;
-        Ok(())
+
+        tx.commit().await.map_err(|e| {
+            A2AError::DatabaseError(format!("Failed to commit context state: {}", e))
+        })?;
+
+        Ok(match previous {
+            None => Remembered::Stored,
+            Some(previous) if previous == value => Remembered::Unchanged,
+            Some(previous) => Remembered::Replaced { previous },
+        })
     }
 
     async fn forget(
@@ -2106,6 +2320,14 @@ impl SqlxTaskStorage {
             A2AError::DatabaseError(format!("Failed to commit the sweep of {context_id}: {e}"))
         })?;
 
+        // After the commit, not before: a sweep that rolls back must not leave
+        // this process re-reading an answer it still holds. Deletion is the only
+        // thing that can invalidate a cached claim, so this is the only eviction
+        // there is.
+        if let Some(cache) = self.claim_cache.as_ref() {
+            cache.forget(context_id);
+        }
+
         Ok(Swept {
             contexts: 1,
             tasks: tasks.rows_affected(),
@@ -2248,5 +2470,200 @@ mod tests {
             .await
             .unwrap()
             .is_some()
+    }
+
+    /// A hit inside the window, a miss outside it. A zero window is what makes
+    /// this assertable without sleeping: nothing is ever new enough.
+    #[test]
+    fn a_cached_claim_is_only_returned_inside_its_window() {
+        let cache = ClaimCache::new(Duration::from_secs(60));
+        cache.insert("ctx-1", &ContextClaim::Owner("alice".to_string()));
+        assert!(matches!(
+            cache.get("ctx-1"),
+            Some(ContextClaim::Owner(owner)) if owner == "alice"
+        ));
+
+        let expired = ClaimCache::new(Duration::ZERO);
+        expired.insert("ctx-1", &ContextClaim::Open);
+        assert!(expired.get("ctx-1").is_none());
+    }
+
+    #[test]
+    fn forgetting_a_context_drops_what_was_cached_for_it() {
+        let cache = ClaimCache::new(Duration::from_secs(60));
+        cache.insert("ctx-1", &ContextClaim::Open);
+        cache.forget("ctx-1");
+        assert!(cache.get("ctx-1").is_none());
+    }
+
+    /// Full means start over, which is a correctness-free choice: every entry
+    /// is reconstructible with one `SELECT`.
+    #[test]
+    fn a_full_cache_starts_over_rather_than_growing() {
+        let cache = ClaimCache::new(Duration::from_secs(60));
+        for i in 0..=CLAIM_CACHE_CAPACITY {
+            cache.insert(&format!("ctx-{i}"), &ContextClaim::Open);
+        }
+        assert!(cache.entries.lock().unwrap().len() <= CLAIM_CACHE_CAPACITY);
+    }
+
+    /// The cache is actually consulted, shown the only way that cannot be
+    /// mistaken for something else: change the row underneath it.
+    ///
+    /// This is also the staleness window written down as a test. Nothing in the
+    /// store can reassign an owner — that is what makes caching the answer
+    /// sound — so the tampering here stands in for another replica sweeping the
+    /// context and a different principal claiming the id afresh.
+    #[tokio::test]
+    async fn a_cached_owner_outlives_a_row_changed_behind_the_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!("sqlite:{}?mode=rwc", dir.path().join("a2a.db").display());
+        let storage = SqlxTaskStorage::builder(&url)
+            .max_connections(1)
+            .claim_cache(Some(Duration::from_secs(60)))
+            .connect()
+            .await
+            .unwrap();
+
+        let context = cid("ctx-cached");
+        storage.load_state(&context, Some("alice")).await.unwrap();
+
+        sqlx::raw_sql("UPDATE contexts SET owner = 'bob' WHERE id = 'ctx-cached'")
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+
+        storage
+            .load_state(&context, Some("alice"))
+            .await
+            .expect("the claim alice opened is still the cached one");
+
+        // Closed before the second store opens: two pools writing one SQLite
+        // file is a lock fight this test has no reason to pick.
+        drop(storage);
+
+        let uncached = SqlxTaskStorage::builder(&url)
+            .max_connections(1)
+            .claim_cache(None)
+            .connect()
+            .await
+            .unwrap();
+        assert!(
+            matches!(
+                uncached.load_state(&context, Some("alice")).await,
+                Err(A2AError::ContextAccessDenied { .. })
+            ),
+            "a store that reads every time sees the row as it now is"
+        );
+    }
+
+    /// The other half of `ReadRefresh`, which needs a bag older than the window
+    /// and no port lets a caller write one. Ageing the row directly is the only
+    /// way, and having the pool is why this lives here rather than in
+    /// `tests/context_state_test.rs`.
+    ///
+    /// Asserted through a sweep rather than by reading `updated_at` back: the
+    /// `Any` driver cannot decode a `timestamptz`, which is the same constraint
+    /// that makes the refresh write blind in the first place. A sweep at the
+    /// real `now` is the store's own answer to "how old is this bag".
+    #[tokio::test]
+    async fn a_read_refreshes_a_bag_that_is_old_enough() {
+        let day = Duration::from_secs(24 * 60 * 60);
+        let storage = SqlxTaskStorage::builder("sqlite::memory:")
+            .max_connections(1)
+            .read_refresh(ReadRefresh::after(day))
+            .connect()
+            .await
+            .unwrap();
+
+        let context = cid("ctx-refresh");
+        let name = StateKey::scoped(StateScope::User, "name").unwrap();
+        storage
+            .remember(&context, Some("alice"), &name, "Emil")
+            .await
+            .unwrap();
+        age_the_bag(&storage, "alice").await;
+
+        storage.load_state(&context, Some("alice")).await.unwrap();
+
+        let policy = RetentionPolicy::keep_everything().delete_user_state_idle_for(day);
+        let swept = storage.sweep(&policy, chrono::Utc::now()).await.unwrap();
+        assert_eq!(
+            swept.state_keys, 0,
+            "the read moved the bag out of the sweep's reach"
+        );
+    }
+
+    /// The same bag, the same read, and no refresh configured: it is swept,
+    /// which is what makes the case above about the refresh and not about the
+    /// sweep.
+    #[tokio::test]
+    async fn without_a_refresh_the_same_read_leaves_the_bag_sweepable() {
+        let day = Duration::from_secs(24 * 60 * 60);
+        let storage = SqlxTaskStorage::builder("sqlite::memory:")
+            .max_connections(1)
+            .connect()
+            .await
+            .unwrap();
+
+        let context = cid("ctx-no-refresh");
+        let name = StateKey::scoped(StateScope::User, "name").unwrap();
+        storage
+            .remember(&context, Some("alice"), &name, "Emil")
+            .await
+            .unwrap();
+        age_the_bag(&storage, "alice").await;
+
+        storage.load_state(&context, Some("alice")).await.unwrap();
+
+        let policy = RetentionPolicy::keep_everything().delete_user_state_idle_for(day);
+        let swept = storage.sweep(&policy, chrono::Utc::now()).await.unwrap();
+        assert_eq!(swept.state_keys, 1);
+    }
+
+    /// Put a principal's bag a week into the past, which is the one thing the
+    /// port cannot do.
+    async fn age_the_bag(storage: &SqlxTaskStorage, principal: &str) {
+        let sql = storage
+            .sql("UPDATE context_state SET updated_at = ? WHERE scope = 'user' AND scope_key = ?");
+        let long_ago = storage
+            .dialect
+            .format_timestamp(chrono::Utc::now() - chrono::TimeDelta::days(7));
+        sqlx::query(&sql)
+            .bind(long_ago)
+            .bind(principal)
+            .execute(&storage.pool)
+            .await
+            .unwrap();
+    }
+
+    /// The one thing that can invalidate a cached claim is deletion, so the
+    /// sweep has to evict — otherwise a swept id stays owned by a principal
+    /// whose row is gone, and the caller who re-opens it is refused their own
+    /// context.
+    #[tokio::test]
+    async fn a_swept_context_leaves_nothing_cached() {
+        let storage = SqlxTaskStorage::builder("sqlite::memory:")
+            .max_connections(1)
+            .claim_cache(Some(Duration::from_secs(60)))
+            .connect()
+            .await
+            .unwrap();
+
+        let context = cid("ctx-swept");
+        storage.load_state(&context, Some("alice")).await.unwrap();
+
+        let policy =
+            RetentionPolicy::keep_everything().delete_contexts_idle_for(Duration::from_secs(60));
+        let swept = storage
+            .sweep(&policy, chrono::Utc::now() + chrono::TimeDelta::days(30))
+            .await
+            .unwrap();
+        assert_eq!(swept.contexts, 1);
+
+        storage
+            .load_state(&context, Some("bob"))
+            .await
+            .expect("nobody holds a context that was swept");
     }
 }

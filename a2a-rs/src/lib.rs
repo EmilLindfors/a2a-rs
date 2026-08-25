@@ -94,9 +94,10 @@ pub use domain::{
     ContextId, DeleteTaskPushNotificationConfigParams, DeviceCodeOAuthFlow, ErrorDetail, ErrorInfo,
     FieldViolation, GetTaskPushNotificationConfigParams, ListTaskPushNotificationConfigsParams,
     ListTasksParams, ListTasksResult, Message, OAuthFlows, Part, PushConfigId,
-    PushNotificationAuthenticationInfo, Result, RetentionPolicy, RetryPolicy, Role, SecurityScheme,
-    Swept, Task, TaskArtifactUpdateEvent, TaskId, TaskIdParams, TaskPushNotificationConfig,
-    TaskQueryParams, TaskState, TaskStatus, TaskStatusUpdateEvent, VersionedTask,
+    PushNotificationAuthenticationInfo, ReadRefresh, Result, RetentionPolicy, RetryPolicy, Role,
+    SecurityScheme, Swept, Task, TaskArtifactUpdateEvent, TaskId, TaskIdParams,
+    TaskPushNotificationConfig, TaskQueryParams, TaskState, TaskStatus, TaskStatusUpdateEvent,
+    VersionedTask,
 };
 
 // Port traits for better separation of concerns

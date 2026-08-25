@@ -127,6 +127,39 @@ impl Dialect {
         }
     }
 
+    /// Let a read count as a write on a principal's `user:` bag, but only once
+    /// it is older than the bound cutoff.
+    ///
+    /// Written blind rather than read first and updated if due. `updated_at` is
+    /// a `timestamptz`, the `Any` driver cannot decode one, and it converts a
+    /// row whole — so selecting it alongside the bag would fail every
+    /// `load_state` on PostgreSQL (the constraint `TASK_COLUMNS` exists for).
+    /// Matching on the primary key's `(scope, scope_key)` prefix, this usually
+    /// updates nothing and leaves no dead tuple behind when it does not.
+    ///
+    /// `<=` where a sweep's comparison is `<`, matching
+    /// [`ReadRefresh::due`](crate::domain::ReadRefresh::due): a sweep deletes so
+    /// it keeps the boundary, a refresh writes so it takes it. It also matters
+    /// in practice on SQLite, where `datetime('now')` and
+    /// [`format_timestamp`](Self::format_timestamp) both truncate to the second
+    /// and a bag written this second would otherwise never be due.
+    ///
+    /// Every one of the principal's rows moves together, because the bag
+    /// expires whole (see
+    /// [`RetentionPolicy::delete_user_state_idle_for`](crate::domain::RetentionPolicy::delete_user_state_idle_for)).
+    pub(super) fn refresh_user_state(self) -> &'static str {
+        match self {
+            Self::Sqlite => {
+                "UPDATE context_state SET updated_at = datetime('now') \
+                 WHERE scope = 'user' AND scope_key = ? AND updated_at <= ?"
+            }
+            Self::Postgres => {
+                "UPDATE context_state SET updated_at = now() \
+                 WHERE scope = 'user' AND scope_key = $1 AND updated_at <= $2::timestamptz"
+            }
+        }
+    }
+
     /// Append one event to a task's log, taking the next per-task id and
     /// handing it back.
     ///
@@ -453,6 +486,28 @@ mod tests {
         ] {
             assert_eq!(query.matches('?').count(), 0, "{query}");
             assert_eq!(query.matches("$1::timestamptz").count(), 1, "{query}");
+        }
+    }
+
+    /// The read refresh is written per dialect for the same reason and bypasses
+    /// [`Dialect::bind_params`] too, so it gets the same guard: two binds, the
+    /// principal and the cutoff, spelled the way each backend needs.
+    #[test]
+    fn the_read_refresh_binds_the_principal_and_the_cutoff() {
+        let sqlite = Dialect::Sqlite.refresh_user_state();
+        assert_eq!(sqlite.matches('?').count(), 2, "{sqlite}");
+
+        let postgres = Dialect::Postgres.refresh_user_state();
+        assert_eq!(postgres.matches('?').count(), 0, "{postgres}");
+        assert_eq!(postgres.matches("$1").count(), 1, "{postgres}");
+        assert_eq!(postgres.matches("$2::timestamptz").count(), 1, "{postgres}");
+
+        // Inclusive at the boundary, where the sweep's is exclusive — the one
+        // difference between the two comparisons, and the one that decides
+        // whether a bag written this second is ever due on SQLite.
+        for query in [sqlite, postgres] {
+            assert!(query.contains("updated_at <="), "{query}");
+            assert!(query.contains("scope = 'user'"), "{query}");
         }
     }
 

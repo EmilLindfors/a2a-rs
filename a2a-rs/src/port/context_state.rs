@@ -3,7 +3,7 @@
 
 use async_trait::async_trait;
 
-use crate::domain::{A2AError, ContextId, ContextState, StateKey, StateScope};
+use crate::domain::{A2AError, ContextId, ContextState, Remembered, StateKey, StateScope};
 
 /// Reads and writes the state bag visible from one context.
 ///
@@ -38,13 +38,20 @@ pub trait AsyncContextStateStore: Send + Sync {
         caller: Option<&str>,
     ) -> Result<ContextState, A2AError>;
 
-    /// Record `value` under `key`, replacing whatever it held.
+    /// Record `value` under `key`, reporting what the key held before.
+    ///
+    /// The report is the whole reason this returns anything: the row is
+    /// overwritten in place, so [`Remembered::Replaced`] is the only record
+    /// that the old value ever existed. It is read the same way [`forget`]'s
+    /// bool is — an agent that has just been corrected and one that is
+    /// repeating itself are different things to tell whoever is listening.
     ///
     /// [`StateScope::Temp`] keys never reach a store — [`is_stored`] is the
-    /// check, and an implementation that is handed one anyway should treat it
-    /// as a no-op rather than persisting a key whose name says it is not
-    /// persisted.
+    /// check, and an implementation that is handed one anyway answers
+    /// [`Remembered::NotStored`] rather than persisting a key whose name says
+    /// it is not persisted.
     ///
+    /// [`forget`]: Self::forget
     /// [`is_stored`]: StateScope::is_stored
     async fn remember(
         &self,
@@ -52,7 +59,7 @@ pub trait AsyncContextStateStore: Send + Sync {
         caller: Option<&str>,
         key: &StateKey,
         value: &str,
-    ) -> Result<(), A2AError>;
+    ) -> Result<Remembered, A2AError>;
 
     /// Drop `key`, reporting whether it held anything.
     ///
@@ -125,8 +132,8 @@ impl AsyncContextStateStore for NoContextState {
         _caller: Option<&str>,
         _key: &StateKey,
         _value: &str,
-    ) -> Result<(), A2AError> {
-        Ok(())
+    ) -> Result<Remembered, A2AError> {
+        Ok(Remembered::NotStored)
     }
 
     async fn forget(
@@ -153,10 +160,15 @@ mod tests {
         let store = NoContextState;
         let context = ContextId::from_str("ctx-1").unwrap();
 
-        store
-            .remember(&context, None, &key("project"), "a2a-rs")
-            .await
-            .unwrap();
+        // `NotStored` rather than `Stored`: the adapter keeps nothing, and
+        // saying the write landed would be the one answer that is untrue.
+        assert_eq!(
+            store
+                .remember(&context, None, &key("project"), "a2a-rs")
+                .await
+                .unwrap(),
+            Remembered::NotStored
+        );
         assert!(store.load_state(&context, None).await.unwrap().is_empty());
         assert!(!store.forget(&context, None, &key("project")).await.unwrap());
     }
