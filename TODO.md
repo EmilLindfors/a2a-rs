@@ -77,6 +77,25 @@ What is left on this side of the seam — the handler-side remainder is in korps
 Work whose two halves land on opposite sides of the seam. Also listed in korps'
 `TODO.md` §2; whoever picks one up should check the other copy.
 
+- [ ] **`ContextLengthExceeded` throws away the numbers the provider gave.**
+      It carries a `String` — the formatted error body — so the two facts a
+      caller most wants are readable only by re-parsing prose it was handed as
+      an opaque message. llama.cpp returns them as *fields*
+      (`"n_ctx":32768,"n_prompt_tokens":40089`) and OpenAI's prose names the
+      window; both are discarded. korps' half is already written against this:
+      its new `CeilingWatch` reports the estimated size of the refused request,
+      because that is all it can know, and tells the operator to set
+      `max_input_tokens` below it — which is a bound, not an answer. Measured
+      against llama.cpp at `n_ctx = 32768`, a request the estimator put at 51483
+      tokens was 40089 by the server's count, so the advice leaves everything
+      from 33k to 51k still failing. Wants optional `window` and `prompt_tokens`
+      on the variant, parsed where the provider gives them structurally and left
+      `None` otherwise. **Breaking** — it is a tuple variant today — so it wants
+      a release boundary rather than a slot in the marker fix.
+      korps' `TODO.md` §2 has the other half, plus a second use for the same
+      fields: `DriftWatch` only ever samples *successful* requests, since it
+      reconciles against `usage.prompt_tokens`, so the requests where the
+      estimate being wrong actually costs something contribute nothing to it.
 - [ ] **A skill with no keywords serves an undecodable card.** The `a2a-rs` half
       landed on 2026-08-21: `SimpleAgentInfo::add_skill` and
       `add_comprehensive_skill` now require `tags`, because the spec marks the
@@ -150,6 +169,21 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         builds against published `a2a-llm` today.
 
 ## 3. Interop and CI
+
+- [ ] **Nothing runs `a2a-llm` against a real OpenAI-compatible server.** Every
+      test here is a unit test over a hand-written body, and the marker list is
+      the part of this crate that unit tests structurally cannot check: it is
+      only ever wrong about a server nobody has run it against. The llama.cpp
+      miss fixed on 2026-08-26 is the proof — the list *named* llama.cpp in a
+      comment, had never been run against one, and matched none of its wording;
+      it took minutes to find by hand and the suite was green throughout. This
+      is the same shape as the two `a2acli` interop items below, which are what
+      found the last round of protocol bugs, and it wants the same treatment: a
+      gated job that starts a local server (llama.cpp is the cheap one, and the
+      one with distinctive errors) and asserts at least an answer, a tool call,
+      reasoning arriving as `reasoning_content`, and an overflow classified as
+      `ContextLengthExceeded` rather than `ApiError`. The overflow case is the
+      one that earns it. korps' `TODO.md` §3 tracks the handler-side twin.
 
 - [x] Point the **official** `a2aproject/a2acli` at our `examples/jsonrpc_server`
       (`:8137`) — done 2026-08-21 against `a2acli` 0.1.5, and it found three
