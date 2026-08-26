@@ -170,6 +170,24 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
 
 ## 3. Interop and CI
 
+- [ ] **The two storage backends return different tasks for the same run.**
+      A completed task read back from `InMemoryTaskStorage` carries the agent's
+      reply in `status.message`; the same task from `SqlxTaskStorage` has no
+      `status.message` at all, and the reply only in `history`. Observed
+      2026-08-26 against one korps agent asked one question, with nothing
+      changed between runs but `[server.storage] type`, and confirmed persistent
+      by re-reading the task through `GetTask` — so it is not a race with the
+      final write. A client reading `status.message`, which is where the answer
+      belongs and where the in-memory backend puts it, gets nothing on
+      PostgreSQL and SQLite.
+      Two backends behind one port disagreeing about the shape of what they
+      return is the failure the `Any`-driver work was meant to make impossible,
+      and it is invisible to a suite that tests each adapter against its own
+      expectations. What would catch the class: one conformance test run against
+      both, asserting a task read back equals the task written. Found from
+      korps, which is the only place both backends serve the same agent.
+
+
 - [ ] **Nothing runs `a2a-llm` against a real OpenAI-compatible server.** Every
       test here is a unit test over a hand-written body, and the marker list is
       the part of this crate that unit tests structurally cannot check: it is
