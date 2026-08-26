@@ -109,15 +109,26 @@ pub(crate) fn describe_transport_error(error: &dyn std::error::Error) -> String 
 /// Providers disagree on both the status code and the shape, and several return
 /// a plain 400 with prose, so matching on text is the only thing that works
 /// across all of them. Checked lowercase.
-const CONTEXT_LENGTH_MARKERS: [&str; 6] = [
+const CONTEXT_LENGTH_MARKERS: [&str; 8] = [
     // OpenAI (`"code": "context_length_exceeded"`), and OpenRouter passes it through.
     "context_length_exceeded",
     // OpenAI / OpenRouter prose, and most OpenAI-compatible servers.
     "maximum context length",
     "context length",
+    // The same concept spelled "size", which is llama.cpp's word for it and
+    // matched none of the above. Kept as a bare marker, symmetric with
+    // "context length", so a build whose error `type` differs from the one
+    // below is still recognized by its prose.
+    "context size",
     // llama.cpp, vLLM.
     "too many tokens",
     "exceeds the maximum",
+    // llama.cpp b10524's `type`, for the same overflow:
+    // `{"type":"exceed_context_size_error","message":"request (40089 tokens)
+    // exceeds the available context size (32768 tokens)"}`. Matched on the
+    // `type` as well as the prose above, that being the half of the body least
+    // likely to be reworded.
+    "exceed_context_size_error",
     // Gemini: INVALID_ARGUMENT naming the input token count.
     "input token count",
 ];
@@ -551,6 +562,10 @@ mod error_tests {
             "OpenAI stream error (400): Requested 200000 tokens, exceeds the maximum for this model",
             r#"Gemini API error (400): {"error":{"status":"INVALID_ARGUMENT","message":"The input token count (1200000) exceeds the maximum"}}"#,
             "OpenAI API error (400): too many tokens in prompt",
+            // llama.cpp b10524, verbatim. None of the markers above match it:
+            // it says "context size", not "context length", and "exceeds the
+            // available", not "exceeds the maximum".
+            r#"OpenAI stream error (400 Bad Request): {"error":{"code":400,"message":"request (40089 tokens) exceeds the available context size (32768 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":40089,"n_ctx":32768}}"#,
         ];
         for body in bodies {
             assert!(
