@@ -170,39 +170,32 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
 
 ## 3. Interop and CI
 
-- [ ] **The two storage backends return different tasks for the same run.**
-      A completed task read back from `InMemoryTaskStorage` carries the agent's
-      reply in `status.message`; the same task from `SqlxTaskStorage` has no
-      `status.message` at all, and the reply only in `history`. Observed
-      2026-08-26 against one korps agent asked one question, with nothing
-      changed between runs but `[server.storage] type`, and confirmed persistent
-      by re-reading the task through `GetTask` — so it is not a race with the
-      final write. A client reading `status.message`, which is where the answer
-      belongs and where the in-memory backend puts it, gets nothing on
-      PostgreSQL and SQLite.
-      Two backends behind one port disagreeing about the shape of what they
-      return is the failure the `Any`-driver work was meant to make impossible,
-      and it is invisible to a suite that tests each adapter against its own
-      expectations. What would catch the class: one conformance test run against
-      both, asserting a task read back equals the task written. Found from
-      korps, which is the only place both backends serve the same agent.
-
-
-- [ ] **Nothing runs `a2a-llm` against a real OpenAI-compatible server.** Every
-      test here is a unit test over a hand-written body, and the marker list is
-      the part of this crate that unit tests structurally cannot check: it is
-      only ever wrong about a server nobody has run it against. The llama.cpp
-      miss fixed on 2026-08-26 is the proof — the list *named* llama.cpp in a
-      comment, had never been run against one, and matched none of its wording;
-      it took minutes to find by hand and the suite was green throughout. This
-      is the same shape as the two `a2acli` interop items below, which are what
-      found the last round of protocol bugs, and it wants the same treatment: a
-      gated job that starts a local server (llama.cpp is the cheap one, and the
-      one with distinctive errors) and asserts at least an answer, a tool call,
-      reasoning arriving as `reasoning_content`, and an overflow classified as
-      `ContextLengthExceeded` rather than `ApiError`. The overflow case is the
-      one that earns it. korps' `TODO.md` §3 tracks the handler-side twin.
-
+- [x] **The two storage backends returned different tasks for the same run.**
+      Fixed 2026-08-26. A completed task from `InMemoryTaskStorage` carried the
+      agent's reply in `status.message`; the same task from `SqlxTaskStorage`
+      had none. The cause was one missing column in three statements:
+      `update_status`, `update_status_checked` and `cancel` all wrote
+      `status_state` and left `status_message` holding whatever `create` put
+      there — normally `NULL`. The column, the read in `row_to_task`, and the
+      `TASK_COLUMNS` list were all correct and had been all along; nothing ever
+      wrote to it after insert.
+      `Task::update_status` in the domain is the reference and it replaces the
+      whole `TaskStatus`, so a transition carrying no message clears the last
+      one rather than leaving it attributed to a state it was never about. The
+      storage side does that now: `status_message_json(None)` writes `NULL`
+      deliberately rather than skipping the column.
+      **The test is the point of the fix.** New `tests/storage_parity_test.rs`
+      holds the assertions once and takes the backend as a parameter, because
+      each adapter having its own file asserting what *it* does is exactly what
+      let these two drift while both suites stayed green. Verified against the
+      unfixed code first: `in_memory` passes, `sqlx` fails on the completed-task
+      assertion — so it catches the real difference rather than restating the
+      new behaviour. A backend added later gets one `parity_suite!` line and
+      inherits the lot.
+      Also deduplicated on the way through: the `TaskState` → column-string
+      match had five copies against a sixth that reads it back, and anything the
+      writer spells differently from the reader returns as `Unknown`. One
+      `state_str` now.
 - [x] Point the **official** `a2aproject/a2acli` at our `examples/jsonrpc_server`
       (`:8137`) — done 2026-08-21 against `a2acli` 0.1.5, and it found three
       bugs on our side (missing `tags`, the `:verb` task paths, a stream that

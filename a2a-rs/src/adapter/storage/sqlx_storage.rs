@@ -91,6 +91,38 @@ use super::dialect::Dialect;
 /// text, integers, floats, booleans and bytes — and a row is converted whole, so
 /// selecting a column nobody reads fails the query on PostgreSQL.
 #[cfg(feature = "sqlx-storage")]
+/// The `status_state` spelling of a task state.
+///
+/// One copy. It was written out at five sites — three that update a task, one
+/// that appends history, and the list filter — against a sixth match in
+/// `row_to_task` that reads it back, and anything the writer spells differently
+/// from the reader comes back as `TaskState::Unknown`.
+#[cfg(feature = "sqlx-storage")]
+fn state_str(state: TaskState) -> &'static str {
+    match state {
+        TaskState::Submitted => "submitted",
+        TaskState::Working => "working",
+        TaskState::InputRequired => "input-required",
+        TaskState::Completed => "completed",
+        TaskState::Canceled => "canceled",
+        TaskState::Failed => "failed",
+        TaskState::Rejected => "rejected",
+        TaskState::AuthRequired => "auth-required",
+        TaskState::Unknown => "unknown",
+    }
+}
+
+/// The `status_message` column value for a status carrying `message`.
+///
+/// `None` is an answer rather than an absence to skip: the message belongs to
+/// the *current* status, so a transition carrying none has to clear what the
+/// last one left. `Task::update_status` replaces the whole `TaskStatus`, and
+/// this is the storage-side half of that.
+#[cfg(feature = "sqlx-storage")]
+fn status_message_json(message: Option<&Message>) -> Option<String> {
+    message.map(|m| serde_json::to_string(m).unwrap_or_default())
+}
+
 const TASK_COLUMNS: &str = "id, context_id, status_state, status_message, metadata, artifacts";
 
 /// How many events per task [`SqlxTaskStorage`] keeps for stream resumption.
@@ -884,17 +916,7 @@ impl SqlxTaskStorage {
         state: TaskState,
         message: Option<Message>,
     ) -> Result<(), A2AError> {
-        let state_str = match state {
-            TaskState::Submitted => "submitted",
-            TaskState::Working => "working",
-            TaskState::InputRequired => "input-required",
-            TaskState::Completed => "completed",
-            TaskState::Canceled => "canceled",
-            TaskState::Failed => "failed",
-            TaskState::Rejected => "rejected",
-            TaskState::AuthRequired => "auth-required",
-            TaskState::Unknown => "unknown",
-        };
+        let state_str = state_str(state);
 
         let message_json = if let Some(msg) = message {
             Some(serde_json::to_string(&msg).map_err(|e| {
@@ -1110,23 +1132,20 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         message: Option<Message>,
     ) -> Result<Task, A2AError> {
         let task_id = id.as_str();
-        // Convert state to string
-        let state_str = match state {
-            TaskState::Submitted => "submitted",
-            TaskState::Working => "working",
-            TaskState::InputRequired => "input-required",
-            TaskState::Completed => "completed",
-            TaskState::Canceled => "canceled",
-            TaskState::Failed => "failed",
-            TaskState::Rejected => "rejected",
-            TaskState::AuthRequired => "auth-required",
-            TaskState::Unknown => "unknown",
-        };
+        let state_str = state_str(state);
 
-        // Update task in database (bump the optimistic-concurrency version)
-        let sql = self.sql("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?");
+        // Update task in database (bump the optimistic-concurrency version).
+        // `status_message` goes with the state: it used to be written only by
+        // `create` and never again, so a completed task read back from here had
+        // the state right and no message, while the in-memory store — and the
+        // domain's own `Task::update_status` — carried the agent's reply.
+        let sql = self.sql(
+            "UPDATE tasks SET status_state = ?, status_message = ?, version = version + 1 \
+             WHERE id = ?",
+        );
         let result = sqlx::query(&sql)
             .bind(state_str)
+            .bind(status_message_json(message.as_ref()))
             .bind(task_id)
             .execute(&self.pool)
             .await
@@ -1209,10 +1228,17 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         cancel_message.task_id = task_id.to_string();
         cancel_message.context_id = task.context_id.clone();
 
-        // Update task status (bump the optimistic-concurrency version)
-        let sql = self.sql("UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ?");
+        // Update task status (bump the optimistic-concurrency version). The
+        // cancellation message is the status message, which is what the
+        // in-memory store does by handing it to `Task::update_status` — here it
+        // reached history only, so a canceled task could not say why.
+        let sql = self.sql(
+            "UPDATE tasks SET status_state = ?, status_message = ?, version = version + 1 \
+             WHERE id = ?",
+        );
         sqlx::query(&sql)
-            .bind("canceled")
+            .bind(state_str(TaskState::Canceled))
+            .bind(status_message_json(Some(&cancel_message)))
             .bind(task_id)
             .execute(&self.pool)
             .await
@@ -1277,25 +1303,17 @@ impl AsyncTaskVersioning for SqlxTaskStorage {
         message: Option<Message>,
     ) -> Result<VersionedTask, A2AError> {
         let task_id = id.as_str();
-        let state_str = match state {
-            TaskState::Submitted => "submitted",
-            TaskState::Working => "working",
-            TaskState::InputRequired => "input-required",
-            TaskState::Completed => "completed",
-            TaskState::Canceled => "canceled",
-            TaskState::Failed => "failed",
-            TaskState::Rejected => "rejected",
-            TaskState::AuthRequired => "auth-required",
-            TaskState::Unknown => "unknown",
-        };
+        let state_str = state_str(state);
 
         // Conditional update: both backends apply it atomically, so the row
         // count tells us whether the version matched without a separate lock.
         let sql = self.sql(
-            "UPDATE tasks SET status_state = ?, version = version + 1 WHERE id = ? AND version = ?",
+            "UPDATE tasks SET status_state = ?, status_message = ?, version = version + 1 \
+             WHERE id = ? AND version = ?",
         );
         let result = sqlx::query(&sql)
             .bind(state_str)
+            .bind(status_message_json(message.as_ref()))
             .bind(task_id)
             .bind(expected as i64)
             .execute(&self.pool)
@@ -1380,17 +1398,7 @@ impl AsyncTaskQuery for SqlxTaskStorage {
             count_q = count_q.bind(context_id);
         }
         if let Some(ref status) = params.status {
-            let state_str = match *status {
-                crate::domain::TaskState::Submitted => "submitted",
-                crate::domain::TaskState::Working => "working",
-                crate::domain::TaskState::InputRequired => "input-required",
-                crate::domain::TaskState::Completed => "completed",
-                crate::domain::TaskState::Canceled => "canceled",
-                crate::domain::TaskState::Failed => "failed",
-                crate::domain::TaskState::Rejected => "rejected",
-                crate::domain::TaskState::AuthRequired => "auth-required",
-                crate::domain::TaskState::Unknown => "unknown",
-            };
+            let state_str = state_str(*status);
             count_q = count_q.bind(state_str);
         }
         if let Some(ref ts) = timestamp_str {
@@ -1432,17 +1440,7 @@ impl AsyncTaskQuery for SqlxTaskStorage {
             main_q = main_q.bind(context_id);
         }
         if let Some(ref status) = params.status {
-            let state_str = match *status {
-                crate::domain::TaskState::Submitted => "submitted",
-                crate::domain::TaskState::Working => "working",
-                crate::domain::TaskState::InputRequired => "input-required",
-                crate::domain::TaskState::Completed => "completed",
-                crate::domain::TaskState::Canceled => "canceled",
-                crate::domain::TaskState::Failed => "failed",
-                crate::domain::TaskState::Rejected => "rejected",
-                crate::domain::TaskState::AuthRequired => "auth-required",
-                crate::domain::TaskState::Unknown => "unknown",
-            };
+            let state_str = state_str(*status);
             main_q = main_q.bind(state_str);
         }
         if let Some(ref ts) = timestamp_str {
