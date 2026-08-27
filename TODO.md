@@ -77,6 +77,25 @@ What is left on this side of the seam — the handler-side remainder is in korps
 Work whose two halves land on opposite sides of the seam. Also listed in korps'
 `TODO.md` §2; whoever picks one up should check the other copy.
 
+- [ ] **`ContextLengthExceeded` throws away the numbers the provider gave.**
+      It carries a `String` — the formatted error body — so the two facts a
+      caller most wants are readable only by re-parsing prose it was handed as
+      an opaque message. llama.cpp returns them as *fields*
+      (`"n_ctx":32768,"n_prompt_tokens":40089`) and OpenAI's prose names the
+      window; both are discarded. korps' half is already written against this:
+      its new `CeilingWatch` reports the estimated size of the refused request,
+      because that is all it can know, and tells the operator to set
+      `max_input_tokens` below it — which is a bound, not an answer. Measured
+      against llama.cpp at `n_ctx = 32768`, a request the estimator put at 51483
+      tokens was 40089 by the server's count, so the advice leaves everything
+      from 33k to 51k still failing. Wants optional `window` and `prompt_tokens`
+      on the variant, parsed where the provider gives them structurally and left
+      `None` otherwise. **Breaking** — it is a tuple variant today — so it wants
+      a release boundary rather than a slot in the marker fix.
+      korps' `TODO.md` §2 has the other half, plus a second use for the same
+      fields: `DriftWatch` only ever samples *successful* requests, since it
+      reconciles against `usage.prompt_tokens`, so the requests where the
+      estimate being wrong actually costs something contribute nothing to it.
 - [ ] **A skill with no keywords serves an undecodable card.** The `a2a-rs` half
       landed on 2026-08-21: `SimpleAgentInfo::add_skill` and
       `add_comprehensive_skill` now require `tags`, because the spec marks the
@@ -151,6 +170,32 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
 
 ## 3. Interop and CI
 
+- [x] **The two storage backends returned different tasks for the same run.**
+      Fixed 2026-08-26. A completed task from `InMemoryTaskStorage` carried the
+      agent's reply in `status.message`; the same task from `SqlxTaskStorage`
+      had none. The cause was one missing column in three statements:
+      `update_status`, `update_status_checked` and `cancel` all wrote
+      `status_state` and left `status_message` holding whatever `create` put
+      there — normally `NULL`. The column, the read in `row_to_task`, and the
+      `TASK_COLUMNS` list were all correct and had been all along; nothing ever
+      wrote to it after insert.
+      `Task::update_status` in the domain is the reference and it replaces the
+      whole `TaskStatus`, so a transition carrying no message clears the last
+      one rather than leaving it attributed to a state it was never about. The
+      storage side does that now: `status_message_json(None)` writes `NULL`
+      deliberately rather than skipping the column.
+      **The test is the point of the fix.** New `tests/storage_parity_test.rs`
+      holds the assertions once and takes the backend as a parameter, because
+      each adapter having its own file asserting what *it* does is exactly what
+      let these two drift while both suites stayed green. Verified against the
+      unfixed code first: `in_memory` passes, `sqlx` fails on the completed-task
+      assertion — so it catches the real difference rather than restating the
+      new behaviour. A backend added later gets one `parity_suite!` line and
+      inherits the lot.
+      Also deduplicated on the way through: the `TaskState` → column-string
+      match had five copies against a sixth that reads it back, and anything the
+      writer spells differently from the reader returns as `Unknown`. One
+      `state_str` now.
 - [x] Point the **official** `a2aproject/a2acli` at our `examples/jsonrpc_server`
       (`:8137`) — done 2026-08-21 against `a2acli` 0.1.5, and it found three
       bugs on our side (missing `tags`, the `:verb` task paths, a stream that
