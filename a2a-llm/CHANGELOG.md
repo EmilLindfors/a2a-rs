@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.2.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.2.0...a2a-llm-v0.2.1) - 2026-08-27
+
+### Fixed
+
+- Recognize llama.cpp's context-overflow error as one
+
 ## [0.2.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.1.1...a2a-llm-v0.2.0) - 2026-08-25
 
 ### Added

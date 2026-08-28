@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-llm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-stream",
  "async-trait",
@@ -58,7 +58,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-rs"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "arbitrary",
  "async-trait",
