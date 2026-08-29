@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.8.1...a2a-rs-v0.8.2) - 2026-08-29
+
+### Fixed
+
+- The middleware reads the credential the authenticator says it takes
+
 ## [0.8.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.8.0...a2a-rs-v0.8.1) - 2026-08-27
 
 ### Fixed
