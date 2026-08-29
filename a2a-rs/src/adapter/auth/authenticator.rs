@@ -348,15 +348,18 @@ mod http_auth {
     }
 
     impl AuthState {
-        /// Create a new authentication state
+        /// Create a new authentication state, reading credentials the way the
+        /// authenticator's own security scheme says they arrive.
         pub fn new(authenticator: impl Authenticator + 'static) -> Self {
+            let extractors = extractors_for(authenticator.security_scheme());
             Self {
                 authenticator: Arc::new(authenticator),
-                extractors: vec![Arc::new(BearerTokenExtractor)],
+                extractors,
             }
         }
 
-        /// Create with custom extractors
+        /// Create with custom extractors, for a credential
+        /// [`new`](Self::new) cannot derive.
         #[allow(dead_code)]
         pub fn with_extractors(
             authenticator: impl Authenticator + 'static,
@@ -366,6 +369,54 @@ mod http_auth {
                 authenticator: Arc::new(authenticator),
                 extractors,
             }
+        }
+    }
+
+    /// The extractor that reads the credential `scheme` describes.
+    ///
+    /// Derived rather than assumed, and that is the whole of it: every
+    /// [`Authenticator`] declares its scheme — `security_scheme()` is required
+    /// by the port, and the same value goes on the agent card — and every one
+    /// of them refuses a context labelled with any other scheme. Hard-coding
+    /// [`BearerTokenExtractor`] here therefore made three of the five
+    /// authenticators unreachable: an API key, an OAuth2 access token and an
+    /// OIDC ID token were each extracted as `bearer` and then refused by the
+    /// authenticator that had just been wired up to accept them, so a server
+    /// configured with one answered 401 to every request — the valid
+    /// credentials included. Only `bearer` and JWT worked, because those are
+    /// the two that expect what the bearer extractor produces.
+    ///
+    /// What the card advertises is now what the server reads.
+    ///
+    /// One limit worth stating: this middleware reads *headers*, so an API key
+    /// configured with `location = "query"` or `"cookie"` extracts nothing and
+    /// the request is refused. That is deliberate on the query side — a
+    /// credential in a URL is a credential in every access log and referrer —
+    /// and a caller who needs either can pass its own extractors to
+    /// [`AuthState::with_extractors`].
+    fn extractors_for(scheme: &SecurityScheme) -> Vec<Arc<dyn AuthContextExtractor>> {
+        use crate::domain::core::agent::security_scheme::Scheme;
+
+        match &scheme.scheme {
+            Some(Scheme::ApiKeySecurityScheme(api_key)) => vec![Arc::new(ApiKeyExtractor::new(
+                api_key.location.clone(),
+                api_key.name.clone(),
+            ))],
+            // An OAuth2 access token and an OIDC ID token both arrive in an
+            // `Authorization: Bearer` header and are both labelled `oauth2` —
+            // which is what `OpenIdConnectAuthenticator::validate_context`
+            // already accepts alongside its own name.
+            #[cfg(feature = "auth")]
+            Some(Scheme::Oauth2SecurityScheme(_) | Scheme::OpenIdConnectSecurityScheme(_)) => {
+                vec![Arc::new(crate::adapter::auth::OAuth2Extractor)]
+            }
+            // `http` (bearer, and JWT in a bearer header), mTLS — where the
+            // credential is not in a header this middleware reads at all — and
+            // any scheme added later. The bearer extractor is what
+            // `BearerTokenAuthenticator`, `JwtAuthenticator` and
+            // `NoopAuthenticator` expect, so this is also what every working
+            // deployment already had.
+            _ => vec![Arc::new(BearerTokenExtractor)],
         }
     }
 

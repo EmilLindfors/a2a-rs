@@ -250,6 +250,27 @@ is for. And `AgentConfig::validate` refuses an OAuth2 block without an
 card and refuses every request is the same silent-wrong as the echo fallback for
 an unknown handler, and the same answer applies — fail the config, name the key.
 
+**The middleware reads what the authenticator says it takes.** (2026-08-29)
+
+`AuthState::new` derives its `AuthContextExtractor` from
+`authenticator.security_scheme()` rather than assuming a bearer header. The
+alternative — a constructor taking extractors, or a defaulted trait method —
+was rejected for the reason the honesty rule gives: a default extractor is a
+guess about a credential, and the guess was wrong for three of the five
+authenticators shipped here. It was not a gap anyone could see from either
+side alone, because each half was right: the extractor produced a valid bearer
+context, the authenticator correctly refused a scheme that was not its own, and
+the server answered 401 to every request.
+
+The scheme is already the value that goes on the agent card, so this makes the
+card and the middleware one description instead of two. A new authenticator
+gets its extraction from the scheme it declares, and cannot be added in a state
+where it authenticates nobody.
+
+Headers only. An API key in a query parameter is a credential in every access
+log and referrer, and the middleware does not read one; `with_extractors` is
+the escape hatch for an embedder who has decided otherwise.
+
 **Two authenticators for one OIDC provider, because the credential differs.**
 (2026-08-17)
 
