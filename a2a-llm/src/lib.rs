@@ -74,8 +74,23 @@ pub enum LlmError {
     /// caller can act on: drop history and try again. Folded into `ApiError` it
     /// reached the handler as `A2AError::Internal("LLM error: API error (400)
     /// …")` and simply failed the task.
-    #[error("context length exceeded: {0}")]
-    ContextLengthExceeded(String),
+    ///
+    /// The numbers are carried where the provider's body names them, because
+    /// they are the difference between an answer and a bound: a caller advising
+    /// "set your ceiling below N" from its own token *estimate* hands out a
+    /// number with the estimator's error on it, while `context_window` is the
+    /// limit the provider actually enforced.
+    #[error("context length exceeded: {detail}")]
+    ContextLengthExceeded {
+        /// The provider's message as received (label, status, body).
+        detail: String,
+        /// Prompt tokens as the provider counted them, where the body names
+        /// them. The provider's count, never an estimate; `None` must not read
+        /// as zero (the same rule as [`TokenUsage`]).
+        prompt_tokens: Option<u32>,
+        /// The context window the provider enforced, where the body names it.
+        context_window: Option<u32>,
+    },
     #[error("Network error: {0}")]
     NetworkError(String),
     #[error("Serialization error: {0}")]
@@ -136,17 +151,61 @@ const CONTEXT_LENGTH_MARKERS: [&str; 8] = [
 /// Classify a provider's failure body, so an over-long request becomes
 /// [`LlmError::ContextLengthExceeded`] rather than an opaque API error.
 ///
-/// Takes the already-formatted message so both providers and both code paths
-/// (streaming and not) classify identically.
-pub(crate) fn classify_api_error(message: String) -> LlmError {
+/// One function for both providers and both code paths (streaming and not) so
+/// they classify identically — it owns the `{label} ({status}): {body}`
+/// format too, which used to be written at every call site. Takes the **raw**
+/// body because the numbers a context refusal carries are read from it before
+/// anything is flattened into prose.
+pub(crate) fn classify_api_error(label: &str, status: reqwest::StatusCode, body: &str) -> LlmError {
+    let message = format!("{label} ({status}): {body}");
     let haystack = message.to_lowercase();
     if CONTEXT_LENGTH_MARKERS
         .iter()
         .any(|marker| haystack.contains(marker))
     {
-        return LlmError::ContextLengthExceeded(message);
+        let (prompt_tokens, context_window) = context_refusal_numbers(body);
+        return LlmError::ContextLengthExceeded {
+            detail: message,
+            prompt_tokens,
+            context_window,
+        };
     }
     LlmError::ApiError(message)
+}
+
+/// What the provider's body says about a refused request: (prompt tokens as it
+/// counted them, the window it enforced).
+///
+/// JSON fields first — llama.cpp returns `n_prompt_tokens` and `n_ctx` beside
+/// the message, inside the `error` object — then the two prose shapes the
+/// fixtures pin: OpenAI's "maximum context length is <N>" names the window,
+/// Gemini's "input token count (<N>)" names the count. Nothing speculative: a
+/// shape with no fixture is not parsed, because a wrong number is worse than
+/// none — these values are what a caller repairs its config with.
+fn context_refusal_numbers(body: &str) -> (Option<u32>, Option<u32>) {
+    let json: Option<Value> = serde_json::from_str(body).ok();
+    let field = |name: &str| {
+        let json = json.as_ref()?;
+        json.get(name)
+            .or_else(|| json.get("error").and_then(|error| error.get(name)))
+            .and_then(Value::as_u64)
+            .and_then(|n| u32::try_from(n).ok())
+    };
+    let prose = body.to_lowercase();
+    let prompt_tokens =
+        field("n_prompt_tokens").or_else(|| number_after(&prose, "input token count ("));
+    let context_window =
+        field("n_ctx").or_else(|| number_after(&prose, "maximum context length is "));
+    (prompt_tokens, context_window)
+}
+
+/// The unsigned number immediately following `pattern` in `haystack`, if any.
+fn number_after(haystack: &str, pattern: &str) -> Option<u32> {
+    let start = haystack.find(pattern)? + pattern.len();
+    let digits: &str = haystack[start..]
+        .split(|c: char| !c.is_ascii_digit())
+        .next()?;
+    digits.parse().ok()
 }
 
 /// Whether the model behind an endpoint accepts the reasoning parameter its
@@ -553,28 +612,64 @@ pub trait LlmProvider: Send + Sync {
 mod error_tests {
     use super::*;
 
+    fn status(code: u16) -> reqwest::StatusCode {
+        reqwest::StatusCode::from_u16(code).unwrap()
+    }
+
     /// The one API failure a caller can act on has to be tellable from the rest,
-    /// across the shapes the providers actually return.
+    /// across the shapes the providers actually return — and where a body names
+    /// the numbers, they come through, because they are what a caller repairs
+    /// its config with (an estimate-derived bound has the estimator's error on
+    /// it; `n_ctx` is the limit the provider actually enforced).
     #[test]
     fn an_over_long_request_is_classified_as_a_context_length_failure() {
-        let bodies = [
-            r#"OpenAI API error (400): {"error":{"message":"This model's maximum context length is 128000 tokens","code":"context_length_exceeded"}}"#,
-            "OpenAI stream error (400): Requested 200000 tokens, exceeds the maximum for this model",
-            r#"Gemini API error (400): {"error":{"status":"INVALID_ARGUMENT","message":"The input token count (1200000) exceeds the maximum"}}"#,
-            "OpenAI API error (400): too many tokens in prompt",
-            // llama.cpp b10524, verbatim. None of the markers above match it:
-            // it says "context size", not "context length", and "exceeds the
-            // available", not "exceeds the maximum".
-            r#"OpenAI stream error (400 Bad Request): {"error":{"code":400,"message":"request (40089 tokens) exceeds the available context size (32768 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":40089,"n_ctx":32768}}"#,
+        // (label, body, provider-counted prompt tokens, enforced window)
+        let cases = [
+            (
+                "OpenAI API error",
+                r#"{"error":{"message":"This model's maximum context length is 128000 tokens","code":"context_length_exceeded"}}"#,
+                None,
+                Some(128000),
+            ),
+            (
+                "OpenAI stream error",
+                "Requested 200000 tokens, exceeds the maximum for this model",
+                // No fixture-pinned shape names these numbers, and a shape
+                // without a fixture is not parsed.
+                None,
+                None,
+            ),
+            (
+                "Gemini API error",
+                r#"{"error":{"status":"INVALID_ARGUMENT","message":"The input token count (1200000) exceeds the maximum"}}"#,
+                Some(1200000),
+                None,
+            ),
+            ("OpenAI API error", "too many tokens in prompt", None, None),
+            // llama.cpp b10524, verbatim. None of the markers above match it
+            // (it says "context size", not "context length", and "exceeds the
+            // available", not "exceeds the maximum") — and it is the one body
+            // carrying both numbers as JSON fields.
+            (
+                "OpenAI stream error",
+                r#"{"error":{"code":400,"message":"request (40089 tokens) exceeds the available context size (32768 tokens), try increasing it","type":"exceed_context_size_error","n_prompt_tokens":40089,"n_ctx":32768}}"#,
+                Some(40089),
+                Some(32768),
+            ),
         ];
-        for body in bodies {
-            assert!(
-                matches!(
-                    classify_api_error(body.to_string()),
-                    LlmError::ContextLengthExceeded(_)
-                ),
-                "should classify as context length: {body}"
-            );
+        for (label, body, prompt, window) in cases {
+            match classify_api_error(label, status(400), body) {
+                LlmError::ContextLengthExceeded {
+                    detail,
+                    prompt_tokens,
+                    context_window,
+                } => {
+                    assert!(detail.contains(label) && detail.contains(body), "{detail}");
+                    assert_eq!(prompt_tokens, prompt, "prompt tokens for: {body}");
+                    assert_eq!(context_window, window, "window for: {body}");
+                }
+                other => panic!("should classify as context length: {body} → {other:?}"),
+            }
         }
     }
 
@@ -582,14 +677,21 @@ mod error_tests {
     /// "too long" would send the handler into a compaction loop it can never win.
     #[test]
     fn other_failures_stay_api_errors() {
-        let bodies = [
-            r#"OpenAI API error (401): {"error":{"message":"Incorrect API key provided"}}"#,
-            "OpenAI API error (429): Rate limit reached for requests",
-            "Gemini API error (503): The model is overloaded",
+        let cases = [
+            (
+                "OpenAI API error",
+                401,
+                r#"{"error":{"message":"Incorrect API key provided"}}"#,
+            ),
+            ("OpenAI API error", 429, "Rate limit reached for requests"),
+            ("Gemini API error", 503, "The model is overloaded"),
         ];
-        for body in bodies {
+        for (label, code, body) in cases {
             assert!(
-                matches!(classify_api_error(body.to_string()), LlmError::ApiError(_)),
+                matches!(
+                    classify_api_error(label, status(code), body),
+                    LlmError::ApiError(_)
+                ),
                 "should stay an API error: {body}"
             );
         }

@@ -299,9 +299,7 @@ impl GeminiProvider {
             && refuses_reasoning(status.as_u16(), &error_text, THINKING_FIELD))
         {
             error!(status = %status, error = %error_text, "Gemini API returned error");
-            return Err(super::classify_api_error(format!(
-                "{label} ({status}): {error_text}"
-            )));
+            return Err(super::classify_api_error(label, status, &error_text));
         }
 
         warn!(
@@ -347,7 +345,7 @@ impl GeminiProvider {
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
         error!(status = %status, error = %error_text, "Gemini API returned error");
-        super::classify_api_error(format!("{label} ({status}): {error_text}"))
+        super::classify_api_error(label, status, &error_text)
     }
 }
 
