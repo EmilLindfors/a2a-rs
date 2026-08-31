@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.3.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.2.1...a2a-llm-v0.3.0) - 2026-08-31
+
+### Added
+
+- *(a2a-llm)* A context refusal carries the provider's window and token count ([#63](https://github.com/EmilLindfors/a2a-rs/pull/63))
+
 ## [0.2.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.2.0...a2a-llm-v0.2.1) - 2026-08-27
 
 ### Fixed
