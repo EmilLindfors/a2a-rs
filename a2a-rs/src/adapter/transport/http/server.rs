@@ -38,6 +38,8 @@ where
     address: String,
     /// Authenticator
     authenticator: Option<Arc<Auth>>,
+    /// Extra routes served outside the authenticator, if any.
+    open_router: Option<Router>,
 }
 
 impl<P, A> HttpServer<P, A>
@@ -52,6 +54,7 @@ where
             agent_info: Arc::new(agent_info),
             address,
             authenticator: None,
+            open_router: None,
         }
     }
 }
@@ -69,7 +72,30 @@ where
             agent_info: Arc::new(agent_info),
             address,
             authenticator: Some(Arc::new(authenticator)),
+            open_router: None,
         }
+    }
+
+    /// Serve `router`'s routes on the same listener, *outside* the
+    /// authenticator.
+    ///
+    /// For endpoints that carry their own authentication — a webhook receiver
+    /// validating a per-task token, a health probe — where requiring the
+    /// agent's credentials would mean handing them to whoever calls back. The
+    /// A2A routes and the agent card stay behind the authenticator exactly as
+    /// before; only the routes given here bypass it.
+    ///
+    /// The counterpart of the composable [`jsonrpc_router`] /
+    /// [`rest_router`](crate::adapter::rest_router) surface for a transport
+    /// whose app is assembled inside this type.
+    ///
+    /// `router` must not define a fallback: the ConnectRPC service is this
+    /// server's fallback, and [`Router::merge`] panics on a second one.
+    ///
+    /// [`jsonrpc_router`]: crate::adapter::jsonrpc_router
+    pub fn with_open_router(mut self, router: Router) -> Self {
+        self.open_router = Some(router);
+        self
     }
 
     /// Start the HTTP server on the configured address.
@@ -132,6 +158,13 @@ where
 
             // Create an auth router with the authenticator
             app = with_auth(app, (*auth_clone).clone());
+        }
+
+        // Merged after the auth middleware is applied, which is what keeps
+        // these routes outside it: an axum layer wraps the routes present when
+        // it is added, and these are added afterwards on purpose.
+        if let Some(open) = &self.open_router {
+            app = app.merge(open.clone());
         }
 
         axum::serve(listener, app).await.map_err(|e| {
