@@ -77,7 +77,19 @@ What is left on this side of the seam — the handler-side remainder is in korps
 Work whose two halves land on opposite sides of the seam. Also listed in korps'
 `TODO.md` §2; whoever picks one up should check the other copy.
 
-- [ ] **`ContextLengthExceeded` throws away the numbers the provider gave.**
+- [x] **`ContextLengthExceeded` throws away the numbers the provider gave.**
+      The upstream half landed 2026-08-31, as specified: a struct variant
+      `{ detail, prompt_tokens: Option<u32>, context_window: Option<u32> }`,
+      read from the raw body — llama.cpp's JSON fields first, then the two
+      prose shapes the fixtures pin (OpenAI's window, Gemini's count), nothing
+      speculative. What it did not predict: `classify_api_error` taking the
+      raw body meant it had to take over the `{label} ({status}): {body}`
+      formatting too, which deleted the same format string from all four call
+      sites — the numbers must be read before the JSON is flattened, so the
+      flattening moved inside. korps' half (the `CeilingWatch` report naming
+      the window, `DriftWatch` sampling refusals) lands with the 0.3.0
+      release; its `TODO.md` §2 tracks it.
+      The original item, for the reasoning:
       It carries a `String` — the formatted error body — so the two facts a
       caller most wants are readable only by re-parsing prose it was handed as
       an opaque message. llama.cpp returns them as *fields*

@@ -491,7 +491,7 @@ impl OpenAiProvider {
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
         error!(status = %status, error = %error_text, "OpenAI API returned error");
-        classify_api_error(format!("{label} ({status}): {error_text}"))
+        classify_api_error(label, status, &error_text)
     }
 
     /// POST `body`, and if the model refuses the reasoning parameter it carries,
@@ -525,9 +525,7 @@ impl OpenAiProvider {
             && refuses_reasoning(status.as_u16(), &error_text, REASONING_FIELD))
         {
             error!(status = %status, error = %error_text, "OpenAI API returned error");
-            return Err(classify_api_error(format!(
-                "{label} ({status}): {error_text}"
-            )));
+            return Err(classify_api_error(label, status, &error_text));
         }
 
         warn!(
