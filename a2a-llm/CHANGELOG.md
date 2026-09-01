@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.4.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.3.0...a2a-llm-v0.4.0) - 2026-09-01
+
+### Added
+
+- *(a2a-llm)* The response says why the model stopped
+
 ## [0.3.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.2.1...a2a-llm-v0.3.0) - 2026-08-31
 
 ### Added
