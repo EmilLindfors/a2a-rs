@@ -368,6 +368,7 @@ struct OpenAiChatResponse {
 #[derive(Debug, Deserialize)]
 struct ChatChoice {
     message: OpenAiChatMessage,
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -382,6 +383,9 @@ struct OpenAiStreamChunk {
 #[derive(Debug, Deserialize)]
 struct StreamChoice {
     delta: StreamDelta,
+    /// Set on the choice's last chunk; `null` until then.
+    #[serde(default)]
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -645,6 +649,11 @@ impl LlmProvider for OpenAiProvider {
             LlmError::ProviderError("No response from AI".to_string())
         })?;
 
+        let finish = choice
+            .finish_reason
+            .as_deref()
+            .map(super::FinishReason::from_wire);
+
         let tool_calls = choice.message.tool_calls.map(|calls| {
             calls
                 .into_iter()
@@ -674,6 +683,7 @@ impl LlmProvider for OpenAiProvider {
             tool_calls,
             reasoning,
             usage: completion.usage.map(TokenUsage::from),
+            finish,
         })
     }
 
@@ -856,6 +866,14 @@ impl LlmProvider for OpenAiProvider {
                                 arguments: new_args,
                             };
                         }
+                    }
+
+                    // Rides on the choice's last content chunk, so it lands
+                    // before the [DONE] tool-call flush and any usage-only
+                    // chunk — which is why the event's doc says "record it,
+                    // don't break on it".
+                    if let Some(reason) = choice.finish_reason {
+                        yield super::LlmStreamEvent::Finish(super::FinishReason::from_wire(&reason));
                     }
                 }
             }
@@ -1053,5 +1071,42 @@ mod tests {
                 "for {dialect:?}"
             );
         }
+    }
+
+    /// A length-stop is HTTP 200 with a cut answer — `finish_reason` is the
+    /// only thing in the body that says the text is incomplete, so the parse
+    /// dropping the field would make truncation invisible to every caller.
+    /// The fixture is the shape llama.cpp b10524 actually sends when a slot's
+    /// context fills mid-generation.
+    #[test]
+    fn a_stream_chunk_carries_its_finish_reason() {
+        let chunk: OpenAiStreamChunk = serde_json::from_str(
+            r#"{"choices":[{"finish_reason":"length","index":0,"delta":{"content":"cut mid-"}}],
+                "created":1756713600,"id":"chatcmpl-x","model":"qwen3",
+                "object":"chat.completion.chunk"}"#,
+        )
+        .expect("a real llama.cpp final chunk parses");
+        assert_eq!(
+            chunk.choices[0].finish_reason.as_deref(),
+            Some("length"),
+            "the reason must survive the parse"
+        );
+
+        // The usage-only chunk that follows has no choices and no reason.
+        let terminal: OpenAiStreamChunk = serde_json::from_str(
+            r#"{"choices":[],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}"#,
+        )
+        .expect("the usage-only chunk still parses");
+        assert!(terminal.choices.is_empty());
+    }
+
+    #[test]
+    fn a_completion_response_carries_its_finish_reason() {
+        let completion: OpenAiChatResponse = serde_json::from_str(
+            r#"{"choices":[{"message":{"role":"assistant","content":"done"},
+                "finish_reason":"stop"}]}"#,
+        )
+        .expect("parses");
+        assert_eq!(completion.choices[0].finish_reason.as_deref(), Some("stop"));
     }
 }
