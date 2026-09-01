@@ -212,7 +212,7 @@ impl From<GeminiUsageMetadata> for super::TokenUsage {
 struct Candidate {
     content: Option<ResponseContent>,
     #[serde(rename = "finishReason")]
-    _finish_reason: Option<String>,
+    finish_reason: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -506,6 +506,11 @@ impl LlmProvider for GeminiProvider {
             LlmError::ProviderError("Empty candidates array".to_string())
         })?;
 
+        let finish = candidate
+            .finish_reason
+            .as_deref()
+            .map(super::FinishReason::from_wire);
+
         let response_content = candidate.content.ok_or_else(|| {
             warn!("No content in Gemini API candidate");
             LlmError::ProviderError("No content in response".to_string())
@@ -546,6 +551,7 @@ impl LlmProvider for GeminiProvider {
             tool_calls,
             reasoning: None,
             usage,
+            finish,
         })
     }
 
@@ -726,6 +732,14 @@ impl LlmProvider for GeminiProvider {
 
                 if let Some(candidates) = chunk.candidates {
                     for candidate in candidates {
+                        // Read before `content` is moved out of the candidate;
+                        // yielded after the parts so the cut text still arrives
+                        // ahead of the reason it was cut.
+                        let finish = candidate
+                            .finish_reason
+                            .as_deref()
+                            .map(super::FinishReason::from_wire);
+
                         if let Some(content) = candidate.content
                             && let Some(parts) = content.parts
                         {
@@ -753,6 +767,10 @@ impl LlmProvider for GeminiProvider {
                                     });
                                 }
                             }
+                        }
+
+                        if let Some(reason) = finish {
+                            yield super::LlmStreamEvent::Finish(reason);
                         }
                     }
                 }
@@ -904,6 +922,24 @@ mod tests {
                 "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
                 "generationConfig": { "temperature": 0.25, "maxOutputTokens": 64 },
             })
+        );
+    }
+
+    /// Gemini spells the field `finishReason` and the values UPPER_SNAKE; a
+    /// candidate cut at `maxOutputTokens` says `MAX_TOKENS` on an otherwise
+    /// successful body, and may arrive with no content at all.
+    #[test]
+    fn a_candidate_carries_its_finish_reason() {
+        let candidate: Candidate = serde_json::from_str(
+            r#"{"content":{"parts":[{"text":"cut mid-"}],"role":"model"},
+                "finishReason":"MAX_TOKENS"}"#,
+        )
+        .expect("parses");
+        assert_eq!(candidate.finish_reason.as_deref(), Some("MAX_TOKENS"));
+        assert_eq!(
+            crate::FinishReason::from_wire("MAX_TOKENS"),
+            crate::FinishReason::Length,
+            "Gemini's spelling normalizes to the same variant as OpenAI's `length`"
         );
     }
 }

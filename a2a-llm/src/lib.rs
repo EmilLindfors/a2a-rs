@@ -563,6 +563,56 @@ impl LlmRequest {
     }
 }
 
+/// Why the model stopped generating, normalized across providers.
+///
+/// The variant a caller acts on is [`FinishReason::Length`]: the output hit a
+/// token limit — the request's own `max_tokens`, or whatever the serving stack
+/// enforces on its own — and the content is cut mid-thought. That arrives as
+/// HTTP 200 with no refusal, so this field is the *only* thing in the response
+/// that says the text is incomplete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FinishReason {
+    /// The model finished on its own.
+    Stop,
+    /// Generation was cut at an output-token limit; the content is incomplete.
+    Length,
+    /// The model stopped to call tools.
+    ToolCalls,
+    /// The provider suppressed output (safety filter, recitation).
+    ContentFilter,
+    /// A reason this crate does not recognize, kept verbatim.
+    Other(String),
+}
+
+impl FinishReason {
+    /// Reads a provider's wire spelling. OpenAI-compatible endpoints (OpenAI,
+    /// OpenRouter, llama.cpp, vLLM) say `stop` / `length` / `tool_calls` /
+    /// `function_call` / `content_filter`; Gemini says `STOP` / `MAX_TOKENS` /
+    /// `SAFETY` / … — one reader for both, since the spellings do not collide.
+    pub fn from_wire(value: &str) -> Self {
+        match value {
+            "stop" | "STOP" => Self::Stop,
+            "length" | "MAX_TOKENS" => Self::Length,
+            "tool_calls" | "function_call" => Self::ToolCalls,
+            "content_filter" | "SAFETY" | "RECITATION" | "PROHIBITED_CONTENT" | "BLOCKLIST"
+            | "SPII" => Self::ContentFilter,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
+impl std::fmt::Display for FinishReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FinishReason::Stop => f.write_str("stop"),
+            FinishReason::Length => f.write_str("length"),
+            FinishReason::ToolCalls => f.write_str("tool_calls"),
+            FinishReason::ContentFilter => f.write_str("content_filter"),
+            FinishReason::Other(reason) => f.write_str(reason),
+        }
+    }
+}
+
 /// A response from an LLM provider.
 #[derive(Debug, Clone)]
 pub struct LlmResponse {
@@ -574,6 +624,8 @@ pub struct LlmResponse {
     pub reasoning: Option<String>,
     /// What the provider says the request cost. `None` when it reported nothing.
     pub usage: Option<TokenUsage>,
+    /// Why generation stopped. `None` when the provider named no reason.
+    pub finish: Option<FinishReason>,
 }
 
 /// An event emitted during a streaming LLM response.
@@ -593,6 +645,12 @@ pub enum LlmStreamEvent {
     /// in the final chunk, after the content. Absent on endpoints that do not
     /// report usage while streaming — see `OpenAiConfig::stream_usage`.
     Usage(TokenUsage),
+    /// Why generation stopped. Arrives near the end of the stream but not
+    /// necessarily last — OpenAI-style endpoints put it on the final content
+    /// chunk, before the usage-only chunk and before this crate flushes
+    /// accumulated tool calls — so a caller should record it, not break on it.
+    /// Absent when the provider named no reason.
+    Finish(FinishReason),
 }
 
 /// Trait defining a generic LLM provider for standardizing AI integration across agents.
@@ -765,6 +823,31 @@ mod error_tests {
             }
             .is_empty(),
             "a reported zero is a report, not an absence"
+        );
+    }
+
+    /// One reader for both dialects, because the spellings do not collide —
+    /// and a reason it does not recognize survives verbatim rather than being
+    /// flattened into a guess.
+    #[test]
+    fn finish_reasons_normalize_across_provider_spellings() {
+        let cases = [
+            ("stop", FinishReason::Stop),
+            ("STOP", FinishReason::Stop),
+            ("length", FinishReason::Length),
+            ("MAX_TOKENS", FinishReason::Length),
+            ("tool_calls", FinishReason::ToolCalls),
+            ("function_call", FinishReason::ToolCalls),
+            ("content_filter", FinishReason::ContentFilter),
+            ("SAFETY", FinishReason::ContentFilter),
+            ("RECITATION", FinishReason::ContentFilter),
+        ];
+        for (wire, expected) in cases {
+            assert_eq!(FinishReason::from_wire(wire), expected, "for {wire:?}");
+        }
+        assert_eq!(
+            FinishReason::from_wire("MALFORMED_FUNCTION_CALL"),
+            FinishReason::Other("MALFORMED_FUNCTION_CALL".to_string())
         );
     }
 }
