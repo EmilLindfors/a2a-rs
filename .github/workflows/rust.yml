@@ -67,10 +67,10 @@ jobs:
     # keeps the number true. Bump it and `[workspace.package] rust-version`
     # together — they are the same claim written twice.
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.96
+        uses: dtolnay/rust-toolchain@1.100
 
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
