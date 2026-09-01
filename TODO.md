@@ -71,6 +71,16 @@ What is left on this side of the seam — the handler-side remainder is in korps
       index, search — ADK `MemoryService`, LangGraph `BaseStore`, Letta
       archival) needs a vector index and is its own pass. Define the config key
       before then so enabling it later is not a breaking config change.
+- [ ] **A `MAX_TOKENS` cut that ate Gemini's whole answer loses its reason.**
+      Deliberately left out of the 0.4.0 finish-reason work (its commit says
+      so): a candidate cut before any content arrived carries
+      `finishReason: "MAX_TOKENS"` and no `content`, and `chat_completion`
+      fails it as `ProviderError("No content in response")` *before* the
+      reason is read — the one empty response whose emptiness is explained
+      raises the same opaque error as a truly empty one. Read the reason
+      first and carry it in the error (or return an empty response with
+      `finish` set), so a caller can name the output-cap knob instead of
+      reporting a provider fault.
 
 ## 2. Shared with korps
 
@@ -258,6 +268,20 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         item in §1 describes: a sweep of the context takes its events, so this
         rides on korps growing a timer. Until then the per-task cap
         (`event_log_capacity`, 1024 by default) is what bounds the table.
+- [ ] **`a2acli send` cannot continue a conversation.** No `--context` flag,
+      so continuing from the CLI means reusing a task id — a different thing
+      on the wire, and a settled task is not a conversation handle. Found
+      driving the 2026-09-01 korps wake-up session by hand. Small: accept a
+      context id on `send` the way a task id already is.
+- [ ] **What does `auto_connect` dial when the card disagrees with the
+      endpoint it was given?** Observed from korps' fleet wake e2e
+      falsification (2026-09-01): `auto_connect` against a *reachable*
+      endpoint whose card advertises an unreachable `url` fails the
+      delegation — so a mis-set `advertised_url` takes down even callers
+      holding the agent's real address. First check exactly which URL the
+      negotiated transport connects to; then decide whether the endpoint the
+      caller handed in should win (or be the fallback) over the card's, and
+      make the connection error name both URLs either way.
 
 ---
 
