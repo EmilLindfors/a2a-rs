@@ -200,6 +200,13 @@ impl A2AError {
                     .with_metadata("actual", actual.to_string());
                 vec![ErrorDetail::ErrorInfo(info)]
             }
+            // The context a caller was refused is the one fact it needs to act
+            // on the refusal, and the message is prose; carry it as metadata so
+            // a client can rebuild the typed variant.
+            A2AError::ContextAccessDenied { context_id } => vec![ErrorDetail::ErrorInfo(
+                crate::domain::error_details::ErrorInfo::new(self.reason_code())
+                    .with_metadata("context_id", context_id),
+            )],
             _ => vec![ErrorDetail::reason(self.reason_code())],
         }
     }

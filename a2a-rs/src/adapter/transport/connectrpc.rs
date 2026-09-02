@@ -154,38 +154,10 @@ fn request_context(ctx: &::connectrpc::Context, context_id: &str) -> RequestCont
         .with_principal(ctx.extensions.get::<AuthPrincipal>().cloned())
 }
 
-/// Helper function to map A2AError to connectrpc::ConnectError
+/// Map a domain error onto the wire. See `connect_wire` for why the A2A code
+/// travels as a detail rather than through the Connect code.
 fn map_err(e: A2AError) -> ::connectrpc::ConnectError {
-    match e {
-        A2AError::TaskNotFound(msg) => {
-            ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::NotFound, msg)
-        }
-        A2AError::InvalidParams(msg) => {
-            ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::InvalidArgument, msg)
-        }
-        A2AError::ValidationError { field, message } => ::connectrpc::ConnectError::new(
-            ::connectrpc::ErrorCode::InvalidArgument,
-            format!("{}: {}", field, message),
-        ),
-        A2AError::UnsupportedOperation(msg) => {
-            ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Unimplemented, msg)
-        }
-        A2AError::AuthenticatedExtendedCardNotConfigured => ::connectrpc::ConnectError::new(
-            ::connectrpc::ErrorCode::FailedPrecondition,
-            "Authenticated extended card not configured".to_string(),
-        ),
-        A2AError::MethodNotFound(msg) => {
-            ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Unimplemented, msg)
-        }
-        // A context owned by someone else is a refusal, not a fault. Left to the
-        // catch-all it reported as `Internal`, which reads as a server bug and
-        // invites a retry that will be refused again.
-        A2AError::ContextAccessDenied { context_id } => ::connectrpc::ConnectError::new(
-            ::connectrpc::ErrorCode::PermissionDenied,
-            format!("context {context_id} belongs to another principal"),
-        ),
-        _ => ::connectrpc::ConnectError::new(::connectrpc::ErrorCode::Internal, e.to_string()),
-    }
+    super::connect_wire::to_connect_error(&e)
 }
 
 /// Helper to map domain metadata to protobuf Struct

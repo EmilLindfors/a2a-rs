@@ -36,23 +36,19 @@ pub mod methods {
 }
 
 /// Standard + A2A-specific JSON-RPC error codes (mirrors the official SDK).
+///
+/// These are the domain's own constants, re-exported under the names this
+/// module has always used: the number a variant maps to is decided once, in
+/// `domain::error`, and a table here that spelled one differently would be the
+/// drift this module exists to prevent.
 pub mod error_code {
-    pub const PARSE_ERROR: i32 = -32700;
-    pub const INVALID_REQUEST: i32 = -32600;
-    pub const METHOD_NOT_FOUND: i32 = -32601;
-    pub const INVALID_PARAMS: i32 = -32602;
-    pub const INTERNAL_ERROR: i32 = -32603;
-
-    pub const TASK_NOT_FOUND: i32 = -32001;
-    pub const TASK_NOT_CANCELABLE: i32 = -32002;
-    pub const PUSH_NOTIFICATION_NOT_SUPPORTED: i32 = -32003;
-    pub const UNSUPPORTED_OPERATION: i32 = -32004;
-    pub const CONTENT_TYPE_NOT_SUPPORTED: i32 = -32005;
-    pub const INVALID_AGENT_RESPONSE: i32 = -32006;
-    pub const EXTENDED_CARD_NOT_CONFIGURED: i32 = -32007;
-
-    /// Custom application range (outside the spec's reserved codes).
-    pub const VERSION_CONFLICT: i32 = -32101;
+    pub use crate::domain::error::{
+        AUTHENTICATED_EXTENDED_CARD_NOT_CONFIGURED as EXTENDED_CARD_NOT_CONFIGURED,
+        CONTENT_TYPE_NOT_SUPPORTED, CONTEXT_ACCESS_DENIED, DATABASE_ERROR, INTERNAL_ERROR,
+        INVALID_AGENT_RESPONSE, INVALID_PARAMS, INVALID_REQUEST, METHOD_NOT_FOUND, PARSE_ERROR,
+        PUSH_NOTIFICATION_NOT_SUPPORTED, TASK_NOT_CANCELABLE, TASK_NOT_FOUND,
+        UNSUPPORTED_OPERATION, VERSION_CONFLICT,
+    };
 }
 
 /// JSON-RPC request envelope (server deserializes; client serializes).
@@ -118,7 +114,14 @@ pub struct JsonRpcError {
 }
 
 /// The JSON-RPC error code for a domain [`A2AError`].
-fn a2a_error_code(err: &A2AError) -> i32 {
+///
+/// This and [`jsonrpc_to_a2a`] are the one table both bindings read: the
+/// JSON-RPC adapters put the code in `error.code`, and the ConnectRPC adapters
+/// carry the same object as an error detail (see `connect_wire`). A variant
+/// added to `A2AError` without an arm here goes on the wire as `-32603` — the
+/// exhaustive match is what makes that a compile error rather than a
+/// mislabelled refusal.
+pub fn a2a_error_code(err: &A2AError) -> i32 {
     use error_code::*;
     match err {
         A2AError::JsonRpc { code, .. } => *code,
@@ -134,7 +137,9 @@ fn a2a_error_code(err: &A2AError) -> i32 {
         A2AError::InvalidAgentResponse(_) => INVALID_AGENT_RESPONSE,
         A2AError::AuthenticatedExtendedCardNotConfigured => EXTENDED_CARD_NOT_CONFIGURED,
         A2AError::VersionConflict { .. } => VERSION_CONFLICT,
-        _ => INTERNAL_ERROR,
+        A2AError::DatabaseError(_) => DATABASE_ERROR,
+        A2AError::ContextAccessDenied { .. } => CONTEXT_ACCESS_DENIED,
+        A2AError::Internal(_) | A2AError::Io(_) => INTERNAL_ERROR,
     }
 }
 
@@ -162,18 +167,34 @@ pub fn a2a_to_jsonrpc(err: &A2AError) -> JsonRpcError {
 /// Map a JSON-RPC error object back onto a domain [`A2AError`] — the inverse of
 /// [`a2a_to_jsonrpc`], used by the client to reconstruct typed errors.
 ///
-/// A [`A2AError::VersionConflict`] is rebuilt from its `ErrorInfo` metadata when
-/// present, so the typed expected/actual versions survive the round-trip.
+/// Every spec code comes back as the variant that produced it, so a caller can
+/// `match` on the refusal it actually got rather than on a number. The two
+/// variants with structured payloads — [`A2AError::VersionConflict`] and
+/// [`A2AError::ContextAccessDenied`] — are rebuilt from their `ErrorInfo`
+/// metadata when it is present. A code this table does not know (a foreign
+/// server's own range, or a spec code newer than this crate) stays
+/// [`A2AError::JsonRpc`] with the number intact.
 pub fn jsonrpc_to_a2a(err: &JsonRpcError) -> A2AError {
     use error_code::*;
+    let message = || err.message.clone();
     match err.code {
-        TASK_NOT_FOUND => A2AError::TaskNotFound(err.message.clone()),
-        INVALID_PARAMS => A2AError::InvalidParams(err.message.clone()),
-        METHOD_NOT_FOUND => A2AError::MethodNotFound(err.message.clone()),
-        UNSUPPORTED_OPERATION => A2AError::UnsupportedOperation(err.message.clone()),
+        PARSE_ERROR | INVALID_REQUEST => A2AError::InvalidRequest(message()),
+        INVALID_PARAMS => A2AError::InvalidParams(message()),
+        METHOD_NOT_FOUND => A2AError::MethodNotFound(message()),
+        INTERNAL_ERROR => A2AError::Internal(message()),
+        TASK_NOT_FOUND => A2AError::TaskNotFound(message()),
+        TASK_NOT_CANCELABLE => A2AError::TaskNotCancelable(message()),
+        PUSH_NOTIFICATION_NOT_SUPPORTED => A2AError::PushNotificationNotSupported,
+        UNSUPPORTED_OPERATION => A2AError::UnsupportedOperation(message()),
+        CONTENT_TYPE_NOT_SUPPORTED => A2AError::ContentTypeNotSupported(message()),
+        INVALID_AGENT_RESPONSE => A2AError::InvalidAgentResponse(message()),
         EXTENDED_CARD_NOT_CONFIGURED => A2AError::AuthenticatedExtendedCardNotConfigured,
+        DATABASE_ERROR => A2AError::DatabaseError(message()),
         VERSION_CONFLICT => version_conflict_from_data(err)
             .unwrap_or_else(|| A2AError::Internal(err.message.clone())),
+        CONTEXT_ACCESS_DENIED => A2AError::ContextAccessDenied {
+            context_id: error_info_metadata(err, "context_id").unwrap_or_default(),
+        },
         code => A2AError::JsonRpc {
             code,
             message: err.message.clone(),
@@ -182,14 +203,24 @@ pub fn jsonrpc_to_a2a(err: &JsonRpcError) -> A2AError {
     }
 }
 
+/// The `ErrorInfo` detail in a wire error's `data` array, if it carries one.
+fn error_info(err: &JsonRpcError) -> Option<ErrorInfo> {
+    let details: Vec<ErrorDetail> = serde_json::from_value(err.data.clone()?).ok()?;
+    details.into_iter().find_map(|d| match d {
+        ErrorDetail::ErrorInfo(info) => Some(info),
+        _ => None,
+    })
+}
+
+/// One `ErrorInfo` metadata value from a wire error, if present.
+fn error_info_metadata(err: &JsonRpcError, key: &str) -> Option<String> {
+    error_info(err)?.metadata.get(key).cloned()
+}
+
 /// Reconstruct a [`A2AError::VersionConflict`] from the `ErrorInfo` metadata in a
 /// wire error's `data` array, if it carries the expected/actual versions.
 fn version_conflict_from_data(err: &JsonRpcError) -> Option<A2AError> {
-    let details: Vec<ErrorDetail> = serde_json::from_value(err.data.clone()?).ok()?;
-    let ErrorInfo { metadata, .. } = details.into_iter().find_map(|d| match d {
-        ErrorDetail::ErrorInfo(info) => Some(info),
-        _ => None,
-    })?;
+    let ErrorInfo { metadata, .. } = error_info(err)?;
     Some(A2AError::VersionConflict {
         id: metadata.get("task_id").cloned().unwrap_or_default(),
         expected: metadata.get("expected").and_then(|s| s.parse().ok())?,

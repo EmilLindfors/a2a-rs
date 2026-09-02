@@ -76,6 +76,50 @@ breaks korps. Checking is a manual step and stays one — point korps'
 edit-compile loop. The place that signal belongs is korps' own CI, which builds
 this repo's crates by definition.
 
+**The A2A error code rides ConnectRPC as a detail, not as the Connect code.**
+(2026-09-02)
+
+Connect has sixteen error codes and A2A has its own numbered set, and no table
+between them inverts: `MethodNotFound` and `UnsupportedOperation` are both
+`Unimplemented`, and "this agent does not do push" has no Connect code at all,
+so it went out as `Internal` and came back as a server fault. The adapter had
+one table per direction, each with a catch-all, which is the shape that
+guarantees the next variant decodes as something else too (#72).
+
+The alternative was more arms in both tables. It fixes the two cases named and
+leaves the class: any variant absent from either table is one forgotten arm
+from `-32603` again, and nothing makes the two tables agree. So the code does
+not go through the Connect code at all. The server attaches the JSON-RPC error
+object — the same one the JSON-RPC binding sends — as a Connect error detail,
+and the client reads it back through the JSON-RPC table. `connect_wire` holds
+both directions for the same reason `jsonrpc_wire` does, and the JSON-RPC
+table is now exhaustive over `A2AError`, so a variant added without a code is
+a compile error rather than a mislabelled refusal.
+
+The detail's `type` is `a2a_rs.JsonRpcError` with the object in `debug` and no
+`value`. Connect names a detail by its protobuf message and carries the message
+base64-encoded in `value`; A2A's JSON-RPC error is not a protobuf message and
+inventing one for the purpose would be a second definition of the same thing.
+The Connect code is still set, to the nearest category, for a client that is
+not ours and reads nothing else. That client sees exactly what it saw before;
+ours sees the refusal the server made.
+
+**A refused Connect stream is an error behind an `Ok(None)`.** (2026-09-02)
+
+A Connect streaming call answers HTTP 200 before the handler has run, so a
+handler that refuses before any stream exists says so in the END_STREAM
+envelope, and the client library reports that envelope as an ordinary end of
+stream — `message()` returns `Ok(None)` and the error is parked in
+`ServerStream::error()` for whoever thinks to ask. Our `unfold` did not, so a
+refused subscription and an instantly settled task were the same empty stream
+(#71). This is the silence bug the honesty rule exists for: a caller trusting
+the stream reported "the peer said nothing" when the truth was "the peer said
+no". The read is one line and the hazard is that it is invisible: every other
+path through that `unfold` was correct, every test with a working streaming
+backend passed, and only a server that refuses shows it. The test that pins it
+subscribes against the adapter's default `NoopStreamingHandler`, which is the
+configuration that had never been exercised over a socket.
+
 **The stream log is a port, not a field on the streaming handler.** (2026-08-23)
 
 `InMemoryStreamingHandler` owned both halves of streaming: who is listening, and
