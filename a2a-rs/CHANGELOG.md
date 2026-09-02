@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.4](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.8.3...a2a-rs-v0.8.4) - 2026-09-02
+
+### Fixed
+
+- *(a2a-rs)* A ConnectRPC refusal arrives as the refusal the server made
+
 ## [0.8.3](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.8.2...a2a-rs-v0.8.3) - 2026-09-01
 
 ### Added
