@@ -65,22 +65,62 @@ impl SkillToolConverter {
         )
     }
 
-    /// Create a namespaced tool name
-    ///
-    /// Format: `{sanitized_agent_url}_{skill_id}`
-    pub fn create_tool_name(agent_url: &str, skill_id: &str) -> String {
-        // Sanitize the agent URL to create a valid tool name prefix
-        let sanitized_url = agent_url
+    /// The agent URL as a name prefix: scheme dropped, `/`, `:` and `.`
+    /// replaced by `_`. One place, shared with artifact URIs.
+    pub fn sanitize_namespace(agent_url: &str) -> String {
+        agent_url
             .replace("https://", "")
             .replace("http://", "")
-            .replace(['/', ':', '.'], "_");
+            .replace(['/', ':', '.'], "_")
+    }
 
-        format!("{}_{}", sanitized_url, skill_id)
+    /// Create a namespaced tool name
+    ///
+    /// Format: `{sanitized_agent_url}_{skill_id}`, with `agent_` in front when
+    /// the sanitized URL does not start with a letter or an underscore — an
+    /// address like `http://127.0.0.1:8081` did, and a function name that
+    /// starts with a digit is rejected by Gemini (and is not a valid
+    /// identifier for anything), which failed every request from a model that
+    /// had this agent's tools in front of it.
+    pub fn create_tool_name(agent_url: &str, skill_id: &str) -> String {
+        let namespace = Self::sanitize_namespace(agent_url);
+        let starts_well = namespace
+            .chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+        if starts_well {
+            format!("{namespace}_{skill_id}")
+        } else {
+            format!("agent_{namespace}_{skill_id}")
+        }
+    }
+
+    /// The skill a tool (or prompt) name refers to, among `skills` served under
+    /// `agent_url`: the one whose generated name is exactly `tool_name`.
+    ///
+    /// This is how a bridge should answer a call. Matching against the names
+    /// it generated is exact by construction; [`parse_tool_name`] is
+    /// best-effort and splits at the last underscore, so a skill id with an
+    /// underscore in it (`my_skill`) parsed back as `skill` and was "not
+    /// found" for as long as the bridge parsed.
+    ///
+    /// [`parse_tool_name`]: Self::parse_tool_name
+    pub fn resolve_skill<'a>(
+        skills: &'a [AgentSkill],
+        agent_url: &str,
+        tool_name: &str,
+    ) -> Option<&'a AgentSkill> {
+        skills
+            .iter()
+            .find(|skill| Self::create_tool_name(agent_url, &skill.id) == tool_name)
     }
 
     /// Parse a tool name back into agent URL and skill ID
     ///
-    /// This is a best-effort operation and may not perfectly reverse the sanitization
+    /// This is a best-effort operation and may not perfectly reverse the
+    /// sanitization: it splits at the *last* underscore, so a skill id that
+    /// contains one comes back cut. Prefer [`resolve_skill`](Self::resolve_skill)
+    /// wherever the skills are at hand.
     pub fn parse_tool_name(tool_name: &str) -> Result<(String, String)> {
         // Find the last underscore to split agent identifier from skill ID
         let parts: Vec<&str> = tool_name.rsplitn(2, '_').collect();
@@ -126,6 +166,41 @@ mod tests {
         let name =
             SkillToolConverter::create_tool_name("https://example.com:8080/api/agent", "my_skill");
         assert_eq!(name, "example_com_8080_api_agent_my_skill");
+    }
+
+    /// A loopback address gave a name starting with a digit, which is not a
+    /// function name anywhere and which Gemini refuses outright.
+    #[test]
+    fn a_tool_name_starts_with_a_letter_whatever_the_address() {
+        assert_eq!(
+            SkillToolConverter::create_tool_name("http://127.0.0.1:8081", "greet"),
+            "agent_127_0_0_1_8081_greet"
+        );
+        // And a name that already does is left alone.
+        assert_eq!(
+            SkillToolConverter::create_tool_name("https://tools.example", "greet"),
+            "tools_example_greet"
+        );
+    }
+
+    /// A call is answered by the skill whose generated name it carries —
+    /// including one with an underscore in its id, which parsing cut.
+    #[test]
+    fn a_call_resolves_to_its_skill_by_the_generated_name() {
+        let skills = vec![
+            AgentSkill::new("my_skill".into(), "Mine".into(), "d".into(), vec![]),
+            AgentSkill::new("skill".into(), "Other".into(), "d".into(), vec![]),
+        ];
+        let url = "http://127.0.0.1:8081";
+        let name = SkillToolConverter::create_tool_name(url, "my_skill");
+        assert_eq!(
+            SkillToolConverter::resolve_skill(&skills, url, &name).map(|s| s.id.as_str()),
+            Some("my_skill")
+        );
+        assert_eq!(
+            SkillToolConverter::resolve_skill(&skills, url, "nobody_asked_for_this"),
+            None
+        );
     }
 
     #[test]

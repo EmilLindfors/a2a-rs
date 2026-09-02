@@ -215,13 +215,19 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         name the right type. Moving `a2a-rs`, `a2a-llm`, `a2a-mcp` and
         `a2a-web-client` to 0.13 unifies it; the `aws-lc-sys` item in §5 is
         the same TLS knot from the other end.
-      * **`a2a-mcp`'s bridge names tools after the agent's address.** An
-        agent's `echo` skill served over the MCP bridge arrives at a client
-        as `127_0_0_1_0_echo` — the card URL's host and port with the skill
-        appended. For an MCP-only agent (`http_port = 0`) that prefix is
-        nonsense a model then has to call by, and for any agent it changes
-        when the address does. The agent's id or name is the right prefix;
-        `SkillToolConverter` is where it is decided.
+      * **`a2a-mcp`'s bridge names tools after the agent's address** — and
+        the name it made was not a function name. An agent's `greet` skill
+        served over the bridge arrived at a client as `127_0_0_1_8081_greet`,
+        and Gemini refuses a request carrying a function name that starts
+        with a digit, so a korps agent with that server connected could not
+        use *any* tool. Fixed the same day, additively: `create_tool_name`
+        puts `agent_` in front when the sanitized address does not start
+        with a letter, and the bridge answers a call by matching the names
+        it generated (`resolve_skill`) instead of `parse_tool_name`, which
+        split at the last underscore and cut `my_skill` to `skill`. Still
+        open: the prefix is the address, which changes when the address
+        does; the agent's id or name is the right one, and that is a
+        naming change for a release to carry deliberately.
 
 ## 3. Interop and CI
 
