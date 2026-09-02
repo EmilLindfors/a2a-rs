@@ -122,7 +122,7 @@ dependencies = [
 
 [[package]]
 name = "a2acli"
-version = "0.7.2"
+version = "0.7.3"
 dependencies = [
  "a2a-rs",
  "anyhow",
