@@ -1,6 +1,6 @@
 [package]
 name = "a2a-rs"
-version = "0.8.3"
+version = "0.8.4"
 edition = "2024"
 rust-version.workspace = true
 authors = ["Emil Lindfors <emil@lindfors.no>"]
