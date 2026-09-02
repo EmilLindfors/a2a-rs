@@ -190,6 +190,39 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       - Like the `axum` item, korps only feels this when the release lands; it
         builds against published `a2a-llm` today.
 
+- [ ] **Findings from korps' live runs, 2026-09-02** — four things seen from
+      the consuming side, none of which korps could fix here. Recorded so they
+      are decided rather than rediscovered.
+      * **`Finish` arrives twice from OpenRouter.** It puts `finish_reason:
+        "stop"` on the last content chunk *and* on the usage-only chunk, and
+        `a2a-llm`'s stream forwards both as `LlmStreamEvent::Finish(Stop)`.
+        korps reads it as a fact and did not break; a consumer that counted
+        finishes, or treated the first as the end of the stream, would.
+        Either de-duplicate (emit once, on the last chunk that carries one)
+        or document that `Finish` is a fact, not a terminator.
+      * **Reasoning text is the model's to give.** Gemini via OpenRouter
+        bills `reasoning_tokens` on every request and puts a summary in
+        `delta.reasoning` only sometimes — one in nine in korps' probes, with
+        `reasoning.effort`, `enabled`, `stream_options` and no parameter at
+        all making no difference. `a2a-llm` parses the field correctly; there
+        is often nothing in it. Worth a line in the `Reasoning` docs so nobody
+        writes a feature that expects the text; `TokenUsage::reasoning_tokens`
+        is what can be relied on.
+      * **`reqwest` 0.12 here, 0.13 under `rmcp`.** `rmcp` 1.7's Streamable
+        HTTP client is generic over `reqwest` 0.13, and every binary that
+        links `a2a-rs` and `rmcp` carries both versions and both TLS stacks.
+        korps had to add a second `reqwest` under its `mcp-client` feature to
+        name the right type. Moving `a2a-rs`, `a2a-llm`, `a2a-mcp` and
+        `a2a-web-client` to 0.13 unifies it; the `aws-lc-sys` item in §5 is
+        the same TLS knot from the other end.
+      * **`a2a-mcp`'s bridge names tools after the agent's address.** An
+        agent's `echo` skill served over the MCP bridge arrives at a client
+        as `127_0_0_1_0_echo` — the card URL's host and port with the skill
+        appended. For an MCP-only agent (`http_port = 0`) that prefix is
+        nonsense a model then has to call by, and for any agent it changes
+        when the address does. The agent's id or name is the right prefix;
+        `SkillToolConverter` is where it is decided.
+
 ## 3. Interop and CI
 
 - [x] **The two storage backends returned different tasks for the same run.**
