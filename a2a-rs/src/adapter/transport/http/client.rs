@@ -29,29 +29,10 @@ use crate::{
 
 use crate::adapter::transport::resume;
 
+/// Map a wire error back onto the domain. See `connect_wire`: exact when the
+/// server is a2a-rs, a category otherwise.
 fn map_connect_err(err: connectrpc::ConnectError) -> A2AError {
-    let code = match err.code {
-        connectrpc::ErrorCode::NotFound => crate::domain::error::TASK_NOT_FOUND,
-        connectrpc::ErrorCode::Unimplemented => crate::domain::error::METHOD_NOT_FOUND,
-        connectrpc::ErrorCode::InvalidArgument => crate::domain::error::INVALID_PARAMS,
-        connectrpc::ErrorCode::Internal => crate::domain::error::INTERNAL_ERROR,
-        connectrpc::ErrorCode::FailedPrecondition => {
-            crate::domain::error::AUTHENTICATED_EXTENDED_CARD_NOT_CONFIGURED
-        }
-        _ => {
-            let code_val = err.code as i32;
-            if code_val != 0 {
-                code_val
-            } else {
-                crate::domain::error::INTERNAL_ERROR
-            }
-        }
-    };
-    A2AError::JsonRpc {
-        code,
-        message: err.message.clone().unwrap_or_default(),
-        data: None,
-    }
+    crate::adapter::transport::connect_wire::from_connect_error(err)
 }
 
 /// HTTP client for interacting with the A2A protocol via ConnectRPC
@@ -500,24 +481,36 @@ impl Transport for HttpClient {
             .await
             .map_err(map_connect_err)?;
 
-        let mapped = futures::stream::unfold(stream, |mut s| async move {
+        // A Connect streaming call answers HTTP 200 before the handler has
+        // run, so a server that refuses the subscription outright says so in
+        // the END_STREAM envelope — which the client library parks in
+        // `ServerStream::error()` behind an ordinary `Ok(None)`. Read it
+        // there, once, or a refusal is indistinguishable from a task that
+        // settled with nothing to say.
+        let mapped = futures::stream::unfold((stream, false), |(mut s, ended)| async move {
+            if ended {
+                return None;
+            }
             match s.message().await {
                 Ok(Some(view)) => {
                     let resp = view.to_owned_message();
                     if let Some(mut item) = stream_response_to_item(resp) {
                         let event_id = resume::take_event_id(&mut item);
-                        Some((Ok(StreamEvent::new(event_id, item)), s))
+                        Some((Ok(StreamEvent::new(event_id, item)), (s, false)))
                     } else {
                         Some((
                             Err(A2AError::Internal(
                                 "Empty or unhandled stream response payload".to_string(),
                             )),
-                            s,
+                            (s, false),
                         ))
                     }
                 }
-                Ok(None) => None,
-                Err(e) => Some((Err(map_connect_err(e)), s)),
+                Ok(None) => {
+                    let trailing = s.error().cloned()?;
+                    Some((Err(map_connect_err(trailing)), (s, true)))
+                }
+                Err(e) => Some((Err(map_connect_err(e)), (s, false))),
             }
         });
 

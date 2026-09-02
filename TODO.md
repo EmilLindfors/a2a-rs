@@ -226,6 +226,19 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
 - [x] Capture the matrix (which transports and SDKs interoperate) in the
       `a2acli` README — done, with the upstream commit it was run against.
       gRPC is the gap: upstream serves it on `:50051`, we do not speak it.
+- [x] **A refused ConnectRPC subscription arrived as an empty stream** (#71).
+      Fixed 2026-09-02: the refusal is in the END_STREAM envelope, which the
+      client library parks in `ServerStream::error()` behind an `Ok(None)`, and
+      the client's `unfold` never read it. It yields the refusal once now.
+      `tests/connectrpc_error_test.rs` pins both pre-stream refusals over a
+      socket; see `NOTES.md`.
+- [x] **ConnectRPC lost the A2A error code** (#72). Fixed 2026-09-02: the
+      server attaches the JSON-RPC error object as a Connect error detail and
+      the client reads it back through the JSON-RPC table, so both bindings
+      share one exhaustive map (`connect_wire`, `jsonrpc_wire`). The Connect
+      code stays as a category for foreign clients. See `CHANGELOG.md` for the
+      JSON-RPC client's typed-variant change that came with it, and `NOTES.md`
+      for why the code does not go through the Connect code at all.
 - [x] **`SubscribeToTask` on a terminal task is an error.** Done 2026-08-21:
       `a2a.proto:75` specifies `UnsupportedOperationError` and we answered with
       an empty stream. Resumption (`Last-Event-ID`) still opens. See

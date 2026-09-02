@@ -467,10 +467,9 @@ async fn cancelling_a_completed_task_is_refused_over_the_wire() {
         .cancel_task("task-done")
         .await
         .expect_err("a completed task cannot be canceled");
-    let rendered = format!("{err:?}");
     assert!(
-        rendered.contains("TASK_NOT_CANCELABLE"),
-        "the reason has to survive the trip: {rendered}"
+        matches!(err, A2AError::TaskNotCancelable(_)),
+        "the refusal has to survive the trip as itself: {err:?}"
     );
 }
 
