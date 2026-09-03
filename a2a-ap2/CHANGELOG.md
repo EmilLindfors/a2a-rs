@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.6](https://github.com/EmilLindfors/a2a-rs/compare/a2a-ap2-v0.4.5...a2a-ap2-v0.4.6) - 2026-09-03
+
+### Documentation
+
+- A release-plz release with only skipped commits writes a release entry
+
+### Other
+
+- Release
+
 ## [0.4.5](https://github.com/EmilLindfors/a2a-rs/compare/a2a-ap2-v0.4.4...a2a-ap2-v0.4.5) - 2026-09-03
 
 ### Other

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.7.2...a2a-web-client-v0.7.3) - 2026-09-03
+
+### Documentation
+
+- A release-plz release with only skipped commits writes a release entry
+
+### Other
+
+- Release
+
 ## [0.7.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.7.1...a2a-web-client-v0.7.2) - 2026-09-03
 
 ### Other
