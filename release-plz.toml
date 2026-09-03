@@ -44,27 +44,37 @@ body = """
 """
 trim = true
 
-# Conventional-commit routing. Noise types (ci, build, style, chore) and any
-# "fmt"/"clippy"/"fixed CI" cleanup commits are skipped from the user-facing
-# changelog; the substance (feat/fix/perf/refactor/docs) is grouped.
+# Conventional-commit routing. feat/fix/perf/refactor/docs get their own
+# group; everything else lands under "Other".
+#
+# Nothing is skipped, on purpose. release-plz only hands git-cliff the commits
+# that touched the crate being released, and git-cliff drops a release whose
+# commit list comes out empty (git-cliff-core `process_releases`). release-plz
+# then cannot find the `## [x.y.z]` heading in its own output, gives up
+# stripping the header, and splices a second `# Changelog` header into the file
+# where the entry should be (`compose_changelog` in release_plz_core). Every
+# dependency-only bump did exactly that between 2026-08-15 and 2026-09-03 —
+# the note release-plz writes for those is itself a `chore:` commit ("chore:
+# updated the following local packages: a2a-rs"), which the old `^chore` skip
+# ate — and on 2026-09-03 it became a loop: release-plz decides a crate needs
+# publishing by diffing the package against the crates.io tarball, CHANGELOG.md
+# included, so each merged garbage header was a new diff, proposing another
+# patch release whose only commit was the previous `chore: release`, skipped
+# again. a2a-ap2 0.4.5 and a2a-web-client 0.7.2 were published with no change
+# at all that way.
+#
+# There is no template-side escape: `[changelog]` here rejects unknown keys and
+# does not expose git-cliff's `render_always`. So a `chore:`/`build:`/`ci:`/
+# `style:`/`test:` commit that actually changed a crate's packaged files gets
+# its one line under "Other" — which is also accurate, since it did trigger the
+# release. Commits that never touch a crate directory (CI config, root docs)
+# still never appear, because release-plz never selects them.
 commit_parsers = [
-  { message = "(?i)^(chore\\(release\\)|release v|prepare release)", skip = true },
-  # Non-conventional cleanup commits ("cargo fmt", "clippy fixes", "fixed CI").
-  # Anchored at the start on purpose: unanchored, this also swallowed real
-  # entries such as "fix: clippy-reported bug in the parser" — the commit still
-  # bumped the version but never appeared in the changelog. Well-formed
-  # `ci:`/`chore:`/`style:` commits are handled by the parsers below.
-  { message = '(?i)^(rustfmt|cargo fmt|fmt\b|clippy|fixed ci|fix ci)', skip = true },
   { message = "^feat", group = "Added" },
   { message = "^fix", group = "Fixed" },
   { message = "^perf", group = "Performance" },
   { message = "^refactor", group = "Changed" },
   { message = "^docs?", group = "Documentation" },
-  { message = "^test", skip = true },
-  { message = "^build", skip = true },
-  { message = "^style", skip = true },
-  { message = "^ci", skip = true },
-  { message = "^chore", skip = true },
   { message = ".*", group = "Other" },
 ]
 protect_breaking_commits = true
