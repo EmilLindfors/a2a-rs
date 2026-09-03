@@ -559,6 +559,10 @@ impl OpenAiProvider {
 
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
+    fn reasoning_refused(&self) -> Option<bool> {
+        Some(self.reasoning_support.refused())
+    }
+
     async fn chat_completion(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
         let url = format!("{}/chat/completions", self.config.base_url);
         let reasoning = self.reasoning_for(&request);
@@ -1059,6 +1063,26 @@ mod tests {
             wire(&provider, &request(None)),
             serde_json::json!({}),
             "a refusal is remembered, not rediscovered per call"
+        );
+    }
+
+    /// What the adapter remembers is readable from outside it: a refusal is
+    /// the provider dropping a setting the config paid for, and the agent
+    /// serving that provider reports it as running degraded.
+    #[test]
+    fn a_refusal_is_reported_through_the_provider_port() {
+        let provider = provider(
+            ReasoningDialect::OpenAi,
+            Some(Reasoning::Effort(ReasoningEffort::High)),
+        );
+        let clone = provider.clone();
+        assert_eq!(provider.reasoning_refused(), Some(false));
+        provider.reasoning_support.record_refusal();
+        assert_eq!(provider.reasoning_refused(), Some(true));
+        assert_eq!(
+            clone.reasoning_refused(),
+            Some(true),
+            "one memory per model"
         );
     }
 

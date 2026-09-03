@@ -692,6 +692,24 @@ pub trait LlmProvider: Send + Sync {
         &self,
         request: LlmRequest,
     ) -> Result<BoxStream<'static, Result<LlmStreamEvent, LlmError>>, LlmError>;
+
+    /// Whether the model behind this provider has refused the reasoning
+    /// parameter the adapter sends, so requests now go without it.
+    ///
+    /// `Some(true)` is a fact about the process: the parameter was sent, the
+    /// model answered 400 naming it, the retry without it succeeded, and
+    /// nothing will carry it again — a configured `reasoning` is being paid
+    /// for and not delivered, which is what an agent's operator wants to see
+    /// somewhere other than one log line. `Some(false)` says it has not
+    /// happened (yet).
+    ///
+    /// `None` is the default and means this adapter has nothing to report:
+    /// it sends no such parameter, or has no memory of a refusal. An adapter
+    /// that does retry without the parameter must override this, or the
+    /// refusal it remembers is one nobody outside it can see.
+    fn reasoning_refused(&self) -> Option<bool> {
+        None
+    }
 }
 
 #[cfg(test)]
