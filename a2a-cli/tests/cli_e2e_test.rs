@@ -488,6 +488,73 @@ async fn send_get_roundtrip() {
     assert_eq!(state_of(&got), "TASK_STATE_COMPLETED");
 }
 
+/// A conversation is continued with a new task in the same *context*, and the
+/// CLI both accepts one and says so.
+///
+/// Reusing a settled task's id is a different thing on the wire — a message to
+/// an exchange that is over — so the flag has to name the context, and the
+/// next-step hint after a finished task has to point at it rather than at the
+/// task id.
+#[tokio::test]
+async fn send_continues_a_conversation_by_context() {
+    let agent = spawn_agent(Agent::Echo, None).await;
+
+    let first = run_json(
+        &agent.base,
+        &[
+            "send",
+            "hello",
+            "--context-id",
+            "conv-1",
+            "--task-id",
+            "t-ctx-a",
+        ],
+    )
+    .await;
+    assert_eq!(first["contextId"], "conv-1");
+    assert_eq!(state_of(&first), "TASK_STATE_COMPLETED");
+
+    let second = run_json(
+        &agent.base,
+        &[
+            "send",
+            "and then?",
+            "--context-id",
+            "conv-1",
+            "--task-id",
+            "t-ctx-b",
+        ],
+    )
+    .await;
+    assert_eq!(
+        second["contextId"], "conv-1",
+        "the second task joins the same context"
+    );
+    assert_ne!(
+        second["id"], first["id"],
+        "a continuation is a new task, not a reused id"
+    );
+
+    let listed = run_json(&agent.base, &["list", "--context-id", "conv-1"]).await;
+    let ids: Vec<&str> = listed["tasks"]
+        .as_array()
+        .expect("tasks array")
+        .iter()
+        .filter_map(|t| t["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&"t-ctx-a") && ids.contains(&"t-ctx-b"),
+        "listed: {listed}"
+    );
+
+    // The human-readable output of a finished task says how to go on.
+    let text = run(&agent.base, &["send", "hello", "--context-id", "conv-1"]).await;
+    assert!(
+        text.contains("send --context-id conv-1"),
+        "a finished task should point at its context: {text}"
+    );
+}
+
 /// A task still in flight can be cancelled through the binary.
 #[tokio::test]
 async fn cancel_stops_a_task_in_flight() {
