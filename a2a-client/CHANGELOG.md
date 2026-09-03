@@ -6,18 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
-# Changelog
 
-All notable changes to this project will be documented in this file.
-# Changelog
+## [0.7.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.7.1...a2a-web-client-v0.7.2) - 2026-09-03
 
-All notable changes to this project will be documented in this file.
-# Changelog
+### Other
 
-All notable changes to this project will be documented in this file.
-# Changelog
+- No code changes; republished to correct a release-plz changelog entry
 
-All notable changes to this project will be documented in this file.
+## [0.7.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.7.0...a2a-web-client-v0.7.1) - 2026-09-03
+
+### Other
+
+- Updated the following local packages: a2a-rs (0.8 -> 0.9)
 
 ## [0.7.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.6.1...a2a-web-client-v0.7.0) - 2026-08-25
 

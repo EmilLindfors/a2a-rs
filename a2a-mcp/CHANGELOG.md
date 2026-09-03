@@ -16,12 +16,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A bridged skill's tool name is a function name, and a call resolves by it
-# Changelog
 
-All notable changes to this project will be documented in this file.
-# Changelog
+## [0.7.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.7.1...a2a-mcp-v0.7.2) - 2026-09-01
 
-All notable changes to this project will be documented in this file.
+### Other
+
+- Updated the following local packages: a2a-llm (0.3 -> 0.4)
+- Updated the following local packages: a2a-rs (0.8.2 -> 0.8.3)
+
+## [0.7.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.7.0...a2a-mcp-v0.7.1) - 2026-08-31
+
+### Other
+
+- Updated the following local packages: a2a-llm (0.2 -> 0.3)
+- Updated the following local packages: a2a-rs (0.8.0 -> 0.8.2)
 
 ## [0.7.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.6.1...a2a-mcp-v0.7.0) - 2026-08-25
 

@@ -13,18 +13,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A machine with no CA bundle is an error, not a panic
 - *(a2acli)* `send --context-id` continues a conversation
-# Changelog
 
-All notable changes to this project will be documented in this file.
-# Changelog
+## [0.7.3](https://github.com/EmilLindfors/a2a-rs/compare/a2acli-v0.7.2...a2acli-v0.7.3) - 2026-09-02
 
-All notable changes to this project will be documented in this file.
-# Changelog
+### Other
 
-All notable changes to this project will be documented in this file.
-# Changelog
+- Updated the following local packages: a2a-rs (0.8.3 -> 0.8.4)
 
-All notable changes to this project will be documented in this file.
+## [0.7.2](https://github.com/EmilLindfors/a2a-rs/compare/a2acli-v0.7.1...a2acli-v0.7.2) - 2026-09-01
+
+### Other
+
+- Updated the following local packages: a2a-rs (0.8.2 -> 0.8.3)
+- Updated the following local packages: a2a-llm (0.2.1 -> 0.4.0)
+- Updated the following local packages: a2a-mcp (0.7.0 -> 0.7.2)
+
+## [0.7.1](https://github.com/EmilLindfors/a2a-rs/compare/a2acli-v0.7.0...a2acli-v0.7.1) - 2026-08-29
+
+### Other
+
+- Updated the following local packages: a2a-rs (0.8.0 -> 0.8.2)
+- Updated the following local packages: a2a-llm (0.2.0 -> 0.2.1)
 
 ## [0.7.0](https://github.com/EmilLindfors/a2a-rs/compare/a2acli-v0.6.1...a2acli-v0.7.0) - 2026-08-25
 
