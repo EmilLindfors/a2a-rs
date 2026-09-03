@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "a2a-ap2"
-version = "0.4.4"
+version = "0.4.5"
 dependencies = [
  "a2a-rs",
  "buffa",
@@ -103,7 +103,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-web-client"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "a2a-rs",
  "anyhow",
