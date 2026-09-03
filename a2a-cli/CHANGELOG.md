@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1](https://github.com/EmilLindfors/a2a-rs/compare/a2acli-v0.8.0...a2acli-v0.8.1) - 2026-09-03
+
+### Documentation
+
+- A release-plz release with only skipped commits writes a release entry
+
 ## [0.8.0](https://github.com/EmilLindfors/a2a-rs/compare/a2acli-v0.7.3...a2acli-v0.8.0) - 2026-09-03
 
 ### Fixed

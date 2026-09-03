@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.5.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.5.0...a2a-llm-v0.5.1) - 2026-09-03
+
+### Added
+
+- A provider says whether the model refused its reasoning parameter
+
 ## [0.5.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.4.0...a2a-llm-v0.5.0) - 2026-09-03
 
 ### Fixed
