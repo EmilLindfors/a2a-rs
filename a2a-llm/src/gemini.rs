@@ -243,17 +243,19 @@ pub struct GeminiProvider {
 const THINKING_FIELD: &str = "thinking";
 
 impl GeminiProvider {
-    pub fn new(config: GeminiConfig) -> Self {
-        Self {
+    /// Fails only when the HTTP client cannot be built, which since reqwest
+    /// 0.13 means the machine has no CA bundle to verify anything against.
+    pub fn new(config: GeminiConfig) -> Result<Self, LlmError> {
+        Ok(Self {
             config,
-            client: reqwest::Client::new(),
+            client: super::http_client()?,
             reasoning_support: ReasoningSupport::default(),
-        }
+        })
     }
 
     pub fn from_env() -> Result<Self, String> {
         let config = GeminiConfig::from_env()?;
-        Ok(Self::new(config))
+        Self::new(config).map_err(|e| e.to_string())
     }
 
     /// What thinking configuration this request carries, if any.
@@ -821,6 +823,7 @@ mod tests {
             api_key: "key".to_string(),
             reasoning,
         })
+        .expect("the HTTP client builds")
     }
 
     fn request(reasoning: Option<Reasoning>) -> LlmRequest {

@@ -104,17 +104,20 @@ pub trait TransportFactory: Send + Sync {
 
 /// Build a JSON-RPC client on `url` with `config` applied.
 #[cfg(feature = "jsonrpc-client")]
-fn jsonrpc_client(url: String, config: &ClientConfig) -> super::jsonrpc_client::JsonRpcClient {
+fn jsonrpc_client(
+    url: String,
+    config: &ClientConfig,
+) -> Result<super::jsonrpc_client::JsonRpcClient, A2AError> {
     use super::jsonrpc_client::JsonRpcClient;
 
     let mut client = match config.auth_token() {
-        Some(token) => JsonRpcClient::with_auth(url, token.to_string()),
-        None => JsonRpcClient::new(url),
+        Some(token) => JsonRpcClient::try_with_auth(url, token.to_string())?,
+        None => JsonRpcClient::try_new(url)?,
     };
     if let Some(secs) = config.timeout_secs() {
         client = client.with_timeout(secs);
     }
-    client
+    Ok(client)
 }
 
 /// Build a ConnectRPC client on `url` with `config` applied, reporting a URL
@@ -153,7 +156,7 @@ impl TransportFactory for JsonRpcTransportFactory {
         iface: &AgentInterface,
         config: &ClientConfig,
     ) -> Result<Box<dyn Transport>, A2AError> {
-        Ok(Box::new(jsonrpc_client(iface.url.clone(), config)))
+        Ok(Box::new(jsonrpc_client(iface.url.clone(), config)?))
     }
 }
 
@@ -405,7 +408,7 @@ fn direct_transport(base_url: &str, config: &ClientConfig) -> Result<Box<dyn Tra
     }
     #[cfg(all(not(feature = "http-client"), feature = "jsonrpc-client"))]
     {
-        Ok(Box::new(jsonrpc_client(base_url.to_string(), config)))
+        Ok(Box::new(jsonrpc_client(base_url.to_string(), config)?))
     }
 }
 
@@ -424,7 +427,7 @@ pub async fn fetch_agent_card_with(
 ) -> Result<AgentCard, A2AError> {
     use crate::adapter::error::HttpClientError;
 
-    let client = reqwest::Client::new();
+    let client = crate::adapter::error::http_client()?;
     let base = base_url.trim_end_matches('/');
     for path in [".well-known/agent-card.json", "agent-card"] {
         let url = format!("{base}/{path}");

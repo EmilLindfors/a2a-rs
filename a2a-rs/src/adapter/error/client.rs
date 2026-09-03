@@ -30,6 +30,18 @@ pub enum HttpClientError {
     Timeout,
 }
 
+/// A `reqwest::Client`, built rather than `Client::new()`-ed. `new()` unwraps
+/// the builder, and since reqwest 0.13 the builder fails on a machine with no
+/// CA bundle ("No CA certificates were loaded from the system") — a
+/// deployment fault, which is an error to report, not a panic to hit in a
+/// constructor. Every reqwest client in this crate comes through here.
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
+pub(crate) fn http_client() -> Result<reqwest::Client, A2AError> {
+    reqwest::Client::builder()
+        .build()
+        .map_err(|e| HttpClientError::Reqwest(e).into())
+}
+
 // Conversion from adapter errors to domain errors
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
 impl From<HttpClientError> for A2AError {

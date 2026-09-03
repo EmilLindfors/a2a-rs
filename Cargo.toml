@@ -41,8 +41,10 @@ futures = "0.3"
 # egress with its own CA) fixes it the way they fix curl. What 0.12 had and
 # this does not is a compiled-in webpki floor: a machine with no CA bundle at
 # all now fails to build a client ("No CA certificates were loaded from the
-# system") — and `reqwest::Client::new()` panics on it — rather than reaching
-# public APIs. An image that ships an agent ships `ca-certificates`.
+# system") rather than reaching public APIs — which is why nothing in this
+# workspace calls `reqwest::Client::new()` (it unwraps the builder): every
+# client goes through a fallible `http_client()`. An image that ships an agent
+# ships `ca-certificates`.
 #
 # `rustls` also brings the aws-lc-rs provider; a process that installed
 # another (the ConnectRPC client installs ring) keeps its own. See `NOTES.md`.

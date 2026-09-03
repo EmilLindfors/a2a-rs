@@ -57,14 +57,27 @@ impl Default for HttpPushNotificationSender {
 
 #[cfg(feature = "http-client")]
 impl HttpPushNotificationSender {
-    /// Create a new push notification sender
+    /// Create a new push notification sender.
+    ///
+    /// # Panics
+    ///
+    /// If the HTTP client cannot be built — since reqwest 0.13, a machine with
+    /// no CA bundle. `InMemoryTaskStorage::new` builds one of these, so that
+    /// machine fails at storage construction; [`try_new`](Self::try_new) is
+    /// the fallible form, and `SqlxStorageBuilder` uses it.
     pub fn new() -> Self {
-        Self {
-            client: Client::new(),
+        Self::try_new().expect("HTTP client")
+    }
+
+    /// Create a push notification sender, reporting an HTTP client that will
+    /// not build rather than panicking.
+    pub fn try_new() -> Result<Self, A2AError> {
+        Ok(Self {
+            client: crate::adapter::error::http_client()?,
             timeout: 30,      // Default timeout in seconds
             max_retries: 3,   // Default max retries
             backoff_ms: 1000, // Default backoff in milliseconds (1 second)
-        }
+        })
     }
 
     /// Set the timeout for requests

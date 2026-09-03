@@ -108,6 +108,21 @@ pub enum LlmError {
 /// (see `NOTES.md`). The certificate error was one `source()` away the whole
 /// time. Takes `dyn Error` so the SSE stream's wrapper is covered by the same
 /// rule.
+/// The HTTP client every provider sends through, built rather than
+/// `Client::new()`-ed: `new()` unwraps the builder, and since reqwest 0.13 the
+/// builder fails on a machine with no CA bundle ("No CA certificates were
+/// loaded from the system"). That is a deployment fault — ship
+/// `ca-certificates`, or point `SSL_CERT_FILE` at a bundle — and a deployment
+/// fault is an error to report, not a panic in a constructor.
+pub(crate) fn http_client() -> Result<reqwest::Client, LlmError> {
+    reqwest::Client::builder().build().map_err(|e| {
+        LlmError::NetworkError(format!(
+            "building the HTTP client: {}",
+            describe_transport_error(&e)
+        ))
+    })
+}
+
 pub(crate) fn describe_transport_error(error: &dyn std::error::Error) -> String {
     let mut message = error.to_string();
     let mut source = error.source();

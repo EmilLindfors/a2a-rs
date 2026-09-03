@@ -952,11 +952,13 @@ Linux the OS bundle, or `SSL_CERT_FILE` / `SSL_CERT_DIR` *instead of* it when
 either is set, so the variable works and works the way curl's does. The
 trade: there is no compiled-in webpki floor any more. A machine with no CA
 bundle at all does not fall back to public roots, it fails to *build* the
-client, and `reqwest::Client::new()` — used at construction time by both LLM
-providers and the client negotiator — panics with "No CA certificates were
-loaded from the system". Proven by probe: a request through the new stack
-reached a public host with the OS bundle, and the same binary panicked at
-`Client::new()` with `SSL_CERT_FILE=/dev/null`. An image that ships an agent
+client with "No CA certificates were loaded from the system" — and
+`reqwest::Client::new()` unwraps that, which is why nothing in the workspace
+calls it any more: every client comes through a fallible `http_client()`, and
+the LLM providers, negotiation, the CLI and the SQL storage builder report the
+failure. Proven by probe: a request through the new stack reached a public
+host with the OS bundle, and the same binary failed at construction with
+`SSL_CERT_FILE=/dev/null`. An image that ships an agent
 ships `ca-certificates`; that is a one-line `Dockerfile` fact, where a
 runtime fallback to webpki would have hidden a missing bundle until the first
 MITM proxy. The ConnectRPC client is on its own stack (hyper-rustls through

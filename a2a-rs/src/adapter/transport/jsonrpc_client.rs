@@ -65,25 +65,47 @@ pub struct JsonRpcClient {
 
 impl JsonRpcClient {
     /// Create a new JSON-RPC client targeting `base_url`.
+    ///
+    /// # Panics
+    ///
+    /// If the HTTP client cannot be built — since reqwest 0.13, a machine with
+    /// no CA bundle. Use [`try_new`](Self::try_new) anywhere that is a
+    /// deployment to report on rather than a program to abort.
     pub fn new(base_url: String) -> Self {
-        Self {
-            base_url,
-            client: Client::new(),
-            auth_token: None,
-            timeout: 30,
-            interceptors: Vec::new(),
-        }
+        Self::try_new(base_url).expect("HTTP client")
     }
 
     /// Create a JSON-RPC client with a bearer auth token.
+    ///
+    /// # Panics
+    ///
+    /// As [`new`](Self::new); see [`try_with_auth`](Self::try_with_auth).
     pub fn with_auth(base_url: String, auth_token: String) -> Self {
-        Self {
+        Self::try_with_auth(base_url, auth_token).expect("HTTP client")
+    }
+
+    /// Create a new JSON-RPC client, reporting an HTTP client that will not
+    /// build rather than panicking.
+    pub fn try_new(base_url: String) -> Result<Self, A2AError> {
+        Ok(Self {
             base_url,
-            client: Client::new(),
+            client: crate::adapter::error::http_client()?,
+            auth_token: None,
+            timeout: 30,
+            interceptors: Vec::new(),
+        })
+    }
+
+    /// Create an authenticated JSON-RPC client, reporting an HTTP client that
+    /// will not build rather than panicking. See [`try_new`](Self::try_new).
+    pub fn try_with_auth(base_url: String, auth_token: String) -> Result<Self, A2AError> {
+        Ok(Self {
+            base_url,
+            client: crate::adapter::error::http_client()?,
             auth_token: Some(auth_token),
             timeout: 30,
             interceptors: Vec::new(),
-        }
+        })
     }
 
     /// Set the request timeout (seconds).

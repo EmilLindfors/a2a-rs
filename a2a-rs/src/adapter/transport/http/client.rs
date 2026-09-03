@@ -54,11 +54,13 @@ impl HttpClient {
     ///
     /// # Panics
     ///
-    /// If `base_url` is not a valid `http::Uri`. Use [`try_new`](Self::try_new)
-    /// whenever the URL came from outside the program — a CLI flag, a config
-    /// file, or an agent card.
+    /// If `base_url` is not a valid `http::Uri`, or the HTTP client cannot be
+    /// built (since reqwest 0.13: a machine with no CA bundle). Use
+    /// [`try_new`](Self::try_new) whenever the URL came from outside the
+    /// program — a CLI flag, a config file, or an agent card — or the
+    /// deployment is one to report on rather than abort.
     pub fn new(base_url: String) -> Self {
-        Self::try_new(base_url).expect("Invalid base URL")
+        Self::try_new(base_url).expect("Invalid base URL or HTTP client")
     }
 
     /// Create a new HTTP client, reporting an unusable base URL rather than
@@ -73,7 +75,7 @@ impl HttpClient {
         let (transport, config) = Self::transport_for(&base_url)?;
         Ok(Self {
             base_url,
-            client: Client::new(),
+            client: crate::adapter::error::http_client()?,
             connect_client: A2aServiceClient::new(transport, config),
             auth_token: None,
             timeout: 30,
@@ -86,7 +88,7 @@ impl HttpClient {
     ///
     /// As [`new`](Self::new); see [`try_with_auth`](Self::try_with_auth).
     pub fn with_auth(base_url: String, auth_token: String) -> Self {
-        Self::try_with_auth(base_url, auth_token).expect("Invalid base URL")
+        Self::try_with_auth(base_url, auth_token).expect("Invalid base URL or HTTP client")
     }
 
     /// Create an authenticated HTTP client, reporting an unusable base URL
@@ -96,7 +98,7 @@ impl HttpClient {
         let config = config.default_header("authorization", format!("Bearer {}", auth_token));
         Ok(Self {
             base_url,
-            client: Client::new(),
+            client: crate::adapter::error::http_client()?,
             connect_client: A2aServiceClient::new(transport, config),
             auth_token: Some(auth_token),
             timeout: 30,

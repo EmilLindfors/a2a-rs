@@ -19,6 +19,7 @@ fn openai(server: &MockServer) -> OpenAiProvider {
         reasoning: None,
         stream_usage: true,
     })
+    .expect("the HTTP client builds")
 }
 
 fn gemini(server: &MockServer) -> GeminiProvider {
@@ -28,6 +29,7 @@ fn gemini(server: &MockServer) -> GeminiProvider {
         api_key: "key".to_string(),
         reasoning: None,
     })
+    .expect("the HTTP client builds")
 }
 
 /// OpenRouter puts `finish_reason: "stop"` on the last content chunk *and* on

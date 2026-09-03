@@ -377,9 +377,10 @@ async fn build_transport(cli: &Cli, url: &str) -> anyhow::Result<Arc<dyn Transpo
         }
         TransportChoice::Jsonrpc => {
             let mut client = match &cli.auth {
-                Some(token) => JsonRpcClient::with_auth(url.to_string(), token.clone()),
-                None => JsonRpcClient::new(url.to_string()),
-            };
+                Some(token) => JsonRpcClient::try_with_auth(url.to_string(), token.clone()),
+                None => JsonRpcClient::try_new(url.to_string()),
+            }
+            .context("building a JSON-RPC client")?;
             if let Some(secs) = cli.timeout {
                 client = client.with_timeout(secs);
             }
