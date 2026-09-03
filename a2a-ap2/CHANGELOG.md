@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
 # Changelog
 
 All notable changes to this project will be documented in this file.
+# Changelog
+
+All notable changes to this project will be documented in this file.
 
 ## [0.4.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-ap2-v0.4.1...a2a-ap2-v0.4.2) - 2026-08-18
 
