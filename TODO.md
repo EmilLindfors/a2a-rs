@@ -71,16 +71,13 @@ What is left on this side of the seam — the handler-side remainder is in korps
       index, search — ADK `MemoryService`, LangGraph `BaseStore`, Letta
       archival) needs a vector index and is its own pass. Define the config key
       before then so enabling it later is not a breaking config change.
-- [ ] **A `MAX_TOKENS` cut that ate Gemini's whole answer loses its reason.**
-      Deliberately left out of the 0.4.0 finish-reason work (its commit says
-      so): a candidate cut before any content arrived carries
-      `finishReason: "MAX_TOKENS"` and no `content`, and `chat_completion`
-      fails it as `ProviderError("No content in response")` *before* the
-      reason is read — the one empty response whose emptiness is explained
-      raises the same opaque error as a truly empty one. Read the reason
-      first and carry it in the error (or return an empty response with
-      `finish` set), so a caller can name the output-cap knob instead of
-      reporting a provider fault.
+- [x] **A `MAX_TOKENS` cut that ate Gemini's whole answer loses its reason.**
+      Fixed 2026-09-03: a candidate with a `finishReason` and no `content` is
+      an empty `LlmResponse` with `finish` set — the shape the OpenAI path
+      already returned for a choice with no content — and only a candidate
+      with neither is still `ProviderError("No content in response")`. See
+      `CHANGELOG.md`; `NOTES.md` has why the order of reading matters.
+      `a2a-llm/tests/wire_test.rs` pins both over a socket.
 
 ## 2. Shared with korps
 
@@ -193,21 +190,15 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
 - [ ] **Findings from korps' live runs, 2026-09-02** — four things seen from
       the consuming side, none of which korps could fix here. Recorded so they
       are decided rather than rediscovered.
-      * **`Finish` arrives twice from OpenRouter.** It puts `finish_reason:
-        "stop"` on the last content chunk *and* on the usage-only chunk, and
-        `a2a-llm`'s stream forwards both as `LlmStreamEvent::Finish(Stop)`.
-        korps reads it as a fact and did not break; a consumer that counted
-        finishes, or treated the first as the end of the stream, would.
-        Either de-duplicate (emit once, on the last chunk that carries one)
-        or document that `Finish` is a fact, not a terminator.
-      * **Reasoning text is the model's to give.** Gemini via OpenRouter
-        bills `reasoning_tokens` on every request and puts a summary in
-        `delta.reasoning` only sometimes — one in nine in korps' probes, with
-        `reasoning.effort`, `enabled`, `stream_options` and no parameter at
-        all making no difference. `a2a-llm` parses the field correctly; there
-        is often nothing in it. Worth a line in the `Reasoning` docs so nobody
-        writes a feature that expects the text; `TokenUsage::reasoning_tokens`
-        is what can be relied on.
+      * [x] **`Finish` arrives twice from OpenRouter.** Done 2026-09-03, both
+        halves: the stream emits a reason once (a repeat of the same reason is
+        dropped, a different one still comes through), *and* `Finish`'s doc
+        says it is a fact, not a terminator. `a2a-llm/tests/wire_test.rs`
+        pins it over a socket; checked against the unfixed stream first.
+      * [x] **Reasoning text is the model's to give.** Done 2026-09-03: the
+        line is on `Reasoning` and `LlmResponse::reasoning`, naming
+        `TokenUsage::reasoning_tokens` as the reliable signal. `NOTES.md` has
+        the one-in-nine measurement so it is not re-run.
       * **`reqwest` 0.12 here, 0.13 under `rmcp`.** `rmcp` 1.7's Streamable
         HTTP client is generic over `reqwest` 0.13, and every binary that
         links `a2a-rs` and `rmcp` carries both versions and both TLS stacks.
@@ -320,20 +311,22 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         item in §1 describes: a sweep of the context takes its events, so this
         rides on korps growing a timer. Until then the per-task cap
         (`event_log_capacity`, 1024 by default) is what bounds the table.
-- [ ] **`a2acli send` cannot continue a conversation.** No `--context` flag,
-      so continuing from the CLI means reusing a task id — a different thing
-      on the wire, and a settled task is not a conversation handle. Found
-      driving the 2026-09-01 korps wake-up session by hand. Small: accept a
-      context id on `send` the way a task id already is.
-- [ ] **What does `auto_connect` dial when the card disagrees with the
-      endpoint it was given?** Observed from korps' fleet wake e2e
-      falsification (2026-09-01): `auto_connect` against a *reachable*
-      endpoint whose card advertises an unreachable `url` fails the
-      delegation — so a mis-set `advertised_url` takes down even callers
-      holding the agent's real address. First check exactly which URL the
-      negotiated transport connects to; then decide whether the endpoint the
-      caller handed in should win (or be the fallback) over the card's, and
-      make the connection error name both URLs either way.
+- [x] **`a2acli send` cannot continue a conversation.** Done 2026-09-03. The
+      flag existed under the wrong name: `--session-id` was already the
+      message's `context_id` on the wire. It is `--context-id` now, matching
+      `list`, and a finished task's next-step hint points at its context.
+      `cli_e2e_test.rs` sends two tasks into one context and reads the hint.
+      The port's `session_id` parameter keeps its name for now — renaming it
+      touches every transport and both clients, and is not what was missing.
+- [x] **What does `auto_connect` dial when the card disagrees with the
+      endpoint it was given?** Answered 2026-09-03: the card's interface URL,
+      always, when the card can be fetched and negotiated; `base_url` is only
+      where the card comes from, and the direct-client fallback fires only
+      when it cannot be. Decided that the caller's address neither wins nor
+      is the fallback — `NOTES.md` has the two legitimate setups that rules
+      out — and `connect_with` now logs both URLs when their origins differ,
+      at the one moment both are known. The fix for the case korps hit is
+      the server's `advertised_url`, and the warning names it.
 
 ---
 

@@ -76,6 +76,28 @@ breaks korps. Checking is a manual step and stays one — point korps'
 edit-compile loop. The place that signal belongs is korps' own CI, which builds
 this repo's crates by definition.
 
+**The card's URL is dialed, and the caller's is not the fallback.** (2026-09-03)
+
+`auto_connect(base_url)` fetches the card from `base_url` and then sends every
+request to the interface URL the card advertises. korps' fleet-wake
+falsification found the sharp edge: an agent with a wrong `advertised_url`
+fails every delegation, including from a caller that reached its card at the
+real address a moment earlier — and the error names only the URL that was
+dialed, which the caller never typed.
+
+Two remedies were on the table and both were declined. Letting the caller's
+address *win* breaks the legitimate cases: upstream's `helloworld-server`
+serves JSON-RPC on a sub-path of the card's origin, and a card served through a
+gateway may name an RPC host the gateway does not forward — the card is the
+spec's authority on where the agent's interfaces are. Making it the *fallback*
+means detecting a connection-level failure on the first request and swapping
+the transport underneath the caller, for a mistake whose fix is one line in the
+server's config. So the rule stands, and the cost is paid where it is cheap:
+`connect_with` compares origins (scheme, host, port — the path is the card's)
+at the one moment both URLs are known and logs a warning naming both. The
+direct-client fallback is still only for a card that cannot be fetched or
+negotiated at all.
+
 **The A2A error code rides ConnectRPC as a detail, not as the Connect code.**
 (2026-09-02)
 
@@ -524,6 +546,16 @@ be given back a task id it did not send unless it reads the response — which i
 why `Transport::send_task_message` takes `Option<&str>` and callers use
 `task.id` afterwards, rather than the id they passed in.
 
+**A conversation is continued by context id, and a flag that hides that costs a
+session.** (2026-09-03) `a2acli send --session-id` was already the message's
+`context_id` on the wire; nothing said so, and the word "session" does not
+suggest it. Driving korps' wake-up session by hand, the only visible way to
+continue was `--task-id`, which is a message to an exchange that is over — a
+different thing on the wire, and not one every agent accepts. The flag is
+`--context-id` now, matching `list`, and a finished task's next-step hint names
+it. The port's parameter is still called `session_id`; it maps to `context_id`
+in every transport and renaming it is a wider change than the CLI's.
+
 ---
 
 ## Hazards that will recur
@@ -643,6 +675,33 @@ returned. Verified accepted on `deepseek-v4-flash`, `minimax-m3`, and `glm-5.2`
 on 2026-08-13 — which is evidence about those three models on that day, not a
 property of the setting. Treat the config as "what we asked for" and the bill as
 the source of truth.
+
+**Reasoning text arrives when the model feels like it; the token count always
+does.** (2026-09-03) Gemini via OpenRouter billed `reasoning_tokens` on every
+one of korps' probe requests and returned `delta.reasoning` on about one in
+nine, and no request parameter moved that ratio. The field is parsed correctly;
+it is empty because the model chose not to summarise. A feature that waits for
+the text — a "thinking…" indicator, a reasoning transcript — is a feature that
+works one time in nine. Build on `TokenUsage::reasoning_tokens` instead, which
+is the bill, and the bill is the source of truth (the entry above).
+
+**A provider's stream can restate a fact, and a consumer must not count it.**
+(2026-09-03) OpenRouter puts `finish_reason: "stop"` on the last content chunk
+and again on the usage-only chunk that follows. The stream now drops a repeat
+of the same reason, so `Finish` is emitted once — but the property to hold on
+to is the one its doc states: `Finish` is a *fact* about the generation, not
+the end of the stream, which ends when it ends. A consumer that breaks on it
+loses the usage chunk and the tool-call flush that come after.
+
+**An empty answer with a reason is an answer.** (2026-09-03) A Gemini candidate
+cut at `MAX_TOKENS` before any content arrived — a reasoning model that spent
+the whole budget thinking — carries a `finishReason` and no `content`. Reading
+the content first turned it into `ProviderError("No content in response")`, the
+same error as a truly empty response, and the one thing the caller could act on
+(raise the output cap) was in the field that was never read. The order matters:
+reason first, and a reason with no content is an empty `LlmResponse` with
+`finish` set, the shape the OpenAI path already had. No reason and no content
+is still the provider error, because then nothing in the response explains it.
 
 **A proto3 `bool` makes the spec's default the one you have to write code for.**
 `SendMessageConfiguration.return_immediately` defaults to `false`, and `false`
