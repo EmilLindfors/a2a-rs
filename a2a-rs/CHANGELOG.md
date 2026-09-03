@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.8.4...a2a-rs-v0.9.0) - 2026-09-03
+
+### Added
+
+- *(a2a-rs)* Connect_with warns when the card's interface is at another origin
+
+### Changed
+
+- The context id is called context_id on the client port
+
+### Fixed
+
+- A machine with no CA bundle is an error, not a panic
+
+### Build
+
+- Reqwest 0.12 → 0.13 across the workspace
+
 ## [0.8.4](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.8.3...a2a-rs-v0.8.4) - 2026-09-02
 
 ### Fixed

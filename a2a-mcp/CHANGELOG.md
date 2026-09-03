@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [0.8.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.7.2...a2a-mcp-v0.8.0) - 2026-09-03
+
+### Changed
+
+- The context id is called context_id on the client port
+
+### Fixed
+
+- A bridged skill's tool name is a function name, and a call resolves by it
 # Changelog
 
 All notable changes to this project will be documented in this file.

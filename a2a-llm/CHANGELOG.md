@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.5.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.4.0...a2a-llm-v0.5.0) - 2026-09-03
+
+### Fixed
+
+- A machine with no CA bundle is an error, not a panic
+- *(a2a-llm)* One Finish per stream, and a cut Gemini candidate keeps its reason
+
 ## [0.4.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.3.0...a2a-llm-v0.4.0) - 2026-09-01
 
 ### Added
