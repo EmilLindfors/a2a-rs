@@ -353,6 +353,10 @@ impl GeminiProvider {
 
 #[async_trait]
 impl LlmProvider for GeminiProvider {
+    fn reasoning_refused(&self) -> Option<bool> {
+        Some(self.reasoning_support.refused())
+    }
+
     async fn chat_completion(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
         let url = format!(
             "{}/{}:generateContent?key={}",
