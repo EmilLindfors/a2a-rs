@@ -367,6 +367,18 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
       0.23` — pulled in by `connectrpc`, `hyper-rustls`, and `reqwest` defaults —
       re-enables the `aws_lc_rs` provider even though `a2a-rs` only asks for
       `ring`.
+      **Checked upstream on 2026-09-03: `connectrpc 0.9.0` is half the fix.**
+      Its `client-tls` now takes `hyper-rustls` with `default-features =
+      false` (so hyper-rustls no longer drags aws-lc-rs in), but its `rustls`
+      dependency still has default features, and rustls' default is
+      `aws_lc_rs` — so the provider is still on. Getting there is not a bump:
+      0.9 wants `buffa` 0.9 (we generate against 0.3, and
+      `domain/generated.rs` is checked in, not built), the generated code's
+      `__buffa` shim is gone, and `connectrpc::Context` — which the server
+      adapter uses at 23 sites — no longer exists. A trial bump produced 143
+      errors before the generated domain was touched. That is a regeneration
+      of the domain plus a rewrite of the server adapter: its own pass, and
+      the release after this one at the earliest.
       A feature-only "ring-only" fix is **blocked by `connectrpc 0.3.3`**: it
       exposes no TLS feature flags and depends on `hyper-rustls`/`tokio-rustls`
       with their default `aws-lc-rs` provider, so no combination of our flags
