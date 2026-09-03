@@ -7,7 +7,7 @@ use thiserror::Error;
 
 /// Error type for HTTP client adapter
 #[derive(Error, Debug)]
-#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
 pub enum HttpClientError {
     /// Reqwest client error
     #[error("HTTP client error: {0}")]
@@ -31,7 +31,7 @@ pub enum HttpClientError {
 }
 
 // Conversion from adapter errors to domain errors
-#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
 impl From<HttpClientError> for A2AError {
     fn from(error: HttpClientError) -> Self {
         match error {

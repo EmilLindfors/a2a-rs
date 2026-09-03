@@ -34,17 +34,20 @@ async-trait = "0.1"
 futures = "0.3"
 # TLS roots are decided here, once, for every crate that speaks HTTPS.
 #
-# The two root stores are additive in reqwest: webpki-roots is the floor (a
-# machine with no trust store still reaches public APIs), and the native store
-# adds whatever CA the operator installed. Without the native half, an agent
-# fails every outbound call behind a TLS-intercepting proxy — a corporate MITM
-# gateway, or a Docker Sandbox, which signs traffic with its own
-# "Docker Sandboxes Proxy CA" and hands the agent a cert webpki has never seen.
-# rustls ignores SSL_CERT_FILE, so there is no way to fix that from outside the
-# binary.
-reqwest = { version = "0.12", default-features = false, features = [
-    "rustls-tls",
-    "rustls-tls-native-roots",
+# reqwest 0.13's `rustls` feature verifies against the *platform* trust store
+# (rustls-platform-verifier): on Linux that is the OS bundle, or `SSL_CERT_FILE`
+# / `SSL_CERT_DIR` instead when either is set — so an operator behind a
+# TLS-intercepting proxy (a corporate MITM gateway, a Docker Sandbox signing
+# egress with its own CA) fixes it the way they fix curl. What 0.12 had and
+# this does not is a compiled-in webpki floor: a machine with no CA bundle at
+# all now fails to build a client ("No CA certificates were loaded from the
+# system") — and `reqwest::Client::new()` panics on it — rather than reaching
+# public APIs. An image that ships an agent ships `ca-certificates`.
+#
+# `rustls` also brings the aws-lc-rs provider; a process that installed
+# another (the ConnectRPC client installs ring) keeps its own. See `NOTES.md`.
+reqwest = { version = "0.13", default-features = false, features = [
+    "rustls",
 ] }
 bon = "2.3"
 tokio = "1.32"

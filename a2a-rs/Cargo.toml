@@ -34,7 +34,9 @@ async-trait = { workspace = true }
 futures = { workspace = true }
 
 # HTTP client - optional
-reqwest = { workspace = true, features = ["json", "stream"], optional = true }
+# `form` is what token introspection posts (RFC 7662 §2.1); it was implicit
+# before 0.13 and is a feature now.
+reqwest = { workspace = true, features = ["json", "stream", "form"], optional = true }
 
 
 # HTTP server - optional
@@ -42,8 +44,12 @@ axum = { version = "0.8", optional = true }
 
 # Authentication - optional
 jsonwebtoken = { version = "9.3", optional = true }
-oauth2 = { version = "5.0", optional = true }
-openidconnect = { version = "4.0", optional = true }
+# Without their `reqwest` feature: it pins reqwest 0.12, and the workspace is
+# on 0.13. The HTTP calls they make go through `auth::oauth2::oauth_http`, a
+# closure over the workspace's reqwest that implements their `AsyncHttpClient`,
+# so the workspace has one reqwest and one TLS stack.
+oauth2 = { version = "5.0", optional = true, default-features = false }
+openidconnect = { version = "4.0", optional = true, default-features = false }
 
 # Logging - optional
 tracing = { workspace = true, optional = true }
@@ -62,7 +68,6 @@ prost-types = "0.14.3"
 # Testing dependencies
 proptest = "1.4"
 proptest-derive = "0.5"
-jsonschema = "0.22"
 criterion = { version = "0.5", features = ["html_reports"] }
 arbitrary = { version = "1.3", features = ["derive"] }
 # Drives the axum routers via `ServiceExt::oneshot` in the JSON-RPC router tests.

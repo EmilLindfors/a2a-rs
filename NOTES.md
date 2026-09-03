@@ -946,6 +946,23 @@ enables `rustls-tls-native-roots` alongside `rustls-tls`; reqwest's two root
 stores are **additive**, so webpki stays the floor and the OS store adds whatever
 CA the operator installed.
 
+**Superseded on 2026-09-03 by reqwest 0.13**, whose `rustls` feature verifies
+through `rustls-platform-verifier`. The trust store is now the platform's — on
+Linux the OS bundle, or `SSL_CERT_FILE` / `SSL_CERT_DIR` *instead of* it when
+either is set, so the variable works and works the way curl's does. The
+trade: there is no compiled-in webpki floor any more. A machine with no CA
+bundle at all does not fall back to public roots, it fails to *build* the
+client, and `reqwest::Client::new()` — used at construction time by both LLM
+providers and the client negotiator — panics with "No CA certificates were
+loaded from the system". Proven by probe: a request through the new stack
+reached a public host with the OS bundle, and the same binary panicked at
+`Client::new()` with `SSL_CERT_FILE=/dev/null`. An image that ships an agent
+ships `ca-certificates`; that is a one-line `Dockerfile` fact, where a
+runtime fallback to webpki would have hidden a missing bundle until the first
+MITM proxy. The ConnectRPC client is on its own stack (hyper-rustls through
+`connectrpc`, `ring`, webpki roots only) and did not move — it still does not
+see the OS store, which is the §5 knot in `TODO.md` from the other end.
+
 Worth knowing how narrow the reproduction was: interception is a *policy*, not a
 property of sandboxing. `sbx` v0.38 under the `balanced` policy tunnels allowed
 hosts, so agents see real certificates and even the unfixed binary works; the

@@ -199,13 +199,15 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         line is on `Reasoning` and `LlmResponse::reasoning`, naming
         `TokenUsage::reasoning_tokens` as the reliable signal. `NOTES.md` has
         the one-in-nine measurement so it is not re-run.
-      * **`reqwest` 0.12 here, 0.13 under `rmcp`.** `rmcp` 1.7's Streamable
-        HTTP client is generic over `reqwest` 0.13, and every binary that
-        links `a2a-rs` and `rmcp` carries both versions and both TLS stacks.
-        korps had to add a second `reqwest` under its `mcp-client` feature to
-        name the right type. Moving `a2a-rs`, `a2a-llm`, `a2a-mcp` and
-        `a2a-web-client` to 0.13 unifies it; the `aws-lc-sys` item in §5 is
-        the same TLS knot from the other end.
+      * [x] **`reqwest` 0.12 here, 0.13 under `rmcp`.** Done 2026-09-03
+        (**breaking**): the workspace is on 0.13, `oauth2`/`openidconnect`
+        go through a twenty-line `AsyncHttpClient` over it instead of their
+        own reqwest-0.12 feature, and the lock holds one reqwest. See
+        `CHANGELOG.md`; `NOTES.md` has the trust-store trade (platform store
+        and `SSL_CERT_FILE` in, webpki floor out — an image needs
+        `ca-certificates`). korps' second `reqwest` under `mcp-client` is a
+        deletion when this releases; the `aws-lc-sys` item in §5 is the same
+        TLS knot from the other end and is unchanged by this.
       * **`a2a-mcp`'s bridge names tools after the agent's address** — and
         the name it made was not a function name. An agent's `greet` skill
         served over the bridge arrived at a client as `127_0_0_1_8081_greet`,
@@ -374,8 +376,9 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
       features, so it cannot flip connectrpc's `hyper-rustls` default either.
       Paths, none cheap:
       - **(a)** upstream a `ring` feature into `connectrpc`, then set ring on
-        `connectrpc` + `reqwest` `rustls-tls-no-provider` + `sqlx`
-        `tls-rustls-ring`;
+        `connectrpc` + `reqwest` `rustls-no-provider` (0.13's spelling; its
+        `rustls` feature brings aws-lc-rs itself, so this is now the one
+        place the provider is chosen for reqwest) + `sqlx` `tls-rustls-ring`;
       - **(b)** fork or vendor `connectrpc` with
         `hyper-rustls = { default-features = false, features = ["ring", …] }`;
       - **(c)** keep `aws-lc-rs` and make it cross-build — a `Cross.toml` whose
