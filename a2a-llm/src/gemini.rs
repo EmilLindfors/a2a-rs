@@ -511,10 +511,34 @@ impl LlmProvider for GeminiProvider {
             .as_deref()
             .map(super::FinishReason::from_wire);
 
-        let response_content = candidate.content.ok_or_else(|| {
-            warn!("No content in Gemini API candidate");
-            LlmError::ProviderError("No content in response".to_string())
-        })?;
+        // A candidate cut before any content arrived — `MAX_TOKENS` with a
+        // reasoning model that spent the whole budget thinking, or `SAFETY` —
+        // carries a `finishReason` and no `content`. That emptiness is
+        // explained, and the explanation is the response: an empty
+        // `LlmResponse` with `finish` set, the same shape the OpenAI path
+        // returns for a choice with no content. Failing it as a provider
+        // error was reading the content before the reason, which turned the
+        // one empty answer a caller can act on (raise the output cap) into
+        // the same opaque fault as a truly empty one.
+        let response_content = match (candidate.content, &finish) {
+            (Some(content), _) => content,
+            (None, Some(reason)) => {
+                info!(%reason, "Gemini candidate carries a finish reason and no content");
+                return Ok(LlmResponse {
+                    content: None,
+                    tool_calls: None,
+                    reasoning: None,
+                    usage,
+                    finish,
+                });
+            }
+            (None, None) => {
+                warn!("No content in Gemini API candidate");
+                return Err(LlmError::ProviderError(
+                    "No content in response".to_string(),
+                ));
+            }
+        };
 
         let parts = response_content.parts.unwrap_or_default();
 

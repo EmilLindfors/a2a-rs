@@ -778,6 +778,11 @@ impl LlmProvider for OpenAiProvider {
         let stream = async_stream::try_stream! {
             // Track partial tool calls by index
             let mut pending_tools: std::collections::HashMap<u32, super::ToolCall> = std::collections::HashMap::new();
+            // The reason already reported, so a provider that repeats it does
+            // not make this stream say it twice. OpenRouter puts
+            // `finish_reason: "stop"` on the last content chunk *and* on the
+            // usage-only chunk that follows; both are the same fact.
+            let mut finished: Option<super::FinishReason> = None;
 
             while let Some(event_res) = event_stream.next().await {
                 let event = match event_res {
@@ -871,9 +876,15 @@ impl LlmProvider for OpenAiProvider {
                     // Rides on the choice's last content chunk, so it lands
                     // before the [DONE] tool-call flush and any usage-only
                     // chunk — which is why the event's doc says "record it,
-                    // don't break on it".
+                    // don't break on it". Emitted once: a repeat of the same
+                    // reason is the provider restating itself, and a
+                    // *different* one is news.
                     if let Some(reason) = choice.finish_reason {
-                        yield super::LlmStreamEvent::Finish(super::FinishReason::from_wire(&reason));
+                        let reason = super::FinishReason::from_wire(&reason);
+                        if finished.as_ref() != Some(&reason) {
+                            finished = Some(reason.clone());
+                            yield super::LlmStreamEvent::Finish(reason);
+                        }
                     }
                 }
             }

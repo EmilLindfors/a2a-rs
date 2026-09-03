@@ -414,8 +414,14 @@ impl ReasoningEffort {
 /// that cannot say this on the wire drops it rather than making every caller
 /// ask first.
 ///
-/// Where the model does honour it, its thinking comes back on a separate channel
-/// ([`LlmResponse::reasoning`] / [`LlmStreamEvent::Reasoning`]).
+/// Where the model does honour it, its thinking *may* come back on a separate
+/// channel ([`LlmResponse::reasoning`] / [`LlmStreamEvent::Reasoning`]). The
+/// text is the model's to give, and often it does not: Gemini via OpenRouter
+/// bills `reasoning_tokens` on every request and put a summary in
+/// `delta.reasoning` on about one request in nine, with no request parameter
+/// changing that. Do not build on the text arriving. What can be relied on is
+/// [`TokenUsage::reasoning_tokens`], which says that thinking happened and
+/// what it cost.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reasoning {
     /// Don't think — for models that let reasoning be turned off. The one
@@ -620,7 +626,9 @@ pub struct LlmResponse {
     pub tool_calls: Option<Vec<ToolCall>>,
     /// Reasoning-model "thinking" text, when the provider exposes it separately
     /// from the answer (e.g. OpenRouter's `reasoning`, Zhipu/GLM's
-    /// `reasoning_content`). `None` for providers that don't surface it.
+    /// `reasoning_content`). `None` for providers that don't surface it — and
+    /// often `None` from ones that do, since the text is the model's to give
+    /// (see [`Reasoning`]); `usage.reasoning_tokens` is the reliable signal.
     pub reasoning: Option<String>,
     /// What the provider says the request cost. `None` when it reported nothing.
     pub usage: Option<TokenUsage>,
@@ -649,7 +657,12 @@ pub enum LlmStreamEvent {
     /// necessarily last — OpenAI-style endpoints put it on the final content
     /// chunk, before the usage-only chunk and before this crate flushes
     /// accumulated tool calls — so a caller should record it, not break on it.
-    /// Absent when the provider named no reason.
+    /// A fact, not a terminator: the stream ends when it ends.
+    ///
+    /// Emitted at most once per reason. OpenRouter repeats `finish_reason` on
+    /// its usage-only chunk, and this crate drops the repeat, so a consumer
+    /// that counts finishes counts one. Absent when the provider named no
+    /// reason.
     Finish(FinishReason),
 }
 
