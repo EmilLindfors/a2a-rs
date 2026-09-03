@@ -30,7 +30,7 @@ pub trait BridgeBackend: Send + Sync {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError>;
 
     /// Subscribe to real-time status and artifact updates for a running task.
@@ -82,7 +82,7 @@ impl BridgeBackend for HttpBackend {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError> {
         // An MCP tool call is request/response: the caller wants the agent's
         // answer, not an acknowledgement, and has no poll loop of its own.
@@ -90,7 +90,7 @@ impl BridgeBackend for HttpBackend {
             .send_task_message(
                 Some(task_id),
                 message,
-                session_id,
+                context_id,
                 None,
                 SendCompletion::WhenSettled,
             )
@@ -155,12 +155,12 @@ where
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError> {
         // An MCP tool call authenticates to the MCP server, not to the A2A
         // agent, so there is no A2A principal to name here.
         let ctx =
-            a2a_rs::port::RequestContext::anonymous().with_session(session_id.unwrap_or_default());
+            a2a_rs::port::RequestContext::anonymous().with_context(context_id.unwrap_or_default());
         self.handler.process_message(task_id, message, &ctx).await
     }
 

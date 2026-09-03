@@ -39,6 +39,11 @@ pub trait Transport: Send + Sync {
     /// rather than inventing one client-side. Pass `Some` only to continue a
     /// task the caller already holds.
     ///
+    /// `context_id` names the conversation the task belongs to — the wire's
+    /// `Message.context_id`. A conversation is continued with a *new* task in
+    /// the same context, not by reusing a settled task's id; `None` lets the
+    /// server open a context for the task.
+    ///
     /// `completion` maps to the wire's
     /// `SendMessageConfiguration.return_immediately`, inverted:
     /// [`SendCompletion::WhenSettled`] (the spec default) asks the server to
@@ -53,7 +58,7 @@ pub trait Transport: Send + Sync {
         &self,
         task_id: Option<&str>,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
         history_length: Option<u32>,
         completion: SendCompletion,
     ) -> Result<Task, A2AError>;

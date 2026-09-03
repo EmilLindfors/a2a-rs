@@ -7,7 +7,7 @@ use crate::port::authenticator::AuthPrincipal;
 /// Built by the transport adapter that accepted the request and passed down
 /// through `TaskService` to
 /// [`AsyncMessageHandler`](crate::port::AsyncMessageHandler). One value rather
-/// than a widening parameter list: the session id, the principal and (later) the
+/// than a widening parameter list: the context id, the principal and (later) the
 /// tenant are all facts about *this* request, and a handler that wants one
 /// usually wants the others.
 ///
@@ -27,14 +27,14 @@ use crate::port::authenticator::AuthPrincipal;
 pub struct RequestContext {
     /// The context id the caller supplied, if any. Empty on a first turn that
     /// lets the agent pick one.
-    session_id: Option<String>,
+    context_id: Option<String>,
     /// The authenticated principal, or `None` on an agent that does not
     /// authenticate.
     principal: Option<AuthPrincipal>,
 }
 
 impl RequestContext {
-    /// A call from nobody in particular: no session, no principal.
+    /// A call from nobody in particular: no context, no principal.
     ///
     /// The right context for an internal caller that is not serving a request —
     /// a bridge invoking a handler directly, or a test.
@@ -44,12 +44,12 @@ impl RequestContext {
 
     /// Name the conversation this call belongs to.
     ///
-    /// An empty string is the same as no session at all, which is what a wire
+    /// An empty string is the same as no context at all, which is what a wire
     /// message with an unset `context_id` decodes to.
     #[must_use]
-    pub fn with_session(mut self, session_id: impl Into<String>) -> Self {
-        let session_id = session_id.into();
-        self.session_id = (!session_id.is_empty()).then_some(session_id);
+    pub fn with_context(mut self, context_id: impl Into<String>) -> Self {
+        let context_id = context_id.into();
+        self.context_id = (!context_id.is_empty()).then_some(context_id);
         self
     }
 
@@ -61,8 +61,8 @@ impl RequestContext {
     }
 
     /// The context id the caller supplied.
-    pub fn session_id(&self) -> Option<&str> {
-        self.session_id.as_deref()
+    pub fn context_id(&self) -> Option<&str> {
+        self.context_id.as_deref()
     }
 
     /// The authenticated principal, with whatever claims the authenticator
@@ -85,25 +85,25 @@ mod tests {
     #[test]
     fn an_anonymous_call_names_nobody() {
         let ctx = RequestContext::anonymous();
-        assert_eq!(ctx.session_id(), None);
+        assert_eq!(ctx.context_id(), None);
         assert_eq!(ctx.caller(), None);
     }
 
     #[test]
-    fn an_empty_session_id_is_no_session() {
+    fn an_empty_context_id_is_no_context() {
         // What an unset wire `context_id` decodes to, so the transports do not
         // each have to remember to filter it.
-        let ctx = RequestContext::anonymous().with_session("");
-        assert_eq!(ctx.session_id(), None);
+        let ctx = RequestContext::anonymous().with_context("");
+        assert_eq!(ctx.context_id(), None);
     }
 
     #[test]
     fn the_caller_is_the_principals_id() {
         let ctx = RequestContext::anonymous()
-            .with_session("ctx-1")
+            .with_context("ctx-1")
             .with_principal(AuthPrincipal::new("alice".to_string(), "jwt".to_string()));
 
-        assert_eq!(ctx.session_id(), Some("ctx-1"));
+        assert_eq!(ctx.context_id(), Some("ctx-1"));
         assert_eq!(ctx.caller(), Some("alice"));
         assert_eq!(ctx.principal().map(|p| p.scheme.as_str()), Some("jwt"));
     }

@@ -150,7 +150,7 @@ impl ConnectRpcAdapter {
 /// context names no caller.
 fn request_context(ctx: &::connectrpc::Context, context_id: &str) -> RequestContext {
     RequestContext::anonymous()
-        .with_session(context_id)
+        .with_context(context_id)
         .with_principal(ctx.extensions.get::<AuthPrincipal>().cloned())
 }
 
@@ -664,11 +664,11 @@ mod tests {
         let request_ctx = request_context(&ctx, "ctx-1");
 
         assert_eq!(request_ctx.caller(), Some("alice"));
-        assert_eq!(request_ctx.session_id(), Some("ctx-1"));
+        assert_eq!(request_ctx.context_id(), Some("ctx-1"));
     }
 
     /// No middleware, no principal — and an unset wire `context_id` is no
-    /// session rather than an empty one.
+    /// context rather than an empty one.
     #[test]
     fn an_unauthenticated_call_names_nobody() {
         let ctx = ::connectrpc::Context::new(::http::HeaderMap::new());
@@ -676,6 +676,6 @@ mod tests {
         let request_ctx = request_context(&ctx, "");
 
         assert_eq!(request_ctx.caller(), None);
-        assert_eq!(request_ctx.session_id(), None);
+        assert_eq!(request_ctx.context_id(), None);
     }
 }

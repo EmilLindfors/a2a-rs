@@ -247,13 +247,13 @@ impl Transport for HttpClient {
 
     #[cfg_attr(
         feature = "tracing",
-        instrument(skip(self, message), fields(task_id, session_id, history_length))
+        instrument(skip(self, message), fields(task_id, context_id, history_length))
     )]
     async fn send_task_message(
         &self,
         task_id: Option<&str>,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
         history_length: Option<u32>,
         completion: SendCompletion,
     ) -> Result<Task, A2AError> {
@@ -263,7 +263,7 @@ impl Transport for HttpClient {
         if let Some(id) = task_id {
             msg.task_id = id.to_string();
         }
-        if let Some(sid) = session_id {
+        if let Some(sid) = context_id {
             msg.context_id = sid.to_string();
         }
 
