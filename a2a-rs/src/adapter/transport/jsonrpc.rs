@@ -837,7 +837,7 @@ fn decode_send_message(
         .into_option()
         .ok_or_else(|| A2AError::InvalidParams("missing message".to_string()))?;
     let ctx = RequestContext::anonymous()
-        .with_session(message.context_id.clone())
+        .with_context(message.context_id.clone())
         .with_principal(caller);
     let opts = decode_send_config(req.configuration.into_option());
     Ok((message, ctx, opts))

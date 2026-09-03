@@ -313,6 +313,16 @@ pub fn provider_from_env() -> Result<Option<SelectedLlm>, LlmConfigError> {
     select_from_env(Env::os())
 }
 
+/// A provider whose HTTP client would not build is selected and unusable, the
+/// same as one with a bad credential — the machine, not the config, is what
+/// is wrong, and the detail (no CA bundle, since reqwest 0.13) says so.
+fn unusable_client(
+    provider: &'static str,
+    selected_by: &'static str,
+) -> impl FnOnce(crate::LlmError) -> LlmConfigError {
+    move |e| LlmConfigError::unusable(provider, selected_by, e.to_string())
+}
+
 fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> {
     let [openrouter_key, gemini_key, openai_vars @ ..] = PROVIDER_ENV_VARS;
 
@@ -324,7 +334,10 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
             model: config.model.clone(),
             selected_by: openrouter_key,
             reasoning: ReasoningPlan::carried(config.reasoning),
-            provider: Arc::new(OpenAiProvider::new(config)),
+            provider: Arc::new(
+                OpenAiProvider::new(config)
+                    .map_err(unusable_client("openrouter", openrouter_key))?,
+            ),
         }));
     }
 
@@ -336,7 +349,9 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
             model: config.model.clone(),
             selected_by: gemini_key,
             reasoning: ReasoningPlan::Unset,
-            provider: Arc::new(GeminiProvider::new(config)),
+            provider: Arc::new(
+                GeminiProvider::new(config).map_err(unusable_client("gemini", gemini_key))?,
+            ),
         }));
     }
 
@@ -347,7 +362,9 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
             model: config.model.clone(),
             selected_by: var,
             reasoning: ReasoningPlan::Unset,
-            provider: Arc::new(OpenAiProvider::new(config)),
+            provider: Arc::new(
+                OpenAiProvider::new(config).map_err(unusable_client("openai", var))?,
+            ),
         }));
     }
 
@@ -427,7 +444,10 @@ fn build_from_settings(
                 model,
                 selected_by: SELECTED_BY_CONFIG,
                 reasoning: ReasoningPlan::carried(settings.reasoning),
-                provider: Arc::new(OpenAiProvider::new(config)),
+                provider: Arc::new(
+                    OpenAiProvider::new(config)
+                        .map_err(unusable_client("openrouter", SELECTED_BY_CONFIG))?,
+                ),
             })
         }
         "openai" => {
@@ -469,7 +489,10 @@ fn build_from_settings(
                 model,
                 selected_by: SELECTED_BY_CONFIG,
                 reasoning: plan,
-                provider: Arc::new(OpenAiProvider::new(config)),
+                provider: Arc::new(
+                    OpenAiProvider::new(config)
+                        .map_err(unusable_client("openai", SELECTED_BY_CONFIG))?,
+                ),
             })
         }
         "gemini" => {
@@ -510,7 +533,10 @@ fn build_from_settings(
                 // Every `Reasoning` has a `thinkingConfig` spelling, so nothing
                 // is dropped here — the model decides.
                 reasoning: ReasoningPlan::attempted(settings.reasoning),
-                provider: Arc::new(GeminiProvider::new(config)),
+                provider: Arc::new(
+                    GeminiProvider::new(config)
+                        .map_err(unusable_client("gemini", SELECTED_BY_CONFIG))?,
+                ),
             })
         }
         other => Err(LlmConfigError::Unsupported {

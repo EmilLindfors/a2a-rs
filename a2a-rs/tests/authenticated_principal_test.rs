@@ -31,7 +31,7 @@ use a2a_rs::domain::{A2AError, Message, Task, TaskState, TaskStatus};
 use a2a_rs::port::{AsyncMessageHandler, RequestContext};
 
 /// What one call was told about who was asking: the principal's id and the
-/// session id, both as the handler saw them.
+/// context id, both as the handler saw them.
 type Seen = (Option<String>, Option<String>);
 
 /// Records what each call was told about its caller.
@@ -57,7 +57,7 @@ impl AsyncMessageHandler for RecordingHandler {
     ) -> Result<Task, A2AError> {
         self.seen.lock().expect("not poisoned").push((
             ctx.caller().map(str::to_string),
-            ctx.session_id().map(str::to_string),
+            ctx.context_id().map(str::to_string),
         ));
         Ok(Task::builder()
             .id(task_id.to_string())

@@ -104,17 +104,20 @@ pub trait TransportFactory: Send + Sync {
 
 /// Build a JSON-RPC client on `url` with `config` applied.
 #[cfg(feature = "jsonrpc-client")]
-fn jsonrpc_client(url: String, config: &ClientConfig) -> super::jsonrpc_client::JsonRpcClient {
+fn jsonrpc_client(
+    url: String,
+    config: &ClientConfig,
+) -> Result<super::jsonrpc_client::JsonRpcClient, A2AError> {
     use super::jsonrpc_client::JsonRpcClient;
 
     let mut client = match config.auth_token() {
-        Some(token) => JsonRpcClient::with_auth(url, token.to_string()),
-        None => JsonRpcClient::new(url),
+        Some(token) => JsonRpcClient::try_with_auth(url, token.to_string())?,
+        None => JsonRpcClient::try_new(url)?,
     };
     if let Some(secs) = config.timeout_secs() {
         client = client.with_timeout(secs);
     }
-    client
+    Ok(client)
 }
 
 /// Build a ConnectRPC client on `url` with `config` applied, reporting a URL
@@ -153,7 +156,7 @@ impl TransportFactory for JsonRpcTransportFactory {
         iface: &AgentInterface,
         config: &ClientConfig,
     ) -> Result<Box<dyn Transport>, A2AError> {
-        Ok(Box::new(jsonrpc_client(iface.url.clone(), config)))
+        Ok(Box::new(jsonrpc_client(iface.url.clone(), config)?))
     }
 }
 
@@ -218,13 +221,27 @@ impl TransportNegotiator {
         card: &AgentCard,
         config: &ClientConfig,
     ) -> Result<Box<dyn Transport>, A2AError> {
+        self.select(card, config)
+            .await
+            .map(|(transport, _iface)| transport)
+    }
+
+    /// [`negotiate_with`](Self::negotiate_with), also returning the interface
+    /// the transport was built from — which is where it will send every
+    /// request, and the one fact a caller holding a *different* address for
+    /// the agent needs in order to explain a failure.
+    async fn select<'c>(
+        &self,
+        card: &'c AgentCard,
+        config: &ClientConfig,
+    ) -> Result<(Box<dyn Transport>, &'c AgentInterface), A2AError> {
         for factory in &self.factories {
             for iface in &card.supported_interfaces {
                 if iface.protocol_binding == factory.protocol()
                     && version_compatible(&iface.protocol_version)
                 {
                     match factory.create(card, iface, config).await {
-                        Ok(transport) => return Ok(transport),
+                        Ok(transport) => return Ok((transport, iface)),
                         Err(_err) => continue,
                     }
                 }
@@ -285,6 +302,18 @@ pub async fn connect(
 /// The card fetch carries the credentials too: an agent that authenticates its
 /// RPC endpoints usually authenticates the card endpoint as well, and a fetch
 /// that 401s would otherwise sink the whole negotiation.
+///
+/// # Which URL the transport dials
+///
+/// `base_url` is where the *card* is fetched from. The transport dials the
+/// interface URL the card advertises, which is the card's to decide — an
+/// agent may serve JSON-RPC on a sub-path, or its card through a gateway that
+/// does not forward RPC — so the address a caller holds does not override it.
+/// When the two disagree in origin, an agent whose advertised URL is wrong
+/// (korps' `advertised_url`, say) fails every request even for a caller
+/// holding its real address; that is logged here, at the one moment both
+/// URLs are known, because the failure that follows names only the one that
+/// was dialed.
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 pub async fn connect_with(
     base_url: &str,
@@ -292,7 +321,32 @@ pub async fn connect_with(
     config: &ClientConfig,
 ) -> Result<Box<dyn Transport>, A2AError> {
     let card = fetch_agent_card_with(base_url, config).await?;
-    negotiator.negotiate_with(&card, config).await
+    let (transport, iface) = negotiator.select(&card, config).await?;
+    if !same_origin(base_url, &iface.url) {
+        #[cfg(feature = "tracing")]
+        tracing::warn!(
+            card_url = %base_url,
+            interface_url = %iface.url,
+            protocol = %iface.protocol_binding,
+            "the agent card advertises its interface at a different origin than it was fetched from; requests go to the advertised URL"
+        );
+    }
+    Ok(transport)
+}
+
+/// Whether two URLs name the same scheme, host and port — the part of an
+/// address that decides which server answers. Paths are the card's business
+/// (an interface on a sub-path is normal); an unparseable URL is reported as a
+/// mismatch, since it cannot be the same server as a parseable one.
+fn same_origin(a: &str, b: &str) -> bool {
+    match (reqwest::Url::parse(a), reqwest::Url::parse(b)) {
+        (Ok(a), Ok(b)) => {
+            a.scheme() == b.scheme()
+                && a.host_str() == b.host_str()
+                && a.port_or_known_default() == b.port_or_known_default()
+        }
+        _ => false,
+    }
 }
 
 /// Validate `base_url`, negotiate a transport from the agent card, and fall back
@@ -305,6 +359,12 @@ pub async fn connect_with(
 /// falls back to a direct client on `base_url` so the call still works against a
 /// bare agent URL with no published card. The fallback prefers the in-tree
 /// ConnectRPC transport, using JSON-RPC 2.0 when ConnectRPC isn't compiled in.
+///
+/// The fallback is for a card that cannot be *fetched or negotiated*, not for
+/// one that is wrong: when the card is served and names an interface this
+/// client speaks, requests go to the URL the card advertises, whatever
+/// `base_url` was — see [`connect_with`] for why, and for the warning logged
+/// when the two disagree.
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 pub async fn auto_connect(base_url: &str) -> Result<Box<dyn Transport>, A2AError> {
     auto_connect_with(base_url, &ClientConfig::default()).await
@@ -348,7 +408,7 @@ fn direct_transport(base_url: &str, config: &ClientConfig) -> Result<Box<dyn Tra
     }
     #[cfg(all(not(feature = "http-client"), feature = "jsonrpc-client"))]
     {
-        Ok(Box::new(jsonrpc_client(base_url.to_string(), config)))
+        Ok(Box::new(jsonrpc_client(base_url.to_string(), config)?))
     }
 }
 
@@ -367,7 +427,7 @@ pub async fn fetch_agent_card_with(
 ) -> Result<AgentCard, A2AError> {
     use crate::adapter::error::HttpClientError;
 
-    let client = reqwest::Client::new();
+    let client = crate::adapter::error::http_client()?;
     let base = base_url.trim_end_matches('/');
     for path in [".well-known/agent-card.json", "agent-card"] {
         let url = format!("{base}/{path}");
@@ -394,6 +454,33 @@ pub async fn fetch_agent_card_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The origin is what decides which server answers; the path is the
+    /// card's to choose and a port left implicit is the same port.
+    #[test]
+    fn same_origin_compares_scheme_host_and_port_only() {
+        assert!(same_origin(
+            "http://127.0.0.1:8081",
+            "http://127.0.0.1:8081/jsonrpc"
+        ));
+        assert!(same_origin(
+            "https://agent.example",
+            "https://agent.example:443/"
+        ));
+        assert!(!same_origin(
+            "http://127.0.0.1:8081",
+            "http://agent.internal:8081"
+        ));
+        assert!(!same_origin(
+            "http://127.0.0.1:8081",
+            "http://127.0.0.1:8082"
+        ));
+        assert!(!same_origin(
+            "http://127.0.0.1:8081",
+            "https://127.0.0.1:8081"
+        ));
+        assert!(!same_origin("http://127.0.0.1:8081", "not a url"));
+    }
 
     #[test]
     fn rejects_v2_interface() {

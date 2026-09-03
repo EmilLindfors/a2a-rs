@@ -30,7 +30,7 @@ pub trait BridgeBackend: Send + Sync {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError>;
 
     /// Subscribe to real-time status and artifact updates for a running task.
@@ -82,7 +82,7 @@ impl BridgeBackend for HttpBackend {
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError> {
         // An MCP tool call is request/response: the caller wants the agent's
         // answer, not an acknowledgement, and has no poll loop of its own.
@@ -90,7 +90,7 @@ impl BridgeBackend for HttpBackend {
             .send_task_message(
                 Some(task_id),
                 message,
-                session_id,
+                context_id,
                 None,
                 SendCompletion::WhenSettled,
             )
@@ -155,12 +155,12 @@ where
         &self,
         task_id: &str,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
     ) -> std::result::Result<Task, A2AError> {
         // An MCP tool call authenticates to the MCP server, not to the A2A
         // agent, so there is no A2A principal to name here.
         let ctx =
-            a2a_rs::port::RequestContext::anonymous().with_session(session_id.unwrap_or_default());
+            a2a_rs::port::RequestContext::anonymous().with_context(context_id.unwrap_or_default());
         self.handler.process_message(task_id, message, &ctx).await
     }
 
@@ -370,11 +370,7 @@ impl AgentToMcpBridge {
     }
 
     fn create_artifact_uri(&self, task_id: &str, artifact_id: &str) -> String {
-        let sanitized_ns = self
-            .namespace
-            .replace("https://", "")
-            .replace("http://", "")
-            .replace(['/', ':', '.'], "_");
+        let sanitized_ns = SkillToolConverter::sanitize_namespace(&self.namespace);
         format!(
             "a2a-artifact://{}/{}/{}",
             sanitized_ns, task_id, artifact_id
@@ -1087,20 +1083,22 @@ impl ServerHandler for AgentToMcpBridge {
             let name = &params.name;
             info!("MCP client calling tool: {}", name);
 
-            // Parse the tool name to extract skill ID
-            let (_agent_id, skill_id) = match SkillToolConverter::parse_tool_name(name) {
-                Ok(result) => result,
-                Err(e) => return Err(e.to_mcp_error()),
+            // The skill whose generated name this is — matched, not parsed,
+            // so a skill id with an underscore in it resolves too.
+            let skill_id = match SkillToolConverter::resolve_skill(
+                &self.agent_card.skills,
+                &self.namespace,
+                name,
+            ) {
+                Some(skill) => skill.id.clone(),
+                None => {
+                    error!("No skill is served as tool '{}'", name);
+                    return Err(McpError::internal_error(
+                        format!("No skill is served as tool '{}'", name),
+                        None,
+                    ));
+                }
             };
-
-            // Verify the skill exists
-            if !self.agent_card.skills.iter().any(|s| s.id == skill_id) {
-                error!("Skill not found: {}", skill_id);
-                return Err(McpError::internal_error(
-                    format!("Skill '{}' not found", skill_id),
-                    None,
-                ));
-            }
 
             let message_text = params
                 .arguments
@@ -1200,20 +1198,22 @@ impl ServerHandler for AgentToMcpBridge {
             let name = &request.name;
             info!("MCP client getting prompt: {}", name);
 
-            // Parse the prompt name to extract skill ID
-            let (_agent_id, skill_id) = match SkillToolConverter::parse_tool_name(name) {
-                Ok(result) => result,
-                Err(e) => return Err(e.to_mcp_error()),
+            // The skill whose generated name this is — matched, not parsed,
+            // so a skill id with an underscore in it resolves too.
+            let skill_id = match SkillToolConverter::resolve_skill(
+                &self.agent_card.skills,
+                &self.namespace,
+                name,
+            ) {
+                Some(skill) => skill.id.clone(),
+                None => {
+                    error!("No skill is served as prompt '{}'", name);
+                    return Err(McpError::internal_error(
+                        format!("No skill is served as prompt '{}'", name),
+                        None,
+                    ));
+                }
             };
-
-            // Verify the skill exists
-            if !self.agent_card.skills.iter().any(|s| s.id == skill_id) {
-                error!("Skill not found: {}", skill_id);
-                return Err(McpError::internal_error(
-                    format!("Skill '{}' not found", skill_id),
-                    None,
-                ));
-            }
 
             // Extract the message parameter from arguments
             let message_text = request

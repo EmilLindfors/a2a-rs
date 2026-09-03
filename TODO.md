@@ -71,16 +71,13 @@ What is left on this side of the seam — the handler-side remainder is in korps
       index, search — ADK `MemoryService`, LangGraph `BaseStore`, Letta
       archival) needs a vector index and is its own pass. Define the config key
       before then so enabling it later is not a breaking config change.
-- [ ] **A `MAX_TOKENS` cut that ate Gemini's whole answer loses its reason.**
-      Deliberately left out of the 0.4.0 finish-reason work (its commit says
-      so): a candidate cut before any content arrived carries
-      `finishReason: "MAX_TOKENS"` and no `content`, and `chat_completion`
-      fails it as `ProviderError("No content in response")` *before* the
-      reason is read — the one empty response whose emptiness is explained
-      raises the same opaque error as a truly empty one. Read the reason
-      first and carry it in the error (or return an empty response with
-      `finish` set), so a caller can name the output-cap knob instead of
-      reporting a provider fault.
+- [x] **A `MAX_TOKENS` cut that ate Gemini's whole answer loses its reason.**
+      Fixed 2026-09-03: a candidate with a `finishReason` and no `content` is
+      an empty `LlmResponse` with `finish` set — the shape the OpenAI path
+      already returned for a choice with no content — and only a candidate
+      with neither is still `ProviderError("No content in response")`. See
+      `CHANGELOG.md`; `NOTES.md` has why the order of reading matters.
+      `a2a-llm/tests/wire_test.rs` pins both over a socket.
 
 ## 2. Shared with korps
 
@@ -190,6 +187,41 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
       - Like the `axum` item, korps only feels this when the release lands; it
         builds against published `a2a-llm` today.
 
+- [ ] **Findings from korps' live runs, 2026-09-02** — four things seen from
+      the consuming side, none of which korps could fix here. Recorded so they
+      are decided rather than rediscovered.
+      * [x] **`Finish` arrives twice from OpenRouter.** Done 2026-09-03, both
+        halves: the stream emits a reason once (a repeat of the same reason is
+        dropped, a different one still comes through), *and* `Finish`'s doc
+        says it is a fact, not a terminator. `a2a-llm/tests/wire_test.rs`
+        pins it over a socket; checked against the unfixed stream first.
+      * [x] **Reasoning text is the model's to give.** Done 2026-09-03: the
+        line is on `Reasoning` and `LlmResponse::reasoning`, naming
+        `TokenUsage::reasoning_tokens` as the reliable signal. `NOTES.md` has
+        the one-in-nine measurement so it is not re-run.
+      * [x] **`reqwest` 0.12 here, 0.13 under `rmcp`.** Done 2026-09-03
+        (**breaking**): the workspace is on 0.13, `oauth2`/`openidconnect`
+        go through a twenty-line `AsyncHttpClient` over it instead of their
+        own reqwest-0.12 feature, and the lock holds one reqwest. See
+        `CHANGELOG.md`; `NOTES.md` has the trust-store trade (platform store
+        and `SSL_CERT_FILE` in, webpki floor out — an image needs
+        `ca-certificates`). korps' second `reqwest` under `mcp-client` is a
+        deletion when this releases; the `aws-lc-sys` item in §5 is the same
+        TLS knot from the other end and is unchanged by this.
+      * **`a2a-mcp`'s bridge names tools after the agent's address** — and
+        the name it made was not a function name. An agent's `greet` skill
+        served over the bridge arrived at a client as `127_0_0_1_8081_greet`,
+        and Gemini refuses a request carrying a function name that starts
+        with a digit, so a korps agent with that server connected could not
+        use *any* tool. Fixed the same day, additively: `create_tool_name`
+        puts `agent_` in front when the sanitized address does not start
+        with a letter, and the bridge answers a call by matching the names
+        it generated (`resolve_skill`) instead of `parse_tool_name`, which
+        split at the last underscore and cut `my_skill` to `skill`. Still
+        open: the prefix is the address, which changes when the address
+        does; the agent's id or name is the right one, and that is a
+        naming change for a release to carry deliberately.
+
 ## 3. Interop and CI
 
 - [x] **The two storage backends returned different tasks for the same run.**
@@ -281,20 +313,22 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         item in §1 describes: a sweep of the context takes its events, so this
         rides on korps growing a timer. Until then the per-task cap
         (`event_log_capacity`, 1024 by default) is what bounds the table.
-- [ ] **`a2acli send` cannot continue a conversation.** No `--context` flag,
-      so continuing from the CLI means reusing a task id — a different thing
-      on the wire, and a settled task is not a conversation handle. Found
-      driving the 2026-09-01 korps wake-up session by hand. Small: accept a
-      context id on `send` the way a task id already is.
-- [ ] **What does `auto_connect` dial when the card disagrees with the
-      endpoint it was given?** Observed from korps' fleet wake e2e
-      falsification (2026-09-01): `auto_connect` against a *reachable*
-      endpoint whose card advertises an unreachable `url` fails the
-      delegation — so a mis-set `advertised_url` takes down even callers
-      holding the agent's real address. First check exactly which URL the
-      negotiated transport connects to; then decide whether the endpoint the
-      caller handed in should win (or be the fallback) over the card's, and
-      make the connection error name both URLs either way.
+- [x] **`a2acli send` cannot continue a conversation.** Done 2026-09-03. The
+      flag existed under the wrong name: `--session-id` was already the
+      message's `context_id` on the wire. It is `--context-id` now, matching
+      `list`, and a finished task's next-step hint points at its context.
+      `cli_e2e_test.rs` sends two tasks into one context and reads the hint.
+      The port's `session_id` parameter keeps its name for now — renaming it
+      touches every transport and both clients, and is not what was missing.
+- [x] **What does `auto_connect` dial when the card disagrees with the
+      endpoint it was given?** Answered 2026-09-03: the card's interface URL,
+      always, when the card can be fetched and negotiated; `base_url` is only
+      where the card comes from, and the direct-client fallback fires only
+      when it cannot be. Decided that the caller's address neither wins nor
+      is the fallback — `NOTES.md` has the two legitimate setups that rules
+      out — and `connect_with` now logs both URLs when their origins differ,
+      at the one moment both are known. The fix for the case korps hit is
+      the server's `advertised_url`, and the warning names it.
 
 ---
 
@@ -333,6 +367,18 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
       0.23` — pulled in by `connectrpc`, `hyper-rustls`, and `reqwest` defaults —
       re-enables the `aws_lc_rs` provider even though `a2a-rs` only asks for
       `ring`.
+      **Checked upstream on 2026-09-03: `connectrpc 0.9.0` is half the fix.**
+      Its `client-tls` now takes `hyper-rustls` with `default-features =
+      false` (so hyper-rustls no longer drags aws-lc-rs in), but its `rustls`
+      dependency still has default features, and rustls' default is
+      `aws_lc_rs` — so the provider is still on. Getting there is not a bump:
+      0.9 wants `buffa` 0.9 (we generate against 0.3, and
+      `domain/generated.rs` is checked in, not built), the generated code's
+      `__buffa` shim is gone, and `connectrpc::Context` — which the server
+      adapter uses at 23 sites — no longer exists. A trial bump produced 143
+      errors before the generated domain was touched. That is a regeneration
+      of the domain plus a rewrite of the server adapter: its own pass, and
+      the release after this one at the earliest.
       A feature-only "ring-only" fix is **blocked by `connectrpc 0.3.3`**: it
       exposes no TLS feature flags and depends on `hyper-rustls`/`tokio-rustls`
       with their default `aws-lc-rs` provider, so no combination of our flags
@@ -342,8 +388,9 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
       features, so it cannot flip connectrpc's `hyper-rustls` default either.
       Paths, none cheap:
       - **(a)** upstream a `ring` feature into `connectrpc`, then set ring on
-        `connectrpc` + `reqwest` `rustls-tls-no-provider` + `sqlx`
-        `tls-rustls-ring`;
+        `connectrpc` + `reqwest` `rustls-no-provider` (0.13's spelling; its
+        `rustls` feature brings aws-lc-rs itself, so this is now the one
+        place the provider is chosen for reqwest) + `sqlx` `tls-rustls-ring`;
       - **(b)** fork or vendor `connectrpc` with
         `hyper-rustls = { default-features = false, features = ["ring", …] }`;
       - **(c)** keep `aws-lc-rs` and make it cross-build — a `Cross.toml` whose

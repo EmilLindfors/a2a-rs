@@ -217,12 +217,12 @@ impl Transport for RetryingTransport {
         &self,
         task_id: Option<&str>,
         message: &Message,
-        session_id: Option<&str>,
+        context_id: Option<&str>,
         history_length: Option<u32>,
         completion: SendCompletion,
     ) -> Result<Task, A2AError> {
         self.inner
-            .send_task_message(task_id, message, session_id, history_length, completion)
+            .send_task_message(task_id, message, context_id, history_length, completion)
             .await
     }
 

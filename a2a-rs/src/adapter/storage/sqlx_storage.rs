@@ -376,7 +376,7 @@ impl SqlxStorageBuilder {
             Some(sender) => PushNotificationRegistry::from_shared(sender),
             None => {
                 #[cfg(feature = "http-client")]
-                let sender = HttpPushNotificationSender::new();
+                let sender = HttpPushNotificationSender::try_new()?;
                 #[cfg(not(feature = "http-client"))]
                 let sender = NoopPushNotificationSender::default();
                 PushNotificationRegistry::new(sender)

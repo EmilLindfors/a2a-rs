@@ -60,7 +60,7 @@ impl AsyncMessageHandler for AsyncAgent {
         ctx: &RequestContext,
     ) -> Result<Task, A2AError> {
         let id: TaskId = task_id.parse()?;
-        let ctx_id: ContextId = ctx.session_id().unwrap_or("ctx").parse()?;
+        let ctx_id: ContextId = ctx.context_id().unwrap_or("ctx").parse()?;
         if !self.storage.exists(&id).await? {
             self.storage.create(&id, &ctx_id).await?;
         }

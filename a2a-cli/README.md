@@ -44,6 +44,7 @@ that guards its RPC endpoints usually guards its card too.
 a2acli card                                   # fetch & print the agent card
 a2acli send "hello"                           # send to a fresh (uuid) task id
 a2acli send "hello" --task-id t1              # send to a specific task
+a2acli send "and then?" --context-id c1       # continue a conversation (a new task in context c1)
 a2acli send - < prompt.txt                    # read the message from stdin
 a2acli send "hello" --no-wait                 # don't wait for the reply
 a2acli send "hello" --wait-timeout 120        # wait longer than the 30s default

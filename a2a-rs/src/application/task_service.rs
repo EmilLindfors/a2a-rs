@@ -319,7 +319,7 @@ impl TaskService {
         opts: SendOptions,
     ) -> Result<Task, A2AError> {
         let (id, context_id, message) = self.stamp_ids(message).await?;
-        let ctx = ctx.clone().with_session(context_id.as_str());
+        let ctx = ctx.clone().with_context(context_id.as_str());
         let task_id = id.as_str();
 
         if let Some(mut push_config) = opts.push_config {
@@ -416,7 +416,7 @@ impl TaskService {
         history_limit: Option<u32>,
     ) -> Result<(Task, UpdateStream), A2AError> {
         let (id, context_id, message) = self.stamp_ids(message).await?;
-        let ctx = ctx.clone().with_session(context_id.as_str());
+        let ctx = ctx.clone().with_context(context_id.as_str());
         let task_id = id.as_str();
 
         if let Some(mut push_config) = push_config {

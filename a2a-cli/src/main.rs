@@ -123,9 +123,14 @@ enum Command {
         /// Target task id. Generated (uuid) if not provided.
         #[arg(long)]
         task_id: Option<String>,
-        /// Session id to associate the message with.
-        #[arg(long)]
-        session_id: Option<String>,
+        /// Context id (conversation) to continue.
+        ///
+        /// A task is one exchange; the context is the conversation it belongs
+        /// to. Continuing a conversation means a *new* task in the same
+        /// context — reusing a settled task's id is a different thing on the
+        /// wire, and not one every agent accepts.
+        #[arg(long, value_name = "ID")]
+        context_id: Option<String>,
         /// Number of history messages to return on the resulting task.
         #[arg(long)]
         history_length: Option<u32>,
@@ -210,7 +215,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Send {
             text,
             task_id,
-            session_id,
+            context_id,
             history_length,
             no_wait,
             wait_timeout,
@@ -229,7 +234,7 @@ async fn main() -> anyhow::Result<()> {
                 .send_task_message(
                     task_id.as_deref(),
                     &message,
-                    session_id.as_deref(),
+                    context_id.as_deref(),
                     *history_length,
                     completion,
                 )
@@ -372,9 +377,10 @@ async fn build_transport(cli: &Cli, url: &str) -> anyhow::Result<Arc<dyn Transpo
         }
         TransportChoice::Jsonrpc => {
             let mut client = match &cli.auth {
-                Some(token) => JsonRpcClient::with_auth(url.to_string(), token.clone()),
-                None => JsonRpcClient::new(url.to_string()),
-            };
+                Some(token) => JsonRpcClient::try_with_auth(url.to_string(), token.clone()),
+                None => JsonRpcClient::try_new(url.to_string()),
+            }
+            .context("building a JSON-RPC client")?;
             if let Some(secs) = cli.timeout {
                 client = client.with_timeout(secs);
             }
@@ -435,8 +441,9 @@ fn finish(task: &Task) -> anyhow::Result<()> {
 /// of them. A task still running is followed with `stream`/`get`. A task in an
 /// *interrupted* state is waiting on **you** — and since those states count as
 /// settled, the CLI previously printed the state and fell silent, which reads
-/// like the agent gave up rather than asked a question. A finished task needs
-/// no advice at all.
+/// like the agent gave up rather than asked a question. A finished task is
+/// continued in its *context*, not on its id: the id names an exchange that is
+/// over, and the context is the conversation it was part of.
 fn print_next_step(url: &str, task_id: &str, task: &Task) {
     if task.status.state.is_interrupted() {
         println!();
@@ -447,6 +454,11 @@ fn print_next_step(url: &str, task_id: &str, task: &Task) {
         println!("the agent is still working; follow it with:");
         println!("  a2acli --url {url} stream {task_id}");
         println!("  a2acli --url {url} get {task_id}");
+    } else if !task.context_id.is_empty() {
+        let context_id = &task.context_id;
+        println!();
+        println!("to continue the conversation, send to the same context:");
+        println!("  a2acli --url {url} send --context-id {context_id} \"your next message\"");
     }
 }
 

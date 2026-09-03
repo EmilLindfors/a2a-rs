@@ -71,6 +71,50 @@ struct IntrospectionResponse {
     exp: Option<i64>,
 }
 
+/// The `oauth2` / `openidconnect` HTTP client, over the workspace's reqwest.
+///
+/// Both crates ship their own reqwest integration behind a `reqwest` feature,
+/// and that feature pins reqwest 0.12 while the workspace is on 0.13 — taking
+/// it would put two reqwests and two TLS stacks in every binary with `auth`
+/// on. Their `AsyncHttpClient` is a plain `Fn(http::Request<Vec<u8>>) ->
+/// Future<Result<http::Response<Vec<u8>>, E>>`, so this is the whole
+/// integration: buffer the request in, buffer the response out. Redirect
+/// policy and everything else stay on the `reqwest::Client` the caller built.
+#[cfg(feature = "auth")]
+fn oauth_http(
+    client: reqwest::Client,
+) -> impl Fn(
+    oauth2::HttpRequest,
+) -> std::pin::Pin<
+    Box<
+        dyn std::future::Future<
+                Output = Result<oauth2::HttpResponse, crate::adapter::error::HttpClientError>,
+            > + Send,
+    >,
+> {
+    use crate::adapter::error::HttpClientError;
+
+    move |request| {
+        let client = client.clone();
+        Box::pin(async move {
+            let (parts, body) = request.into_parts();
+            let response = client
+                .request(parts.method, parts.uri.to_string())
+                .headers(parts.headers)
+                .body(body)
+                .send()
+                .await?;
+            let mut out = http::Response::builder().status(response.status());
+            if let Some(headers) = out.headers_mut() {
+                *headers = response.headers().clone();
+            }
+            let body = response.bytes().await?.to_vec();
+            out.body(body)
+                .map_err(|e| HttpClientError::Request(format!("invalid response: {e}")))
+        })
+    }
+}
+
 /// Where and how to ask the authorization server about a token.
 #[cfg(feature = "auth")]
 #[derive(Clone)]
@@ -413,7 +457,7 @@ impl SigningKeys {
             return Ok(None);
         }
 
-        let set = CoreJsonWebKeySet::fetch_async(&self.jwks_uri, &self.http)
+        let set = CoreJsonWebKeySet::fetch_async(&self.jwks_uri, &oauth_http(self.http.clone()))
             .await
             .map_err(|e| {
                 A2AError::Internal(format!("Failed to fetch the OIDC provider's keys: {}", e))
@@ -505,12 +549,12 @@ impl OpenIdConnectAuthenticator {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| A2AError::Internal(format!("Failed to build HTTP client: {}", e)))?;
-        let provider_metadata =
-            CoreProviderMetadata::discover_async(issuer_url.clone(), &http_client)
-                .await
-                .map_err(|e| {
-                    A2AError::Internal(format!("Failed to discover OIDC provider: {}", e))
-                })?;
+        let provider_metadata = CoreProviderMetadata::discover_async(
+            issuer_url.clone(),
+            &oauth_http(http_client.clone()),
+        )
+        .await
+        .map_err(|e| A2AError::Internal(format!("Failed to discover OIDC provider: {}", e)))?;
 
         let scheme = SecurityScheme::open_id_connect(
             issuer_url.as_str().to_string(),

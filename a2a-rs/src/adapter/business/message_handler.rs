@@ -173,11 +173,11 @@ impl AsyncMessageHandler for ResponderMessageHandler {
 
         // Create the task on first contact. `TaskService` resolves the context
         // before it calls here, so the generated id is for a direct caller that
-        // brought no session — one context each, rather than the shared
+        // brought no context — one context each, rather than the shared
         // `"default"` this used to file them all under.
         if !self.task_lifecycle.exists(&id).await? {
-            let context_id = match ctx.session_id() {
-                Some(session) => session.parse::<ContextId>()?,
+            let context_id = match ctx.context_id() {
+                Some(context) => context.parse::<ContextId>()?,
                 None => ContextId::generate(),
             };
             self.task_lifecycle.create(&id, &context_id).await?;

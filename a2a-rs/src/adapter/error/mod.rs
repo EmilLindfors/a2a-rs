@@ -1,6 +1,6 @@
 //! Error types for adapter implementations
 
-#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
 pub mod client;
 
 /// A `reqwest::Error` and everything under it, as one line.
@@ -26,8 +26,10 @@ pub(crate) fn describe_transport_error(error: &reqwest::Error) -> String {
 pub mod server;
 
 // Re-export client error types
-#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
 pub use client::HttpClientError;
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
+pub(crate) use client::http_client;
 
 // Re-export server error types
 #[cfg(feature = "http-server")]

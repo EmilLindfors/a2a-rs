@@ -243,17 +243,19 @@ pub struct GeminiProvider {
 const THINKING_FIELD: &str = "thinking";
 
 impl GeminiProvider {
-    pub fn new(config: GeminiConfig) -> Self {
-        Self {
+    /// Fails only when the HTTP client cannot be built, which since reqwest
+    /// 0.13 means the machine has no CA bundle to verify anything against.
+    pub fn new(config: GeminiConfig) -> Result<Self, LlmError> {
+        Ok(Self {
             config,
-            client: reqwest::Client::new(),
+            client: super::http_client()?,
             reasoning_support: ReasoningSupport::default(),
-        }
+        })
     }
 
     pub fn from_env() -> Result<Self, String> {
         let config = GeminiConfig::from_env()?;
-        Ok(Self::new(config))
+        Self::new(config).map_err(|e| e.to_string())
     }
 
     /// What thinking configuration this request carries, if any.
@@ -511,10 +513,34 @@ impl LlmProvider for GeminiProvider {
             .as_deref()
             .map(super::FinishReason::from_wire);
 
-        let response_content = candidate.content.ok_or_else(|| {
-            warn!("No content in Gemini API candidate");
-            LlmError::ProviderError("No content in response".to_string())
-        })?;
+        // A candidate cut before any content arrived — `MAX_TOKENS` with a
+        // reasoning model that spent the whole budget thinking, or `SAFETY` —
+        // carries a `finishReason` and no `content`. That emptiness is
+        // explained, and the explanation is the response: an empty
+        // `LlmResponse` with `finish` set, the same shape the OpenAI path
+        // returns for a choice with no content. Failing it as a provider
+        // error was reading the content before the reason, which turned the
+        // one empty answer a caller can act on (raise the output cap) into
+        // the same opaque fault as a truly empty one.
+        let response_content = match (candidate.content, &finish) {
+            (Some(content), _) => content,
+            (None, Some(reason)) => {
+                info!(%reason, "Gemini candidate carries a finish reason and no content");
+                return Ok(LlmResponse {
+                    content: None,
+                    tool_calls: None,
+                    reasoning: None,
+                    usage,
+                    finish,
+                });
+            }
+            (None, None) => {
+                warn!("No content in Gemini API candidate");
+                return Err(LlmError::ProviderError(
+                    "No content in response".to_string(),
+                ));
+            }
+        };
 
         let parts = response_content.parts.unwrap_or_default();
 
@@ -797,6 +823,7 @@ mod tests {
             api_key: "key".to_string(),
             reasoning,
         })
+        .expect("the HTTP client builds")
     }
 
     fn request(reasoning: Option<Reasoning>) -> LlmRequest {

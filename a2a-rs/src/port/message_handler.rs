@@ -12,7 +12,7 @@ use crate::{
 pub trait AsyncMessageHandler: Send + Sync {
     /// Process a message for a specific task.
     ///
-    /// `ctx` is what the transport knows about the request — the session id the
+    /// `ctx` is what the transport knows about the request — the context id the
     /// caller supplied and the principal it authenticated. A handler that keeps
     /// per-caller state reads [`RequestContext::caller`]; one that does not can
     /// ignore it.
