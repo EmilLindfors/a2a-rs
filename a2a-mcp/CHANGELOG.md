@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.8.1...a2a-mcp-v0.9.0) - 2026-09-04
+
+### Added
+
+- MCP for a data server — typed tools, resources, elicitation, names
+
 ## [0.8.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.8.0...a2a-mcp-v0.8.1) - 2026-09-03
 
 ### Documentation

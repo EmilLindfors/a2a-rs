@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.6.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.5.1...a2a-llm-v0.6.0) - 2026-09-04
+
+### Added
+
+- MCP for a data server — typed tools, resources, elicitation, names
+
 ## [0.5.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.5.0...a2a-llm-v0.5.1) - 2026-09-03
 
 ### Added
