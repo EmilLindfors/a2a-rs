@@ -7,8 +7,8 @@
 //! OpenAI-compatible endpoint (OpenRouter, vLLM, llama.cpp); [`gemini`] covers
 //! Google's API. [`provider_from_env`] picks one from the environment.
 //!
-//! The types are deliberately not tied to A2A. [`ToolCall`] and
-//! [`ToolDefinition`] are the tool-calling vocabulary shared with the MCP
+//! The types are deliberately not tied to A2A. [`ToolCall`], [`ToolDefinition`]
+//! and [`ToolResult`] are the tool-calling vocabulary shared with the MCP
 //! bridge, which is why they live in their own crate rather than inside an
 //! agent framework.
 
@@ -327,11 +327,168 @@ pub enum MessageRole {
 }
 
 /// Defines a tool (function) available for the LLM to call.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+///
+/// Only `name`, `description` and `parameters` go on the wire: that is all a
+/// chat-completion API takes. The rest is what the tool's *source* said about
+/// it — an MCP server's title, hints and output schema — kept so the consumer
+/// holding the definition can act on it (refuse a destructive tool to an
+/// analyst, validate a structured result), which it could not while the
+/// bridge flattened everything to three fields.
+///
+/// `#[non_exhaustive]`: build one with [`ToolDefinition::new`] and the
+/// `with_*` methods. Adding a field here broke every constructor downstream
+/// once; it should not do so again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct ToolDefinition {
     pub name: String,
     pub description: String,
-    pub parameters: Value, // JSON Schema representation of arguments
+    /// JSON Schema for the arguments.
+    pub parameters: Value,
+    /// A human-readable name, where the source distinguishes one from `name`.
+    /// Not sent to the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// What the source says about the tool's effects. Not sent to the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
+    /// JSON Schema for a structured result, where the source declares one.
+    /// Not sent to the model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
+}
+
+impl ToolDefinition {
+    /// A tool with the three fields every provider needs.
+    pub fn new(name: impl Into<String>, description: impl Into<String>, parameters: Value) -> Self {
+        Self {
+            name: name.into(),
+            description: description.into(),
+            parameters,
+            title: None,
+            annotations: None,
+            output_schema: None,
+        }
+    }
+
+    pub fn with_title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    pub fn with_annotations(mut self, annotations: ToolAnnotations) -> Self {
+        self.annotations = Some(annotations);
+        self
+    }
+
+    pub fn with_output_schema(mut self, schema: Value) -> Self {
+        self.output_schema = Some(schema);
+        self
+    }
+}
+
+/// What a tool's source says about its effects. Hints, not guarantees: MCP's
+/// own wording, and a server can lie. `None` is "the source said nothing",
+/// which is not the same as `Some(false)` — a tool with no `read_only` claim
+/// is a tool the consumer knows nothing about, not one that writes.
+///
+/// Owned here rather than borrowed from `rmcp` so this crate stays free of
+/// MCP; the bridge maps between the two.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[non_exhaustive]
+pub struct ToolAnnotations {
+    /// The tool does not modify its environment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only: Option<bool>,
+    /// The tool may perform destructive updates (meaningful when not read-only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive: Option<bool>,
+    /// Repeating a call with the same arguments has no further effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotent: Option<bool>,
+    /// The tool reaches an open world of external entities (a web search),
+    /// as opposed to a closed one (a memory store).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_world: Option<bool>,
+}
+
+impl ToolAnnotations {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn read_only(mut self, value: bool) -> Self {
+        self.read_only = Some(value);
+        self
+    }
+
+    pub fn destructive(mut self, value: bool) -> Self {
+        self.destructive = Some(value);
+        self
+    }
+
+    pub fn idempotent(mut self, value: bool) -> Self {
+        self.idempotent = Some(value);
+        self
+    }
+
+    pub fn open_world(mut self, value: bool) -> Self {
+        self.open_world = Some(value);
+        self
+    }
+
+    /// Whether the source said nothing at all.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// What a tool answered: the text the model is shown, and the structured
+/// value beside it when the tool's source returned one (MCP's
+/// `structuredContent`).
+///
+/// The model gets a string either way — [`into_model_text`] — because that is
+/// what every chat-completion API takes for a tool message. The structured
+/// value is for whoever holds the result: a consumer that wants to check it
+/// against the tool's `output_schema` or render it, without re-parsing prose.
+///
+/// [`into_model_text`]: ToolResult::into_model_text
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ToolResult {
+    /// The text content, joined. Empty when the tool returned only structure.
+    pub text: String,
+    /// The structured result, where the source gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured: Option<Value>,
+}
+
+impl ToolResult {
+    pub fn new(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            structured: None,
+        }
+    }
+
+    pub fn with_structured(mut self, value: Value) -> Self {
+        self.structured = Some(value);
+        self
+    }
+
+    /// The string the model is told. The text when there is any; otherwise
+    /// the structured value serialized, so a tool that answered only in
+    /// structure is not reported as having said nothing.
+    pub fn into_model_text(self) -> String {
+        if !self.text.is_empty() {
+            return self.text;
+        }
+        match self.structured {
+            Some(value) => value.to_string(),
+            None => self.text,
+        }
+    }
 }
 
 /// Represents a specific tool invocation requested by the LLM.
@@ -895,5 +1052,66 @@ mod error_tests {
             FinishReason::from_wire("MALFORMED_FUNCTION_CALL"),
             FinishReason::Other("MALFORMED_FUNCTION_CALL".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod tool_vocabulary_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A definition written before the source's title, hints and output
+    /// schema were carried still reads: the new fields are all optional, and
+    /// a definition that has none of them serializes as it always did.
+    #[test]
+    fn a_three_field_definition_still_round_trips() {
+        let old = json!({
+            "name": "add",
+            "description": "Adds two numbers",
+            "parameters": {"type": "object"}
+        });
+        let def: ToolDefinition = serde_json::from_value(old.clone()).unwrap();
+        assert_eq!(def.title, None);
+        assert_eq!(def.annotations, None);
+        assert_eq!(def.output_schema, None);
+        assert_eq!(serde_json::to_value(&def).unwrap(), old);
+    }
+
+    #[test]
+    fn what_the_source_said_survives_serde() {
+        let def = ToolDefinition::new("query", "Runs a query", json!({"type": "object"}))
+            .with_title("Query")
+            .with_annotations(ToolAnnotations::new().read_only(true).open_world(false))
+            .with_output_schema(json!({"type": "object", "properties": {"rows": {}}}));
+        let wire = serde_json::to_value(&def).unwrap();
+        assert_eq!(wire["title"], "Query");
+        assert_eq!(
+            wire["annotations"],
+            json!({"readOnly": true, "openWorld": false})
+        );
+        assert_eq!(wire["output_schema"]["properties"]["rows"], json!({}));
+        let back: ToolDefinition = serde_json::from_value(wire).unwrap();
+        assert_eq!(back, def);
+    }
+
+    /// `None` on a hint is "the source said nothing", so an annotations value
+    /// with nothing set says so too.
+    #[test]
+    fn empty_annotations_are_distinguishable_from_a_false_claim() {
+        assert!(ToolAnnotations::new().is_empty());
+        assert!(!ToolAnnotations::new().read_only(false).is_empty());
+    }
+
+    /// The model is told the text when there is any, and the structure when
+    /// that is all the tool returned — never nothing for a tool that answered.
+    #[test]
+    fn a_result_reaches_the_model_as_text_or_as_its_structure() {
+        let both = ToolResult::new("3 rows").with_structured(json!({"rows": 3}));
+        assert_eq!(both.into_model_text(), "3 rows");
+
+        let only_structure = ToolResult::new("").with_structured(json!({"rows": 3}));
+        assert_eq!(only_structure.into_model_text(), r#"{"rows":3}"#);
+
+        assert_eq!(ToolResult::new("").into_model_text(), "");
     }
 }

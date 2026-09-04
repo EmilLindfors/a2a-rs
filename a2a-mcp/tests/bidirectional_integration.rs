@@ -67,7 +67,7 @@ async fn test_task_to_tool_result_conversion() {
         .build();
 
     // Convert task to MCP result
-    let result = TaskResultConverter::task_to_result(&task).unwrap();
+    let result = TaskResultConverter::task_to_result(&task, None).unwrap();
 
     // Verify it's a success result
     assert!(!result.is_error.unwrap_or(false));
@@ -95,7 +95,7 @@ async fn test_error_handling_bidirectional() {
         .build();
 
     // Convert to MCP result
-    let error_result = TaskResultConverter::task_to_result(&failed_task).unwrap();
+    let error_result = TaskResultConverter::task_to_result(&failed_task, None).unwrap();
 
     // Verify it's an error result
     assert!(error_result.is_error.unwrap_or(false));
@@ -140,7 +140,7 @@ async fn test_skill_tool_bidirectional_metadata() {
 
     // Test skill to tool conversion directly
     let skill = &agent_card.skills[0];
-    let tool = SkillToolConverter::skill_to_tool(skill, "https://example.com/agent");
+    let tool = SkillToolConverter::skill_to_tool(skill, &agent_card.name, None);
 
     // Verify description includes skill metadata
     let description = tool.description.as_ref().unwrap();

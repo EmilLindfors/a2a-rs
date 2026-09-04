@@ -11,8 +11,17 @@ pub struct TaskResultConverter;
 impl TaskResultConverter {
     /// Convert A2A Task to MCP CallToolResult
     ///
-    /// Extracts the last agent message and any artifacts as the tool result
-    pub fn task_to_result(task: &Task) -> Result<CallToolResult> {
+    /// Extracts the last agent message and any artifacts as the tool result.
+    /// With an `output_schema` — the skill declared a structured result — a
+    /// single data part in the agent's final message, or failing that in a
+    /// single artifact, becomes the result's `structuredContent` beside the
+    /// text; it is not validated against the schema here, which is the
+    /// caller's to decide. Without one, a data part is text like everything
+    /// else, as before.
+    pub fn task_to_result(
+        task: &Task,
+        output_schema: Option<&serde_json::Value>,
+    ) -> Result<CallToolResult> {
         // Get history
         let history = &task.history;
 
@@ -75,6 +84,17 @@ impl TaskResultConverter {
             .unwrap_or(false);
 
         if is_input_required {
+            // The question the agent asked rides on the status, not in the
+            // history, so a suspended result that only read the history told
+            // the caller to answer without saying what.
+            let question = task
+                .status
+                .as_option()
+                .and_then(|s| s.message.as_option())
+                .filter(|q| q.message_id != agent_message.message_id);
+            if let Some(question) = question {
+                content.extend(MessageConverter::message_to_content(question)?);
+            }
             let prompt = format!(
                 "\n\n[Task suspended awaiting input. To continue, please call this tool again with `task_id`: '{}' and provide the requested information in the `message` parameter.]",
                 task.id
@@ -96,10 +116,36 @@ impl TaskResultConverter {
             })
             .unwrap_or(false);
 
-        Ok(if is_error {
+        let mut result = if is_error {
             CallToolResult::error(content)
         } else {
             CallToolResult::success(content)
+        };
+        if output_schema.is_some() {
+            result.structured_content = Self::single_data_value(task, agent_message);
+        }
+        Ok(result)
+    }
+
+    /// The one data part of `message`, or of the task's one artifact when the
+    /// message has none. Two data parts is not "a structured result", it is
+    /// two of them, and none is returned rather than the first.
+    fn single_data_value(task: &Task, message: &Message) -> Option<serde_json::Value> {
+        use a2a_rs::domain::generated::part;
+        let data_parts = |parts: &[a2a_rs::domain::Part]| {
+            let mut values = parts.iter().filter_map(|p| match &p.content {
+                Some(part::Content::Data(value)) => serde_json::to_value(&**value).ok(),
+                _ => None,
+            });
+            let first = values.next();
+            match values.next() {
+                Some(_) => None,
+                None => first,
+            }
+        };
+        data_parts(&message.parts).or_else(|| match task.artifacts.as_slice() {
+            [artifact] => data_parts(&artifact.parts),
+            _ => None,
         })
     }
 
@@ -174,7 +220,7 @@ mod tests {
             }])
             .build();
 
-        let result = TaskResultConverter::task_to_result(&task).unwrap();
+        let result = TaskResultConverter::task_to_result(&task, None).unwrap();
         assert!(!result.is_error.unwrap_or(false));
         assert!(result.content.len() >= 2); // Message + artifact
     }
@@ -194,7 +240,7 @@ mod tests {
             ])
             .build();
 
-        let result = TaskResultConverter::task_to_result(&task).unwrap();
+        let result = TaskResultConverter::task_to_result(&task, None).unwrap();
         assert!(result.is_error.unwrap_or(false));
     }
 
@@ -213,5 +259,43 @@ mod tests {
             .status(TaskStatus::new(TaskState::TASK_STATE_WORKING, None))
             .build();
         assert!(!TaskResultConverter::is_task_final(&working));
+    }
+
+    /// A skill that declared an output schema answers with a data part, and
+    /// that value is the result's `structuredContent` — beside the text, not
+    /// instead of it.
+    #[test]
+    fn a_declared_structured_result_is_kept_as_structure() {
+        let value: ::buffa_types::google::protobuf::Value =
+            serde_json::from_value(serde_json::json!({"rows": [1, 2, 3]})).unwrap();
+        let task = Task::builder()
+            .id("task-3".to_string())
+            .context_id("ctx-3".to_string())
+            .status(TaskStatus::new(TaskState::TASK_STATE_COMPLETED, None))
+            .history(vec![
+                Message::builder()
+                    .role(Role::Agent)
+                    .parts(vec![Part::text("3 rows".to_string()), Part::data(value)])
+                    .message_id("msg-3".to_string())
+                    .build(),
+            ])
+            .build();
+
+        let schema = serde_json::json!({"type": "object"});
+        let typed = TaskResultConverter::task_to_result(&task, Some(&schema)).unwrap();
+        // Numbers come back as doubles: `google.protobuf.Value` has no integer.
+        assert_eq!(
+            typed.structured_content,
+            Some(serde_json::json!({"rows": [1.0, 2.0, 3.0]}))
+        );
+        assert_eq!(
+            typed.content.len(),
+            2,
+            "the text and the data are still content"
+        );
+
+        // Without a declared schema the data is text like everything else.
+        let untyped = TaskResultConverter::task_to_result(&task, None).unwrap();
+        assert_eq!(untyped.structured_content, None);
     }
 }

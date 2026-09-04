@@ -258,6 +258,17 @@ impl AgentCard {
             .unwrap_or("1.0")
     }
 
+    /// The extension declared under `uri` in `capabilities.extensions`, if
+    /// any. Extensions are where a card carries what the spec has no field
+    /// for; this is the lookup every reader of one starts with.
+    pub fn extension(&self, uri: &str) -> Option<&AgentExtension> {
+        self.capabilities
+            .as_option()?
+            .extensions
+            .iter()
+            .find(|e| e.uri == uri)
+    }
+
     pub fn preferred_transport(&self) -> &str {
         self.supported_interfaces
             .first()

@@ -10,6 +10,7 @@ use std::sync::{
 
 use a2a_mcp::bridge::agent_to_mcp::AgentToMcpBridge;
 use a2a_mcp::converters::skill_tool::SkillToolConverter;
+use a2a_mcp::{SkillSchema, SkillSchemas};
 use a2a_rs::adapter::transport::http::HttpClient;
 use a2a_rs::domain::core::agent::{AgentCapabilities, AgentCard, AgentSkill};
 use a2a_rs::domain::{
@@ -94,20 +95,15 @@ async fn test_tool_name_namespacing() {
         )])
         .build();
 
-    let tool =
-        SkillToolConverter::skill_to_tool(&agent_card.skills[0], "https://agent-a.example.com");
+    // The bridge namespaces by the agent's *name*, so the same skill on two
+    // agents gives two tools, and the name is a function name a model can use.
+    let tool = SkillToolConverter::skill_to_tool(&agent_card.skills[0], &agent_card.name, None);
+    assert_eq!(tool.name.as_ref(), "agent_a_shared_skill");
 
-    // Verify the tool name includes the sanitized agent URL
-    // Note: hyphens are NOT replaced, only /, :, and .
-    // "https://agent-a.example.com" becomes "agent-a_example_com"
-    assert!(tool.name.contains("agent-a_example_com"));
-    assert!(tool.name.contains("shared_skill"));
-
-    // Verify we can parse it back
-    let (agent_part, _skill_id) = SkillToolConverter::parse_tool_name(&tool.name).unwrap();
-
-    assert!(agent_part.contains("agent-a_example_com"));
-    // Note: parsing may not be perfect due to underscores in both parts
+    // And a call is answered by matching the generated name, not parsing it.
+    let resolved =
+        SkillToolConverter::resolve_skill(&agent_card.skills, &agent_card.name, &tool.name);
+    assert_eq!(resolved.map(|s| s.id.as_str()), Some("shared_skill"));
 }
 
 #[tokio::test]
@@ -129,7 +125,7 @@ async fn test_skill_metadata_preservation() {
         ..Default::default()
     };
 
-    let tool = SkillToolConverter::skill_to_tool(&skill, "https://example.com");
+    let tool = SkillToolConverter::skill_to_tool(&skill, "example", None);
 
     // Verify description includes examples
     let description = tool.description.as_ref().unwrap();
@@ -297,6 +293,173 @@ async fn test_in_process_backend_dispatches_to_handler() {
     let _ = bridge_task.await;
 }
 
+/// An MCP client that declares elicitation and answers the agent's question
+/// the way a person at the client would.
+/// Answers a typed query with a data part, and remembers what it was asked.
+#[derive(Clone)]
+struct TypedQueryHandler {
+    received: Arc<Mutex<Vec<Message>>>,
+}
+
+#[async_trait]
+impl AsyncMessageHandler for TypedQueryHandler {
+    async fn process_message(
+        &self,
+        task_id: &str,
+        message: &Message,
+        _ctx: &a2a_rs::port::RequestContext,
+    ) -> Result<Task, A2AError> {
+        self.received.lock().unwrap().push(message.clone());
+        let rows: ::buffa_types::google::protobuf::Value =
+            serde_json::from_value(serde_json::json!({"rows": [{"year": 2025, "tonnes": 12.5}]}))
+                .unwrap();
+        let agent_msg = Message::builder()
+            .role(Role::Agent)
+            .parts(vec![Part::text("1 row".to_string()), Part::data(rows)])
+            .message_id("resp-typed".to_string())
+            .build();
+        Ok(Task::builder()
+            .id(task_id.to_string())
+            .context_id("ctx-typed".to_string())
+            .status(TaskStatus::new(TaskState::Completed, None))
+            .history(vec![message.clone(), agent_msg])
+            .build())
+    }
+}
+
+/// A skill with a schema on the card's extension is served as a typed tool:
+/// its own input schema (plus `task_id`), its output schema and hints; a call
+/// reaches the agent as one data part; and the agent's data part comes back
+/// as `structuredContent`.
+#[tokio::test]
+async fn a_typed_skill_round_trips_through_the_bridge() {
+    use a2a_rs::domain::generated::part;
+
+    let mut schemas = SkillSchemas::new();
+    schemas.insert(
+        "query",
+        SkillSchema::new()
+            .with_input_schema(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "view": {"type": "string", "enum": ["harvest", "feed"]},
+                    "year": {"type": "integer"}
+                },
+                "required": ["view"]
+            }))
+            .with_output_schema(serde_json::json!({"type": "object"}))
+            .with_annotations(a2a_llm::ToolAnnotations::new().read_only(true)),
+    );
+    let mut agent_card = AgentCard::builder()
+        .name("strata".to_string())
+        .description("A data agent".to_string())
+        .url("http://nonroutable.invalid".to_string())
+        .version("1.0.0".to_string())
+        .capabilities(AgentCapabilities::default())
+        .default_input_modes(vec!["text".to_string()])
+        .default_output_modes(vec!["text".to_string()])
+        .skills(vec![
+            AgentSkill::new(
+                "query".to_string(),
+                "Query".to_string(),
+                "Queries a view".to_string(),
+                vec!["data".to_string()],
+            ),
+            AgentSkill::new(
+                "chat".to_string(),
+                "Chat".to_string(),
+                "Untyped, takes a message".to_string(),
+                vec!["chat".to_string()],
+            ),
+        ])
+        .build();
+    agent_card
+        .capabilities
+        .get_or_insert_default()
+        .extensions
+        .push(schemas.to_extension());
+
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let handler = TypedQueryHandler {
+        received: received.clone(),
+    };
+    let bridge = AgentToMcpBridge::with_handler(handler, agent_card);
+
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let bridge_task = tokio::spawn(async move {
+        let running = bridge.serve(server_io).await?;
+        running.waiting().await?;
+        anyhow::Ok(())
+    });
+    let mcp_client = ().serve(client_io).await.unwrap();
+    let peer = mcp_client.peer().clone();
+
+    let tools = peer.list_tools(None).await.unwrap().tools;
+    let query = tools
+        .iter()
+        .find(|t| t.name == "strata_query")
+        .expect("typed tool");
+    assert_eq!(
+        query.input_schema["properties"]["view"]["enum"][0],
+        "harvest"
+    );
+    assert_eq!(
+        query.input_schema["properties"]["task_id"]["type"],
+        "string"
+    );
+    assert!(query.input_schema["properties"].get("message").is_none());
+    assert!(query.output_schema.is_some());
+    assert_eq!(
+        query.annotations.as_ref().unwrap().read_only_hint,
+        Some(true)
+    );
+    let chat = tools
+        .iter()
+        .find(|t| t.name == "strata_chat")
+        .expect("untyped tool");
+    assert!(chat.input_schema["properties"].get("message").is_some());
+    assert!(chat.output_schema.is_none());
+
+    let params = CallToolRequestParams::new("strata_query").with_arguments(
+        serde_json::json!({ "view": "harvest", "year": 2025 })
+            .as_object()
+            .cloned()
+            .unwrap(),
+    );
+    let result = peer.call_tool(params).await.unwrap();
+    assert!(!result.is_error.unwrap_or(false));
+
+    // The agent received the arguments as one data part, not as text.
+    let messages = received.lock().unwrap().clone();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].parts.len(), 1);
+    match &messages[0].parts[0].content {
+        Some(part::Content::Data(value)) => {
+            let value = serde_json::to_value(&**value).unwrap();
+            assert_eq!(value["view"], "harvest");
+            assert_eq!(value["year"], 2025.0);
+            assert!(
+                value.get("task_id").is_none(),
+                "task_id is the bridge's, not the agent's"
+            );
+        }
+        other => panic!("expected a data part, got {other:?}"),
+    }
+
+    // And the agent's data part is the structured result.
+    let structured = result.structured_content.expect("structured content");
+    assert_eq!(structured["rows"][0]["year"], 2025.0);
+    assert!(
+        result
+            .content
+            .iter()
+            .any(|c| c.as_text().is_some_and(|t| t.text == "1 row"))
+    );
+
+    drop(mcp_client);
+    let _ = bridge_task.await;
+}
+
 #[derive(Clone, Default)]
 struct TestClientHandler {
     progress_notifications: Arc<Mutex<Vec<ProgressNotificationParam>>>,
@@ -304,43 +467,36 @@ struct TestClientHandler {
 
 #[allow(clippy::manual_async_fn)]
 impl ClientHandler for TestClientHandler {
-    fn create_message(
-        &self,
-        params: CreateMessageRequestParams,
-        _context: RequestContext<RoleClient>,
-    ) -> impl std::future::Future<Output = Result<CreateMessageResult, McpError>> + Send + '_ {
-        async move {
-            let mut prompt_found = false;
-            for msg in &params.messages {
-                let text = match &msg.content {
-                    SamplingContent::Single(SamplingMessageContent::Text(raw)) => raw.text.clone(),
-                    SamplingContent::Multiple(items) => items
-                        .iter()
-                        .filter_map(|item| match item {
-                            SamplingMessageContent::Text(raw) => Some(raw.text.clone()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                    _ => String::new(),
-                };
-                if text.contains("Please provide input:") {
-                    prompt_found = true;
-                }
-            }
+    fn get_info(&self) -> ClientInfo {
+        ClientInfo::new(
+            ClientCapabilities::builder().enable_elicitation().build(),
+            Implementation::new("test-client", "1.0.0"),
+        )
+    }
 
-            if prompt_found {
-                let response_msg = SamplingMessage::assistant_text("sampled response: 42");
-                Ok(CreateMessageResult::new(
-                    response_msg,
-                    "mock-model".to_string(),
-                ))
-            } else {
-                Err(McpError::invalid_params(
-                    "Unexpected sampling request message",
+    fn create_elicitation(
+        &self,
+        request: CreateElicitationRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> impl std::future::Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_
+    {
+        async move {
+            let CreateElicitationRequestParams::FormElicitationParams { message, .. } = request
+            else {
+                return Err(McpError::invalid_params(
+                    "expected a form elicitation",
                     None,
-                ))
+                ));
+            };
+            if !message.contains("Please provide input:") {
+                return Err(McpError::invalid_params(
+                    "Unexpected elicitation message",
+                    None,
+                ));
             }
+            let mut result = CreateElicitationResult::new(ElicitationAction::Accept);
+            result.content = Some(serde_json::json!({"answer": "sampled response: 42"}));
+            Ok(result)
         }
     }
 
@@ -517,10 +673,10 @@ impl AsyncStreamingHandler for MockStreamingHandler {
 }
 
 #[tokio::test]
-async fn test_streaming_progress_and_sampling() {
+async fn test_streaming_progress_and_elicitation() {
     let agent_card = AgentCard::builder()
         .name("Streaming Agent".to_string())
-        .description("Exercises streaming, progress and sampling".to_string())
+        .description("Exercises streaming, progress and elicitation".to_string())
         .url("http://nonroutable.invalid".to_string())
         .version("1.0.0".to_string())
         .capabilities(AgentCapabilities::default())
@@ -606,11 +762,82 @@ async fn test_streaming_progress_and_sampling() {
     let _ = bridge_task.await;
 }
 
+/// A client that cannot be asked — no elicitation capability — gets the task
+/// back suspended, with its id and the instruction to call again, instead of
+/// an answer invented on the user's behalf. This was the fallback when
+/// sampling was unavailable and is the only fallback now that it is gone.
 #[tokio::test]
-async fn test_polling_progress_and_sampling() {
+async fn a_client_without_elicitation_gets_the_task_suspended() {
+    let agent_card = AgentCard::builder()
+        .name("Streaming Agent".to_string())
+        .description("Exercises the suspend path".to_string())
+        .url("http://nonroutable.invalid".to_string())
+        .version("1.0.0".to_string())
+        .capabilities(AgentCapabilities::default())
+        .default_input_modes(vec!["text".to_string()])
+        .default_output_modes(vec!["text".to_string()])
+        .skills(vec![AgentSkill::new(
+            "streamskill".to_string(),
+            "Stream Skill".to_string(),
+            "A skill that streams progress".to_string(),
+            vec![],
+        )])
+        .build();
+
+    let bridge = AgentToMcpBridge::with_handler_and_streaming(
+        MockStreamingHandler,
+        MockStreamingHandler,
+        agent_card,
+    );
+
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let bridge_task = tokio::spawn(async move {
+        let running: rmcp::service::RunningService<_, _> = bridge.serve(server_io).await?;
+        running.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    // `()` is a client with default info: no elicitation.
+    let mcp_client = ().serve(client_io).await.unwrap();
+    let peer = mcp_client.peer().clone();
+    let tool_name = peer.list_tools(None).await.unwrap().tools[0]
+        .name
+        .to_string();
+
+    let params = CallToolRequestParams::new(tool_name).with_arguments(
+        serde_json::json!({ "message": "hello" })
+            .as_object()
+            .cloned()
+            .unwrap(),
+    );
+    let result = peer.call_tool(params).await.unwrap();
+
+    let text = result
+        .content
+        .iter()
+        .filter_map(|c| c.as_text().map(|t| t.text.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("Please provide input:"), "got: {text}");
+    assert!(
+        text.contains("[Task suspended awaiting input"),
+        "got: {text}"
+    );
+    assert!(text.contains("`task_id`"), "got: {text}");
+    assert!(
+        !text.contains("Final result"),
+        "nothing was answered for the user: {text}"
+    );
+
+    drop(mcp_client);
+    let _ = bridge_task.await;
+}
+
+#[tokio::test]
+async fn test_polling_progress_and_elicitation() {
     let agent_card = AgentCard::builder()
         .name("Polling Agent".to_string())
-        .description("Exercises polling, progress and sampling".to_string())
+        .description("Exercises polling, progress and elicitation".to_string())
         .url("http://nonroutable.invalid".to_string())
         .version("1.0.0".to_string())
         .capabilities(AgentCapabilities::default())
@@ -775,7 +1002,7 @@ impl a2a_mcp::bridge::agent_to_mcp::BridgeBackend for MockPollingBackend {
             history.push(msg);
         }
 
-        // On first get_task call, return InputRequired to trigger sampling
+        // On first get_task call, return InputRequired to trigger elicitation
         if count == 0 {
             let req_msg = Message::builder()
                 .role(Role::Agent)
