@@ -1,7 +1,7 @@
 //! Bridge that exposes A2A agents as MCP tools
 
 use crate::{
-    converters::{SkillToolConverter, TaskResultConverter},
+    converters::{SkillSchemas, SkillToolConverter, TASK_ID_PROPERTY, TaskResultConverter},
     error::{A2aMcpError, Result},
 };
 use a2a_rs::{
@@ -214,6 +214,10 @@ pub struct AgentToMcpBridge {
     agent_card: Arc<AgentCard>,
     /// Cached list of MCP tools generated from agent skills
     tools: Arc<Vec<Tool>>,
+    /// The typed skills' schemas, read once from the card's extension. A
+    /// skill with an entry here is called with a data part; one without, with
+    /// a `message` string.
+    schemas: Arc<SkillSchemas>,
     /// Namespace prefix used for tools/prompts/resources
     namespace: String,
     /// Cache of tasks processed by this bridge (useful for in-process backends)
@@ -227,10 +231,13 @@ pub struct AgentToMcpBridge {
 impl AgentToMcpBridge {
     /// Create a new bridge from an A2A agent reached over HTTP.
     ///
-    /// The agent's URL — read from [`AgentCard::url`] — is used to namespace
-    /// the resulting MCP tool names so multiple agents can coexist on one
-    /// MCP server. If you need a different namespace (e.g. an internal alias
-    /// distinct from the publicly-advertised URL), use [`Self::with_namespace`].
+    /// The agent's **name** — [`AgentCard::name`] — is the namespace of the
+    /// resulting MCP tool names, so several agents can coexist on one MCP
+    /// server. It used to be the agent's URL, which changes when the
+    /// deployment does and gave a loopback agent a tool name starting with a
+    /// digit; the name is what a tool name should follow. Gemini caps a
+    /// function name at 64 characters, so a long agent name with a long skill
+    /// id is the caller's to shorten through [`Self::with_namespace`].
     ///
     /// When the agent lives in the same process as the bridge, prefer
     /// [`Self::with_handler`] to skip the loopback HTTP hop.
@@ -238,18 +245,17 @@ impl AgentToMcpBridge {
     /// # Arguments
     ///
     /// * `client` - A2A client configured to communicate with the agent
-    /// * `agent_card` - The agent's capabilities card (its `url` is used for namespacing)
+    /// * `agent_card` - The agent's capabilities card (its `name` is used for namespacing)
     pub fn new(client: HttpClient, agent_card: AgentCard) -> Self {
-        let namespace = agent_card.url().to_string();
+        let namespace = agent_card.name.clone();
         Self::with_namespace(client, agent_card, namespace)
     }
 
     /// Create a new HTTP-backed bridge with an explicit tool-name namespace.
     ///
     /// Prefer [`Self::new`] unless you need the MCP tool names to be namespaced
-    /// by something other than the agent's advertised `url` (for example, to
-    /// keep stable tool names when the agent is reached through a tunnel or
-    /// reverse proxy with a different host).
+    /// by something other than the agent's `name` (a short alias for a long
+    /// name, or one that stays put across a rename).
     pub fn with_namespace(client: HttpClient, agent_card: AgentCard, namespace: String) -> Self {
         Self::from_backend(Arc::new(HttpBackend { client }), agent_card, namespace)
     }
@@ -259,17 +265,17 @@ impl AgentToMcpBridge {
     /// Use this when the bridge and the A2A agent live in the same process —
     /// it avoids spawning a loopback HTTP server and threads the call straight
     /// through [`AsyncMessageHandler::process_message`]. The namespace defaults
-    /// to [`AgentCard::url`]; override with [`Self::with_handler_and_namespace`].
+    /// to [`AgentCard::name`]; override with [`Self::with_handler_and_namespace`].
     ///
     /// # Arguments
     ///
     /// * `handler` - The A2A message handler to dispatch tool calls to
-    /// * `agent_card` - The agent's capabilities card (its `url` is used for namespacing)
+    /// * `agent_card` - The agent's capabilities card (its `name` is used for namespacing)
     pub fn with_handler<H>(handler: H, agent_card: AgentCard) -> Self
     where
         H: AsyncMessageHandler + Send + Sync + 'static,
     {
-        let namespace = agent_card.url().to_string();
+        let namespace = agent_card.name.clone();
         Self::with_handler_and_namespace(handler, agent_card, namespace)
     }
 
@@ -303,7 +309,7 @@ impl AgentToMcpBridge {
         H: AsyncMessageHandler + Send + Sync + 'static,
         S: a2a_rs::port::AsyncStreamingHandler + 'static,
     {
-        let namespace = agent_card.url().to_string();
+        let namespace = agent_card.name.clone();
         Self::with_handler_streaming_and_namespace(
             handler,
             streaming_handler,
@@ -339,22 +345,27 @@ impl AgentToMcpBridge {
         agent_card: AgentCard,
         namespace: String,
     ) -> Self {
+        let schemas = SkillSchemas::from_card(&agent_card);
         let tools: Vec<Tool> = agent_card
             .skills
             .iter()
-            .map(|skill| SkillToolConverter::skill_to_tool(skill, &namespace))
+            .map(|skill| {
+                SkillToolConverter::skill_to_tool(skill, &namespace, schemas.get(&skill.id))
+            })
             .collect();
 
         info!(
-            "Created AgentToMcpBridge for agent '{}' with {} tools",
+            "Created AgentToMcpBridge for agent '{}' with {} tools ({} typed)",
             agent_card.name,
-            tools.len()
+            tools.len(),
+            schemas.0.len()
         );
 
         Self {
             backend,
             agent_card: Arc::new(agent_card),
             tools: Arc::new(tools),
+            schemas: Arc::new(schemas),
             namespace,
             tasks_cache: Arc::new(Mutex::new(HashMap::new())),
             mcp_server_name: None,
@@ -466,24 +477,97 @@ impl AgentToMcpBridge {
         mcp_task
     }
 
-    /// Helper to call an A2A agent skill with support for streaming, progress notifications, and elicitation.
+    /// The answer to a task's `InputRequired`, asked of the MCP client's user
+    /// through elicitation — which is what `InputRequired` means: the agent
+    /// has a question only the person can answer.
+    ///
+    /// `None` when there is nobody to ask: the client did not declare the
+    /// elicitation capability, the request failed, or the user declined or
+    /// cancelled. The caller then suspends the task and returns it with its
+    /// id, which is what the bridge always did when sampling was unavailable
+    /// and is now the only fallback. Sampling — asking the client's *model*
+    /// to answer on the user's behalf — is deprecated by SEP-2577 with no
+    /// replacement, and it was the wrong party to ask.
+    async fn ask_for_input(&self, task: &Task, ctx: &RequestContext<RoleServer>) -> Option<String> {
+        let can_ask = ctx
+            .peer
+            .peer_info()
+            .is_some_and(|info| info.capabilities.elicitation.is_some());
+        if !can_ask {
+            debug!(
+                "Task {} requires input and the client does not support elicitation",
+                task.id
+            );
+            return None;
+        }
+
+        let question = task
+            .status
+            .message
+            .as_option()
+            .map(|msg| {
+                msg.parts
+                    .iter()
+                    .filter_map(|part| part.get_text())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|q| !q.is_empty())
+            .unwrap_or_else(|| "The agent needs more input to continue.".to_string());
+
+        let requested_schema = ElicitationSchema::builder()
+            .required_string("answer")
+            .build()
+            .expect("one required string is a valid elicitation schema");
+        let params = CreateElicitationRequestParams::FormElicitationParams {
+            meta: None,
+            message: question,
+            requested_schema,
+        };
+
+        let result = match ctx.peer.create_elicitation(params).await {
+            Ok(result) => result,
+            Err(e) => {
+                debug!("Elicitation for task {} failed: {e}", task.id);
+                return None;
+            }
+        };
+        match result.action {
+            ElicitationAction::Accept => result
+                .content
+                .as_ref()
+                .and_then(|content| content.get("answer"))
+                .and_then(|answer| answer.as_str())
+                .map(str::to_string),
+            ElicitationAction::Decline | ElicitationAction::Cancel => {
+                debug!("User declined to answer task {}", task.id);
+                None
+            }
+        }
+    }
+
+    /// Helper to call an A2A agent skill with support for streaming, progress
+    /// notifications, and elicitation. `parts` is the request as the agent
+    /// receives it: one text part for an untyped skill, one data part holding
+    /// the typed arguments for a skill with an input schema.
     async fn call_skill(
         &self,
         skill_id: &str,
         task_id: &str,
-        message_text: &str,
+        parts: Vec<Part>,
         progress_token: Option<ProgressToken>,
         ctx: &RequestContext<RoleServer>,
     ) -> Result<CallToolResult> {
         debug!(
-            "Calling A2A skill '{}' with message: {}",
-            skill_id, message_text
+            "Calling A2A skill '{}' with {} part(s)",
+            skill_id,
+            parts.len()
         );
 
         // Create an A2A message
         let message = Message::builder()
             .role(Role::User)
-            .parts(vec![Part::text(message_text.to_string())])
+            .parts(parts)
             .message_id(uuid::Uuid::new_v4().to_string())
             .build();
 
@@ -572,45 +656,14 @@ impl AgentToMcpBridge {
 
                             // Handle InputRequired
                             if task.status.state == a2a_rs::domain::TaskState::InputRequired {
-                                debug!("Task {} requires input. Requesting sampling...", task.id);
-                                let messages = translate_task_to_sampling_messages(&task);
-
-                                let sampling_params = CreateMessageRequestParams::new(messages, 1024)
-                                    .with_system_prompt("You are an assistant providing input to an agent task. Respond directly to the agent's request.");
-
-                                let sampling_res_result =
-                                    ctx.peer.create_message(sampling_params).await;
-
-                                let sampling_res = match sampling_res_result {
-                                    Ok(res) => res,
-                                    Err(e) => {
-                                        debug!(
-                                            "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
-                                            task.id
-                                        );
-                                        break;
-                                    }
+                                let Some(response_text) = self.ask_for_input(&task, ctx).await
+                                else {
+                                    debug!(
+                                        "No input obtainable for task {}; suspending it and returning to the caller",
+                                        task.id
+                                    );
+                                    break;
                                 };
-
-                                let response_text = match sampling_res.message.content {
-                                    SamplingContent::Single(SamplingMessageContent::Text(raw)) => {
-                                        raw.text
-                                    }
-                                    SamplingContent::Multiple(items) => items
-                                        .into_iter()
-                                        .filter_map(|item| match item {
-                                            SamplingMessageContent::Text(raw) => Some(raw.text),
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n"),
-                                    _ => String::new(),
-                                };
-
-                                debug!(
-                                    "Sampling response received: {}. Resuming task...",
-                                    response_text
-                                );
 
                                 let reply_msg = Message::builder()
                                     .role(Role::User)
@@ -690,45 +743,14 @@ impl AgentToMcpBridge {
 
                             // Handle InputRequired
                             if task.status.state == a2a_rs::domain::TaskState::InputRequired {
-                                debug!("Task {} requires input. Requesting sampling...", task.id);
-                                let messages = translate_task_to_sampling_messages(&task);
-
-                                let sampling_params = CreateMessageRequestParams::new(messages, 1024)
-                                    .with_system_prompt("You are an assistant providing input to an agent task. Respond directly to the agent's request.");
-
-                                let sampling_res_result =
-                                    ctx.peer.create_message(sampling_params).await;
-
-                                let sampling_res = match sampling_res_result {
-                                    Ok(res) => res,
-                                    Err(e) => {
-                                        debug!(
-                                            "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
-                                            task.id
-                                        );
-                                        break;
-                                    }
+                                let Some(response_text) = self.ask_for_input(&task, ctx).await
+                                else {
+                                    debug!(
+                                        "No input obtainable for task {}; suspending it and returning to the caller",
+                                        task.id
+                                    );
+                                    break;
                                 };
-
-                                let response_text = match sampling_res.message.content {
-                                    SamplingContent::Single(SamplingMessageContent::Text(raw)) => {
-                                        raw.text
-                                    }
-                                    SamplingContent::Multiple(items) => items
-                                        .into_iter()
-                                        .filter_map(|item| match item {
-                                            SamplingMessageContent::Text(raw) => Some(raw.text),
-                                            _ => None,
-                                        })
-                                        .collect::<Vec<_>>()
-                                        .join("\n"),
-                                    _ => String::new(),
-                                };
-
-                                debug!(
-                                    "Sampling response received: {}. Resuming task...",
-                                    response_text
-                                );
 
                                 let reply_msg = Message::builder()
                                     .role(Role::User)
@@ -819,48 +841,13 @@ impl AgentToMcpBridge {
                         }
 
                         if task.status.state == a2a_rs::domain::TaskState::InputRequired {
-                            debug!(
-                                "Polled task {} requires input. Requesting sampling...",
-                                task.id
-                            );
-                            let messages = translate_task_to_sampling_messages(&task);
-
-                            let sampling_params = CreateMessageRequestParams::new(messages, 1024)
-                                .with_system_prompt("You are an assistant providing input to an agent task. Respond directly to the agent's request.");
-
-                            let sampling_res_result =
-                                ctx.peer.create_message(sampling_params).await;
-
-                            let sampling_res = match sampling_res_result {
-                                Ok(res) => res,
-                                Err(e) => {
-                                    debug!(
-                                        "Sampling failed or unavailable: {e}. Suspending task {} and returning to LLM.",
-                                        task.id
-                                    );
-                                    break;
-                                }
+                            let Some(response_text) = self.ask_for_input(&task, ctx).await else {
+                                debug!(
+                                    "No input obtainable for task {}; suspending it and returning to the caller",
+                                    task.id
+                                );
+                                break;
                             };
-
-                            let response_text = match sampling_res.message.content {
-                                SamplingContent::Single(SamplingMessageContent::Text(raw)) => {
-                                    raw.text
-                                }
-                                SamplingContent::Multiple(items) => items
-                                    .into_iter()
-                                    .filter_map(|item| match item {
-                                        SamplingMessageContent::Text(raw) => Some(raw.text),
-                                        _ => None,
-                                    })
-                                    .collect::<Vec<_>>()
-                                    .join("\n"),
-                                _ => String::new(),
-                            };
-
-                            debug!(
-                                "Sampling response received (polling): {}. Resuming task...",
-                                response_text
-                            );
 
                             let reply_msg = Message::builder()
                                 .role(Role::User)
@@ -903,7 +890,11 @@ impl AgentToMcpBridge {
         cancel_guard.task_id = None;
 
         // Convert task to MCP result
-        let result = TaskResultConverter::task_to_result(&task)?;
+        let output_schema = self
+            .schemas
+            .get(skill_id)
+            .and_then(|schema| schema.output_schema.as_ref());
+        let result = TaskResultConverter::task_to_result(&task, output_schema)?;
 
         info!(
             "A2A skill '{}' completed with state: {:?}",
@@ -912,67 +903,6 @@ impl AgentToMcpBridge {
 
         Ok(result)
     }
-}
-
-/// Helper function to translate A2A Task history to MCP sampling messages
-fn translate_task_to_sampling_messages(task: &Task) -> Vec<SamplingMessage> {
-    let mut messages = Vec::new();
-
-    for msg in &task.history {
-        let role = match msg.role {
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_USER) => {
-                rmcp::model::Role::User
-            }
-            buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_AGENT) => {
-                rmcp::model::Role::Assistant
-            }
-            _ => rmcp::model::Role::User,
-        };
-
-        let text_parts: Vec<String> = msg
-            .parts
-            .iter()
-            .filter_map(|part| part.get_text().map(String::from))
-            .collect();
-
-        if !text_parts.is_empty() {
-            let content = SamplingMessageContent::text(text_parts.join("\n"));
-            messages.push(SamplingMessage::new(role, content));
-        }
-    }
-
-    if let Some(msg) = task.status.message.as_option() {
-        let already_in_history = task
-            .history
-            .last()
-            .map(|last_msg| last_msg.message_id == msg.message_id)
-            .unwrap_or(false);
-
-        if !already_in_history {
-            let role = match msg.role {
-                buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_USER) => {
-                    rmcp::model::Role::User
-                }
-                buffa::enumeration::EnumValue::Known(a2a_rs::domain::Role::ROLE_AGENT) => {
-                    rmcp::model::Role::Assistant
-                }
-                _ => rmcp::model::Role::User,
-            };
-
-            let text_parts: Vec<String> = msg
-                .parts
-                .iter()
-                .filter_map(|part| part.get_text().map(String::from))
-                .collect();
-
-            if !text_parts.is_empty() {
-                let content = SamplingMessageContent::text(text_parts.join("\n"));
-                messages.push(SamplingMessage::new(role, content));
-            }
-        }
-    }
-
-    messages
 }
 
 #[async_trait]
@@ -1100,34 +1030,48 @@ impl ServerHandler for AgentToMcpBridge {
                 }
             };
 
-            let message_text = params
-                .arguments
-                .as_ref()
-                .and_then(|args| args.get("message"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+            let mut arguments = params.arguments.unwrap_or_default();
 
-            if message_text.is_empty() {
-                return Err(McpError::invalid_params(
-                    "Missing required parameter 'message'",
-                    None,
-                ));
-            }
-
-            let task_id = params
-                .arguments
-                .as_ref()
-                .and_then(|args| args.get("task_id"))
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string())
+            let task_id = arguments
+                .remove(TASK_ID_PROPERTY)
+                .and_then(|v| v.as_str().map(str::to_string))
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+            // A typed skill gets its arguments as they came, in one data part;
+            // an untyped one gets the `message` string as text.
+            let typed = self
+                .schemas
+                .get(&skill_id)
+                .is_some_and(|schema| schema.input_schema.is_some());
+            let parts = if typed {
+                let value: ::buffa_types::google::protobuf::Value =
+                    serde_json::from_value(serde_json::Value::Object(arguments)).map_err(|e| {
+                        McpError::invalid_params(
+                            format!("Arguments are not a JSON value: {e}"),
+                            None,
+                        )
+                    })?;
+                vec![Part::data(value)]
+            } else {
+                let message_text = arguments
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                if message_text.is_empty() {
+                    return Err(McpError::invalid_params(
+                        "Missing required parameter 'message'",
+                        None,
+                    ));
+                }
+                vec![Part::text(message_text)]
+            };
 
             let progress_token = ctx.meta.get_progress_token();
 
             // Call the A2A agent skill
             match self
-                .call_skill(&skill_id, &task_id, &message_text, progress_token, &ctx)
+                .call_skill(&skill_id, &task_id, parts, progress_token, &ctx)
                 .await
             {
                 Ok(result) => Ok(result),
@@ -1242,7 +1186,13 @@ impl ServerHandler for AgentToMcpBridge {
             // Call the A2A agent skill
             let progress_token = ctx.meta.get_progress_token();
             let tool_result = match self
-                .call_skill(&skill_id, &task_id, &message_text, progress_token, &ctx)
+                .call_skill(
+                    &skill_id,
+                    &task_id,
+                    vec![Part::text(message_text.clone())],
+                    progress_token,
+                    &ctx,
+                )
                 .await
             {
                 Ok(result) => result,
@@ -1565,9 +1515,10 @@ mod tests {
     }
 
     #[test]
-    fn test_bridge_uses_card_url_for_namespacing() {
-        // new() should derive the tool namespace from agent_card.url with no
-        // need for a caller to pass it separately.
+    fn test_bridge_uses_card_name_for_namespacing() {
+        // new() derives the tool namespace from agent_card.name with no need
+        // for a caller to pass it separately — and not from the url, which
+        // changes with the deployment.
         let agent_card = AgentCard::builder()
             .name("Test Agent".to_string())
             .description("A test agent".to_string())
@@ -1587,17 +1538,11 @@ mod tests {
         let client = HttpClient::new("https://card-url.example.com".to_string());
         let bridge = AgentToMcpBridge::new(client, agent_card);
 
-        let tool_name = bridge.tools[0].name.as_ref();
-        // Sanitizer turns dots/colons/slashes into underscores; hyphens stay.
-        assert!(
-            tool_name.contains("card-url_example_com"),
-            "tool name {tool_name} should be namespaced by the card url"
-        );
-        assert!(tool_name.ends_with("do_thing"));
+        assert_eq!(bridge.tools[0].name.as_ref(), "test_agent_do_thing");
     }
 
     #[test]
-    fn test_with_namespace_overrides_card_url() {
+    fn test_with_namespace_overrides_card_name() {
         let agent_card = AgentCard::builder()
             .name("Test Agent".to_string())
             .description("A test agent".to_string())
@@ -1618,6 +1563,6 @@ mod tests {
         let bridge =
             AgentToMcpBridge::with_namespace(client, agent_card, "internal-alias".to_string());
 
-        assert!(bridge.tools[0].name.contains("internal-alias"));
+        assert_eq!(bridge.tools[0].name.as_ref(), "internal_alias_do_thing");
     }
 }

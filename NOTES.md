@@ -556,6 +556,30 @@ different thing on the wire, and not one every agent accepts. The flag is
 it. The port's parameter is still called `session_id`; it maps to `context_id`
 in every transport and renaming it is a wider change than the CLI's.
 
+**A skill's schema rides on the card as an extension, because the skill has no
+field for it.** (2026-09-04) `AgentSkill` in the proto is id, name, description,
+tags, examples, modes and security requirements. There is no `metadata` bag,
+unlike `Message`, `Task` and `Part`. The choice was between an
+`AgentExtension` in `capabilities.extensions` keyed by skill id, a schema block
+appended to the description, and a field the proto does not have. The
+extension is the spec's own mechanism for this: a client that does not know the
+URI ignores it, `required: false` says so, and the card stays valid for every
+conformant client. The cost is one indirection: `SkillSchemas::from_card`
+looks the extension up by URI and decodes `params.skills`, and a malformed
+extension yields no schemas rather than no card.
+
+**`InputRequired` is a question for the user, so the bridge asks through
+elicitation.** (2026-09-04) `AgentToMcpBridge` answered an agent's
+`InputRequired` by sampling: it sent the task history to the MCP client's model
+through `Peer::create_message` and fed the reply back as the user. `rmcp` 1.8
+deprecates that method under SEP-2577, which removes sampling from the protocol
+with no replacement. The alternative kept was elicitation, which asks the
+client's *user* with a one-field form, and that is what the A2A state means.
+When the client has not declared the capability, or declines, the task is
+returned suspended with its id. That was the fallback whenever sampling failed
+and is the only path now. A client that could sample but not elicit loses the
+automatic answer. It gains not having a model answer on the user's behalf.
+
 ---
 
 ## Hazards that will recur

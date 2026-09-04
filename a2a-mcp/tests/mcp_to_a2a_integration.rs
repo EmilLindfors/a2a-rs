@@ -3,7 +3,8 @@
 //! This test verifies that MCP tools and prompts can be successfully exposed as A2A agent skills
 
 use a2a_mcp::bridge::mcp_to_a2a::{
-    McpToA2ABridge, ProgressClientHandler, create_prompt_call_message, create_tool_call_message,
+    McpToA2ABridge, ProgressClientHandler, create_prompt_call_message,
+    create_resource_read_message, create_tool_call_message,
 };
 use a2a_rs::domain::core::agent::AgentCard;
 use a2a_rs::domain::{
@@ -134,6 +135,8 @@ impl ServerHandler for TestMcpServer {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
+                .enable_resources()
+                .enable_resources_subscribe()
                 .build(),
         )
         .with_protocol_version(ProtocolVersion::V_2024_11_05)
@@ -184,6 +187,69 @@ impl ServerHandler for TestMcpServer {
             }
 
             Ok(CallToolResult::success(vec![Content::text("42")]))
+        }
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _ctx: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+        async move {
+            let catalogue =
+                RawResource::new("catalogue://views", "views").with_mime_type("text/markdown");
+            let logo = RawResource::new("file:///logo.bin", "logo")
+                .with_mime_type("application/octet-stream");
+            Ok(ListResourcesResult {
+                resources: vec![Annotated::new(catalogue, None), Annotated::new(logo, None)],
+                next_cursor: None,
+                meta: None,
+            })
+        }
+    }
+
+    fn read_resource(
+        &self,
+        ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
+        _ctx: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        async move {
+            match uri.as_str() {
+                "catalogue://views" => Ok(ReadResourceResult::new(vec![
+                    ResourceContents::TextResourceContents {
+                        uri,
+                        mime_type: Some("text/markdown".to_string()),
+                        text: "# Views\n- harvest\n- feed".to_string(),
+                        meta: None,
+                    },
+                ])),
+                "file:///logo.bin" => Ok(ReadResourceResult::new(vec![
+                    ResourceContents::BlobResourceContents {
+                        uri,
+                        mime_type: Some("application/octet-stream".to_string()),
+                        blob: "AAEC".to_string(), // [0, 1, 2]
+                        meta: None,
+                    },
+                ])),
+                _ => Err(McpError::resource_not_found(uri, None)),
+            }
+        }
+    }
+
+    fn subscribe(
+        &self,
+        SubscribeRequestParams { uri, .. }: SubscribeRequestParams,
+        ctx: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<(), McpError>> + Send + '_ {
+        async move {
+            // The test server reports the resource changed the moment anyone
+            // subscribes, so the notification path is exercised without a
+            // clock.
+            let _ = ctx
+                .peer
+                .notify_resource_updated(ResourceUpdatedNotificationParam::new(uri))
+                .await;
+            Ok(())
         }
     }
 
@@ -362,8 +428,9 @@ async fn test_mcp_to_a2a_prompts() {
     let bridge = McpToA2ABridge::new(peer, NoOpHandler).await.unwrap();
 
     // Verify list_prompts was called and populated
-    assert_eq!(bridge.prompts().len(), 1);
-    assert_eq!(bridge.prompts()[0].name, "test_prompt");
+    let prompts = bridge.prompts().await;
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].name, "test_prompt");
 
     // Call the prompt via bridge
     let prompt_call_msg = create_prompt_call_message("test_prompt", serde_json::json!({}));
@@ -387,6 +454,130 @@ async fn test_mcp_to_a2a_prompts() {
     );
 
     drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// The third list beside tools and prompts, and a read that arrives as what
+/// the resource holds rather than the address it was read from.
+#[tokio::test]
+async fn resources_are_listed_read_and_watched() {
+    use a2a_rs::domain::generated::part;
+
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let mcp_server = TestMcpServer::new();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+
+    let mcp_client = ().serve(client_io).await.unwrap();
+    let peer = mcp_client.peer().clone();
+    let bridge = McpToA2ABridge::new(peer, NoOpHandler).await.unwrap();
+
+    // Listed at initialize.
+    let resources = bridge.resources().await;
+    assert_eq!(resources.len(), 2);
+    assert_eq!(resources[0].uri, "catalogue://views");
+
+    // Read directly: the text, not the URI.
+    let contents = bridge.read_resource("catalogue://views").await.unwrap();
+    assert_eq!(contents.len(), 1);
+    let message = bridge
+        .read_resource_message("catalogue://views", Role::Agent)
+        .await
+        .unwrap();
+    assert_eq!(
+        message.parts[0].content,
+        Some(part::Content::Text(
+            "# Views\n- harvest\n- feed".to_string()
+        ))
+    );
+    assert_eq!(message.parts[0].media_type, "text/markdown");
+
+    // A blob arrives as bytes.
+    let logo = bridge
+        .read_resource_message("file:///logo.bin", Role::Agent)
+        .await
+        .unwrap();
+    assert_eq!(
+        logo.parts[0].content,
+        Some(part::Content::Raw(vec![0, 1, 2]))
+    );
+
+    // Read through the A2A envelope, like a tool or prompt call.
+    let task = bridge
+        .process_message(
+            "task-resource-1",
+            &create_resource_read_message("catalogue://views"),
+            &a2a_rs::port::RequestContext::anonymous(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(task.status.state, TaskState::Completed);
+    assert_eq!(task.history.len(), 2);
+    assert_eq!(task.history[1].role, Role::Agent);
+    assert!(
+        task.history[1].parts[0]
+            .get_text()
+            .is_some_and(|t| t.contains("harvest"))
+    );
+
+    // A URI the server does not serve is the server's error, not a skipped entry.
+    assert!(bridge.read_resource("catalogue://nope").await.is_err());
+
+    drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// `notifications/resources/updated` lands in the bridge when the bridge is
+/// the client handler, and `take_updated_resources` hands the URI over once.
+#[tokio::test]
+async fn a_resource_update_is_recorded_for_the_consumer_to_re_read() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let mcp_server = TestMcpServer::new();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+
+    // Build the bridge over a first connection only to have a peer to
+    // construct with, then serve the bridge itself over the connection under
+    // test so it receives notifications.
+    let (probe_server_io, probe_client_io) = tokio::io::duplex(4096);
+    let probe_server = TestMcpServer::new();
+    let probe_task = tokio::spawn(async move {
+        let running = probe_server.serve(probe_server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let probe_client = ().serve(probe_client_io).await.unwrap();
+    let bridge = McpToA2ABridge::new(probe_client.peer().clone(), NoOpHandler)
+        .await
+        .unwrap();
+
+    let running = bridge.clone().serve(client_io).await.unwrap();
+    // The bridge's own peer still points at the probe connection; subscribe
+    // through the connection the bridge is serving on instead.
+    running
+        .peer()
+        .subscribe(SubscribeRequestParams::new("catalogue://views"))
+        .await
+        .unwrap();
+
+    // The test server notifies on subscribe; give the notification a moment.
+    let mut updated = Vec::new();
+    for _ in 0..50 {
+        updated = bridge.take_updated_resources();
+        if !updated.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(updated, vec!["catalogue://views".to_string()]);
+    assert!(bridge.take_updated_resources().is_empty(), "taken once");
+
+    drop(running);
+    drop(probe_client);
+    probe_task.abort();
     let _ = server_task.await;
 }
 

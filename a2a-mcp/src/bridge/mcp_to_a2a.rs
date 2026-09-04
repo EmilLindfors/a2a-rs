@@ -4,9 +4,9 @@ use crate::{
     converters::{MessageConverter, llm_tool::LlmToolConverter},
     error::{A2aMcpError, Result},
 };
-use a2a_llm::{ToolCall, ToolDefinition};
+use a2a_llm::{ToolCall, ToolDefinition, ToolResult};
 use a2a_rs::{
-    domain::{Message, Part, Role, Task, TaskState, TaskStatus},
+    domain::{AgentExtension, AgentSkill, Message, Part, Role, Task, TaskState, TaskStatus},
     port::{AsyncMessageHandler, RequestContext},
 };
 use async_trait::async_trait;
@@ -18,8 +18,12 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::collections::BTreeSet;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 use tracing::{debug, error, info};
+
+use crate::converters::{SkillSchemas, SkillToolConverter};
 
 /// Metadata key used to mark an A2A [`Message`] as an MCP tool-call request.
 ///
@@ -56,6 +60,21 @@ pub struct McpPromptCall {
     /// JSON arguments forwarded to the MCP prompt. Must be an object (or null).
     #[serde(default, skip_serializing_if = "Value::is_null")]
     pub arguments: Value,
+}
+
+/// Metadata key used to mark an A2A [`Message`] as an MCP resource read.
+pub const MCP_RESOURCE_READ_METADATA_KEY: &str = "a2a_rs_resource_read";
+
+/// Envelope describing an MCP resource read carried inside an A2A [`Message`].
+///
+/// The third envelope beside tools and prompts: a data server's catalogue is
+/// a resource, read once and held, so an A2A caller needs a way to ask for
+/// one that is shaped like the other two.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct McpResourceRead {
+    /// The resource URI, as advertised by `resources/list` or matching one of
+    /// the server's templates.
+    pub uri: String,
 }
 
 /// A request drop guard to trigger request cancellation on drop.
@@ -139,10 +158,15 @@ impl rmcp::ClientHandler for ProgressClientHandler {
 pub struct McpToA2ABridge<H: AsyncMessageHandler> {
     /// The MCP client peer for calling tools and prompts
     mcp_peer: Arc<Peer<RoleClient>>,
-    /// Available MCP tools
-    tools: Arc<Vec<Tool>>,
-    /// Available MCP prompts
-    prompts: Arc<Vec<Prompt>>,
+    /// Available MCP tools. Re-listed on `notifications/tools/list_changed`.
+    tools: Arc<RwLock<Vec<Tool>>>,
+    /// Available MCP prompts. Re-listed on `notifications/prompts/list_changed`.
+    prompts: Arc<RwLock<Vec<Prompt>>>,
+    /// Available MCP resources. Re-listed on `notifications/resources/list_changed`.
+    resources: Arc<RwLock<Vec<Resource>>>,
+    /// URIs the server has said changed since they were last taken, so a
+    /// consumer re-reads the one URI rather than everything.
+    updated_resources: Arc<std::sync::Mutex<BTreeSet<String>>>,
     /// The underlying A2A message handler to delegate non-tool messages
     inner_handler: Arc<H>,
     /// Progress dispatcher to route progress updates
@@ -159,36 +183,20 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
     /// * `mcp_peer` - MCP client peer for calling tools
     /// * `inner_handler` - Underlying A2A handler for non-tool messages
     pub async fn new(mcp_peer: Peer<RoleClient>, inner_handler: H) -> Result<Self> {
-        // Fetch available tools from MCP server
-        let tools = mcp_peer
-            .list_tools(None)
-            .await
-            .map_err(|e| A2aMcpError::McpServer(format!("Failed to list tools: {:?}", e)))?
-            .tools;
-
-        // Fetch available prompts from MCP server
-        let prompts = match mcp_peer.list_all_prompts().await {
-            Ok(p) => p,
-            Err(e) => {
-                debug!("Failed to list prompts: {:?}", e);
-                Vec::new()
-            }
-        };
-
+        let listed = Listed::from_peer(&mcp_peer).await?;
         info!(
-            "McpToA2ABridge initialized with {} MCP tools and {} MCP prompts",
-            tools.len(),
-            prompts.len()
+            "McpToA2ABridge initialized with {} MCP tools, {} MCP prompts and {} MCP resources",
+            listed.tools.len(),
+            listed.prompts.len(),
+            listed.resources.len()
         );
-
-        Ok(Self {
-            mcp_peer: Arc::new(mcp_peer),
-            tools: Arc::new(tools),
-            prompts: Arc::new(prompts),
-            inner_handler: Arc::new(inner_handler),
-            progress_dispatcher: ProgressDispatcher::new(),
-            streaming_handler: None,
-        })
+        Ok(Self::assemble(
+            mcp_peer,
+            listed,
+            inner_handler,
+            ProgressDispatcher::new(),
+            None,
+        ))
     }
 
     /// Create a new MCP → A2A bridge with streaming progress support
@@ -198,63 +206,171 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         progress_dispatcher: ProgressDispatcher,
         streaming_handler: Arc<dyn a2a_rs::port::AsyncStreamingHandler>,
     ) -> Result<Self> {
-        // Fetch available tools from MCP server
-        let tools = mcp_peer
-            .list_tools(None)
-            .await
-            .map_err(|e| A2aMcpError::McpServer(format!("Failed to list tools: {:?}", e)))?
-            .tools;
-
-        // Fetch available prompts from MCP server
-        let prompts = match mcp_peer.list_all_prompts().await {
-            Ok(p) => p,
-            Err(e) => {
-                debug!("Failed to list prompts: {:?}", e);
-                Vec::new()
-            }
-        };
-
+        let listed = Listed::from_peer(&mcp_peer).await?;
         info!(
-            "McpToA2ABridge (streaming) initialized with {} MCP tools and {} MCP prompts",
-            tools.len(),
-            prompts.len()
+            "McpToA2ABridge (streaming) initialized with {} MCP tools, {} MCP prompts and {} MCP resources",
+            listed.tools.len(),
+            listed.prompts.len(),
+            listed.resources.len()
         );
+        Ok(Self::assemble(
+            mcp_peer,
+            listed,
+            inner_handler,
+            progress_dispatcher,
+            Some(streaming_handler),
+        ))
+    }
 
-        Ok(Self {
+    fn assemble(
+        mcp_peer: Peer<RoleClient>,
+        listed: Listed,
+        inner_handler: H,
+        progress_dispatcher: ProgressDispatcher,
+        streaming_handler: Option<Arc<dyn a2a_rs::port::AsyncStreamingHandler>>,
+    ) -> Self {
+        Self {
             mcp_peer: Arc::new(mcp_peer),
-            tools: Arc::new(tools),
-            prompts: Arc::new(prompts),
+            tools: Arc::new(RwLock::new(listed.tools)),
+            prompts: Arc::new(RwLock::new(listed.prompts)),
+            resources: Arc::new(RwLock::new(listed.resources)),
+            updated_resources: Arc::new(std::sync::Mutex::new(BTreeSet::new())),
             inner_handler: Arc::new(inner_handler),
             progress_dispatcher,
-            streaming_handler: Some(streaming_handler),
-        })
+            streaming_handler,
+        }
     }
 
     /// Get the available MCP tools.
-    pub fn tools(&self) -> &[Tool] {
-        &self.tools
+    pub async fn tools(&self) -> Vec<Tool> {
+        self.tools.read().await.clone()
     }
 
     /// Get the available MCP prompts.
-    pub fn prompts(&self) -> &[Prompt] {
-        &self.prompts
+    pub async fn prompts(&self) -> Vec<Prompt> {
+        self.prompts.read().await.clone()
+    }
+
+    /// Get the available MCP resources — the third list beside tools and
+    /// prompts. Empty when the server does not serve resources.
+    pub async fn resources(&self) -> Vec<Resource> {
+        self.resources.read().await.clone()
+    }
+
+    /// Ask the server to send `notifications/resources/updated` for `uri`.
+    /// Only meaningful when the server declared `resources.subscribe`; the
+    /// URIs that arrive are collected for [`take_updated_resources`].
+    ///
+    /// [`take_updated_resources`]: Self::take_updated_resources
+    pub async fn subscribe_resource(&self, uri: &str) -> Result<()> {
+        self.mcp_peer
+            .subscribe(SubscribeRequestParams::new(uri.to_string()))
+            .await
+            .map_err(|e| A2aMcpError::McpServer(format!("Subscribe failed: {e:?}")))
+    }
+
+    /// The URIs the server has reported changed since this was last called.
+    /// A consumer holding a resource as durable context re-reads these and
+    /// nothing else.
+    pub fn take_updated_resources(&self) -> Vec<String> {
+        let mut updated = self
+            .updated_resources
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::mem::take(&mut *updated).into_iter().collect()
+    }
+
+    /// Read one resource. A URI not in the list is still sent — templates
+    /// exist — and the server's refusal comes back as an error.
+    pub async fn read_resource(&self, uri: &str) -> Result<Vec<ResourceContents>> {
+        debug!("Reading MCP resource: {}", uri);
+        let handle = self
+            .mcp_peer
+            .send_request_with_option(
+                ClientRequest::ReadResourceRequest(ReadResourceRequest::new(
+                    ReadResourceRequestParams::new(uri.to_string()),
+                )),
+                PeerRequestOptions::no_options(),
+            )
+            .await
+            .map_err(|e| A2aMcpError::McpServer(format!("Resource read failed to send: {e:?}")))?;
+
+        let request_id = handle.id.clone();
+        let completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let _guard = RequestCancelGuard {
+            peer: self.mcp_peer.clone(),
+            request_id,
+            completed: completed.clone(),
+        };
+
+        let response = handle.await_response().await;
+        completed.store(true, std::sync::atomic::Ordering::SeqCst);
+
+        match response {
+            Ok(ServerResult::ReadResourceResult(r)) => Ok(r.contents),
+            Ok(_) => Err(A2aMcpError::McpServer(
+                "Unexpected response from MCP server".to_string(),
+            )),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Read one resource as an A2A message carrying its contents — a text
+    /// resource's text, a blob resource's bytes — with `role`.
+    pub async fn read_resource_message(&self, uri: &str, role: Role) -> Result<Message> {
+        let contents = self.read_resource(uri).await?;
+        let mut parts: Vec<Part> = contents
+            .iter()
+            .map(MessageConverter::resource_contents_to_part)
+            .collect();
+        if parts.is_empty() {
+            parts.push(Part::text(String::new()));
+        }
+        Ok(Message::builder()
+            .role(role)
+            .parts(parts)
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .build())
+    }
+
+    /// The server's tools as A2A skills, with the schema extension that
+    /// carries their types. A consumer builds a card from these, and
+    /// [`AgentToMcpBridge`](crate::AgentToMcpBridge) serves that card as the
+    /// same typed tools — the round trip.
+    pub async fn agent_skills(&self) -> (Vec<AgentSkill>, AgentExtension) {
+        let mut schemas = SkillSchemas::new();
+        let skills = self
+            .tools
+            .read()
+            .await
+            .iter()
+            .map(|tool| {
+                let (skill, schema) = SkillToolConverter::tool_to_skill(tool);
+                if let Some(schema) = schema {
+                    schemas.insert(skill.id.clone(), schema);
+                }
+                skill
+            })
+            .collect();
+        (skills, schemas.to_extension())
     }
 
     /// Get the available tools converted into LLM ToolDefinition objects.
-    pub fn get_llm_tools(&self) -> Vec<ToolDefinition> {
-        LlmToolConverter::mcp_to_llm_tools(&self.tools)
+    pub async fn get_llm_tools(&self) -> Vec<ToolDefinition> {
+        LlmToolConverter::mcp_to_llm_tools(&self.tools.read().await)
     }
 
     /// Natively execute an LLM `ToolCall` directly against the MCP client.
     ///
     /// This bypasses the A2A Message serialization format and is intended for
-    /// agents interacting directly with `LlmProvider` results.
-    /// It returns the stringified content of the MCP tool's result.
+    /// agents interacting directly with `LlmProvider` results. The text is
+    /// what the model is told; `structuredContent`, when the server sent it,
+    /// is kept beside it rather than flattened.
     pub async fn execute_llm_tool_call(
         &self,
         task_id: &str,
         tool_call: &ToolCall,
-    ) -> Result<String> {
+    ) -> Result<ToolResult> {
         // Convert to MCP parameters
         let params = LlmToolConverter::llm_tool_call_to_mcp_request(tool_call)?;
 
@@ -267,14 +383,7 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         // Reuse the internal `call_mcp_tool` logic
         let mcp_result = self.call_mcp_tool(task_id, &params.name, args).await?;
 
-        // Extract and join text results
-        let mut result_text = String::new();
-        for content in mcp_result.content {
-            let text = MessageConverter::extract_text_from_content(&[content]);
-            result_text.push_str(&text);
-        }
-
-        Ok(result_text)
+        Ok(LlmToolConverter::mcp_result_to_llm(&mcp_result))
     }
 
     /// Extract a typed tool-call envelope from a message, if present.
@@ -316,6 +425,23 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         }
     }
 
+    /// Extract a typed resource-read envelope from a message, if present.
+    fn extract_resource_read(message: &Message) -> Option<McpResourceRead> {
+        let metadata_struct = message.metadata.as_option()?;
+        let metadata_val = serde_json::to_value(metadata_struct).ok()?;
+        let raw = metadata_val.get(MCP_RESOURCE_READ_METADATA_KEY)?;
+        match serde_json::from_value::<McpResourceRead>(raw.clone()) {
+            Ok(read) => Some(read),
+            Err(e) => {
+                debug!(
+                    "Message has '{}' metadata but it failed to deserialise as McpResourceRead: {}",
+                    MCP_RESOURCE_READ_METADATA_KEY, e
+                );
+                None
+            }
+        }
+    }
+
     /// Call an MCP tool
     async fn call_mcp_tool(
         &self,
@@ -326,7 +452,7 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         debug!("Calling MCP tool: {} with args: {}", tool_name, arguments);
 
         // Verify tool exists
-        if !self.tools.iter().any(|t| t.name == tool_name) {
+        if !self.tools.read().await.iter().any(|t| t.name == tool_name) {
             return Err(A2aMcpError::ToolNotFound(tool_name.to_string()));
         }
 
@@ -433,7 +559,13 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         );
 
         // Verify prompt exists
-        if !self.prompts.iter().any(|p| p.name == prompt_name) {
+        if !self
+            .prompts
+            .read()
+            .await
+            .iter()
+            .any(|p| p.name == prompt_name)
+        {
             return Err(A2aMcpError::PromptNotFound(prompt_name.to_string()));
         }
 
@@ -491,6 +623,83 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> rmcp::ClientHandler
         _context: NotificationContext<RoleClient>,
     ) {
         self.progress_dispatcher.handle_notification(params).await;
+    }
+
+    /// The server said a resource changed: remember which, for whoever holds
+    /// it as context to re-read.
+    async fn on_resource_updated(
+        &self,
+        params: ResourceUpdatedNotificationParam,
+        _context: NotificationContext<RoleClient>,
+    ) {
+        debug!("MCP server reports resource updated: {}", params.uri);
+        self.updated_resources
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(params.uri);
+    }
+
+    /// The three lists are re-read when the server says they changed. Until
+    /// this, the bridge served the list it read at startup for as long as it
+    /// ran, and a tool added mid-conversation was `ToolNotFound` here while
+    /// the server offered it.
+    async fn on_resource_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        match self.mcp_peer.list_all_resources().await {
+            Ok(resources) => *self.resources.write().await = resources,
+            Err(e) => debug!("Re-listing resources after list_changed failed: {e:?}"),
+        }
+    }
+
+    async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        match self.mcp_peer.list_all_tools().await {
+            Ok(tools) => *self.tools.write().await = tools,
+            Err(e) => debug!("Re-listing tools after list_changed failed: {e:?}"),
+        }
+    }
+
+    async fn on_prompt_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        match self.mcp_peer.list_all_prompts().await {
+            Ok(prompts) => *self.prompts.write().await = prompts,
+            Err(e) => debug!("Re-listing prompts after list_changed failed: {e:?}"),
+        }
+    }
+}
+
+/// What a server lists at `initialize`: read once for both constructors.
+struct Listed {
+    tools: Vec<Tool>,
+    prompts: Vec<Prompt>,
+    resources: Vec<Resource>,
+}
+
+impl Listed {
+    /// Tools are required — a server with none is not one this bridge is for.
+    /// Prompts and resources are optional capabilities, and a server that
+    /// refuses to list them (or has not declared them) simply has none.
+    async fn from_peer(peer: &Peer<RoleClient>) -> Result<Self> {
+        let tools = peer
+            .list_all_tools()
+            .await
+            .map_err(|e| A2aMcpError::McpServer(format!("Failed to list tools: {:?}", e)))?;
+        let prompts = match peer.list_all_prompts().await {
+            Ok(p) => p,
+            Err(e) => {
+                debug!("Failed to list prompts: {:?}", e);
+                Vec::new()
+            }
+        };
+        let resources = match peer.list_all_resources().await {
+            Ok(r) => r,
+            Err(e) => {
+                debug!("Failed to list resources: {:?}", e);
+                Vec::new()
+            }
+        };
+        Ok(Self {
+            tools,
+            prompts,
+            resources,
+        })
     }
 }
 
@@ -627,9 +836,23 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
                     Err(e.to_a2a_error())
                 }
             }
+        } else if let Some(McpResourceRead { uri }) = Self::extract_resource_read(message) {
+            info!("Detected MCP resource read request for: {}", uri);
+            match self.read_resource_message(&uri, Role::Agent).await {
+                Ok(contents) => Ok(Task::builder()
+                    .id(task_id.to_string())
+                    .context_id(uuid::Uuid::new_v4().to_string())
+                    .status(TaskStatus::new(TaskState::Completed, None))
+                    .history(vec![message.clone(), contents])
+                    .build()),
+                Err(e) => {
+                    error!("MCP resource read failed: {}", e);
+                    Err(e.to_a2a_error())
+                }
+            }
         } else {
-            // Not a tool or prompt call, delegate to inner handler
-            debug!("Message is not a tool or prompt call, delegating to inner handler");
+            // Not a tool, prompt or resource request; delegate to inner handler
+            debug!("Message is not an MCP request, delegating to inner handler");
             self.inner_handler
                 .process_message(task_id, message, ctx)
                 .await
@@ -808,9 +1031,68 @@ pub fn attach_prompt_call(message: &mut Message, prompt_name: impl Into<String>,
     }
 }
 
+/// Build an A2A [`Message`] that carries an MCP resource-read envelope.
+pub fn create_resource_read_message(uri: impl Into<String>) -> Message {
+    let envelope = McpResourceRead { uri: uri.into() };
+    let mut map = Map::new();
+    map.insert(
+        MCP_RESOURCE_READ_METADATA_KEY.to_string(),
+        serde_json::to_value(&envelope).expect("McpResourceRead always serialises"),
+    );
+    let metadata =
+        serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map))
+            .expect("valid Struct");
+    Message::builder()
+        .role(Role::User)
+        .metadata(metadata)
+        .message_id(uuid::Uuid::new_v4().to_string())
+        .build()
+}
+
+/// Attach an MCP resource-read envelope to an existing [`Message`] in place.
+pub fn attach_resource_read(message: &mut Message, uri: impl Into<String>) {
+    let envelope = McpResourceRead { uri: uri.into() };
+    let metadata_struct = message.metadata.get_or_insert_default();
+    let mut map = serde_json::to_value(&*metadata_struct)
+        .ok()
+        .and_then(|v| match v {
+            Value::Object(m) => Some(m),
+            _ => None,
+        })
+        .unwrap_or_default();
+    map.insert(
+        MCP_RESOURCE_READ_METADATA_KEY.to_string(),
+        serde_json::to_value(&envelope).expect("McpResourceRead always serialises"),
+    );
+    if let Ok(new_struct) =
+        serde_json::from_value::<::buffa_types::google::protobuf::Struct>(Value::Object(map))
+    {
+        *metadata_struct = new_struct;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_resource_read_envelope_is_detected_and_only_that() {
+        let msg = create_resource_read_message("catalogue://views");
+        let read = McpToA2ABridge::<NoOpHandler>::extract_resource_read(&msg)
+            .expect("metadata envelope should be detected");
+        assert_eq!(read.uri, "catalogue://views");
+        assert!(McpToA2ABridge::<NoOpHandler>::extract_tool_call(&msg).is_none());
+        assert!(McpToA2ABridge::<NoOpHandler>::extract_prompt_call(&msg).is_none());
+
+        let mut with_parts = Message::builder()
+            .role(Role::User)
+            .parts(vec![Part::text("read the catalogue".to_string())])
+            .message_id("test".to_string())
+            .build();
+        attach_resource_read(&mut with_parts, "catalogue://views");
+        assert_eq!(with_parts.parts.len(), 1);
+        assert!(McpToA2ABridge::<NoOpHandler>::extract_resource_read(&with_parts).is_some());
+    }
 
     #[test]
     fn test_extract_tool_call_detection() {

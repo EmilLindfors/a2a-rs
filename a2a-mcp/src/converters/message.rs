@@ -2,7 +2,8 @@
 
 use crate::error::Result;
 use a2a_rs::domain::{Message, Part, Role};
-use rmcp::model::{Content, RawContent};
+use base64::Engine;
+use rmcp::model::{Content, RawContent, ResourceContents};
 
 /// Converts between A2A Messages and MCP Content
 pub struct MessageConverter;
@@ -114,23 +115,7 @@ impl MessageConverter {
                     parts.push(Part::data(val));
                 }
                 RawContent::Resource(resource_content) => {
-                    // Treat embedded resource as a file reference
-                    match &resource_content.resource {
-                        rmcp::model::ResourceContents::TextResourceContents {
-                            uri,
-                            mime_type,
-                            ..
-                        } => {
-                            parts.push(Part::file_from_uri(uri.clone(), None, mime_type.clone()));
-                        }
-                        rmcp::model::ResourceContents::BlobResourceContents {
-                            uri,
-                            mime_type,
-                            ..
-                        } => {
-                            parts.push(Part::file_from_uri(uri.clone(), None, mime_type.clone()));
-                        }
-                    }
+                    parts.push(Self::resource_contents_to_part(&resource_content.resource));
                 }
                 RawContent::ResourceLink(resource_link) => {
                     // Treat resource link as a file reference
@@ -156,6 +141,37 @@ impl MessageConverter {
             .parts(parts)
             .message_id(uuid::Uuid::new_v4().to_string())
             .build())
+    }
+
+    /// The contents of one MCP resource as an A2A part that carries them.
+    ///
+    /// Text contents become a text part holding the text; blob contents a
+    /// file part holding the decoded bytes, or the URI when the base64 does
+    /// not decode. Both keep the mime type. The earlier mapping reduced every
+    /// resource to a file *reference* by URI, which threw away the body a
+    /// caller had read the resource for — a catalogue read at startup arrived
+    /// as its own address.
+    pub fn resource_contents_to_part(contents: &ResourceContents) -> Part {
+        match contents {
+            ResourceContents::TextResourceContents {
+                text, mime_type, ..
+            } => {
+                let mut part = Part::text(text.clone());
+                if let Some(mime) = mime_type {
+                    part.media_type = mime.clone();
+                }
+                part
+            }
+            ResourceContents::BlobResourceContents {
+                uri,
+                blob,
+                mime_type,
+                ..
+            } => match base64::engine::general_purpose::STANDARD.decode(blob) {
+                Ok(bytes) => Part::file_from_bytes(bytes, Some(uri.clone()), mime_type.clone()),
+                Err(_) => Part::file_from_uri(uri.clone(), None, mime_type.clone()),
+            },
+        }
     }
 
     /// Extract text content from A2A message
@@ -272,5 +288,42 @@ mod tests {
         let text = MessageConverter::extract_text_from_message(&message);
         assert!(text.contains("Line 1"));
         assert!(text.contains("Line 2"));
+    }
+
+    /// A read resource arrives as what it holds: a text resource's text, a
+    /// blob resource's bytes — not the address it was read from.
+    #[test]
+    fn a_resource_is_carried_as_its_contents() {
+        use a2a_rs::domain::generated::part;
+        let text = ResourceContents::TextResourceContents {
+            uri: "catalogue://views".to_string(),
+            mime_type: Some("text/markdown".to_string()),
+            text: "# Views".to_string(),
+            meta: None,
+        };
+        let part = MessageConverter::resource_contents_to_part(&text);
+        assert_eq!(
+            part.content,
+            Some(part::Content::Text("# Views".to_string()))
+        );
+        assert_eq!(part.media_type, "text/markdown");
+
+        let blob = ResourceContents::BlobResourceContents {
+            uri: "file:///a.bin".to_string(),
+            mime_type: Some("application/octet-stream".to_string()),
+            blob: base64::engine::general_purpose::STANDARD.encode(b"\x00\x01"),
+            meta: None,
+        };
+        let part = MessageConverter::resource_contents_to_part(&blob);
+        assert_eq!(part.content, Some(part::Content::Raw(vec![0, 1])));
+        assert_eq!(part.filename, "file:///a.bin");
+
+        // An embedded resource in tool content takes the same path.
+        let embedded = Content::resource(text);
+        let message = MessageConverter::content_to_message(&[embedded], Role::Agent).unwrap();
+        assert_eq!(
+            message.parts[0].content,
+            Some(part::Content::Text("# Views".to_string()))
+        );
     }
 }

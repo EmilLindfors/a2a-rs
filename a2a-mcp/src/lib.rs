@@ -35,7 +35,7 @@
 //!         .skills(vec![])
 //!         .build();
 //!
-//!     // MCP tool names are namespaced by agent_card.url.
+//!     // MCP tool names are namespaced by agent_card.name.
 //!     let bridge = AgentToMcpBridge::new(client, agent_card);
 //!
 //!     // Serve as an MCP server over stdio.
@@ -146,10 +146,16 @@ pub mod error;
 
 // Re-export key types
 pub use bridge::mcp_to_a2a::{
-    MCP_TOOL_CALL_METADATA_KEY, McpToolCall, attach_tool_call, create_tool_call_message,
+    MCP_PROMPT_CALL_METADATA_KEY, MCP_RESOURCE_READ_METADATA_KEY, MCP_TOOL_CALL_METADATA_KEY,
+    McpPromptCall, McpResourceRead, McpToolCall, attach_prompt_call, attach_resource_read,
+    attach_tool_call, create_prompt_call_message, create_resource_read_message,
+    create_tool_call_message,
 };
 pub use bridge::{AgentToMcpBridge, McpToA2ABridge};
-pub use converters::{MessageConverter, SkillToolConverter, TaskResultConverter};
+pub use converters::{
+    MessageConverter, SKILL_SCHEMA_EXTENSION_URI, SkillSchema, SkillSchemas, SkillToolConverter,
+    TaskResultConverter,
+};
 pub use error::{A2aMcpError, Result};
 
 /// Current crate version

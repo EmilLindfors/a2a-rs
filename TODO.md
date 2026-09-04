@@ -208,7 +208,7 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         `ca-certificates`). korps' second `reqwest` under `mcp-client` is a
         deletion when this releases; the `aws-lc-sys` item in §5 is the same
         TLS knot from the other end and is unchanged by this.
-      * **`a2a-mcp`'s bridge names tools after the agent's address** — and
+      * [x] **`a2a-mcp`'s bridge names tools after the agent's address** — and
         the name it made was not a function name. An agent's `greet` skill
         served over the bridge arrived at a client as `127_0_0_1_8081_greet`,
         and Gemini refuses a request carrying a function name that starts
@@ -217,10 +217,9 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         puts `agent_` in front when the sanitized address does not start
         with a letter, and the bridge answers a call by matching the names
         it generated (`resolve_skill`) instead of `parse_tool_name`, which
-        split at the last underscore and cut `my_skill` to `skill`. Still
-        open: the prefix is the address, which changes when the address
-        does; the agent's id or name is the right one, and that is a
-        naming change for a release to carry deliberately.
+        split at the last underscore and cut `my_skill` to `skill`. The
+        prefix is the agent's name since 2026-09-04 (**breaking**); see
+        `CHANGELOG.md`.
 
 ## 3. Interop and CI
 
