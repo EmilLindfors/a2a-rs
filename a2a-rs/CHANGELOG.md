@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.9.0...a2a-rs-v0.9.1) - 2026-09-04
+
+### Added
+
+- AgentCard::extension looks an extension up by URI
+
 ## [0.9.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.8.4...a2a-rs-v0.9.0) - 2026-09-03
 
 ### Added
