@@ -140,8 +140,8 @@ jobs:
         run: cargo clippy -p a2a-rs --all-targets --all-features -- -D warnings
 
       # Run clippy on other workspace crates that support --all-features
-      - name: Run clippy (a2a-ap2, a2a-web-client, a2a-llm)
-        run: cargo clippy -p a2a-ap2 -p a2a-web-client -p a2a-llm --all-targets --all-features -- -D warnings
+      - name: Run clippy (a2a-ap2, a2a-web-client, a2a-llm, a2a-mcp)
+        run: cargo clippy -p a2a-ap2 -p a2a-web-client -p a2a-llm -p a2a-mcp --all-targets --all-features -- -D warnings
 
 
   rustfmt:
@@ -175,7 +175,7 @@ jobs:
         run: cargo doc --no-deps --all-features -p a2a-rs
 
       - name: Check documentation (other crates)
-        run: cargo doc --no-deps -p a2a-ap2 -p a2a-web-client -p a2a-llm
+        run: cargo doc --no-deps -p a2a-ap2 -p a2a-web-client -p a2a-llm -p a2a-mcp
 
 
   audit:

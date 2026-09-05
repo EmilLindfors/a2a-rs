@@ -3,21 +3,21 @@
 use crate::error::Result;
 use a2a_rs::domain::{Message, Part, Role};
 use base64::Engine;
-use rmcp::model::{Content, RawContent, ResourceContents};
+use rmcp::model::{ContentBlock, ResourceContents};
 
 /// Converts between A2A Messages and MCP Content
 pub struct MessageConverter;
 
 impl MessageConverter {
     /// Convert A2A Message to MCP Content array
-    pub fn message_to_content(message: &Message) -> Result<Vec<Content>> {
+    pub fn message_to_content(message: &Message) -> Result<Vec<ContentBlock>> {
         let mut contents = Vec::new();
 
         for part in &message.parts {
             use a2a_rs::domain::generated::part;
             match &part.content {
                 Some(part::Content::Text(text)) => {
-                    contents.push(Content::text(text.clone()));
+                    contents.push(ContentBlock::text(text.clone()));
                 }
                 Some(part::Content::Raw(_)) => {
                     let file_desc = if !part.filename.is_empty() {
@@ -40,7 +40,7 @@ impl MessageConverter {
                             }
                         )
                     };
-                    contents.push(Content::text(file_desc));
+                    contents.push(ContentBlock::text(file_desc));
                 }
                 Some(part::Content::Url(url)) => {
                     let file_desc = if !part.filename.is_empty() {
@@ -65,18 +65,18 @@ impl MessageConverter {
                             }
                         )
                     };
-                    contents.push(Content::text(file_desc));
+                    contents.push(ContentBlock::text(file_desc));
                 }
                 Some(part::Content::Data(value)) => {
                     // For structured data, serialize to JSON text
-                    contents.push(Content::text(serde_json::to_string_pretty(&value)?));
+                    contents.push(ContentBlock::text(serde_json::to_string_pretty(&value)?));
                 }
                 None => {}
             }
         }
 
         if contents.is_empty() {
-            contents.push(Content::text("(empty message)"));
+            contents.push(ContentBlock::text("(empty message)"));
         }
 
         Ok(contents)
@@ -85,50 +85,12 @@ impl MessageConverter {
     /// Convert MCP Content array to A2A Message
     ///
     /// Uses provided Role enum value
-    pub fn content_to_message(content: &[Content], role: Role) -> Result<Message> {
+    pub fn content_to_message(content: &[ContentBlock], role: Role) -> Result<Message> {
         let mut parts = Vec::new();
 
         for item in content {
-            // Match on the dereferenced RawContent
-            match &**item {
-                RawContent::Text(text_content) => {
-                    parts.push(Part::text(text_content.text.clone()));
-                }
-                RawContent::Image(image_content) => {
-                    // Convert image to data part
-                    let mut data_map = serde_json::Map::new();
-                    data_map.insert(
-                        "type".to_string(),
-                        serde_json::Value::String("image".to_string()),
-                    );
-                    data_map.insert(
-                        "data".to_string(),
-                        serde_json::Value::String(image_content.data.clone()),
-                    );
-                    data_map.insert(
-                        "mimeType".to_string(),
-                        serde_json::Value::String(image_content.mime_type.clone()),
-                    );
-
-                    let val: ::buffa_types::google::protobuf::Value =
-                        serde_json::from_value(serde_json::Value::Object(data_map))?;
-                    parts.push(Part::data(val));
-                }
-                RawContent::Resource(resource_content) => {
-                    parts.push(Self::resource_contents_to_part(&resource_content.resource));
-                }
-                RawContent::ResourceLink(resource_link) => {
-                    // Treat resource link as a file reference
-                    parts.push(Part::file_from_uri(
-                        resource_link.uri.clone(),
-                        Some(resource_link.name.clone()),
-                        resource_link.mime_type.clone(),
-                    ));
-                }
-                RawContent::Audio(_audio_content) => {
-                    // For now, treat audio as text description
-                    parts.push(Part::text("[Audio content]".to_string()));
-                }
+            if let Some(part) = Self::content_block_to_part(item)? {
+                parts.push(part);
             }
         }
 
@@ -141,6 +103,44 @@ impl MessageConverter {
             .parts(parts)
             .message_id(uuid::Uuid::new_v4().to_string())
             .build())
+    }
+
+    /// One MCP content block as the A2A part that carries it, or `None` for
+    /// a block kind this crate does not know — the enum is open-ended.
+    pub fn content_block_to_part(block: &ContentBlock) -> Result<Option<Part>> {
+        Ok(Some(match block {
+            ContentBlock::Text(text_content) => Part::text(text_content.text.clone()),
+            ContentBlock::Image(image_content) => {
+                // Convert image to data part
+                let mut data_map = serde_json::Map::new();
+                data_map.insert(
+                    "type".to_string(),
+                    serde_json::Value::String("image".to_string()),
+                );
+                data_map.insert(
+                    "data".to_string(),
+                    serde_json::Value::String(image_content.data.clone()),
+                );
+                data_map.insert(
+                    "mimeType".to_string(),
+                    serde_json::Value::String(image_content.mime_type.clone()),
+                );
+
+                let val: ::buffa_types::google::protobuf::Value =
+                    serde_json::from_value(serde_json::Value::Object(data_map))?;
+                Part::data(val)
+            }
+            ContentBlock::Resource(embedded) => Self::resource_contents_to_part(&embedded.resource),
+            // A resource link is a file reference.
+            ContentBlock::ResourceLink(link) => Part::file_from_uri(
+                link.uri.clone(),
+                Some(link.name.clone()),
+                link.mime_type.clone(),
+            ),
+            // For now, treat audio as text description
+            ContentBlock::Audio(_) => Part::text("[Audio content]".to_string()),
+            _ => return Ok(None),
+        }))
     }
 
     /// The contents of one MCP resource as an A2A part that carries them.
@@ -171,6 +171,9 @@ impl MessageConverter {
                 Ok(bytes) => Part::file_from_bytes(bytes, Some(uri.clone()), mime_type.clone()),
                 Err(_) => Part::file_from_uri(uri.clone(), None, mime_type.clone()),
             },
+            // The enum is open-ended; a kind this crate does not know is
+            // carried as nothing rather than dropped on the floor silently.
+            _ => Part::text(String::new()),
         }
     }
 
@@ -215,21 +218,22 @@ impl MessageConverter {
     }
 
     /// Extract text from MCP Content array
-    pub fn extract_text_from_content(content: &[Content]) -> String {
+    pub fn extract_text_from_content(content: &[ContentBlock]) -> String {
         content
             .iter()
-            .map(|c| match &**c {
-                RawContent::Text(text_content) => text_content.text.clone(),
-                RawContent::Image(_) => "[Image]".to_string(),
-                RawContent::Resource(resource) => {
-                    let uri = match &resource.resource {
-                        rmcp::model::ResourceContents::TextResourceContents { uri, .. } => uri,
-                        rmcp::model::ResourceContents::BlobResourceContents { uri, .. } => uri,
-                    };
-                    format!("[Resource: {}]", uri)
-                }
-                RawContent::ResourceLink(resource) => format!("[Resource: {}]", resource.uri),
-                RawContent::Audio(_) => "[Audio]".to_string(),
+            .map(|c| match c {
+                ContentBlock::Text(text_content) => text_content.text.clone(),
+                ContentBlock::Image(_) => "[Image]".to_string(),
+                ContentBlock::Resource(resource) => match &resource.resource {
+                    ResourceContents::TextResourceContents { uri, .. }
+                    | ResourceContents::BlobResourceContents { uri, .. } => {
+                        format!("[Resource: {}]", uri)
+                    }
+                    _ => "[Resource]".to_string(),
+                },
+                ContentBlock::ResourceLink(resource) => format!("[Resource: {}]", resource.uri),
+                ContentBlock::Audio(_) => "[Audio]".to_string(),
+                _ => "[Unknown content]".to_string(),
             })
             .collect::<Vec<_>>()
             .join("\n")
@@ -257,7 +261,7 @@ mod tests {
 
     #[test]
     fn test_content_to_message() {
-        let content = vec![Content::text("Hello MCP")];
+        let content = vec![ContentBlock::text("Hello MCP")];
 
         let message = MessageConverter::content_to_message(&content, Role::Agent).unwrap();
         assert_eq!(
@@ -295,12 +299,8 @@ mod tests {
     #[test]
     fn a_resource_is_carried_as_its_contents() {
         use a2a_rs::domain::generated::part;
-        let text = ResourceContents::TextResourceContents {
-            uri: "catalogue://views".to_string(),
-            mime_type: Some("text/markdown".to_string()),
-            text: "# Views".to_string(),
-            meta: None,
-        };
+        let text =
+            ResourceContents::text("# Views", "catalogue://views").with_mime_type("text/markdown");
         let part = MessageConverter::resource_contents_to_part(&text);
         assert_eq!(
             part.content,
@@ -308,18 +308,17 @@ mod tests {
         );
         assert_eq!(part.media_type, "text/markdown");
 
-        let blob = ResourceContents::BlobResourceContents {
-            uri: "file:///a.bin".to_string(),
-            mime_type: Some("application/octet-stream".to_string()),
-            blob: base64::engine::general_purpose::STANDARD.encode(b"\x00\x01"),
-            meta: None,
-        };
+        let blob = ResourceContents::blob(
+            base64::engine::general_purpose::STANDARD.encode(b"\x00\x01"),
+            "file:///a.bin",
+        )
+        .with_mime_type("application/octet-stream");
         let part = MessageConverter::resource_contents_to_part(&blob);
         assert_eq!(part.content, Some(part::Content::Raw(vec![0, 1])));
         assert_eq!(part.filename, "file:///a.bin");
 
         // An embedded resource in tool content takes the same path.
-        let embedded = Content::resource(text);
+        let embedded = ContentBlock::resource(text);
         let message = MessageConverter::content_to_message(&[embedded], Role::Agent).unwrap();
         assert_eq!(
             message.parts[0].content,

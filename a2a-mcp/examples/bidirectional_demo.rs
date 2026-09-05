@@ -89,7 +89,6 @@ impl CalcServer {
 impl ServerHandler for CalcServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_server_info(Implementation::new("calc-server", "0.1.0"))
             .with_instructions("Calculator MCP server with an `add` tool")
     }
@@ -99,13 +98,7 @@ impl ServerHandler for CalcServer {
         _request: Option<PaginatedRequestParams>,
         _ctx: McpRequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        async move {
-            Ok(ListToolsResult {
-                tools: (*self.tools).clone(),
-                next_cursor: None,
-                meta: None,
-            })
-        }
+        async move { Ok(ListToolsResult::with_all_items((*self.tools).clone())) }
     }
 
     fn call_tool(
@@ -114,7 +107,7 @@ impl ServerHandler for CalcServer {
             name, arguments, ..
         }: CallToolRequestParams,
         _ctx: McpRequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
         async move {
             if name != "add" {
                 return Err(McpError::invalid_params(
@@ -132,9 +125,7 @@ impl ServerHandler for CalcServer {
                 .get("b")
                 .and_then(|v| v.as_f64())
                 .ok_or_else(|| McpError::invalid_params("missing or non-numeric 'b'", None))?;
-            Ok(CallToolResult::success(vec![Content::text(
-                (a + b).to_string(),
-            )]))
+            Ok(CallToolResult::success(vec![ContentBlock::text((a + b).to_string())]).into())
         }
     }
 }

@@ -3,7 +3,7 @@
 use crate::converters::MessageConverter;
 use crate::error::{A2aMcpError, Result};
 use a2a_rs::domain::{Message, Role, Task, TaskState};
-use rmcp::model::{CallToolResult, Content};
+use rmcp::model::{CallToolResult, ContentBlock};
 
 /// Converts between A2A Task and MCP CallToolResult
 pub struct TaskResultConverter;
@@ -50,7 +50,7 @@ impl TaskResultConverter {
                         } else {
                             format!("Artifact: {}", text)
                         };
-                        content.push(Content::text(artifact_text));
+                        content.push(ContentBlock::text(artifact_text));
                     }
                     Some(part::Content::Raw(_)) | Some(part::Content::Url(_)) => {
                         let file_text = if !artifact.name.is_empty() {
@@ -58,7 +58,7 @@ impl TaskResultConverter {
                         } else {
                             format!("Artifact File: {:?}", part.filename)
                         };
-                        content.push(Content::text(file_text));
+                        content.push(ContentBlock::text(file_text));
                     }
                     Some(part::Content::Data(value)) => {
                         let data_json = serde_json::to_string_pretty(&value)?;
@@ -67,7 +67,7 @@ impl TaskResultConverter {
                         } else {
                             format!("Artifact data:\n{}", data_json)
                         };
-                        content.push(Content::text(artifact_data));
+                        content.push(ContentBlock::text(artifact_data));
                     }
                     None => {}
                 }
@@ -99,7 +99,7 @@ impl TaskResultConverter {
                 "\n\n[Task suspended awaiting input. To continue, please call this tool again with `task_id`: '{}' and provide the requested information in the `message` parameter.]",
                 task.id
             );
-            content.push(Content::text(prompt));
+            content.push(ContentBlock::text(prompt));
         }
 
         // Determine if the task completed successfully
@@ -151,16 +151,16 @@ impl TaskResultConverter {
 
     /// Create a simple success result from text
     pub fn success_from_text(text: impl Into<String>) -> CallToolResult {
-        CallToolResult::success(vec![Content::text(text.into())])
+        CallToolResult::success(vec![ContentBlock::text(text.into())])
     }
 
     /// Create a simple error result from text
     pub fn error_from_text(text: impl Into<String>) -> CallToolResult {
-        CallToolResult::error(vec![Content::text(text.into())])
+        CallToolResult::error(vec![ContentBlock::text(text.into())])
     }
 
     /// Convert MCP content to an A2A message that can be added to a task
-    pub fn content_to_task_message(content: &[Content], role: Role) -> Result<Message> {
+    pub fn content_to_task_message(content: &[ContentBlock], role: Role) -> Result<Message> {
         MessageConverter::content_to_message(content, role)
     }
 

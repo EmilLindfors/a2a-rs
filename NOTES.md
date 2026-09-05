@@ -580,6 +580,20 @@ returned suspended with its id. That was the fallback whenever sampling failed
 and is the only path now. A client that could sample but not elicit loses the
 automatic answer. It gains not having a model answer on the user's behalf.
 
+**The bridge tracks rmcp's major, because MCP's shape lives there.**
+(2026-09-05) `a2a-mcp` moved from rmcp 1.7 to 3.2 in one step. Two majors
+of rename is mechanical; what it buys is the 2026-07-28 revision, which has
+the two shapes the bridge was missing: a tasks extension with `tasks/get`,
+and an `InputRequired` result a server can answer a tool call with. Both
+TODO §2 items that wanted them are written against these now. The bridge
+lets rmcp negotiate the protocol version instead of pinning `2024-11-05`;
+a peer that asks for the new revision gets the new results, an older peer
+gets the legacy wire shape, and rmcp clears `resultType` for it. What did
+not move: `resources/subscribe`, which is legacy-only under the new
+revision. Its replacement, `subscriptions/listen`, needs the peer opened
+with a discover lifecycle, and the bridge's consumers open peers with
+`serve()`. It stays until one of them needs the other.
+
 ---
 
 ## Hazards that will recur

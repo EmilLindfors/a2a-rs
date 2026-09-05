@@ -476,13 +476,11 @@ impl ClientHandler for TestClientHandler {
 
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParams,
+        request: ElicitRequestParams,
         _context: RequestContext<RoleClient>,
-    ) -> impl std::future::Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_
-    {
+    ) -> impl std::future::Future<Output = Result<ElicitResult, McpError>> + Send + '_ {
         async move {
-            let CreateElicitationRequestParams::FormElicitationParams { message, .. } = request
-            else {
+            let ElicitRequestParams::FormElicitationParams { message, .. } = request else {
                 return Err(McpError::invalid_params(
                     "expected a form elicitation",
                     None,
@@ -494,7 +492,7 @@ impl ClientHandler for TestClientHandler {
                     None,
                 ));
             }
-            let mut result = CreateElicitationResult::new(ElicitationAction::Accept);
+            let mut result = ElicitResult::new(ElicitationAction::Accept);
             result.content = Some(serde_json::json!({"answer": "sampled response: 42"}));
             Ok(result)
         }
@@ -716,7 +714,7 @@ async fn test_streaming_progress_and_elicitation() {
 
     // Prepare call with progress token
     let token = ProgressToken(NumberOrString::String(Arc::from("test-progress-token")));
-    let meta = Meta::with_progress_token(token);
+    let meta = RequestMetaObject::with_progress_token(token);
     let mut params = CallToolRequestParams::new(tool_name).with_arguments(
         serde_json::json!({ "message": "hello streaming" })
             .as_object()
@@ -878,7 +876,7 @@ async fn test_polling_progress_and_elicitation() {
 
     // Prepare call with progress token
     let token = ProgressToken(NumberOrString::String(Arc::from("test-progress-token")));
-    let meta = Meta::with_progress_token(token);
+    let meta = RequestMetaObject::with_progress_token(token);
     let mut params = CallToolRequestParams::new(tool_name).with_arguments(
         serde_json::json!({ "message": "hello polling" })
             .as_object()
@@ -1086,16 +1084,16 @@ async fn test_list_prompts_and_get_prompt() {
     let get_params = GetPromptRequestParams::new(prompt_name.clone()).with_arguments(args);
     let get_res = peer.get_prompt(get_params).await.unwrap();
     assert_eq!(get_res.messages.len(), 2);
-    assert_eq!(get_res.messages[0].role, PromptMessageRole::User);
-    if let PromptMessageContent::Text { text } = &get_res.messages[0].content {
-        assert_eq!(text, "hello prompts");
+    assert_eq!(get_res.messages[0].role, rmcp::model::Role::User);
+    if let ContentBlock::Text(text) = &get_res.messages[0].content {
+        assert_eq!(text.text, "hello prompts");
     } else {
         panic!("expected text content");
     }
 
-    assert_eq!(get_res.messages[1].role, PromptMessageRole::Assistant);
-    if let PromptMessageContent::Text { text } = &get_res.messages[1].content {
-        assert!(text.contains("in-process: hello prompts"));
+    assert_eq!(get_res.messages[1].role, rmcp::model::Role::Assistant);
+    if let ContentBlock::Text(text) = &get_res.messages[1].content {
+        assert!(text.text.contains("in-process: hello prompts"));
     } else {
         panic!("expected text content");
     }
@@ -1215,6 +1213,88 @@ async fn test_list_resources_and_read_resource() {
         }
         _ => panic!("Expected TextResourceContents"),
     }
+
+    drop(mcp_client);
+    let _ = bridge_task.await;
+}
+
+/// A task the bridge ran is readable through the tasks extension: `tasks/get`
+/// answers with the A2A state mapped, and a completed task carries its tool
+/// result inline, so a client that only has the id gets the answer.
+#[tokio::test]
+async fn a_bridged_task_is_readable_through_tasks_get() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let agent_card = AgentCard::builder()
+        .name("Task Agent".to_string())
+        .description("Exercises tasks/get".to_string())
+        .url("http://nonroutable.invalid".to_string())
+        .version("1.0.0".to_string())
+        .capabilities(AgentCapabilities::default())
+        .default_input_modes(vec!["text".to_string()])
+        .default_output_modes(vec!["text".to_string()])
+        .skills(vec![AgentSkill::new(
+            "echo".to_string(),
+            "Echo".to_string(),
+            "Echoes the input".to_string(),
+            vec![],
+        )])
+        .build();
+    let bridge = AgentToMcpBridge::with_handler(
+        CountingHandler {
+            calls: Arc::clone(&calls),
+        },
+        agent_card,
+    );
+
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let bridge_task = tokio::spawn(async move {
+        let running = bridge.serve(server_io).await?;
+        running.waiting().await?;
+        anyhow::Ok(())
+    });
+    // The client has to declare the tasks extension, or `tasks/get` is
+    // refused as a missing client capability.
+    let client_info = ClientInfo::new(
+        ClientCapabilities::builder().enable_tasks().build(),
+        Implementation::new("tasks-client", "1.0.0"),
+    );
+    let mcp_client = client_info.serve(client_io).await.unwrap();
+    let peer = mcp_client.peer().clone();
+    let tool_name = peer.list_tools(None).await.unwrap().tools[0]
+        .name
+        .to_string();
+
+    let params = CallToolRequestParams::new(tool_name).with_arguments(
+        serde_json::json!({ "message": "hello tasks", "task_id": "task-get-1" })
+            .as_object()
+            .cloned()
+            .unwrap(),
+    );
+    peer.call_tool(params).await.unwrap();
+
+    let got = peer
+        .get_task(GetTaskParams::new("task-get-1"))
+        .await
+        .unwrap();
+    assert_eq!(got.task.task.task_id, "task-get-1");
+    assert_eq!(got.task.status(), rmcp::model::TaskStatus::Completed);
+    let TaskPayload::Completed { result } = &got.task.payload else {
+        panic!(
+            "a completed task carries its result: {:?}",
+            got.task.payload
+        );
+    };
+    let result: CallToolResult = serde_json::from_value(serde_json::Value::Object(result.clone()))
+        .expect("the payload is the tool result");
+    let text = result
+        .content
+        .iter()
+        .find_map(|c| c.as_text().map(|t| t.text.clone()))
+        .expect("tool result has text content");
+    assert!(text.contains("in-process: hello tasks"), "got: {text}");
+
+    let missing = peer.get_task(GetTaskParams::new("no-such-task")).await;
+    assert!(missing.is_err(), "an unknown id is an error, not a task");
 
     drop(mcp_client);
     let _ = bridge_task.await;
