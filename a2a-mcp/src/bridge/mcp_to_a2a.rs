@@ -95,10 +95,10 @@ impl Drop for RequestCancelGuard {
                     request_id
                 );
                 let _ = peer
-                    .notify_cancelled(CancelledNotificationParam {
-                        request_id,
-                        reason: Some("Task canceled or handler dropped".to_string()),
-                    })
+                    .notify_cancelled(CancelledNotificationParam::new(
+                        Some(request_id),
+                        Some("Task canceled or handler dropped".to_string()),
+                    ))
                     .await;
             });
         }
@@ -263,6 +263,11 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
     ///
     /// [`take_updated_resources`]: Self::take_updated_resources
     pub async fn subscribe_resource(&self, uri: &str) -> Result<()> {
+        // `resources/subscribe` is the legacy shape; a peer opened with
+        // `serve()` negotiates a legacy version, which is what this bridge's
+        // consumers do today. `subscriptions/listen` is the 2026-07-28 shape
+        // and wants the peer opened with a discover lifecycle first.
+        #[allow(deprecated)]
         self.mcp_peer
             .subscribe(SubscribeRequestParams::new(uri.to_string()))
             .await
@@ -743,19 +748,20 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
                     // Extract resources into artifacts
                     let mut artifacts = Vec::new();
                     for content_item in &result.content {
-                        match &**content_item {
-                            rmcp::model::RawContent::Resource(res) => {
+                        match content_item {
+                            ContentBlock::Resource(res) => {
                                 let (uri, mime_type) = match &res.resource {
-                                    rmcp::model::ResourceContents::TextResourceContents {
+                                    ResourceContents::TextResourceContents {
+                                        uri,
+                                        mime_type,
+                                        ..
+                                    }
+                                    | ResourceContents::BlobResourceContents {
                                         uri,
                                         mime_type,
                                         ..
                                     } => (uri.clone(), mime_type.clone()),
-                                    rmcp::model::ResourceContents::BlobResourceContents {
-                                        uri,
-                                        mime_type,
-                                        ..
-                                    } => (uri.clone(), mime_type.clone()),
+                                    _ => continue,
                                 };
                                 let part = Part::file_from_uri(uri, None, mime_type);
                                 artifacts.push(a2a_rs::domain::Artifact {
@@ -768,7 +774,7 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
                                     ..Default::default()
                                 });
                             }
-                            rmcp::model::RawContent::ResourceLink(link) => {
+                            ContentBlock::ResourceLink(link) => {
                                 let part = Part::file_from_uri(
                                     link.uri.clone(),
                                     Some(link.name.clone()),
@@ -863,50 +869,13 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
 /// Helper to map `PromptMessage` to A2A `Message`.
 fn prompt_message_to_a2a_message(pm: &PromptMessage) -> Message {
     let role = match pm.role {
-        PromptMessageRole::User => Role::User,
-        PromptMessageRole::Assistant => Role::Agent,
+        rmcp::model::Role::User => Role::User,
+        rmcp::model::Role::Assistant => Role::Agent,
     };
 
     let mut parts = Vec::new();
-    match &pm.content {
-        PromptMessageContent::Text { text } => {
-            parts.push(Part::text(text.clone()));
-        }
-        PromptMessageContent::Image { image } => {
-            let mut data_map = serde_json::Map::new();
-            data_map.insert(
-                "type".to_string(),
-                serde_json::Value::String("image".to_string()),
-            );
-            data_map.insert(
-                "data".to_string(),
-                serde_json::Value::String(image.data.clone()),
-            );
-            data_map.insert(
-                "mimeType".to_string(),
-                serde_json::Value::String(image.mime_type.clone()),
-            );
-
-            let val: ::buffa_types::google::protobuf::Value =
-                serde_json::from_value(serde_json::Value::Object(data_map))
-                    .expect("valid JSON Value");
-            parts.push(Part::data(val));
-        }
-        PromptMessageContent::Resource { resource } => match &resource.resource {
-            rmcp::model::ResourceContents::TextResourceContents { uri, mime_type, .. } => {
-                parts.push(Part::file_from_uri(uri.clone(), None, mime_type.clone()));
-            }
-            rmcp::model::ResourceContents::BlobResourceContents { uri, mime_type, .. } => {
-                parts.push(Part::file_from_uri(uri.clone(), None, mime_type.clone()));
-            }
-        },
-        PromptMessageContent::ResourceLink { link } => {
-            parts.push(Part::file_from_uri(
-                link.uri.clone(),
-                Some(link.name.clone()),
-                link.mime_type.clone(),
-            ));
-        }
+    if let Ok(Some(part)) = MessageConverter::content_block_to_part(&pm.content) {
+        parts.push(part);
     }
 
     if parts.is_empty() {
@@ -1249,7 +1218,7 @@ mod tests {
 
     #[test]
     fn test_prompt_message_to_a2a_message_text() {
-        let pm = PromptMessage::new_text(PromptMessageRole::User, "Hello User");
+        let pm = PromptMessage::new_text(rmcp::model::Role::User, "Hello User");
         let msg = prompt_message_to_a2a_message(&pm);
         assert_eq!(
             msg.role,
@@ -1266,15 +1235,9 @@ mod tests {
 
     #[test]
     fn test_prompt_message_to_a2a_message_image() {
-        let raw_image = RawImageContent {
-            data: "imagedata".to_string(),
-            mime_type: "image/png".to_string(),
-            meta: None,
-        };
-        let image = raw_image.no_annotation();
         let pm = PromptMessage::new(
-            PromptMessageRole::Assistant,
-            PromptMessageContent::Image { image },
+            rmcp::model::Role::Assistant,
+            ContentBlock::image("imagedata", "image/png"),
         );
         let msg = prompt_message_to_a2a_message(&pm);
         assert_eq!(
@@ -1295,18 +1258,11 @@ mod tests {
 
     #[test]
     fn test_prompt_message_to_a2a_message_resource() {
-        let resource_contents = ResourceContents::TextResourceContents {
-            uri: "file://test.txt".to_string(),
-            mime_type: Some("text/plain".to_string()),
-            text: "Resource content".to_string(),
-            meta: None,
-        };
-        let embedded_resource = RawEmbeddedResource::new(resource_contents).no_annotation();
+        let resource_contents = ResourceContents::text("Resource content", "file://test.txt")
+            .with_mime_type("text/plain");
         let pm = PromptMessage::new(
-            PromptMessageRole::User,
-            PromptMessageContent::Resource {
-                resource: embedded_resource,
-            },
+            rmcp::model::Role::User,
+            ContentBlock::resource(resource_contents),
         );
         let msg = prompt_message_to_a2a_message(&pm);
         assert_eq!(
@@ -1314,32 +1270,24 @@ mod tests {
             buffa::enumeration::EnumValue::Known(Role::ROLE_USER)
         );
         assert_eq!(msg.parts.len(), 1);
+        // An embedded resource in a prompt is carried as what it holds, the
+        // same as one in a tool result — not as the address it came from.
         use a2a_rs::domain::generated::part;
         let part = &msg.parts[0];
-        if let Some(part::Content::Url(uri)) = &part.content {
-            assert_eq!(uri, "file://test.txt");
+        if let Some(part::Content::Text(text)) = &part.content {
+            assert_eq!(text, "Resource content");
             assert_eq!(part.media_type, "text/plain");
         } else {
-            panic!("Expected file URL part");
+            panic!("Expected text part carrying the resource's text");
         }
     }
 
     #[test]
     fn test_prompt_message_to_a2a_message_resource_link() {
-        let raw_resource = RawResource {
-            uri: "http://example.com".to_string(),
-            name: "link".to_string(),
-            title: None,
-            description: None,
-            mime_type: Some("text/html".to_string()),
-            size: None,
-            icons: None,
-            meta: None,
-        };
-        let resource = raw_resource.no_annotation();
+        let resource = Resource::new("http://example.com", "link").with_mime_type("text/html");
         let pm = PromptMessage::new(
-            PromptMessageRole::Assistant,
-            PromptMessageContent::ResourceLink { link: resource },
+            rmcp::model::Role::Assistant,
+            ContentBlock::resource_link(resource),
         );
         let msg = prompt_message_to_a2a_message(&pm);
         assert_eq!(

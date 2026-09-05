@@ -221,6 +221,52 @@ Work whose two halves land on opposite sides of the seam. Also listed in korps'
         prefix is the agent's name since 2026-09-04 (**breaking**); see
         `CHANGELOG.md`.
 
+The four below are the protocol half of a fleet building a strata project
+end to end (korps' `TODO.md` §8, strata's `TODO.md` § *Agents build a
+project end to end*), set 2026-09-05.
+
+- [ ] **MCP tasks across the bridge.** rmcp 3.2 (in since 2026-09-05)
+      has the tasks extension: a tool call answered with
+      `CallToolResponse::Task`, `tasks/get` returning a `DetailedTask`, and
+      `ClientHandler::on_task_status`. strata's `run` will be a task.
+      `mcp_to_a2a` should map an MCP task onto an A2A task: its states onto
+      `TaskState`, its status notifications onto status updates, its result
+      onto the final message, so a long tool call is one A2A task a caller
+      can watch. The client must declare the extension for a server to
+      materialise a task at all. `agent_to_mcp` answers the reverse for a
+      reading client since the bump (`tasks/get` inlines the result); it
+      does not yet *return* a task from `call_tool` for an agent that takes
+      long. korps consumes this in its §8.
+- [ ] **A server's elicitation becomes `InputRequired`.** The bridge turns
+      an agent's `InputRequired` into an MCP elicitation. The other
+      direction, an MCP server asking its client a question, has no A2A
+      shape. Under 2026-07-28 it arrives two ways: the client handler's
+      `create_elicitation`, and an `InputRequiredResult` from `call_tool`
+      (`Peer::call_tool_once` hands it over unanswered; `call_tool` drives
+      the rounds through the handler). Both should surface as an
+      input-required task with the question as the message, and the next
+      `message/send` on that task answers it: for the result shape, by
+      retrying the call with `InputResponses` and the echoed
+      `requestState`. The bridge half is here; korps' §8 has the handler
+      half.
+- [ ] **File parts survive the bridge.** `task_result.rs` renders a file
+      artifact as the line `Artifact 'x': File ...` and drops the bytes, and
+      `agent_to_mcp` does the same for a request's file part. A fleet
+      handing SQL and TOML between agents through a tool boundary loses the
+      file. Map `FilePart` onto an MCP embedded resource (text or blob with
+      its MIME type) in both directions.
+- [ ] **`a2a-llm` sanitises tool schemas per provider.** Seen 2026-09-05:
+      strata's generated schemas reached Gemini through korps unchanged and
+      passed, but only after strata dropped `const` and `format` on its own
+      side; `additionalProperties`, `minItems` and `default` still pass
+      through untested, and Gemini refuses a keyword it does not know with
+      the same 400 as `thinkingLevel`. One place at the provider boundary
+      that drops what each provider rejects, with a refused-schema fixture
+      like the reasoning one, so a server does not have to know which model
+      is on the other end.
+
+---
+
 ## 3. Interop and CI
 
 - [x] **The two storage backends returned different tasks for the same run.**

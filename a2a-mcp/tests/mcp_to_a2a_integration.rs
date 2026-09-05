@@ -45,7 +45,7 @@ async fn test_mcp_tool_as_a2a_skill() {
     let tools = [tool];
 
     // Create mock MCP client result
-    let _mock_result = CallToolResult::success(vec![Content::text("42")]);
+    let _mock_result = CallToolResult::success(vec![ContentBlock::text("42")]);
 
     // Create a simple agent card to use as base
     let _base_card = AgentCard::builder()
@@ -139,7 +139,6 @@ impl ServerHandler for TestMcpServer {
                 .enable_resources_subscribe()
                 .build(),
         )
-        .with_protocol_version(ProtocolVersion::V_2024_11_05)
         .with_server_info(Implementation::new("test-server", "1.0.0"))
     }
 
@@ -148,20 +147,14 @@ impl ServerHandler for TestMcpServer {
         _request: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        async move {
-            Ok(ListToolsResult {
-                tools: (*self.tools).clone(),
-                next_cursor: None,
-                meta: None,
-            })
-        }
+        async move { Ok(ListToolsResult::with_all_items((*self.tools).clone())) }
     }
 
     fn call_tool(
         &self,
         CallToolRequestParams { name, .. }: CallToolRequestParams,
         ctx: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
         async move {
             if name != "calculator" {
                 return Err(McpError::invalid_params("unknown tool", None));
@@ -186,7 +179,7 @@ impl ServerHandler for TestMcpServer {
                     .await;
             }
 
-            Ok(CallToolResult::success(vec![Content::text("42")]))
+            Ok(CallToolResult::success(vec![ContentBlock::text("42")]).into())
         }
     }
 
@@ -197,14 +190,10 @@ impl ServerHandler for TestMcpServer {
     ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
         async move {
             let catalogue =
-                RawResource::new("catalogue://views", "views").with_mime_type("text/markdown");
-            let logo = RawResource::new("file:///logo.bin", "logo")
+                Resource::new("catalogue://views", "views").with_mime_type("text/markdown");
+            let logo = Resource::new("file:///logo.bin", "logo")
                 .with_mime_type("application/octet-stream");
-            Ok(ListResourcesResult {
-                resources: vec![Annotated::new(catalogue, None), Annotated::new(logo, None)],
-                next_cursor: None,
-                meta: None,
-            })
+            Ok(ListResourcesResult::with_all_items(vec![catalogue, logo]))
         }
     }
 
@@ -212,25 +201,19 @@ impl ServerHandler for TestMcpServer {
         &self,
         ReadResourceRequestParams { uri, .. }: ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<ReadResourceResponse, McpError>> + Send + '_ {
         async move {
             match uri.as_str() {
                 "catalogue://views" => Ok(ReadResourceResult::new(vec![
-                    ResourceContents::TextResourceContents {
-                        uri,
-                        mime_type: Some("text/markdown".to_string()),
-                        text: "# Views\n- harvest\n- feed".to_string(),
-                        meta: None,
-                    },
-                ])),
+                    ResourceContents::text("# Views\n- harvest\n- feed", uri)
+                        .with_mime_type("text/markdown"),
+                ])
+                .into()),
                 "file:///logo.bin" => Ok(ReadResourceResult::new(vec![
-                    ResourceContents::BlobResourceContents {
-                        uri,
-                        mime_type: Some("application/octet-stream".to_string()),
-                        blob: "AAEC".to_string(), // [0, 1, 2]
-                        meta: None,
-                    },
-                ])),
+                    // [0, 1, 2]
+                    ResourceContents::blob("AAEC", uri).with_mime_type("application/octet-stream"),
+                ])
+                .into()),
                 _ => Err(McpError::resource_not_found(uri, None)),
             }
         }
@@ -258,26 +241,20 @@ impl ServerHandler for TestMcpServer {
         _request: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
-        async move {
-            Ok(ListPromptsResult {
-                prompts: (*self.prompts).clone(),
-                next_cursor: None,
-                meta: None,
-            })
-        }
+        async move { Ok(ListPromptsResult::with_all_items((*self.prompts).clone())) }
     }
 
     fn get_prompt(
         &self,
         GetPromptRequestParams { name, .. }: GetPromptRequestParams,
         _ctx: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+    ) -> impl std::future::Future<Output = Result<GetPromptResponse, McpError>> + Send + '_ {
         async move {
             if name != "test_prompt" {
                 return Err(McpError::invalid_params("unknown prompt", None));
             }
-            let pm = PromptMessage::new_text(PromptMessageRole::Assistant, "Prompt output message");
-            Ok(GetPromptResult::new(vec![pm]))
+            let pm = PromptMessage::new_text(rmcp::model::Role::Assistant, "Prompt output message");
+            Ok(GetPromptResult::new(vec![pm]).into())
         }
     }
 }
@@ -557,6 +534,7 @@ async fn a_resource_update_is_recorded_for_the_consumer_to_re_read() {
     let running = bridge.clone().serve(client_io).await.unwrap();
     // The bridge's own peer still points at the probe connection; subscribe
     // through the connection the bridge is serving on instead.
+    #[allow(deprecated)]
     running
         .peer()
         .subscribe(SubscribeRequestParams::new("catalogue://views"))

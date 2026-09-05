@@ -455,26 +455,91 @@ impl AgentToMcpBridge {
         }
     }
 
-    fn convert_to_mcp_task(task: &a2a_rs::domain::Task) -> rmcp::model::Task {
-        let status = Self::map_task_state(&task.status.state);
+    /// The text of a task's status message, if it has one with any.
+    fn status_text(task: &a2a_rs::domain::Task) -> Option<String> {
+        task.status
+            .message
+            .as_option()
+            .map(|msg| {
+                msg.parts
+                    .iter()
+                    .filter_map(|part| part.get_text())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .filter(|text| !text.is_empty())
+    }
+
+    /// The elicitation that asks the MCP client's user what an
+    /// `InputRequired` task is waiting for: the status message as the
+    /// question, one required string as the answer.
+    fn elicitation_for(task: &a2a_rs::domain::Task) -> ElicitRequestParams {
+        let question = Self::status_text(task)
+            .unwrap_or_else(|| "The agent needs more input to continue.".to_string());
+        let requested_schema = ElicitationSchema::builder()
+            .required_string("answer")
+            .build()
+            .expect("one required string is a valid elicitation schema");
+        ElicitRequestParams::FormElicitationParams {
+            meta: None,
+            message: question,
+            requested_schema,
+        }
+    }
+
+    /// The A2A task as the tasks extension's `DetailedTask`: the state
+    /// mapped, and what the state implies carried with it — the tool result
+    /// for a completed task, the failure for a failed one, the question for
+    /// one waiting on input.
+    fn convert_to_mcp_task(
+        task: &a2a_rs::domain::Task,
+    ) -> std::result::Result<DetailedTask, McpError> {
+        use a2a_rs::domain::TaskState;
         let updated_at_dt = task.status.timestamp_utc().unwrap_or_else(chrono::Utc::now);
         let updated_at = updated_at_dt.to_rfc3339();
 
+        let status = Self::map_task_state(&task.status.state);
         let mut mcp_task =
             rmcp::model::Task::new(task.id.clone(), status, updated_at.clone(), updated_at);
-
-        if let Some(msg) = task.status.message.as_option() {
-            let text_parts: Vec<String> = msg
-                .parts
-                .iter()
-                .filter_map(|part| part.get_text().map(String::from))
-                .collect();
-            if !text_parts.is_empty() {
-                mcp_task = mcp_task.with_status_message(text_parts.join("\n"));
-            }
+        if let Some(text) = Self::status_text(task) {
+            mcp_task = mcp_task.with_status_message(text);
         }
 
-        mcp_task
+        let payload = match task.status.state {
+            buffa::enumeration::EnumValue::Known(TaskState::Completed) => {
+                let result = TaskResultConverter::task_to_result(task, None)
+                    .map_err(|e| e.to_mcp_error())?;
+                let result = serde_json::to_value(result)
+                    .ok()
+                    .and_then(|v| v.as_object().cloned())
+                    .unwrap_or_default();
+                TaskPayload::Completed { result }
+            }
+            buffa::enumeration::EnumValue::Known(TaskState::Failed | TaskState::Rejected) => {
+                let message = Self::status_text(task).unwrap_or_else(|| "Task failed".to_string());
+                let error = serde_json::json!({
+                    "code": ErrorCode::INTERNAL_ERROR.0,
+                    "message": message,
+                });
+                TaskPayload::Failed {
+                    error: error.as_object().cloned().unwrap_or_default(),
+                }
+            }
+            buffa::enumeration::EnumValue::Known(TaskState::Canceled) => TaskPayload::Cancelled,
+            buffa::enumeration::EnumValue::Known(
+                TaskState::InputRequired | TaskState::AuthRequired,
+            ) => {
+                let mut input_requests = InputRequests::new();
+                input_requests.insert(
+                    "input".to_string(),
+                    InputRequest::Elicitation(ElicitRequest::new(Self::elicitation_for(task))),
+                );
+                TaskPayload::InputRequired { input_requests }
+            }
+            _ => TaskPayload::Working,
+        };
+
+        Ok(DetailedTask::new(mcp_task, payload))
     }
 
     /// The answer to a task's `InputRequired`, asked of the MCP client's user
@@ -501,29 +566,7 @@ impl AgentToMcpBridge {
             return None;
         }
 
-        let question = task
-            .status
-            .message
-            .as_option()
-            .map(|msg| {
-                msg.parts
-                    .iter()
-                    .filter_map(|part| part.get_text())
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-            .filter(|q| !q.is_empty())
-            .unwrap_or_else(|| "The agent needs more input to continue.".to_string());
-
-        let requested_schema = ElicitationSchema::builder()
-            .required_string("answer")
-            .build()
-            .expect("one required string is a valid elicitation schema");
-        let params = CreateElicitationRequestParams::FormElicitationParams {
-            meta: None,
-            message: question,
-            requested_schema,
-        };
+        let params = Self::elicitation_for(task);
 
         let result = match ctx.peer.create_elicitation(params).await {
             Ok(result) => result,
@@ -543,6 +586,7 @@ impl AgentToMcpBridge {
                 debug!("User declined to answer task {}", task.id);
                 None
             }
+            _ => None,
         }
     }
 
@@ -645,12 +689,12 @@ impl AgentToMcpBridge {
                                         .join("\n")
                                 });
 
-                                let progress_param = ProgressNotificationParam {
-                                    progress_token: token.clone(),
-                                    progress: last_progress,
-                                    total: Some(100.0),
-                                    message: message_str,
-                                };
+                                let mut progress_param =
+                                    ProgressNotificationParam::new(token.clone(), last_progress)
+                                        .with_total(100.0);
+                                if let Some(message) = message_str {
+                                    progress_param = progress_param.with_message(message);
+                                }
                                 let _ = ctx.peer.notify_progress(progress_param).await;
                             }
 
@@ -726,12 +770,12 @@ impl AgentToMcpBridge {
                                         .join("\n")
                                 });
 
-                                let progress_param = ProgressNotificationParam {
-                                    progress_token: token.clone(),
-                                    progress: last_progress,
-                                    total: Some(100.0),
-                                    message: message_str,
-                                };
+                                let mut progress_param =
+                                    ProgressNotificationParam::new(token.clone(), last_progress)
+                                        .with_total(100.0);
+                                if let Some(message) = message_str {
+                                    progress_param = progress_param.with_message(message);
+                                }
                                 let _ = ctx.peer.notify_progress(progress_param).await;
                             }
 
@@ -816,12 +860,12 @@ impl AgentToMcpBridge {
                     poll_count += 1;
 
                     if let Some(ref token) = progress_token {
-                        let progress_param = ProgressNotificationParam {
-                            progress_token: token.clone(),
-                            progress: (poll_count as f64 * 5.0).min(95.0),
-                            total: Some(100.0),
-                            message: Some(format!("Polling task status (attempt {})", poll_count)),
-                        };
+                        let progress_param = ProgressNotificationParam::new(
+                            token.clone(),
+                            (poll_count as f64 * 5.0).min(95.0),
+                        )
+                        .with_total(100.0)
+                        .with_message(format!("Polling task status (attempt {})", poll_count));
                         let _ = ctx.peer.notify_progress(progress_param).await;
                     }
 
@@ -971,17 +1015,18 @@ impl ServerHandler for AgentToMcpBridge {
                 .enable_prompts()
                 .enable_resources()
                 .enable_extensions_with(extensions)
+                .enable_tasks()
                 .build()
         } else {
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
                 .enable_resources()
+                .enable_tasks()
                 .build()
         };
 
         ServerInfo::new(caps)
-            .with_protocol_version(ProtocolVersion::V_2024_11_05)
             .with_server_info(implementation)
             .with_instructions(instructions)
     }
@@ -995,11 +1040,7 @@ impl ServerHandler for AgentToMcpBridge {
         async move {
             debug!("MCP client requested tool list");
 
-            Ok(ListToolsResult {
-                tools: (*self.tools).clone(),
-                next_cursor: None,
-                meta: None,
-            })
+            Ok(ListToolsResult::with_all_items((*self.tools).clone()))
         }
     }
 
@@ -1007,7 +1048,7 @@ impl ServerHandler for AgentToMcpBridge {
         &self,
         params: CallToolRequestParams,
         ctx: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<CallToolResult, McpError>> + Send + '_
+    ) -> impl std::future::Future<Output = std::result::Result<CallToolResponse, McpError>> + Send + '_
     {
         async move {
             let name = &params.name;
@@ -1074,24 +1115,9 @@ impl ServerHandler for AgentToMcpBridge {
                 .call_skill(&skill_id, &task_id, parts, progress_token, &ctx)
                 .await
             {
-                Ok(result) => Ok(result),
+                Ok(result) => Ok(result.into()),
                 Err(e) => Err(e.to_mcp_error()),
             }
-        }
-    }
-
-    fn initialize(
-        &self,
-        _request: InitializeRequestParams,
-        _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<InitializeResult, McpError>> + Send + '_
-    {
-        async move {
-            info!(
-                "MCP client initializing with agent '{}'",
-                self.agent_card.name
-            );
-            Ok(self.get_info())
         }
     }
 
@@ -1124,11 +1150,7 @@ impl ServerHandler for AgentToMcpBridge {
                 })
                 .collect();
 
-            Ok(ListPromptsResult {
-                prompts,
-                next_cursor: None,
-                meta: None,
-            })
+            Ok(ListPromptsResult::with_all_items(prompts))
         }
     }
 
@@ -1136,7 +1158,7 @@ impl ServerHandler for AgentToMcpBridge {
         &self,
         request: GetPromptRequestParams,
         ctx: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<GetPromptResult, McpError>> + Send + '_
+    ) -> impl std::future::Future<Output = std::result::Result<GetPromptResponse, McpError>> + Send + '_
     {
         async move {
             let name = &request.name;
@@ -1201,35 +1223,14 @@ impl ServerHandler for AgentToMcpBridge {
 
             // Convert tool result content to prompt messages
             let mut prompt_messages = vec![PromptMessage::new(
-                PromptMessageRole::User,
-                PromptMessageContent::text(message_text),
+                rmcp::model::Role::User,
+                ContentBlock::text(message_text),
             )];
-
             for c in tool_result.content {
-                let raw = c.raw;
-                let annotations = c.annotations;
-                let msg_content = match raw {
-                    RawContent::Text(t) => PromptMessageContent::Text { text: t.text },
-                    RawContent::Image(img) => PromptMessageContent::Image {
-                        image: Annotated::new(img, annotations),
-                    },
-                    RawContent::Resource(r) => PromptMessageContent::Resource {
-                        resource: Annotated::new(r, annotations),
-                    },
-                    RawContent::ResourceLink(link) => PromptMessageContent::ResourceLink {
-                        link: Annotated::new(link, annotations),
-                    },
-                    RawContent::Audio(_) => PromptMessageContent::Text {
-                        text: "[Audio content]".to_string(),
-                    },
-                };
-                prompt_messages.push(PromptMessage::new(
-                    PromptMessageRole::Assistant,
-                    msg_content,
-                ));
+                prompt_messages.push(PromptMessage::new(rmcp::model::Role::Assistant, c));
             }
 
-            Ok(GetPromptResult::new(prompt_messages))
+            Ok(GetPromptResult::new(prompt_messages).into())
         }
     }
 
@@ -1298,20 +1299,16 @@ impl ServerHandler for AgentToMcpBridge {
                         })
                         .unwrap_or_else(|| "text/plain".to_string());
 
-                    let raw = RawResource::new(uri, name)
-                        .with_title(artifact.name.clone())
-                        .with_description(artifact.description.clone())
-                        .with_mime_type(mime_type);
-
-                    resources.push(Annotated::new(raw, None));
+                    resources.push(
+                        Resource::new(uri, name)
+                            .with_title(artifact.name.clone())
+                            .with_description(artifact.description.clone())
+                            .with_mime_type(mime_type),
+                    );
                 }
             }
 
-            Ok(ListResourcesResult {
-                resources,
-                next_cursor: None,
-                meta: None,
-            })
+            Ok(ListResourcesResult::with_all_items(resources))
         }
     }
 
@@ -1319,7 +1316,7 @@ impl ServerHandler for AgentToMcpBridge {
         &self,
         request: ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<ReadResourceResult, McpError>> + Send + '_
+    ) -> impl std::future::Future<Output = std::result::Result<ReadResourceResponse, McpError>> + Send + '_
     {
         async move {
             info!("MCP client reading resource: {}", request.uri);
@@ -1364,35 +1361,26 @@ impl ServerHandler for AgentToMcpBridge {
             for part in artifact.parts {
                 match part.content {
                     Some(a2a_rs::domain::generated::part::Content::Text(text)) => {
-                        contents.push(ResourceContents::TextResourceContents {
-                            uri: request.uri.clone(),
-                            mime_type: Some("text/plain".to_string()),
-                            text,
-                            meta: None,
-                        });
+                        contents.push(ResourceContents::text(text, request.uri.clone()));
                     }
                     Some(a2a_rs::domain::generated::part::Content::Raw(bytes)) => {
-                        contents.push(ResourceContents::BlobResourceContents {
-                            uri: request.uri.clone(),
-                            mime_type: Some(if part.media_type.is_empty() {
-                                "application/octet-stream".to_string()
-                            } else {
-                                part.media_type.clone()
-                            }),
-                            blob: {
-                                use base64::Engine as _;
-                                base64::engine::general_purpose::STANDARD.encode(&bytes)
-                            },
-                            meta: None,
-                        });
+                        use base64::Engine as _;
+                        let blob = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        contents.push(
+                            ResourceContents::blob(blob, request.uri.clone()).with_mime_type(
+                                if part.media_type.is_empty() {
+                                    "application/octet-stream".to_string()
+                                } else {
+                                    part.media_type.clone()
+                                },
+                            ),
+                        );
                     }
                     Some(a2a_rs::domain::generated::part::Content::Url(uri)) => {
-                        contents.push(ResourceContents::TextResourceContents {
-                            uri: request.uri.clone(),
-                            mime_type: Some("text/plain".to_string()),
-                            text: format!("File URI: {}", uri),
-                            meta: None,
-                        });
+                        contents.push(ResourceContents::text(
+                            format!("File URI: {}", uri),
+                            request.uri.clone(),
+                        ));
                     }
                     Some(a2a_rs::domain::generated::part::Content::Data(data)) => {
                         let data_json = match serde_json::to_string_pretty(&data) {
@@ -1404,36 +1392,34 @@ impl ServerHandler for AgentToMcpBridge {
                                 ));
                             }
                         };
-                        contents.push(ResourceContents::TextResourceContents {
-                            uri: request.uri.clone(),
-                            mime_type: Some("application/json".to_string()),
-                            text: data_json,
-                            meta: None,
-                        });
+                        contents.push(
+                            ResourceContents::text(data_json, request.uri.clone())
+                                .with_mime_type("application/json"),
+                        );
                     }
                     None => {
-                        contents.push(ResourceContents::TextResourceContents {
-                            uri: request.uri.clone(),
-                            mime_type: Some("text/plain".to_string()),
-                            text: format!("File: {}", part.filename),
-                            meta: None,
-                        });
+                        contents.push(ResourceContents::text(
+                            format!("File: {}", part.filename),
+                            request.uri.clone(),
+                        ));
                     }
                 }
             }
 
-            Ok(ReadResourceResult::new(contents))
+            Ok(ReadResourceResult::new(contents).into())
         }
     }
 
-    fn get_task_info(
+    /// `tasks/get` of the tasks extension: the A2A task as a detailed MCP
+    /// task, its final result inlined when it has one.
+    fn get_task(
         &self,
-        request: GetTaskInfoParams,
+        request: GetTaskParams,
         _context: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = std::result::Result<GetTaskResult, McpError>> + Send + '_
     {
         async move {
-            info!("MCP client getting task info: {}", request.task_id);
+            info!("MCP client getting task: {}", request.task_id);
             let mut a2a_task = match self.backend.get_task(&request.task_id).await {
                 Ok(Some(t)) => Some(t),
                 _ => None,
@@ -1448,20 +1434,17 @@ impl ServerHandler for AgentToMcpBridge {
                 McpError::invalid_params(format!("Task {} not found", request.task_id), None)
             })?;
 
-            let mcp_task = Self::convert_to_mcp_task(&a2a_task);
-            Ok(GetTaskResult {
-                meta: None,
-                task: mcp_task,
-            })
+            Ok(GetTaskResult::new(Self::convert_to_mcp_task(&a2a_task)?))
         }
     }
 
+    /// `tasks/cancel`: cooperative, acknowledged with nothing — the state
+    /// change shows on the next `tasks/get`.
     fn cancel_task(
         &self,
         request: CancelTaskParams,
         _context: RequestContext<RoleServer>,
-    ) -> impl std::future::Future<Output = std::result::Result<CancelTaskResult, McpError>> + Send + '_
-    {
+    ) -> impl std::future::Future<Output = std::result::Result<(), McpError>> + Send + '_ {
         async move {
             info!("MCP client canceling task: {}", request.task_id);
             let a2a_task = self
@@ -1474,12 +1457,11 @@ impl ServerHandler for AgentToMcpBridge {
                         None,
                     )
                 })?;
-
-            let mcp_task = Self::convert_to_mcp_task(&a2a_task);
-            Ok(CancelTaskResult {
-                meta: None,
-                task: mcp_task,
-            })
+            self.tasks_cache
+                .lock()
+                .await
+                .insert(a2a_task.id.clone(), a2a_task);
+            Ok(())
         }
     }
 }

@@ -201,7 +201,7 @@ mod tests {
     /// A structured result is beside the text, not flattened into it.
     #[test]
     fn a_structured_result_is_kept_beside_its_text() {
-        let mut result = CallToolResult::success(vec![rmcp::model::Content::text("3 rows")]);
+        let mut result = CallToolResult::success(vec![rmcp::model::ContentBlock::text("3 rows")]);
         result.structured_content = Some(json!({"rows": 3}));
         let llm = LlmToolConverter::mcp_result_to_llm(&result);
         assert_eq!(llm.text, "3 rows");
