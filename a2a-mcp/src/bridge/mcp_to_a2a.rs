@@ -18,7 +18,7 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
@@ -173,6 +173,32 @@ pub struct McpToA2ABridge<H: AsyncMessageHandler> {
     progress_dispatcher: ProgressDispatcher,
     /// Optional streaming handler for status update broadcasting
     streaming_handler: Option<Arc<dyn a2a_rs::port::AsyncStreamingHandler>>,
+    /// Tool calls the server paused for input, by A2A task id, until the
+    /// next message on that task answers them.
+    paused: Arc<std::sync::Mutex<HashMap<String, PausedCall>>>,
+}
+
+/// A tool call the server answered with `input_required`: what it asked, and
+/// what to send back with the answer so the server can resume.
+///
+/// The answer is a later `message/send` on the same task, so the call is
+/// not held open across it. rmcp's own `call_tool` drives these rounds
+/// through the client handler in one request; the bridge cannot, because
+/// the party being asked is on the A2A side and answers on its own clock.
+///
+/// Only a session at MCP 2026-07-28 or newer can carry this: rmcp refuses
+/// to send an `input_required` result on an older one. `initialize` tops
+/// out at 2025-11-25, so a consumer that opens its peer with `serve()`
+/// never sees a pause; the discover lifecycle
+/// (`serve_client_with_lifecycle`) is what reaches 2026-07-28.
+#[derive(Debug, Clone)]
+struct PausedCall {
+    tool: String,
+    arguments: Value,
+    /// Echoed on the retry unchanged; it is the server's state, opaque here.
+    request_state: Option<String>,
+    /// What the server wants answered, by key.
+    input_requests: InputRequests,
 }
 
 impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
@@ -238,7 +264,13 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
             inner_handler: Arc::new(inner_handler),
             progress_dispatcher,
             streaming_handler,
+            paused: Arc::new(std::sync::Mutex::new(HashMap::new())),
         }
+    }
+
+    /// Whether `task_id` is waiting on an answer to a server's question.
+    pub fn is_awaiting_input(&self, task_id: &str) -> bool {
+        self.paused.lock().unwrap().contains_key(task_id)
     }
 
     /// Get the available MCP tools.
@@ -385,10 +417,23 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
             serde_json::Value::Null
         };
 
-        // Reuse the internal `call_mcp_tool` logic
-        let mcp_result = self.call_mcp_tool(task_id, &params.name, args).await?;
-
-        Ok(LlmToolConverter::mcp_result_to_llm(&mcp_result))
+        // A model's tool call has no task to park a question on: a server
+        // that asks one gets no answer here, and the model is told so.
+        match self
+            .call_mcp_tool(task_id, &params.name, args, None, None)
+            .await?
+        {
+            CallToolResponse::Complete(result) => Ok(LlmToolConverter::mcp_result_to_llm(&result)),
+            CallToolResponse::InputRequired(result) => Err(A2aMcpError::McpServer(format!(
+                "tool '{}' asked for input, which a model's tool call cannot answer: {}",
+                params.name,
+                render_questions(&result.input_requests.unwrap_or_default())
+            ))),
+            _ => Err(A2aMcpError::McpServer(format!(
+                "tool '{}' answered with a task; the bridge does not drive the tasks extension",
+                params.name
+            ))),
+        }
     }
 
     /// Extract a typed tool-call envelope from a message, if present.
@@ -448,12 +493,21 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
     }
 
     /// Call an MCP tool
+    /// One `tools/call`, driven until the server either completes it or asks
+    /// something only the A2A side can answer.
+    ///
+    /// A `request_state` with no `input_requests` is the server saying "not
+    /// yet, ask again with this": the bridge retries with backoff, as rmcp's
+    /// own driver does, up to `DEFAULT_MRTR_MAX_ROUNDS`. Anything asked
+    /// comes back as `InputRequired` for the caller to turn into a task.
     async fn call_mcp_tool(
         &self,
         task_id: &str,
         tool_name: &str,
         arguments: serde_json::Value,
-    ) -> Result<CallToolResult> {
+        input_responses: Option<InputResponses>,
+        request_state: Option<String>,
+    ) -> Result<CallToolResponse> {
         debug!("Calling MCP tool: {} with args: {}", tool_name, arguments);
 
         // Verify tool exists
@@ -461,12 +515,48 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
             return Err(A2aMcpError::ToolNotFound(tool_name.to_string()));
         }
 
-        // Call the MCP tool via the peer
         let mut params = CallToolRequestParams::new(tool_name.to_string());
         if let serde_json::Value::Object(map) = arguments {
             params = params.with_arguments(map);
         }
+        params.input_responses = input_responses;
+        params.request_state = request_state;
 
+        for round in 0..DEFAULT_MRTR_MAX_ROUNDS {
+            let response = self.call_mcp_tool_once(task_id, params.clone()).await?;
+            let CallToolResponse::InputRequired(result) = response else {
+                return Ok(response);
+            };
+            let requests = result.input_requests.unwrap_or_default();
+            if requests.is_empty() && result.request_state.is_none() {
+                return Err(A2aMcpError::McpServer(
+                    "the server said input is required and named neither a request nor a state"
+                        .to_string(),
+                ));
+            }
+            if !requests.is_empty() {
+                return Ok(CallToolResponse::InputRequired(InputRequiredResult::new(
+                    Some(requests),
+                    result.request_state,
+                )));
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50 << round.min(6))).await;
+            params.input_responses = None;
+            params.request_state = result.request_state;
+        }
+        Err(A2aMcpError::McpServer(format!(
+            "tool '{tool_name}' asked for input {DEFAULT_MRTR_MAX_ROUNDS} times without completing"
+        )))
+    }
+
+    /// One round of `tools/call`, with the server's progress relayed while it
+    /// runs.
+    async fn call_mcp_tool_once(
+        &self,
+        task_id: &str,
+        params: CallToolRequestParams,
+    ) -> Result<CallToolResponse> {
+        let tool_name = params.name.clone();
         let handle = self
             .mcp_peer
             .send_request_with_option(
@@ -537,19 +627,151 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
             rx_task.abort();
         }
 
-        let result = match response {
-            Ok(ServerResult::CallToolResult(r)) => r,
-            Ok(_) => {
-                return Err(A2aMcpError::McpServer(
-                    "Unexpected response from MCP server".to_string(),
-                ));
+        match response {
+            Ok(ServerResult::CallToolResult(result)) => {
+                info!("MCP tool '{tool_name}' returned result");
+                Ok(CallToolResponse::Complete(result))
             }
-            Err(e) => return Err(e.into()),
+            Ok(ServerResult::InputRequiredResult(result)) => {
+                info!("MCP tool '{tool_name}' asked for input");
+                Ok(CallToolResponse::InputRequired(result))
+            }
+            Ok(ServerResult::CreateTaskResult(_)) => Err(A2aMcpError::McpServer(format!(
+                "tool '{tool_name}' answered with a task; the bridge does not drive the tasks \
+                 extension"
+            ))),
+            Ok(_) => Err(A2aMcpError::McpServer(
+                "Unexpected response from MCP server".to_string(),
+            )),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    /// The task for a tool call the server completed: the text as the
+    /// agent's reply, each embedded or linked resource as an artifact,
+    /// `isError` as `Failed`.
+    fn completed_task(task_id: &str, message: &Message, result: &CallToolResult) -> Task {
+        let task_state = if result.is_error.unwrap_or(false) {
+            TaskState::Failed
+        } else {
+            TaskState::Completed
         };
 
-        info!("MCP tool '{}' returned result", tool_name);
+        let message_text = MessageConverter::extract_text_from_content(&result.content);
 
-        Ok(result)
+        let agent_message = Message::builder()
+            .role(Role::Agent)
+            .parts(vec![Part::text(message_text)])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .build();
+
+        let mut artifacts = Vec::new();
+        for content_item in &result.content {
+            match content_item {
+                ContentBlock::Resource(res) => {
+                    let (uri, mime_type) = match &res.resource {
+                        ResourceContents::TextResourceContents { uri, mime_type, .. }
+                        | ResourceContents::BlobResourceContents { uri, mime_type, .. } => {
+                            (uri.clone(), mime_type.clone())
+                        }
+                        _ => continue,
+                    };
+                    let part = Part::file_from_uri(uri, None, mime_type);
+                    artifacts.push(a2a_rs::domain::Artifact {
+                        artifact_id: uuid::Uuid::new_v4().to_string(),
+                        name: String::new(),
+                        description: String::new(),
+                        parts: vec![part],
+                        metadata: ::buffa::MessageField::none(),
+                        extensions: Vec::new(),
+                        ..Default::default()
+                    });
+                }
+                ContentBlock::ResourceLink(link) => {
+                    let part = Part::file_from_uri(
+                        link.uri.clone(),
+                        Some(link.name.clone()),
+                        link.mime_type.clone(),
+                    );
+                    artifacts.push(a2a_rs::domain::Artifact {
+                        artifact_id: uuid::Uuid::new_v4().to_string(),
+                        name: link.name.clone(),
+                        description: String::new(),
+                        parts: vec![part],
+                        metadata: ::buffa::MessageField::none(),
+                        extensions: Vec::new(),
+                        ..Default::default()
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        let task_builder = Task::builder()
+            .id(task_id.to_string())
+            .context_id(uuid::Uuid::new_v4().to_string())
+            .status(TaskStatus::new(task_state, None))
+            .history(vec![message.clone(), agent_message]);
+
+        if !artifacts.is_empty() {
+            task_builder.artifacts(artifacts).build()
+        } else {
+            task_builder.build()
+        }
+    }
+
+    /// The task for a tool call the server paused: `InputRequired`, with the
+    /// server's question as the status message. The next message on the
+    /// task is the answer.
+    fn paused_task(task_id: &str, message: &Message, paused: &PausedCall) -> Task {
+        let question = Message::builder()
+            .role(Role::Agent)
+            .parts(vec![Part::text(render_questions(&paused.input_requests))])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .build();
+        Task::builder()
+            .id(task_id.to_string())
+            .context_id(uuid::Uuid::new_v4().to_string())
+            .status(TaskStatus::new(
+                TaskState::InputRequired,
+                Some(question.clone()),
+            ))
+            .history(vec![message.clone(), question])
+            .build()
+    }
+
+    /// A tool call's outcome as the task for it, holding the call when the
+    /// server paused it.
+    fn task_for(
+        &self,
+        task_id: &str,
+        message: &Message,
+        tool: &str,
+        arguments: &Value,
+        response: CallToolResponse,
+    ) -> Result<Task> {
+        match response {
+            CallToolResponse::Complete(result) => {
+                Ok(Self::completed_task(task_id, message, &result))
+            }
+            CallToolResponse::InputRequired(result) => {
+                let paused = PausedCall {
+                    tool: tool.to_string(),
+                    arguments: arguments.clone(),
+                    request_state: result.request_state,
+                    input_requests: result.input_requests.unwrap_or_default(),
+                };
+                let task = Self::paused_task(task_id, message, &paused);
+                self.paused
+                    .lock()
+                    .unwrap()
+                    .insert(task_id.to_string(), paused);
+                Ok(task)
+            }
+            _ => Err(A2aMcpError::McpServer(format!(
+                "tool '{tool}' answered with a task; the bridge does not drive the tasks extension"
+            ))),
+        }
     }
 
     /// Call an MCP prompt
@@ -718,99 +940,46 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
         message: &Message,
         ctx: &RequestContext,
     ) -> std::result::Result<Task, a2a_rs::domain::error::A2AError> {
-        // Check if this is a tool call request
+        // Whatever this task was waiting on. A new tool call on the task
+        // supersedes the question; any other message answers it.
+        let paused = self.paused.lock().unwrap().remove(task_id);
         if let Some(McpToolCall {
             name: tool_name,
             arguments,
         }) = Self::extract_tool_call(message)
         {
             info!("Detected MCP tool call request for tool: {}", tool_name);
-
-            // Call the MCP tool
-            match self.call_mcp_tool(task_id, &tool_name, arguments).await {
-                Ok(result) => {
-                    // Convert MCP result to A2A task
-                    let task_state = if result.is_error.unwrap_or(false) {
-                        TaskState::Failed
-                    } else {
-                        TaskState::Completed
-                    };
-
-                    let message_text = MessageConverter::extract_text_from_content(&result.content);
-
-                    // Create agent response message
-                    let agent_message = Message::builder()
-                        .role(Role::Agent)
-                        .parts(vec![Part::text(message_text)])
-                        .message_id(uuid::Uuid::new_v4().to_string())
-                        .build();
-
-                    // Extract resources into artifacts
-                    let mut artifacts = Vec::new();
-                    for content_item in &result.content {
-                        match content_item {
-                            ContentBlock::Resource(res) => {
-                                let (uri, mime_type) = match &res.resource {
-                                    ResourceContents::TextResourceContents {
-                                        uri,
-                                        mime_type,
-                                        ..
-                                    }
-                                    | ResourceContents::BlobResourceContents {
-                                        uri,
-                                        mime_type,
-                                        ..
-                                    } => (uri.clone(), mime_type.clone()),
-                                    _ => continue,
-                                };
-                                let part = Part::file_from_uri(uri, None, mime_type);
-                                artifacts.push(a2a_rs::domain::Artifact {
-                                    artifact_id: uuid::Uuid::new_v4().to_string(),
-                                    name: String::new(),
-                                    description: String::new(),
-                                    parts: vec![part],
-                                    metadata: ::buffa::MessageField::none(),
-                                    extensions: Vec::new(),
-                                    ..Default::default()
-                                });
-                            }
-                            ContentBlock::ResourceLink(link) => {
-                                let part = Part::file_from_uri(
-                                    link.uri.clone(),
-                                    Some(link.name.clone()),
-                                    link.mime_type.clone(),
-                                );
-                                artifacts.push(a2a_rs::domain::Artifact {
-                                    artifact_id: uuid::Uuid::new_v4().to_string(),
-                                    name: link.name.clone(),
-                                    description: String::new(),
-                                    parts: vec![part],
-                                    metadata: ::buffa::MessageField::none(),
-                                    extensions: Vec::new(),
-                                    ..Default::default()
-                                });
-                            }
-                            _ => {}
-                        }
-                    }
-
-                    let task_builder = Task::builder()
-                        .id(task_id.to_string())
-                        .context_id(uuid::Uuid::new_v4().to_string())
-                        .status(TaskStatus::new(task_state, None))
-                        .history(vec![message.clone(), agent_message]);
-
-                    if !artifacts.is_empty() {
-                        Ok(task_builder.artifacts(artifacts).build())
-                    } else {
-                        Ok(task_builder.build())
-                    }
-                }
-                Err(e) => {
+            let response = self
+                .call_mcp_tool(task_id, &tool_name, arguments.clone(), None, None)
+                .await
+                .map_err(|e| {
                     error!("MCP tool call failed: {}", e);
-                    Err(e.to_a2a_error())
-                }
-            }
+                    e.to_a2a_error()
+                })?;
+            self.task_for(task_id, message, &tool_name, &arguments, response)
+                .map_err(|e| e.to_a2a_error())
+        } else if let Some(paused) = paused {
+            // The answer to a question the server asked on this task.
+            info!(
+                "Answering MCP tool '{}' on task {task_id} with the message received",
+                paused.tool
+            );
+            let responses = answers_for(&paused.input_requests, message);
+            let response = self
+                .call_mcp_tool(
+                    task_id,
+                    &paused.tool,
+                    paused.arguments.clone(),
+                    (!responses.is_empty()).then_some(responses),
+                    paused.request_state.clone(),
+                )
+                .await
+                .map_err(|e| {
+                    error!("MCP tool call failed after its input was answered: {}", e);
+                    e.to_a2a_error()
+                })?;
+            self.task_for(task_id, message, &paused.tool, &paused.arguments, response)
+                .map_err(|e| e.to_a2a_error())
         } else if let Some(McpPromptCall {
             name: prompt_name,
             arguments,
@@ -864,6 +1033,172 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
                 .await
         }
     }
+}
+
+/// The server's questions as text a person or a model can answer: each
+/// elicitation's message, then what it wants filled in and how. Sampling has
+/// no question to show; it is named so the reader knows why the task
+/// cannot proceed.
+fn render_questions(requests: &InputRequests) -> String {
+    let mut lines = Vec::new();
+    for request in requests.values() {
+        match request {
+            InputRequest::Elicitation(elicit) => match &elicit.params {
+                ElicitRequestParams::FormElicitationParams {
+                    message,
+                    requested_schema,
+                    ..
+                } => {
+                    lines.push(message.clone());
+                    let required = requested_schema.required.clone().unwrap_or_default();
+                    for (name, definition) in &requested_schema.properties {
+                        let shape = serde_json::to_value(definition).unwrap_or(Value::Null);
+                        let kind = shape
+                            .get("type")
+                            .and_then(Value::as_str)
+                            .unwrap_or("string")
+                            .to_string();
+                        let choices = shape.get("enum").and_then(Value::as_array).map(|values| {
+                            values
+                                .iter()
+                                .map(|v| v.as_str().map(str::to_string).unwrap_or(v.to_string()))
+                                .collect::<Vec<_>>()
+                                .join(" | ")
+                        });
+                        let mut line = format!("- `{name}` ({kind}");
+                        if let Some(choices) = choices {
+                            line.push_str(&format!(": {choices}"));
+                        }
+                        line.push(')');
+                        if required.iter().any(|r| r == name) {
+                            line.push_str(", required");
+                        }
+                        lines.push(line);
+                    }
+                }
+                ElicitRequestParams::UrlElicitationParams { message, url, .. } => {
+                    lines.push(format!("{message}\nOpen {url}, then answer to continue."));
+                }
+                _ => lines.push(
+                    "The server asked a question in a form this bridge cannot show.".to_string(),
+                ),
+            },
+            InputRequest::CreateMessage(_) => lines.push(
+                "The server asked for a model completion (sampling), which nobody here answers."
+                    .to_string(),
+            ),
+            _ => lines.push("The server asked for something this bridge cannot show.".to_string()),
+        }
+    }
+    if lines.is_empty() {
+        "The server needs more input to continue.".to_string()
+    } else {
+        lines.join("\n")
+    }
+}
+
+/// The message's answer as the server's `inputResponses`, one per request.
+///
+/// A data part is the answer as given: an object the form schema describes.
+/// Text fills the form's one property, or its first required one, coerced
+/// to the property's type; `decline` or `cancel` alone is that action. A
+/// URL elicitation is accepted by any answer: the person has been told
+/// where to go. Anything else, sampling included, gets a decline, since
+/// nobody here answers it, and the server decides what that means.
+fn answers_for(requests: &InputRequests, message: &Message) -> InputResponses {
+    use a2a_rs::domain::generated::part;
+    let text = message
+        .parts
+        .iter()
+        .filter_map(|part| part.get_text())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string();
+    let data: Option<Map<String, Value>> =
+        message.parts.iter().find_map(|part| match &part.content {
+            Some(part::Content::Data(value)) => serde_json::to_value(&**value)
+                .ok()
+                .and_then(|value| value.as_object().cloned()),
+            _ => None,
+        });
+    let mut responses = InputResponses::new();
+    for (key, request) in requests {
+        let response = match request {
+            InputRequest::Elicitation(elicit) => match &elicit.params {
+                ElicitRequestParams::FormElicitationParams {
+                    requested_schema, ..
+                } => match action_of(&text) {
+                    Some(action) => ElicitResult::new(action),
+                    None => {
+                        let content = match &data {
+                            Some(object) => Value::Object(object.clone()),
+                            None => fill_form(requested_schema, &text),
+                        };
+                        ElicitResult::new(ElicitationAction::Accept).with_content(content)
+                    }
+                },
+                _ => ElicitResult::new(action_of(&text).unwrap_or(ElicitationAction::Accept)),
+            },
+            _ => ElicitResult::new(ElicitationAction::Decline),
+        };
+        responses.insert(
+            key.clone(),
+            serde_json::to_value(response).unwrap_or(Value::Null),
+        );
+    }
+    responses
+}
+
+/// `decline` or `cancel` on its own, as the action it names.
+fn action_of(text: &str) -> Option<ElicitationAction> {
+    match text.to_ascii_lowercase().as_str() {
+        "decline" => Some(ElicitationAction::Decline),
+        "cancel" => Some(ElicitationAction::Cancel),
+        _ => None,
+    }
+}
+
+/// `text` as the form's content: under its one property, else its first
+/// required property, else its first property, coerced to that property's
+/// declared type. A form with nothing to fill accepts an empty object.
+fn fill_form(schema: &ElicitationSchema, text: &str) -> Value {
+    let required = schema.required.clone().unwrap_or_default();
+    let target = if schema.properties.len() == 1 {
+        schema.properties.keys().next()
+    } else {
+        required
+            .iter()
+            .find(|name| schema.properties.contains_key(*name))
+            .or_else(|| schema.properties.keys().next())
+    };
+    let Some(name) = target else {
+        return Value::Object(Map::new());
+    };
+    let shape = schema
+        .properties
+        .get(name)
+        .and_then(|definition| serde_json::to_value(definition).ok())
+        .unwrap_or(Value::Null);
+    let value = match shape.get("type").and_then(Value::as_str) {
+        Some("boolean") => Value::Bool(matches!(
+            text.to_ascii_lowercase().as_str(),
+            "true" | "yes" | "y" | "1" | "ok" | "confirm"
+        )),
+        Some("integer") => text
+            .parse::<i64>()
+            .map(Value::from)
+            .unwrap_or_else(|_| Value::String(text.to_string())),
+        Some("number") => text
+            .parse::<f64>()
+            .ok()
+            .and_then(|n| serde_json::Number::from_f64(n).map(Value::Number))
+            .unwrap_or_else(|| Value::String(text.to_string())),
+        _ => Value::String(text.to_string()),
+    };
+    let mut object = Map::new();
+    object.insert(name.clone(), value);
+    Value::Object(object)
 }
 
 /// Helper to map `PromptMessage` to A2A `Message`.
