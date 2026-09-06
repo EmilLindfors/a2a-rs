@@ -120,8 +120,30 @@ impl TestMcpServer {
 
         let prompt = Prompt::new("test_prompt", Some("A test prompt"), None);
 
+        // Pauses for a yes/no before doing anything, the way a data server's
+        // destructive tool would.
+        let drop_table = Tool::new(
+            "drop_table",
+            "Drops a table after asking",
+            Arc::new(
+                serde_json::from_value(serde_json::json!({
+                    "type": "object",
+                    "properties": { "table": { "type": "string" } },
+                    "required": ["table"]
+                }))
+                .unwrap(),
+            ),
+        );
+        // Not ready on the first call: answers with state only, and completes
+        // when that state comes back.
+        let slow_count = Tool::new(
+            "slow_count",
+            "Counts, eventually",
+            Arc::new(serde_json::from_value(serde_json::json!({ "type": "object" })).unwrap()),
+        );
+
         Self {
-            tools: Arc::new(vec![tool]),
+            tools: Arc::new(vec![tool, drop_table, slow_count]),
             prompts: Arc::new(vec![prompt]),
         }
     }
@@ -152,10 +174,87 @@ impl ServerHandler for TestMcpServer {
 
     fn call_tool(
         &self,
-        CallToolRequestParams { name, .. }: CallToolRequestParams,
+        CallToolRequestParams {
+            name,
+            arguments,
+            input_responses,
+            request_state,
+            ..
+        }: CallToolRequestParams,
         ctx: RequestContext<RoleServer>,
     ) -> impl std::future::Future<Output = Result<CallToolResponse, McpError>> + Send + '_ {
         async move {
+            if name == "drop_table" {
+                let table = arguments
+                    .as_ref()
+                    .and_then(|a| a.get("table"))
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("?")
+                    .to_string();
+                let Some(responses) = input_responses else {
+                    let schema = ElicitationSchema::builder()
+                        .required_bool("confirm")
+                        .build()
+                        .unwrap();
+                    let mut requests = InputRequests::new();
+                    requests.insert(
+                        "confirm".to_string(),
+                        InputRequest::Elicitation(ElicitRequest::new(
+                            ElicitRequestParams::FormElicitationParams {
+                                meta: None,
+                                message: format!("Drop table {table}? This cannot be undone."),
+                                requested_schema: schema,
+                            },
+                        )),
+                    );
+                    return Ok(CallToolResponse::InputRequired(InputRequiredResult::new(
+                        Some(requests),
+                        Some(format!("dropping:{table}")),
+                    )));
+                };
+                if request_state.as_deref() != Some(&format!("dropping:{table}")) {
+                    return Err(McpError::invalid_params(
+                        format!("request state not echoed: {request_state:?}"),
+                        None,
+                    ));
+                }
+                let answer: ElicitResult = serde_json::from_value(
+                    responses
+                        .get("confirm")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null),
+                )
+                .map_err(|e| McpError::invalid_params(format!("no elicit result: {e}"), None))?;
+                let confirmed = answer.action == ElicitationAction::Accept
+                    && answer
+                        .content
+                        .as_ref()
+                        .and_then(|c| c.get("confirm"))
+                        .and_then(|c| c.as_bool())
+                        .unwrap_or(false);
+                let said = if confirmed {
+                    format!("dropped {table}")
+                } else {
+                    format!("kept {table}")
+                };
+                return Ok(CallToolResult::success(vec![ContentBlock::text(said)]).into());
+            }
+            if name == "slow_count" {
+                return Ok(match request_state.as_deref() {
+                    None => CallToolResponse::InputRequired(
+                        InputRequiredResult::from_request_state("counting"),
+                    ),
+                    Some("counting") => {
+                        CallToolResult::success(vec![ContentBlock::text("3")]).into()
+                    }
+                    other => {
+                        return Err(McpError::invalid_params(
+                            format!("unexpected state {other:?}"),
+                            None,
+                        ));
+                    }
+                });
+            }
             if name != "calculator" {
                 return Err(McpError::invalid_params("unknown tool", None));
             }
@@ -642,6 +741,110 @@ async fn test_mcp_to_a2a_progress_streaming() {
             "Progress: 100"
         );
     }
+    drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// A client session at 2026-07-28, which is the only revision a server can
+/// pause a call on: rmcp refuses to send an `InputRequiredResult` below it.
+/// `()` and `serve()` open with `initialize`, and that handshake tops out at
+/// 2025-11-25 whatever the client asks for; 2026-07-28 is reached only
+/// through the discover lifecycle.
+async fn current_client(
+    transport: tokio::io::DuplexStream,
+) -> rmcp::service::RunningService<rmcp::RoleClient, ClientInfo> {
+    use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
+    let info = ClientInfo::new(
+        ClientCapabilities::default(),
+        Implementation::new("test-client", "1.0.0"),
+    )
+    .with_protocol_version(ProtocolVersion::V_2026_07_28);
+    serve_client_with_lifecycle(
+        info,
+        transport,
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// A tool that asks before it acts pauses the task: `InputRequired`, with the
+/// server's question as the status message. The next message on the task
+/// answers it, the server gets its state back with the answer, and the call
+/// completes. `bridge.process_message` is the whole path.
+#[tokio::test]
+async fn a_servers_question_pauses_the_task_and_the_next_message_answers_it() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let mcp_server = TestMcpServer::new();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let mcp_client = current_client(client_io).await;
+    let bridge = McpToA2ABridge::new(mcp_client.peer().clone(), NoOpHandler)
+        .await
+        .unwrap();
+    let ctx = a2a_rs::port::RequestContext::anonymous();
+
+    let call = create_tool_call_message("drop_table", serde_json::json!({ "table": "lice" }));
+    let paused = bridge.process_message("drop-1", &call, &ctx).await.unwrap();
+    assert_eq!(paused.status.state, TaskState::InputRequired);
+    let question: String = paused
+        .status
+        .message
+        .as_option()
+        .map(|m| m.parts.iter().filter_map(|p| p.get_text()).collect())
+        .unwrap_or_default();
+    assert!(
+        question.contains("Drop table lice?") && question.contains("`confirm` (boolean), required"),
+        "the question and what to answer are the status message: {question:?}"
+    );
+    assert!(bridge.is_awaiting_input("drop-1"));
+
+    let yes = Message::user_text("yes".to_string(), "answer-1".to_string());
+    let done = bridge.process_message("drop-1", &yes, &ctx).await.unwrap();
+    assert_eq!(done.status.state, TaskState::Completed);
+    assert_eq!(done.history[1].parts[0].get_text(), Some("dropped lice"));
+    assert!(!bridge.is_awaiting_input("drop-1"));
+
+    // `decline` on its own is the action, not a string the form receives.
+    let call = create_tool_call_message("drop_table", serde_json::json!({ "table": "sites" }));
+    bridge.process_message("drop-2", &call, &ctx).await.unwrap();
+    let no = Message::user_text("decline".to_string(), "answer-2".to_string());
+    let kept = bridge.process_message("drop-2", &no, &ctx).await.unwrap();
+    assert_eq!(kept.status.state, TaskState::Completed);
+    assert_eq!(kept.history[1].parts[0].get_text(), Some("kept sites"));
+
+    drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// A server that answers with state and no question is not asking anyone:
+/// the bridge calls again with the state and nobody sees a pause.
+#[tokio::test]
+async fn a_state_only_round_is_retried_without_pausing() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let mcp_server = TestMcpServer::new();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let mcp_client = current_client(client_io).await;
+    let bridge = McpToA2ABridge::new(mcp_client.peer().clone(), NoOpHandler)
+        .await
+        .unwrap();
+
+    let call = create_tool_call_message("slow_count", serde_json::json!({}));
+    let task = bridge
+        .process_message("count-1", &call, &a2a_rs::port::RequestContext::anonymous())
+        .await
+        .unwrap();
+    assert_eq!(task.status.state, TaskState::Completed);
+    assert_eq!(task.history[1].parts[0].get_text(), Some("3"));
+    assert!(!bridge.is_awaiting_input("count-1"));
+
     drop(mcp_client);
     let _ = server_task.await;
 }

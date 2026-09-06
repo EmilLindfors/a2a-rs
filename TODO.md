@@ -237,18 +237,14 @@ project end to end*), set 2026-09-05.
       reading client since the bump (`tasks/get` inlines the result); it
       does not yet *return* a task from `call_tool` for an agent that takes
       long. korps consumes this in its §8.
-- [ ] **A server's elicitation becomes `InputRequired`.** The bridge turns
-      an agent's `InputRequired` into an MCP elicitation. The other
-      direction, an MCP server asking its client a question, has no A2A
-      shape. Under 2026-07-28 it arrives two ways: the client handler's
-      `create_elicitation`, and an `InputRequiredResult` from `call_tool`
-      (`Peer::call_tool_once` hands it over unanswered; `call_tool` drives
-      the rounds through the handler). Both should surface as an
-      input-required task with the question as the message, and the next
-      `message/send` on that task answers it: for the result shape, by
-      retrying the call with `InputResponses` and the echoed
-      `requestState`. The bridge half is here; korps' §8 has the handler
-      half.
+- [ ] **An in-flight elicitation becomes `InputRequired` too.** The
+      `input_required` result shape pauses a task since 2026-09-06 (see
+      `NOTES.md`). The other way a server asks, `create_elicitation` on the
+      client handler while `tools/call` is still open, does not: nothing in
+      that request names the A2A task that raised it, so a bridge with two
+      calls in flight cannot route the answer. The tasks extension's
+      related-task metadata would; so would a bridge that serves one call
+      at a time and says so. Either is a design choice, not a patch.
 - [ ] **File parts survive the bridge.** `task_result.rs` renders a file
       artifact as the line `Artifact 'x': File ...` and drops the bytes, and
       `agent_to_mcp` does the same for a request's file part. A fleet

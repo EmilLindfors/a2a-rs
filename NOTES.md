@@ -592,7 +592,37 @@ gets the legacy wire shape, and rmcp clears `resultType` for it. What did
 not move: `resources/subscribe`, which is legacy-only under the new
 revision. Its replacement, `subscriptions/listen`, needs the peer opened
 with a discover lifecycle, and the bridge's consumers open peers with
-`serve()`. It stays until one of them needs the other.
+`serve()`. It stays until one of them needs the other. Amended 2026-09-06:
+one of them does now, see the next entry, and on a discover session
+`resources/subscribe` is `method_not_found`. A consumer that opens with
+discover to be pausable has to move to `Peer::listen` in the same change.
+
+**`serve()` never reaches 2026-07-28, so nothing opened with it can be
+paused.** (2026-09-06) rmcp 3.2's `ProtocolVersion::LATEST` is 2025-11-25,
+and its `initialize` handshake negotiates only the legacy revisions up to
+that one whatever the client asks for. 2026-07-28 is reached through the
+discover lifecycle alone, `serve_client_with_lifecycle` with
+`ClientLifecycleMode::Discover`. A server refuses to send an
+`InputRequiredResult` below 2026-07-28 with `-32600`, so a consumer that
+opens its peer with `serve()` gets that error where it expected a question.
+The test client for the pause path opens with discover; korps' connector
+opened with `serve()` and `LATEST` on 2026-09-05 and has to follow, and
+when it does, its `resources/subscribe` stops working on the same day.
+
+**A paused tool call is task state in the bridge, and the task's next
+message is the answer.** (2026-09-06) rmcp's `call_tool` drives
+`input_required` rounds through the client handler inside one request. The
+bridge cannot: the party being asked is on the A2A side and answers on its
+own clock, through `message/send`. So `McpToA2ABridge` holds the paused
+call per task id, with the server's `requestState` and its requests, and
+retries on the next message with the answer as `inputResponses`. A new tool
+call on the same task supersedes the question. What is not done is the
+other arrival path, `create_elicitation` on the client handler while a call
+is in flight: nothing correlates that request with the A2A task that raised
+it, so with two calls in flight the answer could reach the wrong one. It
+waits for the tasks extension's related-task metadata, or a consumer that
+serves one call at a time.
+
 
 ---
 
