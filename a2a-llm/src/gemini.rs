@@ -1,6 +1,7 @@
 use super::{
-    Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning, ReasoningSupport,
-    ToolDefinition, describe_transport_error, refuses_reasoning, schema,
+    ChatMessage, ContentPart, Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageContent,
+    MessageRole, Reasoning, ReasoningSupport, ToolDefinition, content::encode_base64,
+    describe_transport_error, refuses_reasoning, schema,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -100,7 +101,7 @@ fn thinking_config_for(reasoning: Reasoning) -> ThinkingConfig {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 struct Part {
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
@@ -108,6 +109,158 @@ struct Part {
     function_call: Option<GeminiFunctionCall>,
     #[serde(rename = "functionResponse", skip_serializing_if = "Option::is_none")]
     function_response: Option<GeminiFunctionResponse>,
+    /// Bytes carried in the request.
+    #[serde(rename = "inlineData", skip_serializing_if = "Option::is_none")]
+    inline_data: Option<InlineData>,
+    /// Bytes Gemini fetches — a Files API URI, or a public one. Any MIME type,
+    /// unlike OpenAI, which fetches only images.
+    #[serde(rename = "fileData", skip_serializing_if = "Option::is_none")]
+    file_data: Option<FileData>,
+}
+
+impl Part {
+    fn text(text: String) -> Self {
+        Self {
+            text: Some(text),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct InlineData {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    /// Base64. The API takes no `data:` prefix here, unlike OpenAI.
+    data: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct FileData {
+    #[serde(rename = "mimeType")]
+    mime_type: String,
+    #[serde(rename = "fileUri")]
+    file_uri: String,
+}
+
+/// One neutral part as Gemini's.
+///
+/// Gemini has a field for each of the three, so nothing is described in prose
+/// here the way OpenAI has to describe a non-image URI. A file *name* is what
+/// this API has no field for; it is dropped, which loses a label and no
+/// content.
+fn part_for(part: ContentPart) -> Part {
+    match part {
+        ContentPart::Text { text } => Part::text(text),
+        ContentPart::Blob {
+            mime_type, data, ..
+        } => Part {
+            inline_data: Some(InlineData {
+                data: encode_base64(&data),
+                mime_type,
+            }),
+            ..Default::default()
+        },
+        ContentPart::Uri { mime_type, uri, .. } => Part {
+            file_data: Some(FileData {
+                mime_type,
+                file_uri: uri,
+            }),
+            ..Default::default()
+        },
+    }
+}
+
+/// A message's content as Gemini parts. A text-only message is one text part,
+/// which is what this provider has always sent.
+fn parts_for(content: MessageContent) -> Vec<Part> {
+    match content {
+        MessageContent::Text(text) => vec![Part::text(text)],
+        MessageContent::Parts(parts) => parts.into_iter().map(part_for).collect(),
+    }
+}
+
+/// The whole conversation as Gemini takes it: the system prompt in
+/// `systemInstruction`, everything else in `contents` under the two roles this
+/// API has.
+///
+/// Shared by the completion and streaming paths, which held a verbatim copy
+/// each — thirty lines that had to be edited twice to add anything, and that
+/// only the non-streaming half was ever tested on.
+fn conversation(messages: Vec<ChatMessage>) -> (Option<SystemInstruction>, Vec<Content>) {
+    let mut system_instruction_parts = Vec::new();
+    let mut contents = Vec::new();
+
+    for msg in messages {
+        match msg.role {
+            MessageRole::System => {
+                if let Some(content) = msg.content {
+                    system_instruction_parts.extend(parts_for(content));
+                }
+            }
+            MessageRole::User => {
+                if let Some(content) = msg.content {
+                    let parts = parts_for(content);
+                    if !parts.is_empty() {
+                        contents.push(Content {
+                            role: "user".to_string(),
+                            parts,
+                        });
+                    }
+                }
+            }
+            MessageRole::Assistant => {
+                let mut parts = msg.content.map(parts_for).unwrap_or_default();
+                if let Some(tool_calls) = msg.tool_calls {
+                    for call in tool_calls {
+                        parts.push(Part {
+                            function_call: Some(GeminiFunctionCall {
+                                name: call.name,
+                                args: serde_json::from_str(&call.arguments)
+                                    .unwrap_or(serde_json::Value::Null),
+                            }),
+                            ..Default::default()
+                        });
+                    }
+                }
+                if !parts.is_empty() {
+                    contents.push(Content {
+                        role: "model".to_string(),
+                        parts,
+                    });
+                }
+            }
+            MessageRole::Tool => {
+                if let Some(name) = msg.name {
+                    // A tool message is text by construction (`tool_result`),
+                    // and Gemini wants it as JSON where it parses as JSON.
+                    let text = msg.content.map(|content| content.to_text());
+                    let response_val: serde_json::Value = match text {
+                        Some(text) => {
+                            serde_json::from_str(&text).unwrap_or(serde_json::Value::String(text))
+                        }
+                        None => serde_json::Value::Null,
+                    };
+                    contents.push(Content {
+                        role: "function".to_string(),
+                        parts: vec![Part {
+                            function_response: Some(GeminiFunctionResponse {
+                                name,
+                                response: response_val,
+                            }),
+                            ..Default::default()
+                        }],
+                    });
+                }
+            }
+        }
+    }
+
+    let system_instruction = (!system_instruction_parts.is_empty()).then_some(SystemInstruction {
+        parts: system_instruction_parts,
+    });
+
+    (system_instruction, contents)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -398,94 +551,7 @@ impl LlmProvider for GeminiProvider {
         // Resolved before the messages are moved out of `request`.
         let thinking_config = self.thinking_for(&request);
 
-        let mut system_instruction_parts = Vec::new();
-        let mut contents = Vec::new();
-
-        // Gemini only supports "user" and "model" roles in contents.
-        // System prompt goes into `systemInstruction`.
-        for msg in request.messages {
-            match msg.role {
-                MessageRole::System => {
-                    if let Some(text) = msg.content {
-                        system_instruction_parts.push(Part {
-                            text: Some(text),
-                            function_call: None,
-                            function_response: None,
-                        });
-                    }
-                }
-                MessageRole::User => {
-                    if let Some(text) = msg.content {
-                        contents.push(Content {
-                            role: "user".to_string(),
-                            parts: vec![Part {
-                                text: Some(text),
-                                function_call: None,
-                                function_response: None,
-                            }],
-                        });
-                    }
-                }
-                MessageRole::Assistant => {
-                    let mut parts = Vec::new();
-                    if let Some(text) = msg.content {
-                        parts.push(Part {
-                            text: Some(text),
-                            function_call: None,
-                            function_response: None,
-                        });
-                    }
-                    if let Some(tool_calls) = msg.tool_calls {
-                        for call in tool_calls {
-                            parts.push(Part {
-                                text: None,
-                                function_call: Some(GeminiFunctionCall {
-                                    name: call.name,
-                                    args: serde_json::from_str(&call.arguments)
-                                        .unwrap_or(serde_json::Value::Null),
-                                }),
-                                function_response: None,
-                            });
-                        }
-                    }
-                    if !parts.is_empty() {
-                        contents.push(Content {
-                            role: "model".to_string(),
-                            parts,
-                        });
-                    }
-                }
-                MessageRole::Tool => {
-                    if let Some(name) = msg.name {
-                        let response_val: serde_json::Value = if let Some(content) = msg.content {
-                            serde_json::from_str(&content)
-                                .unwrap_or(serde_json::Value::String(content))
-                        } else {
-                            serde_json::Value::Null
-                        };
-                        contents.push(Content {
-                            role: "function".to_string(),
-                            parts: vec![Part {
-                                text: None,
-                                function_call: None,
-                                function_response: Some(GeminiFunctionResponse {
-                                    name,
-                                    response: response_val,
-                                }),
-                            }],
-                        });
-                    }
-                }
-            }
-        }
-
-        let system_instruction = if !system_instruction_parts.is_empty() {
-            Some(SystemInstruction {
-                parts: system_instruction_parts,
-            })
-        } else {
-            None
-        };
+        let (system_instruction, contents) = conversation(request.messages);
 
         let generation_config = GenerationConfig {
             temperature: request.temperature,
@@ -618,92 +684,7 @@ impl LlmProvider for GeminiProvider {
         // Resolved before the messages are moved out of `request`.
         let thinking_config = self.thinking_for(&request);
 
-        let mut system_instruction_parts = Vec::new();
-        let mut contents = Vec::new();
-
-        for msg in request.messages {
-            match msg.role {
-                MessageRole::System => {
-                    if let Some(text) = msg.content {
-                        system_instruction_parts.push(Part {
-                            text: Some(text),
-                            function_call: None,
-                            function_response: None,
-                        });
-                    }
-                }
-                MessageRole::User => {
-                    if let Some(text) = msg.content {
-                        contents.push(Content {
-                            role: "user".to_string(),
-                            parts: vec![Part {
-                                text: Some(text),
-                                function_call: None,
-                                function_response: None,
-                            }],
-                        });
-                    }
-                }
-                MessageRole::Assistant => {
-                    let mut parts = Vec::new();
-                    if let Some(text) = msg.content {
-                        parts.push(Part {
-                            text: Some(text),
-                            function_call: None,
-                            function_response: None,
-                        });
-                    }
-                    if let Some(tool_calls) = msg.tool_calls {
-                        for call in tool_calls {
-                            parts.push(Part {
-                                text: None,
-                                function_call: Some(GeminiFunctionCall {
-                                    name: call.name,
-                                    args: serde_json::from_str(&call.arguments)
-                                        .unwrap_or(serde_json::Value::Null),
-                                }),
-                                function_response: None,
-                            });
-                        }
-                    }
-                    if !parts.is_empty() {
-                        contents.push(Content {
-                            role: "model".to_string(),
-                            parts,
-                        });
-                    }
-                }
-                MessageRole::Tool => {
-                    if let Some(name) = msg.name {
-                        let response_val: serde_json::Value = if let Some(content) = msg.content {
-                            serde_json::from_str(&content)
-                                .unwrap_or(serde_json::Value::String(content))
-                        } else {
-                            serde_json::Value::Null
-                        };
-                        contents.push(Content {
-                            role: "function".to_string(),
-                            parts: vec![Part {
-                                text: None,
-                                function_call: None,
-                                function_response: Some(GeminiFunctionResponse {
-                                    name,
-                                    response: response_val,
-                                }),
-                            }],
-                        });
-                    }
-                }
-            }
-        }
-
-        let system_instruction = if !system_instruction_parts.is_empty() {
-            Some(SystemInstruction {
-                parts: system_instruction_parts,
-            })
-        } else {
-            None
-        };
+        let (system_instruction, contents) = conversation(request.messages);
 
         let generation_config = GenerationConfig {
             temperature: request.temperature,
@@ -829,7 +810,7 @@ impl LlmProvider for GeminiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChatMessage, ReasoningEffort};
+    use crate::{ContentPart, ReasoningEffort};
 
     fn provider(reasoning: Option<Reasoning>) -> GeminiProvider {
         GeminiProvider::new(GeminiConfig {
@@ -929,6 +910,124 @@ mod tests {
         assert_eq!(wire(&provider(None), &request(None)), serde_json::json!({}));
     }
 
+    /// The conversation as Gemini receives it: `systemInstruction` and
+    /// `contents`, serialized, so the camelCase envelopes are the wire's.
+    fn conversation_wire(messages: Vec<ChatMessage>) -> serde_json::Value {
+        let (system_instruction, contents) = conversation(messages);
+        serde_json::json!({
+            "systemInstruction": system_instruction,
+            "contents": contents,
+        })
+    }
+
+    /// The shape this provider has always sent. Parts must not change it.
+    #[test]
+    fn a_text_conversation_is_unchanged() {
+        assert_eq!(
+            conversation_wire(vec![
+                ChatMessage::system("be brief"),
+                ChatMessage::user("hi")
+            ]),
+            serde_json::json!({
+                "systemInstruction": { "parts": [{ "text": "be brief" }] },
+                "contents": [{ "role": "user", "parts": [{ "text": "hi" }] }],
+            })
+        );
+    }
+
+    /// Bytes go in `inlineData`, base64 and bare — no `data:` prefix, which is
+    /// the difference from OpenAI and the thing easiest to get wrong.
+    #[test]
+    fn bytes_go_in_inline_data() {
+        assert_eq!(
+            conversation_wire(vec![ChatMessage::user(vec![
+                ContentPart::text("what is this"),
+                ContentPart::blob("image/png", vec![0, 1, 2]).named("shot.png"),
+            ])]),
+            serde_json::json!({
+                "systemInstruction": null,
+                "contents": [{
+                    "role": "user",
+                    "parts": [
+                        { "text": "what is this" },
+                        { "inlineData": { "mimeType": "image/png", "data": "AAEC" } },
+                    ],
+                }],
+            })
+        );
+    }
+
+    /// A URI is `fileData`, for any MIME type — this API fetches what OpenAI
+    /// will not.
+    #[test]
+    fn a_uri_goes_in_file_data_whatever_its_type() {
+        assert_eq!(
+            conversation_wire(vec![ChatMessage::user(vec![ContentPart::uri(
+                "application/pdf",
+                "https://example.test/r.pdf"
+            )])]),
+            serde_json::json!({
+                "systemInstruction": null,
+                "contents": [{
+                    "role": "user",
+                    "parts": [{
+                        "fileData": {
+                            "mimeType": "application/pdf",
+                            "fileUri": "https://example.test/r.pdf",
+                        },
+                    }],
+                }],
+            })
+        );
+    }
+
+    /// An assistant turn puts its text and its calls in one `model` content,
+    /// in that order — the case the two copies of this loop both had to get
+    /// right, and now only one does.
+    #[test]
+    fn an_assistant_turn_carries_its_text_and_its_calls() {
+        let message = ChatMessage {
+            role: MessageRole::Assistant,
+            content: Some("looking".into()),
+            tool_calls: Some(vec![crate::ToolCall {
+                id: "call-1".to_string(),
+                name: "look_it_up".to_string(),
+                arguments: r#"{"q":"oslo"}"#.to_string(),
+            }]),
+            tool_call_id: None,
+            name: None,
+        };
+        assert_eq!(
+            conversation_wire(vec![message])["contents"],
+            serde_json::json!([{
+                "role": "model",
+                "parts": [
+                    { "text": "looking" },
+                    { "functionCall": { "name": "look_it_up", "args": { "q": "oslo" } } },
+                ],
+            }])
+        );
+    }
+
+    /// A tool's answer is still JSON in a `functionResponse`, and text that is
+    /// not JSON is still a string.
+    #[test]
+    fn a_tool_result_is_a_function_response() {
+        assert_eq!(
+            conversation_wire(vec![ChatMessage::tool_result(
+                "call-1",
+                "look_it_up",
+                "not json"
+            )])["contents"],
+            serde_json::json!([{
+                "role": "function",
+                "parts": [{
+                    "functionResponse": { "name": "look_it_up", "response": "not json" },
+                }],
+            }])
+        );
+    }
+
     /// The retry drops the field and keeps the request: the messages, tools and
     /// the rest of `generationConfig` are what the model was asked for.
     #[test]
@@ -937,11 +1036,7 @@ mod tests {
             system_instruction: None,
             contents: vec![Content {
                 role: "user".to_string(),
-                parts: vec![Part {
-                    text: Some("hi".to_string()),
-                    function_call: None,
-                    function_response: None,
-                }],
+                parts: vec![Part::text("hi".to_string())],
             }],
             generation_config: Some(GenerationConfig {
                 temperature: Some(0.25),

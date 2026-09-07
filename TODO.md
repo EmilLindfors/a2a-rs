@@ -118,16 +118,24 @@ project end to end*), set 2026-09-05.
       calls in flight cannot route the answer. The tasks extension's
       related-task metadata would; so would a bridge that serves one call
       at a time and says so. Either is a design choice, not a patch.
-- [ ] **`a2a-llm` has no message parts, so bytes never reach a model.**
-      `ChatMessage::content` is `Option<String>`. korps feeds text parts,
-      data parts and file *names* to the model since 2026-08-27 and withholds
-      the bytes, naming what it withheld, because there is no content array
-      to map a `FilePart` into. OpenAI and Gemini both take a parts array in
-      place of the string. A content enum of text and typed bytes with a MIME
-      type, rendered per provider, with the `String` constructors kept so a
-      text-only caller does not change. korps' §3 has the consumer half; its
-      §7 *Handoffs carry files* rides on this; the bridge's half shipped
-      2026-09-07.
+- [ ] **A model can be sent bytes, and korps still withholds them.**
+      The `a2a-llm` half landed on 2026-09-07: `ChatMessage::content` is
+      `MessageContent`, a string or a list of `ContentPart`s, rendered per
+      provider. See `CHANGELOG.md`; `NOTES.md` has why it is one content
+      channel rather than a second field, and which URIs OpenAI will not
+      fetch. korps' half is left: `part_text` in `handlers/context.rs` still
+      turns a `FilePart` into `[attachment: … — not sent to the model]`, and
+      that maps to `ContentPart::blob(media_type, bytes)` and
+      `ContentPart::uri` now. Its §3 has that half; its §7 *Handoffs carry
+      files* rides on it.
+      - The upgrade breaks 52 call sites in korps, all of them reading
+        `content` as a string. `ChatMessage::text()` is the replacement for
+        `content.as_deref()`.
+      - korps' `TokenEstimate` counts a message's text and nothing else, so a
+        two-megabyte image estimates as zero tokens and the ceiling that
+        guards a context window stops guarding it. A blob's token cost is the
+        provider's business (Gemini bills an image by tiles), so the estimate
+        needs a per-media rule rather than a byte count.
 
 ---
 

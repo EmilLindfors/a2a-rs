@@ -13,6 +13,9 @@ categories = ["api-bindings", "asynchronous"]
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Bytes in a message part are held decoded; every provider wants base64 on the
+# wire.
+base64 = "0.22"
 reqwest = { workspace = true, features = ["json", "stream"] }
 uuid = { workspace = true, features = ["v4"] }
 async-trait = { workspace = true }

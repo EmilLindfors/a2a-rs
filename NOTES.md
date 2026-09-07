@@ -794,6 +794,33 @@ a 400 names one field per response, and a schema can carry many. The
 `format` list is the one table here, kept because the API documents it and a
 wrong value is a refusal rather than a stale default.
 
+**A message has one content channel, and it holds bytes.** (2026-09-07)
+`ChatMessage::content` was `Option<String>`, so a caller holding a file could
+send only its name. korps did exactly that, and a model asked to summarize an
+attachment answered about nothing. The alternative was a second field,
+`parts` beside `content`: non-breaking, and it makes every reader decide which
+of the two a message means. `MessageContent` is the string or the parts
+instead, so there is one place to look and the compiler finds every reader
+that assumed prose.
+
+Text stays a bare string on the wire (`#[serde(untagged)]`). That keeps
+conversations stored before this readable, and it matters upstream too:
+several small OpenAI-compatible servers take a string for `content` and
+nothing else, so a text-only request must not become an array.
+
+Bytes are held decoded, as `Vec<u8>`. Both providers want base64, and each
+spells the envelope differently — Gemini's `inlineData` is bare base64,
+OpenAI's `image_url` is a `data:` URL — so encoding is the provider's job and
+the type stays the thing a caller has. `Debug` reports a byte count, because a
+megabyte of PDF in a log is not a diagnostic.
+
+**Only Gemini fetches a URI that is not an image.** (2026-09-07) Gemini takes
+`fileData` for any MIME type. OpenAI fetches image URLs and has no field for
+anything else, so `ContentPart::Uri` with a PDF becomes a text part naming the
+file, and the provider logs it at warn. Naming it beats dropping it: the model
+can say it cannot open the file, and a tool in the loop may be able to fetch
+it. A caller that needs a PDF read by an OpenAI model sends the bytes.
+
 **Asking a model to think is a request, never a guarantee.** `Reasoning::Off`
 sends OpenRouter's `enabled: false`; a model with no way to turn reasoning off
 may ignore it, and reasoning tokens are billed even when the text is not

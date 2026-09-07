@@ -4,7 +4,7 @@
 
 use a2a_llm::gemini::{GeminiConfig, GeminiProvider};
 use a2a_llm::openai::{OpenAiConfig, OpenAiProvider, ReasoningDialect};
-use a2a_llm::{ChatMessage, FinishReason, LlmProvider, LlmRequest, LlmStreamEvent};
+use a2a_llm::{ChatMessage, ContentPart, FinishReason, LlmProvider, LlmRequest, LlmStreamEvent};
 use futures::StreamExt;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -202,5 +202,85 @@ async fn a_tool_schema_reaches_gemini_in_the_subset_it_takes() {
             },
             "required": ["kind", "path"],
         })
+    );
+}
+
+/// The point of message parts: the bytes leave the process. Pinned on the
+/// *streaming* path, which is the one an agent actually runs on and the one
+/// that used to hold its own copy of the message mapping — a copy is exactly
+/// where a feature lands on one path and not the other.
+#[tokio::test]
+async fn a_file_reaches_gemini_as_bytes_on_the_streaming_path() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/test-model:streamGenerateContent"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"a duck\"}],\"role\":\"model\"}}]}\n\n",
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+
+    let stream = gemini(&server)
+        .chat_completion_stream(LlmRequest::new(vec![ChatMessage::user(vec![
+            ContentPart::text("what is this"),
+            ContentPart::blob("image/png", b"\x89PNG".to_vec()).named("duck.png"),
+        ])]))
+        .await
+        .expect("the stream opens");
+    let _: Vec<_> = stream.collect().await;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("requests are recorded");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("the body is JSON");
+    assert_eq!(
+        body["contents"][0]["parts"],
+        serde_json::json!([
+            { "text": "what is this" },
+            { "inlineData": { "mimeType": "image/png", "data": "iVBORw==" } },
+        ]),
+        "body: {body}"
+    );
+}
+
+/// The same file, the same path, the other provider — where an image is a
+/// `data:` URL rather than bare base64.
+#[tokio::test]
+async fn a_file_reaches_openai_as_bytes_on_the_streaming_path() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"a duck\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n",
+            "text/event-stream",
+        ))
+        .mount(&server)
+        .await;
+
+    let stream = openai(&server)
+        .chat_completion_stream(LlmRequest::new(vec![ChatMessage::user(vec![
+            ContentPart::text("what is this"),
+            ContentPart::blob("image/png", b"\x89PNG".to_vec()).named("duck.png"),
+        ])]))
+        .await
+        .expect("the stream opens");
+    let _: Vec<_> = stream.collect().await;
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("requests are recorded");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("the body is JSON");
+    assert_eq!(
+        body["messages"][0]["content"],
+        serde_json::json!([
+            { "type": "text", "text": "what is this" },
+            { "type": "image_url", "image_url": { "url": "data:image/png;base64,iVBORw==" } },
+        ]),
+        "body: {body}"
     );
 }

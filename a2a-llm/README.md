@@ -36,6 +36,31 @@ let response = selected
 # }
 ```
 
+## A message carries bytes
+
+`ChatMessage::content` is `MessageContent`: a string, or a list of
+`ContentPart`s when the message holds something a string cannot.
+
+```rust
+use a2a_llm::{ChatMessage, ContentPart};
+
+# fn run(png: Vec<u8>) {
+let message = ChatMessage::user(vec![
+    ContentPart::text("what is this"),
+    ContentPart::blob("image/png", png).named("shot.png"),
+]);
+# }
+```
+
+Bytes are held decoded; each provider encodes them into the shape its API
+takes. Gemini takes bytes as `inlineData` and a URI as `fileData`, any MIME
+type. OpenAI takes an image as `image_url`, wav and mp3 as `input_audio`, and
+anything else as a `file` part. A URI that is not an image has no field on that
+API, so it reaches the model as a line of text naming the file.
+
+`ChatMessage::user("hello")` still means what it did, and a text-only message is
+still a bare string on the wire.
+
 ## Why it is its own crate
 
 The types are deliberately not tied to A2A. `ToolCall` and `ToolDefinition` are
