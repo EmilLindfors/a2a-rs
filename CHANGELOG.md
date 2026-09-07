@@ -13,6 +13,8 @@ they were written with. Released sections below are untouched.
 
 ### Added
 
+- **File parts survive the bridge (`a2a-mcp`)**: a file part with bytes reaches an MCP client as an embedded resource (text under a textual media type, a blob otherwise) or as image content, named by the part's `filename`; a file part by URI is a resource link. Both the agent's message and its artifacts take this path. Coming the other way, an embedded resource in a tool result is an artifact holding the contents rather than a reference to its URI, an image is a file part holding the bytes rather than a data part holding base64, and a text resource whose URI has no scheme keeps that URI as the part's `filename`. A fleet handing SQL and TOML between agents through a tool boundary used to get one line naming the file.
+
 - **A server's question pauses the task (`a2a-mcp`)**: when a tool answers `McpToA2ABridge` with `input_required`, the task comes back `InputRequired` with the server's question and what to fill in as the status message, and the next `message/send` on that task answers it. Text fills the form's one property, coerced to its type; a data part is the answer as given; `decline` or `cancel` alone is that action. The bridge echoes the server's `requestState` on the retry and drives state-only rounds itself. `is_awaiting_input(task_id)` says whether a task is paused. A model's tool call through `execute_llm_tool_call` has no task to pause, and gets the question as the failure.
   - Only a session at 2026-07-28 can carry a pause, and `serve()` cannot reach that revision: rmcp's `initialize` tops out at 2025-11-25, so a consumer opens its peer with `serve_client_with_lifecycle` and the discover lifecycle.
 

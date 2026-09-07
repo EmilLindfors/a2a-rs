@@ -669,17 +669,18 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         for content_item in &result.content {
             match content_item {
                 ContentBlock::Resource(res) => {
-                    let (uri, mime_type) = match &res.resource {
-                        ResourceContents::TextResourceContents { uri, mime_type, .. }
-                        | ResourceContents::BlobResourceContents { uri, mime_type, .. } => {
-                            (uri.clone(), mime_type.clone())
-                        }
+                    // The artifact carries what the resource holds, named by
+                    // its URI. It used to be a reference to the URI, which
+                    // dropped the bytes the server had just sent.
+                    let name = match &res.resource {
+                        ResourceContents::TextResourceContents { uri, .. }
+                        | ResourceContents::BlobResourceContents { uri, .. } => uri.clone(),
                         _ => continue,
                     };
-                    let part = Part::file_from_uri(uri, None, mime_type);
+                    let part = MessageConverter::resource_contents_to_part(&res.resource);
                     artifacts.push(a2a_rs::domain::Artifact {
                         artifact_id: uuid::Uuid::new_v4().to_string(),
-                        name: String::new(),
+                        name,
                         description: String::new(),
                         parts: vec![part],
                         metadata: ::buffa::MessageField::none(),
@@ -1570,9 +1571,10 @@ mod tests {
 
     #[test]
     fn test_prompt_message_to_a2a_message_image() {
+        // An image is a file part holding the decoded bytes.
         let pm = PromptMessage::new(
             rmcp::model::Role::Assistant,
-            ContentBlock::image("imagedata", "image/png"),
+            ContentBlock::image("AQID", "image/png"),
         );
         let msg = prompt_message_to_a2a_message(&pm);
         assert_eq!(
@@ -1581,14 +1583,11 @@ mod tests {
         );
         assert_eq!(msg.parts.len(), 1);
         use a2a_rs::domain::generated::part;
-        if let Some(part::Content::Data(val)) = &msg.parts[0].content {
-            let json_val = serde_json::to_value(&**val).unwrap();
-            assert_eq!(json_val["type"], "image");
-            assert_eq!(json_val["data"], "imagedata");
-            assert_eq!(json_val["mimeType"], "image/png");
-        } else {
-            panic!("Expected data part");
-        }
+        assert_eq!(
+            msg.parts[0].content,
+            Some(part::Content::Raw(vec![1, 2, 3]))
+        );
+        assert_eq!(msg.parts[0].media_type, "image/png");
     }
 
     #[test]

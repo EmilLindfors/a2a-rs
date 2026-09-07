@@ -623,6 +623,19 @@ it, so with two calls in flight the answer could reach the wrong one. It
 waits for the tasks extension's related-task metadata, or a consumer that
 serves one call at a time.
 
+**A file crosses the bridge as a resource, and a URI without a scheme is a
+file name.** (2026-09-07) An A2A file part with bytes becomes an MCP
+embedded resource: text under a textual media type, a blob otherwise, image
+content for an image. A file part by URI is a resource link. The resource's
+URI is the part's `filename`, since MCP requires a URI and the name is the
+one thing the sender said about the file. Coming back, a text resource is a
+text part with the text, which is what a model wants of a resource it
+read, and that would lose the name. So the rule on the way in is that a URI
+with no scheme is a file name and is kept as the part's `filename`; a
+resource read from a server always carries a scheme. The alternative was to
+send every file as a blob, which round-trips a file as a file but shows a
+client base64 where it could show SQL.
+
 
 ---
 

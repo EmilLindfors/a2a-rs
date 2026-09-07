@@ -53,12 +53,18 @@ impl TaskResultConverter {
                         content.push(ContentBlock::text(artifact_text));
                     }
                     Some(part::Content::Raw(_)) | Some(part::Content::Url(_)) => {
-                        let file_text = if !artifact.name.is_empty() {
-                            format!("Artifact '{}': File {:?}", artifact.name, part.filename)
+                        // A file artifact keeps its bytes; see
+                        // `MessageConverter::part_to_content_block`.
+                        let fallback = if artifact.name.is_empty() {
+                            format!("artifact://{}", artifact.artifact_id)
                         } else {
-                            format!("Artifact File: {:?}", part.filename)
+                            artifact.name.clone()
                         };
-                        content.push(ContentBlock::text(file_text));
+                        if let Some(block) =
+                            MessageConverter::part_to_content_block(part, &fallback)?
+                        {
+                            content.push(block);
+                        }
                     }
                     Some(part::Content::Data(value)) => {
                         let data_json = serde_json::to_string_pretty(&value)?;
@@ -223,6 +229,47 @@ mod tests {
         let result = TaskResultConverter::task_to_result(&task, None).unwrap();
         assert!(!result.is_error.unwrap_or(false));
         assert!(result.content.len() >= 2); // Message + artifact
+    }
+
+    /// A file artifact reaches the client as the file, not as a line naming
+    /// it.
+    #[test]
+    fn a_file_artifact_is_an_embedded_resource() {
+        let task = Task::builder()
+            .id("task-4".to_string())
+            .context_id("ctx-4".to_string())
+            .status(TaskStatus::new(TaskState::TASK_STATE_COMPLETED, None))
+            .history(vec![
+                Message::builder()
+                    .role(Role::Agent)
+                    .parts(vec![Part::text("here is the model".to_string())])
+                    .message_id("msg-4".to_string())
+                    .build(),
+            ])
+            .artifacts(vec![Artifact {
+                artifact_id: "art-4".to_string(),
+                name: "semantic".to_string(),
+                description: String::new(),
+                parts: vec![Part::file_from_bytes(
+                    b"[model]\nname = \"lice\"".to_vec(),
+                    Some("semantic.toml".to_string()),
+                    Some("application/toml".to_string()),
+                )],
+                metadata: None.into(),
+                extensions: Vec::new(),
+                ..Default::default()
+            }])
+            .build();
+
+        let result = TaskResultConverter::task_to_result(&task, None).unwrap();
+        let ContentBlock::Resource(embedded) = &result.content[1] else {
+            panic!("expected an embedded resource, got {:?}", result.content[1]);
+        };
+        assert_eq!(
+            embedded.resource,
+            rmcp::model::ResourceContents::text("[model]\nname = \"lice\"", "semantic.toml")
+                .with_mime_type("application/toml")
+        );
     }
 
     #[test]

@@ -97,7 +97,7 @@ Gemini agent without a model); see its `CHANGELOG.md`.
       of a process on a provider that refuses costs one wasted round trip, and
       nothing says so either.
 
-The five below are the protocol half of a fleet building a strata project
+The four below are the protocol half of a fleet building a strata project
 end to end (korps' `TODO.md` §7, strata's `TODO.md` § *Agents build a
 project end to end*), set 2026-09-05.
 
@@ -121,12 +121,6 @@ project end to end*), set 2026-09-05.
       calls in flight cannot route the answer. The tasks extension's
       related-task metadata would; so would a bridge that serves one call
       at a time and says so. Either is a design choice, not a patch.
-- [ ] **File parts survive the bridge.** `task_result.rs` renders a file
-      artifact as the line `Artifact 'x': File ...` and drops the bytes, and
-      `agent_to_mcp` does the same for a request's file part. A fleet
-      handing SQL and TOML between agents through a tool boundary loses the
-      file. Map `FilePart` onto an MCP embedded resource (text or blob with
-      its MIME type) in both directions.
 - [ ] **`a2a-llm` sanitises tool schemas per provider.** Seen 2026-09-05:
       strata's generated schemas reached Gemini through korps unchanged and
       passed, but only after strata dropped `const` and `format` on its own
@@ -144,8 +138,8 @@ project end to end*), set 2026-09-05.
       place of the string. A content enum of text and typed bytes with a MIME
       type, rendered per provider, with the `String` constructors kept so a
       text-only caller does not change. korps' §3 has the consumer half; its
-      §7 *Handoffs carry files* rides on this and on *File parts survive the
-      bridge* above.
+      §7 *Handoffs carry files* rides on this; the bridge's half shipped
+      2026-09-07.
 
 ---
 
