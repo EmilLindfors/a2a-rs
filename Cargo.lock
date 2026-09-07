@@ -34,7 +34,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-mcp"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "a2a-llm",
  "a2a-rs",
@@ -59,7 +59,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-rs"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "arbitrary",
  "async-trait",
