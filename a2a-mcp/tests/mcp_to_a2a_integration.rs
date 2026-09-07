@@ -99,6 +99,7 @@ async fn test_task_state_tracking() {
 struct TestMcpServer {
     tools: Arc<Vec<Tool>>,
     prompts: Arc<Vec<Prompt>>,
+    tasks: rmcp::task_manager::TaskManager,
 }
 
 impl TestMcpServer {
@@ -142,9 +143,25 @@ impl TestMcpServer {
             Arc::new(serde_json::from_value(serde_json::json!({ "type": "object" })).unwrap()),
         );
 
+        // Takes a while, so a client that can hold a task gets one; a client
+        // that cannot gets the result when it is done, the way `strata run`
+        // will behave.
+        let run = Tool::new(
+            "run",
+            "Builds the warehouse",
+            Arc::new(serde_json::from_value(serde_json::json!({ "type": "object" })).unwrap()),
+        );
+        // A task that asks before it acts.
+        let run_after_asking = Tool::new(
+            "run_after_asking",
+            "Builds the warehouse after asking",
+            Arc::new(serde_json::from_value(serde_json::json!({ "type": "object" })).unwrap()),
+        );
+
         Self {
-            tools: Arc::new(vec![tool, drop_table, slow_count]),
+            tools: Arc::new(vec![tool, drop_table, slow_count, run, run_after_asking]),
             prompts: Arc::new(vec![prompt]),
+            tasks: rmcp::task_manager::TaskManager::new(),
         }
     }
 }
@@ -159,9 +176,37 @@ impl ServerHandler for TestMcpServer {
                 .enable_prompts()
                 .enable_resources()
                 .enable_resources_subscribe()
+                .enable_tasks()
                 .build(),
         )
         .with_server_info(Implementation::new("test-server", "1.0.0"))
+    }
+
+    fn get_task(
+        &self,
+        request: GetTaskParams,
+        _ctx: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<GetTaskResult, McpError>> + Send + '_ {
+        async move { Ok(GetTaskResult::new(self.tasks.get_task(&request.task_id)?)) }
+    }
+
+    fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        _ctx: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<(), McpError>> + Send + '_ {
+        async move {
+            self.tasks
+                .update_task(&request.task_id, request.input_responses)
+        }
+    }
+
+    fn cancel_task(
+        &self,
+        request: CancelTaskParams,
+        _ctx: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<(), McpError>> + Send + '_ {
+        async move { self.tasks.cancel_task(&request.task_id) }
     }
 
     fn list_tools(
@@ -254,6 +299,67 @@ impl ServerHandler for TestMcpServer {
                         ));
                     }
                 });
+            }
+            if name == "run" || name == "run_after_asking" {
+                use rmcp::task_manager::{TaskExit, TaskOptions};
+                let built = || CallToolResult::success(vec![ContentBlock::text("2 nodes built")]);
+                // Under the discover lifecycle the client's capabilities ride
+                // on each request, not on the peer's handshake info.
+                let client_holds_tasks = ctx
+                    .client_capabilities()
+                    .is_some_and(|caps| caps.supports_tasks());
+                if !client_holds_tasks {
+                    return Ok(built().into());
+                }
+                let asks = name == "run_after_asking";
+                let task = self.tasks.spawn(
+                    TaskOptions::new().with_poll_interval_ms(10),
+                    move |task| {
+                        Box::pin(async move {
+                            if asks {
+                                let schema = ElicitationSchema::builder()
+                                    .required_bool("confirm")
+                                    .build()
+                                    .unwrap();
+                                let answer = task
+                                    .request_input(
+                                        "confirm",
+                                        InputRequest::Elicitation(ElicitRequest::new(
+                                            ElicitRequestParams::FormElicitationParams {
+                                                meta: None,
+                                                message: "Build the warehouse now?".to_string(),
+                                                requested_schema: schema,
+                                            },
+                                        )),
+                                    )
+                                    .await?;
+                                let answer: ElicitResult = serde_json::from_value(answer)
+                                    .map_err(|e| TaskExit::Error(McpError::invalid_params(e.to_string(), None)))?;
+                                let confirmed = answer.action == ElicitationAction::Accept
+                                    && answer
+                                        .content
+                                        .as_ref()
+                                        .and_then(|c| c.get("confirm"))
+                                        .and_then(|c| c.as_bool())
+                                        .unwrap_or(false);
+                                if !confirmed {
+                                    return Ok(CallToolResult::success(vec![ContentBlock::text(
+                                        "did not build",
+                                    )]));
+                                }
+                            }
+                            for node in 1..=2 {
+                                task.set_status_message(format!("node {node} of 2"));
+                                tokio::select! {
+                                    _ = task.cancelled() => return Err(TaskExit::Cancelled),
+                                    _ = tokio::time::sleep(std::time::Duration::from_millis(30)) => {}
+                                }
+                            }
+                            Ok(built())
+                        })
+                    },
+                );
+                return Ok(CallToolResponse::Task(CreateTaskResult::new(task)));
             }
             if name != "calculator" {
                 return Err(McpError::invalid_params("unknown tool", None));
@@ -768,6 +874,164 @@ async fn current_client(
     )
     .await
     .unwrap()
+}
+
+/// A client at 2026-07-28 that also declares the tasks extension, so a
+/// server may answer a tool call with a task.
+async fn tasks_client(
+    transport: tokio::io::DuplexStream,
+) -> rmcp::service::RunningService<rmcp::RoleClient, ClientInfo> {
+    use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
+    let info = ClientInfo::new(
+        ClientCapabilities::builder().enable_tasks().build(),
+        Implementation::new("test-client", "1.0.0"),
+    )
+    .with_protocol_version(ProtocolVersion::V_2026_07_28);
+    serve_client_with_lifecycle(
+        info,
+        transport,
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// A tool call the server made a task of is one A2A task: the bridge
+/// watches `tasks/get` until the task settles, each status message the
+/// server sets is a `Working` update on the A2A task, and the task's result
+/// is the call's.
+#[tokio::test]
+async fn a_long_tool_call_is_one_task_the_caller_can_watch() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let mcp_server = TestMcpServer::new();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let mcp_client = tasks_client(client_io).await;
+    let streaming_handler = TestStreamingHandler::default();
+    let bridge = McpToA2ABridge::with_streaming(
+        mcp_client.peer().clone(),
+        NoOpHandler,
+        ProgressDispatcher::new(),
+        Arc::new(streaming_handler.clone()),
+    )
+    .await
+    .unwrap();
+    let ctx = a2a_rs::port::RequestContext::anonymous();
+
+    let call = create_tool_call_message("run", serde_json::json!({}));
+    let done = bridge.process_message("run-1", &call, &ctx).await.unwrap();
+    assert_eq!(done.status.state, TaskState::Completed);
+    assert_eq!(done.history[1].parts[0].get_text(), Some("2 nodes built"));
+
+    let relayed: Vec<String> = streaming_handler
+        .updates
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|u| u.status.state == TaskState::Working)
+        .filter_map(|u| u.status.message.as_option())
+        .filter_map(|m| m.parts[0].get_text().map(String::from))
+        .collect();
+    assert_eq!(
+        relayed,
+        vec!["node 1 of 2", "node 2 of 2"],
+        "each status message the server set was relayed once"
+    );
+
+    // A model's tool call gets the task's result as the tool's.
+    let tool_call = a2a_llm::ToolCall {
+        id: "call-1".to_string(),
+        name: "run".to_string(),
+        arguments: "{}".to_string(),
+    };
+    let result = bridge
+        .execute_llm_tool_call("run-2", &tool_call)
+        .await
+        .unwrap();
+    assert_eq!(result.into_model_text(), "2 nodes built");
+
+    drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// A task that asks pauses the A2A task like a paused call does; the next
+/// message answers it through `tasks/update`, and the bridge watches the
+/// task on to its result.
+#[tokio::test]
+async fn a_tasks_question_pauses_the_task_and_tasks_update_answers_it() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let mcp_server = TestMcpServer::new();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let mcp_client = tasks_client(client_io).await;
+    let bridge = McpToA2ABridge::new(mcp_client.peer().clone(), NoOpHandler)
+        .await
+        .unwrap();
+    let ctx = a2a_rs::port::RequestContext::anonymous();
+
+    let call = create_tool_call_message("run_after_asking", serde_json::json!({}));
+    let paused = bridge.process_message("ask-1", &call, &ctx).await.unwrap();
+    assert_eq!(paused.status.state, TaskState::InputRequired);
+    let question: String = paused
+        .status
+        .message
+        .as_option()
+        .map(|m| m.parts.iter().filter_map(|p| p.get_text()).collect())
+        .unwrap_or_default();
+    assert!(
+        question.contains("Build the warehouse now?"),
+        "the task's question is the status message: {question:?}"
+    );
+    assert!(bridge.is_awaiting_input("ask-1"));
+
+    let yes = Message::user_text("yes".to_string(), "answer-1".to_string());
+    let done = bridge.process_message("ask-1", &yes, &ctx).await.unwrap();
+    assert_eq!(done.status.state, TaskState::Completed);
+    assert_eq!(done.history[1].parts[0].get_text(), Some("2 nodes built"));
+    assert!(!bridge.is_awaiting_input("ask-1"));
+
+    // Declined, the task still settles; its answer is the tool's.
+    let call = create_tool_call_message("run_after_asking", serde_json::json!({}));
+    bridge.process_message("ask-2", &call, &ctx).await.unwrap();
+    let no = Message::user_text("decline".to_string(), "answer-2".to_string());
+    let kept = bridge.process_message("ask-2", &no, &ctx).await.unwrap();
+    assert_eq!(kept.status.state, TaskState::Completed);
+    assert_eq!(kept.history[1].parts[0].get_text(), Some("did not build"));
+
+    drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// A client that did not declare the extension is answered in `tools/call`
+/// as before; the bridge sees no task.
+#[tokio::test]
+async fn a_client_without_the_extension_is_answered_in_the_call() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let mcp_server = TestMcpServer::new();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let mcp_client = current_client(client_io).await;
+    let bridge = McpToA2ABridge::new(mcp_client.peer().clone(), NoOpHandler)
+        .await
+        .unwrap();
+    let call = create_tool_call_message("run", serde_json::json!({}));
+    let done = bridge
+        .process_message("run-3", &call, &a2a_rs::port::RequestContext::anonymous())
+        .await
+        .unwrap();
+    assert_eq!(done.status.state, TaskState::Completed);
+    assert_eq!(done.history[1].parts[0].get_text(), Some("2 nodes built"));
+
+    drop(mcp_client);
+    let _ = server_task.await;
 }
 
 /// A tool that asks before it acts pauses the task: `InputRequired`, with the

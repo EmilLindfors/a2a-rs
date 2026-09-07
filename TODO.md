@@ -101,18 +101,23 @@ The four below are the protocol half of a fleet building a strata project
 end to end (korps' `TODO.md` §7, strata's `TODO.md` § *Agents build a
 project end to end*), set 2026-09-05.
 
-- [ ] **MCP tasks across the bridge.** rmcp 3.2 (in since 2026-09-05)
-      has the tasks extension: a tool call answered with
-      `CallToolResponse::Task`, `tasks/get` returning a `DetailedTask`, and
-      `ClientHandler::on_task_status`. strata's `run` will be a task.
-      `mcp_to_a2a` should map an MCP task onto an A2A task: its states onto
-      `TaskState`, its status notifications onto status updates, its result
-      onto the final message, so a long tool call is one A2A task a caller
-      can watch. The client must declare the extension for a server to
-      materialise a task at all. `agent_to_mcp` answers the reverse for a
-      reading client since the bump (`tasks/get` inlines the result); it
-      does not yet *return* a task from `call_tool` for an agent that takes
-      long. korps consumes this in its §7.
+- [ ] **A slow agent behind `agent_to_mcp` is still one blocking call.**
+      The client half shipped 2026-09-07: `McpToA2ABridge` watches a task
+      the server makes of a tool call and the outcome is the call's (see
+      `CHANGELOG.md`). The server half is left. `call_tool` on
+      `AgentToMcpBridge` drives the A2A task to its end inside the request,
+      so a client with a deadline times out on an agent that takes long,
+      even though the bridge already declares the extension and answers
+      `tasks/get` from its cache. Wanted: when the client declared the
+      extension and the A2A task has not settled after a grace period,
+      answer with `CreateTaskResult` (the A2A task id as the MCP task id)
+      and keep driving the task in the background, updating the cache;
+      `tasks/update` becomes the next message on the A2A task, and
+      `InputRequired` stays a task state instead of an elicitation the
+      bridge raises itself. Also `notifications/tasks` on each change, which
+      rmcp has no helper for (`send_notification` by hand). rmcp 3.2's
+      tasks are SEP-2663: no per-call opt-in and no `tasks/result`, so the
+      grace period is the bridge's policy, not the client's.
 - [ ] **An in-flight elicitation becomes `InputRequired` too.** The
       `input_required` result shape pauses a task since 2026-09-06 (see
       `NOTES.md`). The other way a server asks, `create_elicitation` on the

@@ -195,10 +195,60 @@ pub struct McpToA2ABridge<H: AsyncMessageHandler> {
 struct PausedCall {
     tool: String,
     arguments: Value,
-    /// Echoed on the retry unchanged; it is the server's state, opaque here.
-    request_state: Option<String>,
+    /// How the answer reaches the server.
+    resume: Resume,
     /// What the server wants answered, by key.
     input_requests: InputRequests,
+}
+
+/// Where a paused call's answer goes: back into `tools/call`, or to the
+/// task the server made of the call.
+#[derive(Debug, Clone)]
+enum Resume {
+    /// `tools/call` again with the answer, and the server's state echoed
+    /// unchanged; it is opaque here.
+    Retry { request_state: Option<String> },
+    /// `tasks/update` with the answer, then watch the task again.
+    Task {
+        mcp_task_id: String,
+        poll_interval_ms: Option<u64>,
+    },
+}
+
+/// What a tool call came to, once the bridge has driven it as far as it can
+/// without the A2A side.
+#[derive(Debug)]
+enum ToolOutcome {
+    Complete(CallToolResult),
+    InputRequired {
+        input_requests: InputRequests,
+        resume: Resume,
+    },
+    /// The server cancelled the task it made of the call.
+    Cancelled,
+}
+
+/// Cancels the MCP task the bridge was watching if the watcher is dropped
+/// before the task settles: the A2A side went away, so nobody will read
+/// the result.
+struct McpTaskCancelGuard {
+    peer: Arc<Peer<RoleClient>>,
+    mcp_task_id: String,
+    settled: bool,
+}
+
+impl Drop for McpTaskCancelGuard {
+    fn drop(&mut self) {
+        if self.settled {
+            return;
+        }
+        let peer = self.peer.clone();
+        let id = self.mcp_task_id.clone();
+        tokio::spawn(async move {
+            debug!("watcher dropped; cancelling MCP task {id}");
+            let _ = peer.cancel_task(CancelTaskParams::new(id)).await;
+        });
+    }
 }
 
 impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
@@ -423,14 +473,16 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
             .call_mcp_tool(task_id, &params.name, args, None, None)
             .await?
         {
-            CallToolResponse::Complete(result) => Ok(LlmToolConverter::mcp_result_to_llm(&result)),
-            CallToolResponse::InputRequired(result) => Err(A2aMcpError::McpServer(format!(
-                "tool '{}' asked for input, which a model's tool call cannot answer: {}",
-                params.name,
-                render_questions(&result.input_requests.unwrap_or_default())
-            ))),
-            _ => Err(A2aMcpError::McpServer(format!(
-                "tool '{}' answered with a task; the bridge does not drive the tasks extension",
+            ToolOutcome::Complete(result) => Ok(LlmToolConverter::mcp_result_to_llm(&result)),
+            ToolOutcome::InputRequired { input_requests, .. } => {
+                Err(A2aMcpError::McpServer(format!(
+                    "tool '{}' asked for input, which a model's tool call cannot answer: {}",
+                    params.name,
+                    render_questions(&input_requests)
+                )))
+            }
+            ToolOutcome::Cancelled => Err(A2aMcpError::McpServer(format!(
+                "tool '{}' was cancelled by the server",
                 params.name
             ))),
         }
@@ -507,7 +559,7 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         arguments: serde_json::Value,
         input_responses: Option<InputResponses>,
         request_state: Option<String>,
-    ) -> Result<CallToolResponse> {
+    ) -> Result<ToolOutcome> {
         debug!("Calling MCP tool: {} with args: {}", tool_name, arguments);
 
         // Verify tool exists
@@ -523,9 +575,29 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         params.request_state = request_state;
 
         for round in 0..DEFAULT_MRTR_MAX_ROUNDS {
-            let response = self.call_mcp_tool_once(task_id, params.clone()).await?;
-            let CallToolResponse::InputRequired(result) = response else {
-                return Ok(response);
+            let result = match self.call_mcp_tool_once(task_id, params.clone()).await? {
+                CallToolResponse::Complete(result) => return Ok(ToolOutcome::Complete(result)),
+                CallToolResponse::InputRequired(result) => result,
+                // The server made a task of the call; it is watched from
+                // here, and its outcome is the call's.
+                CallToolResponse::Task(created) => {
+                    info!(
+                        "MCP tool '{tool_name}' answered with task {}; watching it",
+                        created.task.task_id
+                    );
+                    return self
+                        .watch_task(
+                            task_id,
+                            created.task.task_id.clone(),
+                            created.task.poll_interval_ms,
+                        )
+                        .await;
+                }
+                _ => {
+                    return Err(A2aMcpError::McpServer(format!(
+                        "tool '{tool_name}' answered with a response kind this bridge does not know"
+                    )));
+                }
             };
             let requests = result.input_requests.unwrap_or_default();
             if requests.is_empty() && result.request_state.is_none() {
@@ -535,10 +607,12 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
                 ));
             }
             if !requests.is_empty() {
-                return Ok(CallToolResponse::InputRequired(InputRequiredResult::new(
-                    Some(requests),
-                    result.request_state,
-                )));
+                return Ok(ToolOutcome::InputRequired {
+                    input_requests: requests,
+                    resume: Resume::Retry {
+                        request_state: result.request_state,
+                    },
+                });
             }
             tokio::time::sleep(std::time::Duration::from_millis(50 << round.min(6))).await;
             params.input_responses = None;
@@ -636,14 +710,123 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
                 info!("MCP tool '{tool_name}' asked for input");
                 Ok(CallToolResponse::InputRequired(result))
             }
-            Ok(ServerResult::CreateTaskResult(_)) => Err(A2aMcpError::McpServer(format!(
-                "tool '{tool_name}' answered with a task; the bridge does not drive the tasks \
-                 extension"
-            ))),
+            Ok(ServerResult::CreateTaskResult(created)) => Ok(CallToolResponse::Task(created)),
             Ok(_) => Err(A2aMcpError::McpServer(
                 "Unexpected response from MCP server".to_string(),
             )),
             Err(e) => Err(e.into()),
+        }
+    }
+
+    /// Watch the MCP task the server made of a tool call until it settles or
+    /// asks for input, and say what it came to. `tasks/get` is polled at the
+    /// interval the server named; each status message the server sets is
+    /// relayed as a `Working` status update on the A2A task. A watcher
+    /// dropped before the task settles cancels it.
+    ///
+    /// The server's `notifications/tasks` are not consumed: the bridge is
+    /// seldom the session's client handler, and polling is how rmcp observes
+    /// a task too.
+    async fn watch_task(
+        &self,
+        task_id: &str,
+        mcp_task_id: String,
+        poll_interval_ms: Option<u64>,
+    ) -> Result<ToolOutcome> {
+        let interval = std::time::Duration::from_millis(
+            poll_interval_ms.unwrap_or(rmcp::task_manager::DEFAULT_POLL_INTERVAL_MS),
+        );
+        let mut guard = McpTaskCancelGuard {
+            peer: self.mcp_peer.clone(),
+            mcp_task_id: mcp_task_id.clone(),
+            settled: false,
+        };
+        let mut last_status_message: Option<String> = None;
+        loop {
+            let detailed = self
+                .mcp_peer
+                .get_task(GetTaskParams::new(mcp_task_id.clone()))
+                .await
+                .map_err(|e| {
+                    A2aMcpError::McpServer(format!("tasks/get for {mcp_task_id} failed: {e}"))
+                })?
+                .task;
+            if detailed.task.status_message != last_status_message {
+                if let Some(text) = &detailed.task.status_message {
+                    self.broadcast_working(task_id, text.clone()).await;
+                }
+                last_status_message = detailed.task.status_message.clone();
+            }
+            match detailed.payload {
+                TaskPayload::Working => {}
+                TaskPayload::InputRequired { input_requests } => {
+                    // The task is paused, not abandoned: the answer comes
+                    // through `tasks/update` on the next A2A message.
+                    guard.settled = true;
+                    return Ok(ToolOutcome::InputRequired {
+                        input_requests,
+                        resume: Resume::Task {
+                            mcp_task_id,
+                            poll_interval_ms,
+                        },
+                    });
+                }
+                TaskPayload::Completed { result } => {
+                    guard.settled = true;
+                    let result: CallToolResult =
+                        serde_json::from_value(Value::Object(result)).map_err(|e| {
+                            A2aMcpError::McpServer(format!(
+                                "task {mcp_task_id} completed with a result that is not a tool result: {e}"
+                            ))
+                        })?;
+                    info!("MCP task {mcp_task_id} completed");
+                    return Ok(ToolOutcome::Complete(result));
+                }
+                TaskPayload::Failed { error } => {
+                    guard.settled = true;
+                    let message = error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("task failed")
+                        .to_string();
+                    return Err(A2aMcpError::McpServer(format!(
+                        "task {mcp_task_id} failed: {message}"
+                    )));
+                }
+                TaskPayload::Cancelled => {
+                    guard.settled = true;
+                    return Ok(ToolOutcome::Cancelled);
+                }
+                _ => {
+                    return Err(A2aMcpError::McpServer(format!(
+                        "task {mcp_task_id} is in a state this bridge does not know"
+                    )));
+                }
+            }
+            tokio::time::sleep(interval).await;
+        }
+    }
+
+    /// Relay one line from the server as a `Working` status update on the
+    /// A2A task, when there is a streaming handler to relay it through.
+    async fn broadcast_working(&self, task_id: &str, text: String) {
+        let Some(sh) = &self.streaming_handler else {
+            return;
+        };
+        let message = Message::builder()
+            .role(Role::Agent)
+            .parts(vec![Part::text(text)])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .build();
+        let update = a2a_rs::domain::TaskStatusUpdateEvent {
+            task_id: task_id.to_string(),
+            context_id: uuid::Uuid::new_v4().to_string(),
+            kind: "status-update".to_string(),
+            status: TaskStatus::new(TaskState::Working, Some(message)),
+            metadata: None,
+        };
+        if let Err(e) = sh.broadcast_status_update(task_id, update).await {
+            error!("Failed to broadcast status update: {:?}", e);
         }
     }
 
@@ -749,29 +932,81 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         message: &Message,
         tool: &str,
         arguments: &Value,
-        response: CallToolResponse,
-    ) -> Result<Task> {
-        match response {
-            CallToolResponse::Complete(result) => {
-                Ok(Self::completed_task(task_id, message, &result))
-            }
-            CallToolResponse::InputRequired(result) => {
+        outcome: ToolOutcome,
+    ) -> Task {
+        match outcome {
+            ToolOutcome::Complete(result) => Self::completed_task(task_id, message, &result),
+            ToolOutcome::InputRequired {
+                input_requests,
+                resume,
+            } => {
                 let paused = PausedCall {
                     tool: tool.to_string(),
                     arguments: arguments.clone(),
-                    request_state: result.request_state,
-                    input_requests: result.input_requests.unwrap_or_default(),
+                    resume,
+                    input_requests,
                 };
                 let task = Self::paused_task(task_id, message, &paused);
                 self.paused
                     .lock()
                     .unwrap()
                     .insert(task_id.to_string(), paused);
-                Ok(task)
+                task
             }
-            _ => Err(A2aMcpError::McpServer(format!(
-                "tool '{tool}' answered with a task; the bridge does not drive the tasks extension"
-            ))),
+            ToolOutcome::Cancelled => {
+                let note = Message::builder()
+                    .role(Role::Agent)
+                    .parts(vec![Part::text(format!(
+                        "tool '{tool}' was cancelled by the server"
+                    ))])
+                    .message_id(uuid::Uuid::new_v4().to_string())
+                    .build();
+                Task::builder()
+                    .id(task_id.to_string())
+                    .context_id(uuid::Uuid::new_v4().to_string())
+                    .status(TaskStatus::new(TaskState::Canceled, Some(note.clone())))
+                    .history(vec![message.clone(), note])
+                    .build()
+            }
+        }
+    }
+
+    /// Answer a paused call with what the A2A side said, and carry on: a
+    /// call the server paused in `tools/call` is retried with the answer,
+    /// one it made a task of gets the answer through `tasks/update` and is
+    /// watched again.
+    async fn resume_call(
+        &self,
+        task_id: &str,
+        paused: &PausedCall,
+        responses: InputResponses,
+    ) -> Result<ToolOutcome> {
+        match &paused.resume {
+            Resume::Retry { request_state } => {
+                self.call_mcp_tool(
+                    task_id,
+                    &paused.tool,
+                    paused.arguments.clone(),
+                    (!responses.is_empty()).then_some(responses),
+                    request_state.clone(),
+                )
+                .await
+            }
+            Resume::Task {
+                mcp_task_id,
+                poll_interval_ms,
+            } => {
+                self.mcp_peer
+                    .update_task(UpdateTaskParams::new(mcp_task_id.clone(), responses))
+                    .await
+                    .map_err(|e| {
+                        A2aMcpError::McpServer(format!(
+                            "tasks/update for {mcp_task_id} failed: {e}"
+                        ))
+                    })?;
+                self.watch_task(task_id, mcp_task_id.clone(), *poll_interval_ms)
+                    .await
+            }
         }
     }
 
@@ -950,15 +1185,14 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
         }) = Self::extract_tool_call(message)
         {
             info!("Detected MCP tool call request for tool: {}", tool_name);
-            let response = self
+            let outcome = self
                 .call_mcp_tool(task_id, &tool_name, arguments.clone(), None, None)
                 .await
                 .map_err(|e| {
                     error!("MCP tool call failed: {}", e);
                     e.to_a2a_error()
                 })?;
-            self.task_for(task_id, message, &tool_name, &arguments, response)
-                .map_err(|e| e.to_a2a_error())
+            Ok(self.task_for(task_id, message, &tool_name, &arguments, outcome))
         } else if let Some(paused) = paused {
             // The answer to a question the server asked on this task.
             info!(
@@ -966,21 +1200,14 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> AsyncMessageHandler
                 paused.tool
             );
             let responses = answers_for(&paused.input_requests, message);
-            let response = self
-                .call_mcp_tool(
-                    task_id,
-                    &paused.tool,
-                    paused.arguments.clone(),
-                    (!responses.is_empty()).then_some(responses),
-                    paused.request_state.clone(),
-                )
+            let outcome = self
+                .resume_call(task_id, &paused, responses)
                 .await
                 .map_err(|e| {
                     error!("MCP tool call failed after its input was answered: {}", e);
                     e.to_a2a_error()
                 })?;
-            self.task_for(task_id, message, &paused.tool, &paused.arguments, response)
-                .map_err(|e| e.to_a2a_error())
+            Ok(self.task_for(task_id, message, &paused.tool, &paused.arguments, outcome))
         } else if let Some(McpPromptCall {
             name: prompt_name,
             arguments,

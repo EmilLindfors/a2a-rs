@@ -636,6 +636,29 @@ resource read from a server always carries a scheme. The alternative was to
 send every file as a blob, which round-trips a file as a file but shows a
 client base64 where it could show SQL.
 
+**An MCP task is watched inside the request that made it.** (2026-09-07)
+`process_message` returns one `Task`, and what it returns is what the
+transport stores. So `McpToA2ABridge` does not hand back `Working` and
+finish the MCP task in the background: there would be no way to store the
+result when it came. It polls `tasks/get` until the task settles or asks,
+inside the call, and relays the server's status messages through the
+streaming handler meanwhile. The A2A caller's deadline governs, which is
+what a caller that wanted to wait asked for; one that did not can
+subscribe and read the updates. `notifications/tasks` is not consumed:
+the bridge is seldom the session's client handler, and rmcp observes a
+task by polling too. rmcp 3.2's tasks are SEP-2663, not the SEP-1319
+draft the TODO item was written against: there is no per-call opt-in, so
+declaring the extension means any tool may answer with a task, and the
+bridge handles one wherever it calls a tool.
+
+**A 2026-07-28 client's capabilities are on the request, not the
+handshake.** (2026-09-07) Under the discover lifecycle
+`Peer::peer_info()` is not filled from `initialize`; each request carries
+the client's capabilities in its metadata, and
+`RequestContext::client_capabilities()` reads whichever is there. A
+server that reads `peer_info()` to decide whether it may elicit or make
+a task sees `None` for exactly the clients that can do both.
+
 
 ---
 
