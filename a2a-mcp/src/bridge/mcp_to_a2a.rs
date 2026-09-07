@@ -105,26 +105,72 @@ impl Drop for RequestCancelGuard {
     }
 }
 
-/// Client handler that dispatches progress notifications to a `ProgressDispatcher`.
+/// Client handler that dispatches progress notifications to a
+/// `ProgressDispatcher`, and optionally routes elicitations to a bridge.
 #[derive(Clone, Default)]
 pub struct ProgressClientHandler {
     dispatcher: ProgressDispatcher,
+    elicitations: Option<ElicitationRouter>,
 }
 
 impl ProgressClientHandler {
     /// Create a new progress client handler
     pub fn new(dispatcher: ProgressDispatcher) -> Self {
-        Self { dispatcher }
+        Self {
+            dispatcher,
+            elicitations: None,
+        }
+    }
+
+    /// Route what the server asks mid-call to the bridge built with this
+    /// same router. Without one, an elicitation is refused: this handler has
+    /// nobody to ask.
+    pub fn with_elicitations(mut self, router: ElicitationRouter) -> Self {
+        self.elicitations = Some(router);
+        self
+    }
+
+    /// Declare what a peer served with this handler can do.
+    ///
+    /// Elicitation is declared only when there is a router to answer with:
+    /// rmcp will not deliver an elicitation to a client that did not declare
+    /// the capability, and declaring one this handler would refuse is worse
+    /// than not declaring it. Everything else is rmcp's default, including
+    /// the implementation identity.
+    pub fn client_info(&self) -> ClientInfo {
+        let mut info = ClientInfo::default();
+        if self.elicitations.is_some() {
+            info.capabilities = ClientCapabilities::builder().enable_elicitation().build();
+        }
+        info
     }
 }
 
 impl rmcp::ClientHandler for ProgressClientHandler {
+    fn get_info(&self) -> ClientInfo {
+        self.client_info()
+    }
+
     async fn on_progress(
         &self,
         params: ProgressNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
         self.dispatcher.handle_notification(params).await;
+    }
+
+    async fn create_elicitation(
+        &self,
+        params: ElicitRequestParams,
+        _context: rmcp::service::RequestContext<RoleClient>,
+    ) -> std::result::Result<ElicitResult, rmcp::ErrorData> {
+        match &self.elicitations {
+            Some(router) => router.route(params).await,
+            None => Err(rmcp::ErrorData::invalid_request(
+                "this client routes no elicitations",
+                None,
+            )),
+        }
     }
 }
 
@@ -176,6 +222,193 @@ pub struct McpToA2ABridge<H: AsyncMessageHandler> {
     /// Tool calls the server paused for input, by A2A task id, until the
     /// next message on that task answers them.
     paused: Arc<std::sync::Mutex<HashMap<String, PausedCall>>>,
+    /// Tool calls open on the wire right now. What an elicitation the server
+    /// raises mid-call is routed by.
+    elicitations: ElicitationRouter,
+}
+
+/// Routes an elicitation a server raises in the middle of `tools/call` to
+/// the A2A task that call belongs to.
+///
+/// Held apart from the bridge for the same reason [`ProgressDispatcher`] is:
+/// the bridge is built *from* a peer, so it cannot be the handler that peer
+/// was served with. A consumer creates one, gives it to whatever client
+/// handler it serves with — [`ProgressClientHandler::with_elicitations`] —
+/// and hands the same one to the bridge with
+/// [`McpToA2ABridge::with_elicitation_router`]. A consumer that serves the
+/// bridge itself as the client handler needs none of that; the bridge has
+/// its own.
+#[derive(Clone, Default)]
+pub struct ElicitationRouter {
+    in_flight: Arc<std::sync::Mutex<HashMap<String, InFlight>>>,
+}
+
+/// A `tools/call` open on the wire, and what has become of it since.
+enum InFlight {
+    /// Running, with nothing asked of the A2A side yet. The channel wakes
+    /// the call's own await when the server elicits, so the question can go
+    /// back to the A2A side while the call stays open.
+    Open(tokio::sync::oneshot::Sender<Raised>),
+    /// The server asked something and is waiting on the answer, which the
+    /// A2A side owes on the next message. The call is still running.
+    Asked {
+        answer: tokio::sync::oneshot::Sender<ElicitResult>,
+        call: tokio::task::JoinHandle<Result<CallToolResponse>>,
+    },
+}
+
+/// An elicitation the server raised in the middle of a call: what it asked,
+/// and where the answer goes.
+struct Raised {
+    input_requests: InputRequests,
+    answer: tokio::sync::oneshot::Sender<ElicitResult>,
+}
+
+/// The key an in-flight elicitation is filed under. One question per call,
+/// so the name only has to be stable between asking and answering.
+const IN_FLIGHT_KEY: &str = "elicitation";
+
+/// How long a server's in-flight elicitation waits for the A2A side before
+/// it is cancelled.
+///
+/// A bound rather than none because the server is holding a request open
+/// across it. Generous, because the party being asked is a person or an
+/// agent, not a machine.
+const ELICITATION_ANSWER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
+impl ElicitationRouter {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Answer an elicitation the server raised mid-call, by routing it to
+    /// the A2A task whose call it belongs to.
+    ///
+    /// Nothing in the request names that call — MCP 2026-07-28 has no
+    /// related-task metadata on a server-to-client request — so this routes
+    /// by what it can prove: the calls it has open. With one open the
+    /// question is that call's. With two it is unknowable, and this refuses
+    /// rather than pause the wrong task; a consumer that hits the refusal is
+    /// calling two elicitating tools at once through one bridge, which is
+    /// worth being told about.
+    ///
+    /// The answer comes from the A2A side, as the next message on the task
+    /// this pauses. The call stays open across it.
+    pub async fn route(
+        &self,
+        params: ElicitRequestParams,
+    ) -> std::result::Result<ElicitResult, rmcp::ErrorData> {
+        let raised = self.take_open()?;
+
+        let mut input_requests = InputRequests::new();
+        input_requests.insert(
+            IN_FLIGHT_KEY.to_string(),
+            InputRequest::Elicitation(ElicitRequest::new(params)),
+        );
+
+        let (answer, answer_rx) = tokio::sync::oneshot::channel();
+        if raised
+            .send(Raised {
+                input_requests,
+                answer,
+            })
+            .is_err()
+        {
+            return Err(rmcp::ErrorData::internal_error(
+                "the call this question belongs to stopped waiting",
+                None,
+            ));
+        }
+
+        match tokio::time::timeout(ELICITATION_ANSWER_TIMEOUT, answer_rx).await {
+            Ok(Ok(result)) => Ok(result),
+            // Cancel, not decline: nobody said no, nobody said anything.
+            Ok(Err(_)) | Err(_) => {
+                debug!("An in-flight elicitation went unanswered; cancelling it");
+                Ok(ElicitResult::new(ElicitationAction::Cancel))
+            }
+        }
+    }
+
+    /// The one open call's waker, or the reason there is not exactly one.
+    fn take_open(
+        &self,
+    ) -> std::result::Result<tokio::sync::oneshot::Sender<Raised>, rmcp::ErrorData> {
+        let mut calls = self.in_flight.lock().unwrap();
+        let open: Vec<String> = calls
+            .iter()
+            .filter(|(_, call)| matches!(call, InFlight::Open(_)))
+            .map(|(id, _)| id.clone())
+            .collect();
+        match open.as_slice() {
+            [id] => match calls.remove(id) {
+                Some(InFlight::Open(raised)) => Ok(raised),
+                other => {
+                    if let Some(call) = other {
+                        calls.insert(id.clone(), call);
+                    }
+                    Err(rmcp::ErrorData::internal_error(
+                        "the call this question belongs to went away",
+                        None,
+                    ))
+                }
+            },
+            [] => Err(rmcp::ErrorData::invalid_request(
+                "this client has no tool call open, so there is nobody to ask",
+                None,
+            )),
+            ids => Err(rmcp::ErrorData::invalid_request(
+                format!(
+                    "{} tool calls are open and nothing in this request names which one asked, \
+                     so the answer cannot be routed",
+                    ids.len()
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// Register a call as open, and take the channel it is woken through.
+    fn opened(&self, task_id: &str) -> tokio::sync::oneshot::Receiver<Raised> {
+        let (raised, rx) = tokio::sync::oneshot::channel();
+        self.in_flight
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), InFlight::Open(raised));
+        rx
+    }
+
+    /// The call is over, whatever it came to.
+    fn closed(&self, task_id: &str) {
+        self.in_flight.lock().unwrap().remove(task_id);
+    }
+
+    /// The call is waiting on an answer the A2A side owes.
+    fn parked(
+        &self,
+        task_id: &str,
+        answer: tokio::sync::oneshot::Sender<ElicitResult>,
+        call: tokio::task::JoinHandle<Result<CallToolResponse>>,
+    ) {
+        self.in_flight
+            .lock()
+            .unwrap()
+            .insert(task_id.to_string(), InFlight::Asked { answer, call });
+    }
+
+    /// Take back a parked call, to answer it.
+    fn take_parked(
+        &self,
+        task_id: &str,
+    ) -> Option<(
+        tokio::sync::oneshot::Sender<ElicitResult>,
+        tokio::task::JoinHandle<Result<CallToolResponse>>,
+    )> {
+        match self.in_flight.lock().unwrap().remove(task_id) {
+            Some(InFlight::Asked { answer, call }) => Some((answer, call)),
+            _ => None,
+        }
+    }
 }
 
 /// A tool call the server answered with `input_required`: what it asked, and
@@ -213,6 +446,26 @@ enum Resume {
         mcp_task_id: String,
         poll_interval_ms: Option<u64>,
     },
+    /// The answer goes back to an elicitation the server raised while
+    /// `tools/call` was still open. The call has been running all along; the
+    /// answer unblocks it and its result is the call's.
+    Elicitation,
+}
+
+/// A server's answer to `tools/call`, read as either an outcome or another
+/// question.
+enum Responded {
+    Outcome(ToolOutcome),
+    AskAgain(InputRequiredResult),
+}
+
+/// What one `tools/call` round came to.
+enum RoundOutcome {
+    /// The server answered the call.
+    Answered(CallToolResponse),
+    /// The server asked the A2A side something instead, and the call is
+    /// still open waiting on the answer.
+    Elicited { input_requests: InputRequests },
 }
 
 /// What a tool call came to, once the bridge has driven it as far as it can
@@ -315,7 +568,27 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
             progress_dispatcher,
             streaming_handler,
             paused: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            elicitations: ElicitationRouter::new(),
         }
+    }
+
+    /// The router this bridge takes in-flight elicitations from.
+    ///
+    /// Hand it to whatever client handler the peer is served with, so a
+    /// question the server asks mid-call reaches the task that asked it.
+    pub fn elicitations(&self) -> ElicitationRouter {
+        self.elicitations.clone()
+    }
+
+    /// Take elicitations from a router created before the peer was served,
+    /// rather than this bridge's own.
+    ///
+    /// The order is forced: a client handler is served first and the bridge
+    /// is built from the peer that returns, so a router the handler already
+    /// holds cannot have come from the bridge.
+    pub fn with_elicitation_router(mut self, router: ElicitationRouter) -> Self {
+        self.elicitations = router;
+        self
     }
 
     /// Whether `task_id` is waiting on an answer to a server's question.
@@ -575,29 +848,20 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         params.request_state = request_state;
 
         for round in 0..DEFAULT_MRTR_MAX_ROUNDS {
-            let result = match self.call_mcp_tool_once(task_id, params.clone()).await? {
-                CallToolResponse::Complete(result) => return Ok(ToolOutcome::Complete(result)),
-                CallToolResponse::InputRequired(result) => result,
-                // The server made a task of the call; it is watched from
-                // here, and its outcome is the call's.
-                CallToolResponse::Task(created) => {
-                    info!(
-                        "MCP tool '{tool_name}' answered with task {}; watching it",
-                        created.task.task_id
-                    );
-                    return self
-                        .watch_task(
-                            task_id,
-                            created.task.task_id.clone(),
-                            created.task.poll_interval_ms,
-                        )
-                        .await;
+            let response = match self.call_mcp_tool_once(task_id, params.clone()).await? {
+                RoundOutcome::Answered(response) => response,
+                // The server asked mid-call. The question goes to the A2A
+                // side and the call stays open for its answer.
+                RoundOutcome::Elicited { input_requests } => {
+                    return Ok(ToolOutcome::InputRequired {
+                        input_requests,
+                        resume: Resume::Elicitation,
+                    });
                 }
-                _ => {
-                    return Err(A2aMcpError::McpServer(format!(
-                        "tool '{tool_name}' answered with a response kind this bridge does not know"
-                    )));
-                }
+            };
+            let result = match self.responded(task_id, tool_name, response).await? {
+                Responded::Outcome(outcome) => return Ok(outcome),
+                Responded::AskAgain(result) => result,
             };
             let requests = result.input_requests.unwrap_or_default();
             if requests.is_empty() && result.request_state.is_none() {
@@ -623,9 +887,84 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
         )))
     }
 
-    /// One round of `tools/call`, with the server's progress relayed while it
-    /// runs.
+    /// What a server's answer to `tools/call` means, for the two places that
+    /// have to read one: the first call and the resumed one.
+    async fn responded(
+        &self,
+        task_id: &str,
+        tool_name: &str,
+        response: CallToolResponse,
+    ) -> Result<Responded> {
+        match response {
+            CallToolResponse::Complete(result) => {
+                Ok(Responded::Outcome(ToolOutcome::Complete(result)))
+            }
+            CallToolResponse::InputRequired(result) => Ok(Responded::AskAgain(result)),
+            // The server made a task of the call; it is watched from here,
+            // and its outcome is the call's.
+            CallToolResponse::Task(created) => {
+                info!(
+                    "MCP tool '{tool_name}' answered with task {}; watching it",
+                    created.task.task_id
+                );
+                self.watch_task(
+                    task_id,
+                    created.task.task_id.clone(),
+                    created.task.poll_interval_ms,
+                )
+                .await
+                .map(Responded::Outcome)
+            }
+            _ => Err(A2aMcpError::McpServer(format!(
+                "tool '{tool_name}' answered with a response kind this bridge does not know"
+            ))),
+        }
+    }
+
+    /// One round of `tools/call`.
+    ///
+    /// The round runs as its own task, and this races it against the server
+    /// elicitating mid-call. Spawned rather than awaited in place because an
+    /// elicitation has to reach the A2A side *while the call is still open*:
+    /// the answer arrives as a later `message/send`, which cannot happen
+    /// until `process_message` returns, which cannot happen while this is
+    /// awaiting the call. Dropping the call's future instead would cancel it
+    /// — `RequestCancelGuard` says so on the wire — which is the opposite of
+    /// what a question mid-call means.
     async fn call_mcp_tool_once(
+        &self,
+        task_id: &str,
+        params: CallToolRequestParams,
+    ) -> Result<RoundOutcome> {
+        let raised_rx = self.elicitations.opened(task_id);
+
+        let round = self.clone();
+        let round_task = task_id.to_string();
+        let mut call = tokio::spawn(async move { round.one_round(&round_task, params).await });
+
+        tokio::select! {
+            finished = &mut call => {
+                self.elicitations.closed(task_id);
+                match finished {
+                    Ok(result) => result.map(RoundOutcome::Answered),
+                    Err(join) => Err(A2aMcpError::McpServer(format!(
+                        "the tool call did not finish: {join}"
+                    ))),
+                }
+            }
+            Ok(raised) = raised_rx => {
+                info!("MCP server asked something mid-call on task {task_id}; the call stays open");
+                self.elicitations.parked(task_id, raised.answer, call);
+                Ok(RoundOutcome::Elicited {
+                    input_requests: raised.input_requests,
+                })
+            }
+        }
+    }
+
+    /// The `tools/call` itself, with the server's progress relayed while it
+    /// runs.
+    async fn one_round(
         &self,
         task_id: &str,
         params: CallToolRequestParams,
@@ -1007,6 +1346,58 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
                 self.watch_task(task_id, mcp_task_id.clone(), *poll_interval_ms)
                     .await
             }
+            Resume::Elicitation => {
+                self.answer_elicitation(task_id, &paused.tool, responses)
+                    .await
+            }
+        }
+    }
+
+    /// Hand the A2A side's answer to the elicitation the server raised, and
+    /// take up the call it has been holding open all along.
+    async fn answer_elicitation(
+        &self,
+        task_id: &str,
+        tool_name: &str,
+        mut responses: InputResponses,
+    ) -> Result<ToolOutcome> {
+        let Some((answer, call)) = self.elicitations.take_parked(task_id) else {
+            return Err(A2aMcpError::McpServer(format!(
+                "no call on task {task_id} is waiting for an answer"
+            )));
+        };
+
+        let result = responses
+            .remove(IN_FLIGHT_KEY)
+            .and_then(|value| serde_json::from_value::<ElicitResult>(value).ok())
+            .unwrap_or_else(|| ElicitResult::new(ElicitationAction::Decline));
+        if answer.send(result).is_err() {
+            return Err(A2aMcpError::McpServer(format!(
+                "the server stopped waiting for the answer on task {task_id}"
+            )));
+        }
+
+        let response = call.await.map_err(|join| {
+            A2aMcpError::McpServer(format!("the tool call did not finish: {join}"))
+        })??;
+
+        match self.responded(task_id, tool_name, response).await? {
+            Responded::Outcome(outcome) => Ok(outcome),
+            // The server asked again, this time through the result shape.
+            Responded::AskAgain(result) => {
+                let requests = result.input_requests.unwrap_or_default();
+                if requests.is_empty() {
+                    return Err(A2aMcpError::McpServer(
+                        "the server said input is required and named no request".to_string(),
+                    ));
+                }
+                Ok(ToolOutcome::InputRequired {
+                    input_requests: requests,
+                    resume: Resume::Retry {
+                        request_state: result.request_state,
+                    },
+                })
+            }
         }
     }
 
@@ -1080,12 +1471,37 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> McpToA2ABridge<H> {
 impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> rmcp::ClientHandler
     for McpToA2ABridge<H>
 {
+    /// Declares elicitation, because this handler answers one — rmcp
+    /// delivers none to a client that did not say so, which would leave
+    /// `create_elicitation` below unreachable.
+    ///
+    /// Only reached when the bridge is itself the handler its peer was
+    /// served with, which the construction order rarely allows; a consumer
+    /// serving some other handler declares it there. See
+    /// [`ProgressClientHandler::client_info`].
+    fn get_info(&self) -> ClientInfo {
+        let mut info = ClientInfo::default();
+        info.capabilities = ClientCapabilities::builder().enable_elicitation().build();
+        info
+    }
+
     async fn on_progress(
         &self,
         params: ProgressNotificationParam,
         _context: NotificationContext<RoleClient>,
     ) {
         self.progress_dispatcher.handle_notification(params).await;
+    }
+
+    /// A question the server asked in the middle of `tools/call`, routed to
+    /// the A2A task whose call it belongs to. See [`ElicitationRouter`],
+    /// which a consumer that serves some other client handler holds instead.
+    async fn create_elicitation(
+        &self,
+        params: ElicitRequestParams,
+        _context: rmcp::service::RequestContext<RoleClient>,
+    ) -> std::result::Result<ElicitResult, rmcp::ErrorData> {
+        self.elicitations.route(params).await
     }
 
     /// The server said a resource changed: remember which, for whoever holds

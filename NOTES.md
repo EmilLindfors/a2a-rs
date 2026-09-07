@@ -794,6 +794,32 @@ a 400 names one field per response, and a schema can carry many. The
 `format` list is the one table here, kept because the API documents it and a
 wrong value is a refusal rather than a stale default.
 
+**A question with two calls open is refused, not guessed.** (2026-09-07)
+A server can ask the client something while `tools/call` is open, and nothing
+in that request names the call: MCP 2026-07-28 has no related-task metadata
+on a server-to-client request. `ElicitationRouter` routes by the calls the
+bridge has open. One open is unambiguous. Two is not, and the answer would
+pause a task that never asked anything — so it refuses with an error naming
+the count.
+
+The alternative was serving one tool call at a time and saying so. That is
+unambiguous by construction, and it makes a slow tool block every other call
+through the same bridge. Refusing costs concurrency only in the case that is
+actually ambiguous: two elicitating tools called at once.
+
+**An elicitation mid-call cannot be awaited in place.** (2026-09-07) The
+answer arrives as a later `message/send` on the A2A task, which cannot happen
+until `process_message` returns, which cannot happen while it is awaiting the
+call. So the round is spawned and `call_mcp_tool_once` races it against the
+elicitation. Dropping the call's future instead would cancel it —
+`RequestCancelGuard` says so on the wire — which is the opposite of what a
+question mid-call means.
+
+The router is not on the bridge for the same reason `ProgressDispatcher` is
+not: the bridge is built *from* a peer, so it cannot be the handler that peer
+was served with. A consumer creates the router, gives it to its client
+handler, and hands the same one to the bridge.
+
 **A grace period, not an always-a-task rule.** (2026-09-07) SEP-2663 has no
 per-call opt-in and no `tasks/result`, so a server that declares the tasks
 extension decides for itself when a call stops blocking. Answering every call

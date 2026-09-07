@@ -89,7 +89,7 @@ skill with no `keywords`, the `axum` and `reqwest` deletions, `Remembered`, a
 Gemini agent without a model, the status route reading `reasoning_refused()`);
 see its `CHANGELOG.md`.
 
-The three below are the protocol half of a fleet building a strata project
+The two below are the protocol half of a fleet building a strata project
 end to end (korps' `TODO.md` §7, strata's `TODO.md` § *Agents build a
 project end to end*), set 2026-09-05.
 
@@ -104,14 +104,6 @@ project end to end*), set 2026-09-05.
       does not declare `ClientCapabilities::enable_tasks()`, so every call
       it makes still blocks and neither half is exercised by a fleet. Its
       §3 has that half.
-- [ ] **An in-flight elicitation becomes `InputRequired` too.** The
-      `input_required` result shape pauses a task since 2026-09-06 (see
-      `NOTES.md`). The other way a server asks, `create_elicitation` on the
-      client handler while `tools/call` is still open, does not: nothing in
-      that request names the A2A task that raised it, so a bridge with two
-      calls in flight cannot route the answer. The tasks extension's
-      related-task metadata would; so would a bridge that serves one call
-      at a time and says so. Either is a design choice, not a patch.
 - [ ] **A model can be sent bytes, and korps still withholds them.**
       The `a2a-llm` half landed on 2026-09-07: `ChatMessage::content` is
       `MessageContent`, a string or a list of `ContentPart`s, rendered per

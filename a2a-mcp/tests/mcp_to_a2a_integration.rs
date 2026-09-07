@@ -19,7 +19,10 @@ use rmcp::{
     handler::client::progress::ProgressDispatcher, model::*, service::RequestContext,
 };
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 #[tokio::test]
 async fn test_mcp_tool_as_a2a_skill() {
@@ -100,6 +103,10 @@ struct TestMcpServer {
     tools: Arc<Vec<Tool>>,
     prompts: Arc<Vec<Prompt>>,
     tasks: rmcp::task_manager::TaskManager,
+    /// Lets one waiting `ask_when_told` call through to its elicitation.
+    gate: Arc<tokio::sync::Notify>,
+    /// How many calls are waiting at it.
+    at_gate: Arc<AtomicUsize>,
 }
 
 impl TestMcpServer {
@@ -157,11 +164,35 @@ impl TestMcpServer {
             "Builds the warehouse after asking",
             Arc::new(serde_json::from_value(serde_json::json!({ "type": "object" })).unwrap()),
         );
+        // Asks the *client* while the call is open, rather than answering
+        // with `input_required` — the other way a server asks.
+        let ask_in_flight = Tool::new(
+            "ask_in_flight",
+            "Asks the client mid-call",
+            Arc::new(serde_json::from_value(serde_json::json!({ "type": "object" })).unwrap()),
+        );
+        // The same, held at a gate the test opens, so two calls can be open
+        // at once on purpose.
+        let ask_when_told = Tool::new(
+            "ask_when_told",
+            "Asks the client mid-call, once let through",
+            Arc::new(serde_json::from_value(serde_json::json!({ "type": "object" })).unwrap()),
+        );
 
         Self {
-            tools: Arc::new(vec![tool, drop_table, slow_count, run, run_after_asking]),
+            tools: Arc::new(vec![
+                tool,
+                drop_table,
+                slow_count,
+                run,
+                run_after_asking,
+                ask_in_flight,
+                ask_when_told,
+            ]),
             prompts: Arc::new(vec![prompt]),
             tasks: rmcp::task_manager::TaskManager::new(),
+            gate: Arc::new(tokio::sync::Notify::new()),
+            at_gate: Arc::new(AtomicUsize::new(0)),
         }
     }
 }
@@ -299,6 +330,39 @@ impl ServerHandler for TestMcpServer {
                         ));
                     }
                 });
+            }
+            if name == "ask_in_flight" || name == "ask_when_told" {
+                if name == "ask_when_told" {
+                    self.at_gate.fetch_add(1, Ordering::SeqCst);
+                    self.gate.notified().await;
+                }
+                let schema = ElicitationSchema::builder()
+                    .required_string("answer")
+                    .build()
+                    .unwrap();
+                let answer = ctx
+                    .peer
+                    .create_elicitation(ElicitRequestParams::FormElicitationParams {
+                        meta: None,
+                        message: "What should I call it?".to_string(),
+                        requested_schema: schema,
+                    })
+                    .await;
+                let said = match answer {
+                    Ok(result) if result.action == ElicitationAction::Accept => result
+                        .content
+                        .as_ref()
+                        .and_then(|c| c.get("answer"))
+                        .and_then(|a| a.as_str())
+                        .unwrap_or("(nothing)")
+                        .to_string(),
+                    Ok(result) => format!("no answer: {:?}", result.action),
+                    Err(e) => format!("could not ask: {e}"),
+                };
+                return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
+                    "named {said}"
+                ))])
+                .into());
             }
             if name == "run" || name == "run_after_asking" {
                 use rmcp::task_manager::{TaskExit, TaskOptions};
@@ -1108,6 +1172,138 @@ async fn a_state_only_round_is_retried_without_pausing() {
     assert_eq!(task.status.state, TaskState::Completed);
     assert_eq!(task.history[1].parts[0].get_text(), Some("3"));
     assert!(!bridge.is_awaiting_input("count-1"));
+
+    drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// A client at 2026-07-28 that declares elicitation and routes what it is
+/// asked to `router` — the shape a consumer uses when the bridge is not the
+/// handler its peer was served with.
+async fn asking_client(
+    transport: tokio::io::DuplexStream,
+    router: a2a_mcp::ElicitationRouter,
+) -> rmcp::service::RunningService<rmcp::RoleClient, ProgressClientHandler> {
+    use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
+    let handler = ProgressClientHandler::new(Default::default()).with_elicitations(router);
+    serve_client_with_lifecycle(
+        handler,
+        transport,
+        ClientLifecycleMode::Discover {
+            preferred_versions: vec![ProtocolVersion::V_2026_07_28],
+        },
+    )
+    .await
+    .unwrap()
+}
+
+/// The other way a server asks: `create_elicitation` on the client while
+/// `tools/call` is still open. Nothing in that request names the call, so
+/// the bridge routes it to the one call it has open — the task pauses, the
+/// next message answers, and the call it was holding open all along
+/// finishes with that answer.
+#[tokio::test]
+async fn an_in_flight_elicitation_pauses_the_task_that_asked() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let mcp_server = TestMcpServer::new();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let router = a2a_mcp::ElicitationRouter::new();
+    let mcp_client = asking_client(client_io, router.clone()).await;
+    let bridge = McpToA2ABridge::new(mcp_client.peer().clone(), NoOpHandler)
+        .await
+        .unwrap()
+        .with_elicitation_router(router);
+    let ctx = a2a_rs::port::RequestContext::anonymous();
+
+    let call = create_tool_call_message("ask_in_flight", serde_json::json!({}));
+    let paused = bridge.process_message("ask-1", &call, &ctx).await.unwrap();
+    assert_eq!(paused.status.state, TaskState::InputRequired);
+    let question: String = paused
+        .status
+        .message
+        .as_option()
+        .map(|m| m.parts.iter().filter_map(|p| p.get_text()).collect())
+        .unwrap_or_default();
+    assert!(
+        question.contains("What should I call it?"),
+        "the server's question is the status message: {question:?}"
+    );
+    assert!(bridge.is_awaiting_input("ask-1"));
+
+    let answer = Message::user_text("Bergen".to_string(), "answer-1".to_string());
+    let done = bridge
+        .process_message("ask-1", &answer, &ctx)
+        .await
+        .unwrap();
+    assert_eq!(done.status.state, TaskState::Completed);
+    assert_eq!(done.history[1].parts[0].get_text(), Some("named Bergen"));
+    assert!(!bridge.is_awaiting_input("ask-1"));
+
+    drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// Two calls open at once and a question that names neither: the bridge
+/// refuses rather than pause the wrong task. The refusal reaches the server
+/// as the elicitation's error, which is where a consumer can act on it.
+#[tokio::test]
+async fn a_question_with_two_calls_open_is_refused_rather_than_guessed() {
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let mcp_server = TestMcpServer::new();
+    let gate = mcp_server.gate.clone();
+    let at_gate = mcp_server.at_gate.clone();
+    let server_task = tokio::spawn(async move {
+        let running = mcp_server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+    let router = a2a_mcp::ElicitationRouter::new();
+    let mcp_client = asking_client(client_io, router.clone()).await;
+    let bridge = Arc::new(
+        McpToA2ABridge::new(mcp_client.peer().clone(), NoOpHandler)
+            .await
+            .unwrap()
+            .with_elicitation_router(router),
+    );
+
+    let both: Vec<_> = ["two-a", "two-b"]
+        .into_iter()
+        .map(|task_id| {
+            let bridge = Arc::clone(&bridge);
+            tokio::spawn(async move {
+                let ctx = a2a_rs::port::RequestContext::anonymous();
+                let call = create_tool_call_message("ask_when_told", serde_json::json!({}));
+                bridge.process_message(task_id, &call, &ctx).await.unwrap()
+            })
+        })
+        .collect();
+
+    // Both calls are on the wire before either is allowed to ask, which is
+    // what makes the question ambiguous rather than racy.
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while at_gate.load(Ordering::SeqCst) < 2 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("both calls reach the gate");
+    gate.notify_waiters();
+
+    for task in both {
+        let task = task.await.unwrap();
+        assert_eq!(
+            task.status.state,
+            TaskState::Completed,
+            "a refused question is not a pause"
+        );
+        let said = task.history[1].parts[0].get_text().unwrap_or_default();
+        assert!(
+            said.contains("could not ask") && said.contains("2 tool calls are open"),
+            "the server is told why, got: {said}"
+        );
+    }
 
     drop(mcp_client);
     let _ = server_task.await;

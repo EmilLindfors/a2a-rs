@@ -142,6 +142,38 @@ all name the same task on both sides.
 - A client that did not declare the extension blocks to the end as before,
   elicitation and cancel-on-disconnect included.
 
+## A question asked mid-call
+
+A server has two ways to ask the A2A side something. The `input_required`
+result shape pauses the task and the next message answers it. The other is
+`create_elicitation` on the client while `tools/call` is still open, and
+nothing in that request names the call it belongs to — MCP 2026-07-28 has no
+related-task metadata on a server-to-client request.
+
+`ElicitationRouter` routes it by what can be proved: the calls the bridge has
+open. With one open the question is that call's, so the A2A task pauses with
+it and the next message answers; the call stays open across that and finishes
+with the answer. With two open the question is unknowable, and the router
+refuses it with an error naming the count rather than pause the wrong task.
+
+The router is separate from the bridge for the same reason `ProgressDispatcher`
+is: the bridge is built *from* a peer, so it cannot be the handler that peer
+was served with.
+
+```rust
+let router = ElicitationRouter::new();
+let client = ProgressClientHandler::new(dispatcher)
+    .with_elicitations(router.clone())
+    .serve(transport)
+    .await?;
+let bridge = McpToA2ABridge::new(client.peer().clone(), handler)
+    .await?
+    .with_elicitation_router(router);
+```
+
+A consumer that serves the bridge itself as the client handler needs none of
+that; the bridge has its own router.
+
 ## Development Status
 
 See the workspace [TODO.md](../TODO.md) for open and deferred work.
