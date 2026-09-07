@@ -86,18 +86,10 @@ Work whose two halves land on opposite sides of the seam. korps' copies are in
 its `TODO.md` §3, §5 and §7; whoever picks one up should check the other copy.
 Every half korps owed from before 2026-09-05 shipped there (`CeilingWatch`, a
 skill with no `keywords`, the `axum` and `reqwest` deletions, `Remembered`, a
-Gemini agent without a model); see its `CHANGELOG.md`.
+Gemini agent without a model, the status route reading `reasoning_refused()`);
+see its `CHANGELOG.md`.
 
-- [ ] **A reasoning refusal is only in the provider's log.** `[llm] reasoning`
-      is sent and read back off the endpoint's 400 since 2026-08-24, and the
-      answer is remembered on the provider (`refused()`, crate-private).
-      `Arc<dyn LlmProvider>` erases the concrete provider, so korps' `doctor`
-      cannot say after a run that the parameter was dropped. Giving it a way
-      means a method on the trait, which does not exist today. The first call
-      of a process on a provider that refuses costs one wasted round trip, and
-      nothing says so either.
-
-The four below are the protocol half of a fleet building a strata project
+The three below are the protocol half of a fleet building a strata project
 end to end (korps' `TODO.md` §7, strata's `TODO.md` § *Agents build a
 project end to end*), set 2026-09-05.
 
@@ -126,15 +118,6 @@ project end to end*), set 2026-09-05.
       calls in flight cannot route the answer. The tasks extension's
       related-task metadata would; so would a bridge that serves one call
       at a time and says so. Either is a design choice, not a patch.
-- [ ] **`a2a-llm` sanitises tool schemas per provider.** Seen 2026-09-05:
-      strata's generated schemas reached Gemini through korps unchanged and
-      passed, but only after strata dropped `const` and `format` on its own
-      side; `additionalProperties`, `minItems` and `default` still pass
-      through untested, and Gemini refuses a keyword it does not know with
-      the same 400 as `thinkingLevel`. One place at the provider boundary
-      that drops what each provider rejects, with a refused-schema fixture
-      like the reasoning one, so a server does not have to know which model
-      is on the other end.
 - [ ] **`a2a-llm` has no message parts, so bytes never reach a model.**
       `ChatMessage::content` is `Option<String>`. korps feeds text parts,
       data parts and file *names* to the model since 2026-08-27 and withholds

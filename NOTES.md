@@ -772,6 +772,28 @@ What this costs is that the plan is no longer known before the run.
 answers only for the drops decided by selection. There is one of those left: a
 token budget on OpenAI, whose Chat Completions API has no field for one at all.
 
+**Gemini's `parameters` is OpenAPI, not JSON Schema, and an unknown keyword
+is a 400.** (2026-09-07) A function declaration's `parameters` is a fixed
+`Schema` object with about twenty fields. The API refuses anything else with
+the same "Unknown name … Cannot find field" 400 it gives an unknown
+`thinkingConfig` field, and does not ignore it. Every tool source produces
+JSON Schema: `schemars` writes `$schema`, `$defs` and `additionalProperties`
+on every struct, and strata's generator wrote `const` and `format`. The
+rewrite lives in `a2a-llm`'s `schema::for_gemini`, applied by the provider,
+because the provider is the one place that knows which model is on the other
+end. A source that strips keywords itself is guessing at a table it does not
+own.
+
+Two rules keep it honest. A keyword with a faithful spelling is translated,
+not dropped: a type array with `null` is `nullable`, a string `const` is an
+`enum` of one, a local `$ref` is inlined where it is used. A keyword with no
+spelling is dropped and named in `Sanitized::dropped`, because every drop
+loosens the schema and the model may then produce an argument the tool's own
+validator refuses. The retry-on-400 the reasoning field uses does not apply:
+a 400 names one field per response, and a schema can carry many. The
+`format` list is the one table here, kept because the API documents it and a
+wrong value is a refusal rather than a stale default.
+
 **Asking a model to think is a request, never a guarantee.** `Reasoning::Off`
 sends OpenRouter's `enabled: false`; a model with no way to turn reasoning off
 may ignore it, and reasoning tokens are billed even when the text is not
