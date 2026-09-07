@@ -1,6 +1,8 @@
 use super::{
-    Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning, ReasoningSupport,
-    TokenUsage, classify_api_error, describe_transport_error, refuses_reasoning,
+    ChatMessage, ContentPart, Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageContent,
+    MessageRole, Reasoning, ReasoningSupport, TokenUsage, classify_api_error,
+    content::{data_url, encode_base64},
+    describe_transport_error, refuses_reasoning,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -329,7 +331,7 @@ struct OpenAiFunction {
 struct OpenAiChatMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<OpenAiContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<OpenAiToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -343,6 +345,185 @@ struct OpenAiChatMessage {
     /// normalization). Response-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reasoning_content: Option<String>,
+}
+
+/// A message's content: a string, or the parts array the API takes in its
+/// place. Untagged, so a text-only message is still a bare string on the wire —
+/// which is what every OpenAI-compatible server has always been sent, and what
+/// several of the smaller ones accept and nothing else.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum OpenAiContent {
+    Text(String),
+    Parts(Vec<OpenAiPart>),
+}
+
+impl OpenAiContent {
+    /// A response's content as text. Responses are text today; a parts array
+    /// coming back is joined rather than dropped.
+    fn into_text(self) -> Option<String> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Parts(parts) => {
+                let text: Vec<String> = parts
+                    .into_iter()
+                    .filter_map(|part| match part {
+                        OpenAiPart::Text { text } => Some(text),
+                        _ => None,
+                    })
+                    .collect();
+                (!text.is_empty()).then(|| text.join("\n"))
+            }
+        }
+    }
+}
+
+/// The four part shapes this API takes. Which one a blob becomes is decided by
+/// its MIME type, in [`part_for`] — the API has no general "attachment" part.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum OpenAiPart {
+    Text { text: String },
+    ImageUrl { image_url: OpenAiImageUrl },
+    InputAudio { input_audio: OpenAiInputAudio },
+    File { file: OpenAiFile },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAiImageUrl {
+    /// A `data:` URL for inline bytes, or the caller's URI as given.
+    url: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAiInputAudio {
+    /// Base64, bare — this is the one part that takes no `data:` prefix.
+    data: String,
+    /// `wav` or `mp3`; the API takes no others.
+    format: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct OpenAiFile {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filename: Option<String>,
+    file_data: String,
+}
+
+/// The audio format name for a MIME type, for the two the API accepts.
+fn audio_format(mime_type: &str) -> Option<&'static str> {
+    match mime_type {
+        "audio/wav" | "audio/wave" | "audio/x-wav" => Some("wav"),
+        "audio/mp3" | "audio/mpeg" | "audio/mpga" => Some("mp3"),
+        _ => None,
+    }
+}
+
+/// One neutral part as the shape this API takes for it.
+///
+/// Images go in `image_url` (bytes as a `data:` URL, a URI as itself), wav and
+/// mp3 in `input_audio`, and everything else — PDFs, text files, anything a
+/// model can be handed — in `file`, which takes any `data:` URL and a
+/// filename.
+///
+/// The one case with no wire form is a **URI that is not an image**: this API
+/// fetches nothing but images, so the file is named in a text part instead of
+/// vanishing. Gemini takes that case natively (`fileData`), which is the
+/// difference to know when a handoff carries a URI.
+fn part_for(part: ContentPart) -> OpenAiPart {
+    let described = part.describe();
+    match part {
+        ContentPart::Text { text } => OpenAiPart::Text { text },
+        ContentPart::Blob {
+            ref mime_type,
+            ref data,
+            ref name,
+        } => {
+            if mime_type.starts_with("image/") {
+                OpenAiPart::ImageUrl {
+                    image_url: OpenAiImageUrl {
+                        url: data_url(mime_type, data),
+                    },
+                }
+            } else if let Some(format) = audio_format(mime_type) {
+                OpenAiPart::InputAudio {
+                    input_audio: OpenAiInputAudio {
+                        data: encode_base64(data),
+                        format: format.to_string(),
+                    },
+                }
+            } else {
+                OpenAiPart::File {
+                    file: OpenAiFile {
+                        filename: name.clone(),
+                        file_data: data_url(mime_type, data),
+                    },
+                }
+            }
+        }
+        ContentPart::Uri {
+            ref mime_type,
+            ref uri,
+            ..
+        } => {
+            if mime_type.starts_with("image/") {
+                OpenAiPart::ImageUrl {
+                    image_url: OpenAiImageUrl { url: uri.clone() },
+                }
+            } else {
+                warn!(
+                    %mime_type,
+                    "OpenAI takes no URI but an image's; the file is named to the model, not sent"
+                );
+                OpenAiPart::Text {
+                    text: format!(
+                        "[file: {described} at {uri} — not fetched by this model, which takes only image URLs]"
+                    ),
+                }
+            }
+        }
+    }
+}
+
+impl From<MessageContent> for OpenAiContent {
+    fn from(content: MessageContent) -> Self {
+        match content {
+            MessageContent::Text(text) => Self::Text(text),
+            MessageContent::Parts(parts) => Self::Parts(parts.into_iter().map(part_for).collect()),
+        }
+    }
+}
+
+/// One neutral message as this API's. Shared by the completion and streaming
+/// paths, which had a verbatim copy each — and a mapping that only half the
+/// requests use is a mapping that drifts.
+fn wire_message(msg: ChatMessage) -> OpenAiChatMessage {
+    OpenAiChatMessage {
+        role: match msg.role {
+            MessageRole::System => "system".to_string(),
+            MessageRole::User => "user".to_string(),
+            MessageRole::Assistant => "assistant".to_string(),
+            MessageRole::Tool => "tool".to_string(),
+        },
+        content: msg.content.map(OpenAiContent::from),
+        tool_calls: msg.tool_calls.map(|calls| {
+            calls
+                .into_iter()
+                .map(|c| OpenAiToolCall {
+                    id: c.id,
+                    tool_type: "function".to_string(),
+                    function: OpenAiFunctionCall {
+                        name: c.name,
+                        arguments: c.arguments,
+                    },
+                })
+                .collect()
+        }),
+        tool_call_id: msg.tool_call_id,
+        name: msg.name,
+        reasoning: None,
+        reasoning_content: None,
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -575,36 +756,7 @@ impl LlmProvider for OpenAiProvider {
             None
         };
 
-        let messages = request
-            .messages
-            .into_iter()
-            .map(|msg| OpenAiChatMessage {
-                role: match msg.role {
-                    MessageRole::System => "system".to_string(),
-                    MessageRole::User => "user".to_string(),
-                    MessageRole::Assistant => "assistant".to_string(),
-                    MessageRole::Tool => "tool".to_string(),
-                },
-                content: msg.content,
-                tool_calls: msg.tool_calls.map(|calls| {
-                    calls
-                        .into_iter()
-                        .map(|c| OpenAiToolCall {
-                            id: c.id,
-                            tool_type: "function".to_string(),
-                            function: OpenAiFunctionCall {
-                                name: c.name,
-                                arguments: c.arguments,
-                            },
-                        })
-                        .collect()
-                }),
-                tool_call_id: msg.tool_call_id,
-                name: msg.name,
-                reasoning: None,
-                reasoning_content: None,
-            })
-            .collect();
+        let messages = request.messages.into_iter().map(wire_message).collect();
 
         let tools = request.tools.map(|tools| {
             tools
@@ -671,7 +823,7 @@ impl LlmProvider for OpenAiProvider {
                 .collect()
         });
 
-        let message_content = choice.message.content;
+        let message_content = choice.message.content.and_then(OpenAiContent::into_text);
         let reasoning = choice
             .message
             .reasoning
@@ -708,36 +860,8 @@ impl LlmProvider for OpenAiProvider {
             None
         };
 
-        let messages: Vec<OpenAiChatMessage> = request
-            .messages
-            .into_iter()
-            .map(|msg| OpenAiChatMessage {
-                role: match msg.role {
-                    MessageRole::System => "system".to_string(),
-                    MessageRole::User => "user".to_string(),
-                    MessageRole::Assistant => "assistant".to_string(),
-                    MessageRole::Tool => "tool".to_string(),
-                },
-                content: msg.content,
-                tool_calls: msg.tool_calls.map(|calls| {
-                    calls
-                        .into_iter()
-                        .map(|c| OpenAiToolCall {
-                            id: c.id,
-                            tool_type: "function".to_string(),
-                            function: OpenAiFunctionCall {
-                                name: c.name,
-                                arguments: c.arguments,
-                            },
-                        })
-                        .collect()
-                }),
-                tool_call_id: msg.tool_call_id,
-                name: msg.name,
-                reasoning: None,
-                reasoning_content: None,
-            })
-            .collect();
+        let messages: Vec<OpenAiChatMessage> =
+            request.messages.into_iter().map(wire_message).collect();
 
         let tools = request.tools.map(|tools| {
             tools
@@ -903,7 +1027,7 @@ impl LlmProvider for OpenAiProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChatMessage, Reasoning, ReasoningEffort};
+    use crate::{ChatMessage, ContentPart, Reasoning, ReasoningEffort};
 
     fn provider(dialect: ReasoningDialect, reasoning: Option<Reasoning>) -> OpenAiProvider {
         OpenAiProvider::new(OpenAiConfig {
@@ -1116,6 +1240,113 @@ mod tests {
     /// dropping the field would make truncation invisible to every caller.
     /// The fixture is the shape llama.cpp b10524 actually sends when a slot's
     /// context fills mid-generation.
+    /// What one message looks like on the wire, which is the only thing a
+    /// server sees.
+    fn wire_content(message: ChatMessage) -> serde_json::Value {
+        serde_json::to_value(wire_message(message))
+            .expect("serializes")
+            .get("content")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null)
+    }
+
+    /// The shape every OpenAI-compatible server has been sent since this crate
+    /// existed, and the one several of the smaller ones accept and nothing
+    /// else. Adding parts must not turn a text message into an array.
+    #[test]
+    fn a_text_message_is_still_a_bare_string() {
+        assert_eq!(
+            wire_content(ChatMessage::user("hi")),
+            serde_json::json!("hi")
+        );
+    }
+
+    /// An image goes in `image_url` as a `data:` URL — the API has no field
+    /// for raw bytes, and this is where they reach a model.
+    #[test]
+    fn image_bytes_go_in_a_data_url() {
+        assert_eq!(
+            wire_content(ChatMessage::user(vec![
+                ContentPart::text("what is this"),
+                ContentPart::blob("image/png", vec![0, 1, 2]),
+            ])),
+            serde_json::json!([
+                { "type": "text", "text": "what is this" },
+                { "type": "image_url", "image_url": { "url": "data:image/png;base64,AAEC" } },
+            ])
+        );
+    }
+
+    /// Anything that is neither image nor audio is a `file` part, which is the
+    /// API's general attachment — and the one place a file name has somewhere
+    /// to go.
+    #[test]
+    fn other_bytes_go_in_a_file_part_with_their_name() {
+        assert_eq!(
+            wire_content(ChatMessage::user(vec![
+                ContentPart::blob("application/pdf", vec![37]).named("report.pdf"),
+            ])),
+            serde_json::json!([{
+                "type": "file",
+                "file": { "filename": "report.pdf", "file_data": "data:application/pdf;base64,JQ==" },
+            }])
+        );
+    }
+
+    /// Audio has its own part, and the format is a name the API knows rather
+    /// than the MIME type — `audio/mpeg` is `mp3` here.
+    #[test]
+    fn audio_bytes_go_in_an_audio_part_under_the_api_s_own_format_name() {
+        assert_eq!(
+            wire_content(ChatMessage::user(vec![ContentPart::blob(
+                "audio/mpeg",
+                vec![1]
+            )])),
+            serde_json::json!([{
+                "type": "input_audio",
+                "input_audio": { "data": "AQ==", "format": "mp3" },
+            }])
+        );
+    }
+
+    /// An image URI is passed as given: this is the one URI the API fetches.
+    #[test]
+    fn an_image_uri_is_passed_through() {
+        assert_eq!(
+            wire_content(ChatMessage::user(vec![ContentPart::uri(
+                "image/png",
+                "https://example.test/shot.png"
+            )])),
+            serde_json::json!([{
+                "type": "image_url",
+                "image_url": { "url": "https://example.test/shot.png" },
+            }])
+        );
+    }
+
+    /// Any other URI has no field on this API. Naming it beats dropping it —
+    /// the model can say it cannot open the file, and a tool in the loop may
+    /// be able to fetch it. Gemini takes this case natively.
+    #[test]
+    fn a_uri_that_is_not_an_image_is_named_rather_than_dropped() {
+        let content = wire_content(ChatMessage::user(vec![
+            ContentPart::uri("application/pdf", "https://example.test/r.pdf").named("r.pdf"),
+        ]));
+        let text = content[0]["text"].as_str().expect("a text part");
+        assert!(text.contains("r.pdf (application/pdf)"), "{text}");
+        assert!(text.contains("https://example.test/r.pdf"), "{text}");
+    }
+
+    /// A tool's answer stays a string. Both this API and Gemini take only text
+    /// in that position, so `tool_result` promises nothing else.
+    #[test]
+    fn a_tool_result_is_a_string() {
+        assert_eq!(
+            wire_content(ChatMessage::tool_result("call-1", "look_it_up", "42")),
+            serde_json::json!("42")
+        );
+    }
+
     #[test]
     fn a_stream_chunk_carries_its_finish_reason() {
         let chunk: OpenAiStreamChunk = serde_json::from_str(

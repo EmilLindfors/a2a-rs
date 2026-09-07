@@ -89,45 +89,39 @@ skill with no `keywords`, the `axum` and `reqwest` deletions, `Remembered`, a
 Gemini agent without a model, the status route reading `reasoning_refused()`);
 see its `CHANGELOG.md`.
 
-The three below are the protocol half of a fleet building a strata project
+The two below are the protocol half of a fleet building a strata project
 end to end (korps' `TODO.md` §7, strata's `TODO.md` § *Agents build a
 project end to end*), set 2026-09-05.
 
-- [ ] **A slow agent behind `agent_to_mcp` is still one blocking call.**
-      The client half shipped 2026-09-07: `McpToA2ABridge` watches a task
-      the server makes of a tool call and the outcome is the call's (see
-      `CHANGELOG.md`). The server half is left. `call_tool` on
-      `AgentToMcpBridge` drives the A2A task to its end inside the request,
-      so a client with a deadline times out on an agent that takes long,
-      even though the bridge already declares the extension and answers
-      `tasks/get` from its cache. Wanted: when the client declared the
-      extension and the A2A task has not settled after a grace period,
-      answer with `CreateTaskResult` (the A2A task id as the MCP task id)
-      and keep driving the task in the background, updating the cache;
-      `tasks/update` becomes the next message on the A2A task, and
-      `InputRequired` stays a task state instead of an elicitation the
-      bridge raises itself. Also `notifications/tasks` on each change, which
-      rmcp has no helper for (`send_notification` by hand). rmcp 3.2's
-      tasks are SEP-2663: no per-call opt-in and no `tasks/result`, so the
-      grace period is the bridge's policy, not the client's.
-- [ ] **An in-flight elicitation becomes `InputRequired` too.** The
-      `input_required` result shape pauses a task since 2026-09-06 (see
-      `NOTES.md`). The other way a server asks, `create_elicitation` on the
-      client handler while `tools/call` is still open, does not: nothing in
-      that request names the A2A task that raised it, so a bridge with two
-      calls in flight cannot route the answer. The tasks extension's
-      related-task metadata would; so would a bridge that serves one call
-      at a time and says so. Either is a design choice, not a patch.
-- [ ] **`a2a-llm` has no message parts, so bytes never reach a model.**
-      `ChatMessage::content` is `Option<String>`. korps feeds text parts,
-      data parts and file *names* to the model since 2026-08-27 and withholds
-      the bytes, naming what it withheld, because there is no content array
-      to map a `FilePart` into. OpenAI and Gemini both take a parts array in
-      place of the string. A content enum of text and typed bytes with a MIME
-      type, rendered per provider, with the `String` constructors kept so a
-      text-only caller does not change. korps' §3 has the consumer half; its
-      §7 *Handoffs carry files* rides on this; the bridge's half shipped
-      2026-09-07.
+- [ ] **Nothing in the fleet asks the bridge for a task yet.**
+      Both halves of the tasks extension are in: the client half shipped
+      2026-09-07 (`McpToA2ABridge` watches a task a server makes of a tool
+      call) and the server half the same day (`AgentToMcpBridge` answers
+      `tools/call` with a task id past a grace period, drives it detached,
+      and takes the answer through `tasks/update`). See `CHANGELOG.md`;
+      `NOTES.md` has why the switch is a grace period and why only a
+      task-mode call is spawned. What is left is korps': its `mcp-client`
+      does not declare `ClientCapabilities::enable_tasks()`, so every call
+      it makes still blocks and neither half is exercised by a fleet. Its
+      §3 has that half.
+- [ ] **A model can be sent bytes, and korps still withholds them.**
+      The `a2a-llm` half landed on 2026-09-07: `ChatMessage::content` is
+      `MessageContent`, a string or a list of `ContentPart`s, rendered per
+      provider. See `CHANGELOG.md`; `NOTES.md` has why it is one content
+      channel rather than a second field, and which URIs OpenAI will not
+      fetch. korps' half is left: `part_text` in `handlers/context.rs` still
+      turns a `FilePart` into `[attachment: … — not sent to the model]`, and
+      that maps to `ContentPart::blob(media_type, bytes)` and
+      `ContentPart::uri` now. Its §3 has that half; its §7 *Handoffs carry
+      files* rides on it.
+      - The upgrade breaks 52 call sites in korps, all of them reading
+        `content` as a string. `ChatMessage::text()` is the replacement for
+        `content.as_deref()`.
+      - korps' `TokenEstimate` counts a message's text and nothing else, so a
+        two-megabyte image estimates as zero tokens and the ceiling that
+        guards a context window stops guarding it. A blob's token cost is the
+        provider's business (Gemini bills an image by tiles), so the estimate
+        needs a per-media rule rather than a byte count.
 
 ---
 

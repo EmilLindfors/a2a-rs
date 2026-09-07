@@ -794,6 +794,95 @@ a 400 names one field per response, and a schema can carry many. The
 `format` list is the one table here, kept because the API documents it and a
 wrong value is a refusal rather than a stale default.
 
+**A question with two calls open is refused, not guessed.** (2026-09-07)
+A server can ask the client something while `tools/call` is open, and nothing
+in that request names the call: MCP 2026-07-28 has no related-task metadata
+on a server-to-client request. `ElicitationRouter` routes by the calls the
+bridge has open. One open is unambiguous. Two is not, and the answer would
+pause a task that never asked anything — so it refuses with an error naming
+the count.
+
+The alternative was serving one tool call at a time and saying so. That is
+unambiguous by construction, and it makes a slow tool block every other call
+through the same bridge. Refusing costs concurrency only in the case that is
+actually ambiguous: two elicitating tools called at once.
+
+**An elicitation mid-call cannot be awaited in place.** (2026-09-07) The
+answer arrives as a later `message/send` on the A2A task, which cannot happen
+until `process_message` returns, which cannot happen while it is awaiting the
+call. So the round is spawned and `call_mcp_tool_once` races it against the
+elicitation. Dropping the call's future instead would cancel it —
+`RequestCancelGuard` says so on the wire — which is the opposite of what a
+question mid-call means.
+
+The router is not on the bridge for the same reason `ProgressDispatcher` is
+not: the bridge is built *from* a peer, so it cannot be the handler that peer
+was served with. A consumer creates the router, gives it to its client
+handler, and hands the same one to the bridge.
+
+**A grace period, not an always-a-task rule.** (2026-09-07) SEP-2663 has no
+per-call opt-in and no `tasks/result`, so a server that declares the tasks
+extension decides for itself when a call stops blocking. Answering every call
+with a task id would cost a second round trip on every quick tool, and every
+client would have to grow a poll loop to use the bridge at all. So
+`AgentToMcpBridge` waits `DEFAULT_TASK_GRACE` and answers with whichever comes
+first, the result or the deadline. Five seconds is under every MCP client
+timeout seen so far and over an ordinary agent turn.
+
+A call that *finished* inside the grace without settling is a task too. An
+agent that stopped to ask something has no result to return yet, and the
+answer comes back through `tasks/update`.
+
+**Only a task-mode call is spawned.** (2026-09-07) The blocking path still
+awaits the call inside the request, because `TaskCancelGuard` cancels the A2A
+task when the request future is dropped, and that only works while the call
+*is* the request. A client that did not declare the extension therefore keeps
+cancel-on-disconnect. A task-mode call gives it up deliberately: the task
+outlives the request by design, and `tasks/cancel` is how it is stopped.
+
+`Drive` is what the two paths differ by — `InRequest` with the peer, the
+progress token and whether the client can be elicited, or `AsTask` with the
+peer. It is owned rather than borrowed from the `RequestContext` so the call
+can be spawned. Everything else is one `call_skill`, which used to hold a
+verbatim copy of the message loop per code path, and a copy is where a feature
+lands on one path and not the other.
+
+**A detached call has to write down what happened to it.** (2026-09-07) Two
+holes, both from nobody waiting on the return value. The task id is handed to
+the client before the agent has replied, so `tasks/get` had nothing to answer
+with until the first reply — the cache is seeded with a `Submitted` task at
+the moment the promise is made. And a failure after the response reached only
+the spawned task's `Result`, leaving the task reading `Working` for as long as
+the client cared to poll; it is written to the cache as `Failed` with its
+reason instead.
+
+**A message has one content channel, and it holds bytes.** (2026-09-07)
+`ChatMessage::content` was `Option<String>`, so a caller holding a file could
+send only its name. korps did exactly that, and a model asked to summarize an
+attachment answered about nothing. The alternative was a second field,
+`parts` beside `content`: non-breaking, and it makes every reader decide which
+of the two a message means. `MessageContent` is the string or the parts
+instead, so there is one place to look and the compiler finds every reader
+that assumed prose.
+
+Text stays a bare string on the wire (`#[serde(untagged)]`). That keeps
+conversations stored before this readable, and it matters upstream too:
+several small OpenAI-compatible servers take a string for `content` and
+nothing else, so a text-only request must not become an array.
+
+Bytes are held decoded, as `Vec<u8>`. Both providers want base64, and each
+spells the envelope differently — Gemini's `inlineData` is bare base64,
+OpenAI's `image_url` is a `data:` URL — so encoding is the provider's job and
+the type stays the thing a caller has. `Debug` reports a byte count, because a
+megabyte of PDF in a log is not a diagnostic.
+
+**Only Gemini fetches a URI that is not an image.** (2026-09-07) Gemini takes
+`fileData` for any MIME type. OpenAI fetches image URLs and has no field for
+anything else, so `ContentPart::Uri` with a PDF becomes a text part naming the
+file, and the provider logs it at warn. Naming it beats dropping it: the model
+can say it cannot open the file, and a tool in the loop may be able to fetch
+it. A caller that needs a PDF read by an OpenAI model sends the bytes.
+
 **Asking a model to think is a request, never a guarantee.** `Reasoning::Off`
 sends OpenRouter's `enabled: false`; a model with no way to turn reasoning off
 may ignore it, and reasoning tokens are billed even when the text is not

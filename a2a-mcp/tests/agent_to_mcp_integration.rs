@@ -1299,3 +1299,363 @@ async fn a_bridged_task_is_readable_through_tasks_get() {
     drop(mcp_client);
     let _ = bridge_task.await;
 }
+
+/// An agent that takes its time. The bridge's grace period is what decides
+/// whether a call waits for it or becomes a task, so the delay is the only
+/// interesting thing about this handler.
+struct SlowHandler {
+    delay: std::time::Duration,
+}
+
+#[async_trait]
+impl AsyncMessageHandler for SlowHandler {
+    async fn process_message(
+        &self,
+        task_id: &str,
+        message: &Message,
+        _ctx: &a2a_rs::port::RequestContext,
+    ) -> Result<Task, A2AError> {
+        tokio::time::sleep(self.delay).await;
+        let agent_msg = Message::builder()
+            .role(Role::Agent)
+            .parts(vec![Part::text("took a while".to_string())])
+            .message_id("slow-resp".to_string())
+            .build();
+        Ok(Task::builder()
+            .id(task_id.to_string())
+            .context_id("ctx-1".to_string())
+            .status(TaskStatus::new(
+                TaskState::Completed,
+                Some(agent_msg.clone()),
+            ))
+            .history(vec![message.clone(), agent_msg])
+            .build())
+    }
+}
+
+/// A client that collects what the server said about its tasks.
+#[derive(Clone, Default)]
+struct TaskWatchingClient {
+    info: ClientInfo,
+    task_notifications: Arc<Mutex<Vec<TaskStatusNotificationParams>>>,
+}
+
+#[allow(clippy::manual_async_fn)]
+impl ClientHandler for TaskWatchingClient {
+    fn get_info(&self) -> ClientInfo {
+        self.info.clone()
+    }
+
+    fn on_task_status(
+        &self,
+        params: TaskStatusNotificationParams,
+        _context: NotificationContext<RoleClient>,
+    ) -> impl std::future::Future<Output = ()> + Send + '_ {
+        async move {
+            self.task_notifications.lock().unwrap().push(params);
+        }
+    }
+
+    fn create_elicitation(
+        &self,
+        _request: ElicitRequestParams,
+        _context: RequestContext<RoleClient>,
+    ) -> impl std::future::Future<Output = Result<ElicitResult, McpError>> + Send + '_ {
+        async move {
+            panic!("a task-mode call must not raise an elicitation of its own");
+        }
+    }
+}
+
+fn slow_agent_card(skill: &str) -> AgentCard {
+    AgentCard::builder()
+        .name("Slow Agent".to_string())
+        .description("Takes longer than a grace period".to_string())
+        .url("http://nonroutable.invalid".to_string())
+        .version("1.0.0".to_string())
+        .capabilities(AgentCapabilities::default())
+        .default_input_modes(vec!["text".to_string()])
+        .default_output_modes(vec!["text".to_string()])
+        .skills(vec![AgentSkill::new(
+            skill.to_string(),
+            "Slow Skill".to_string(),
+            "A skill that takes a while".to_string(),
+            vec![],
+        )])
+        .build()
+}
+
+/// The point of the server half: a client with a deadline gets a task id
+/// rather than a call that blocks for as long as the agent takes. The call is
+/// still running when the answer goes out, and `tasks/get` follows it to the
+/// end.
+#[tokio::test]
+async fn a_slow_agent_becomes_a_task_the_client_can_poll() {
+    let bridge = AgentToMcpBridge::with_handler(
+        SlowHandler {
+            delay: std::time::Duration::from_millis(600),
+        },
+        slow_agent_card("slowskill"),
+    )
+    .with_task_grace_period(std::time::Duration::from_millis(50));
+
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let bridge_task = tokio::spawn(async move {
+        let running = bridge.serve(server_io).await?;
+        running.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let client = TaskWatchingClient {
+        info: ClientInfo::new(
+            ClientCapabilities::builder()
+                .enable_tasks()
+                .enable_elicitation()
+                .build(),
+            Implementation::new("tasks-client", "1.0.0"),
+        ),
+        ..Default::default()
+    };
+    let notifications = client.task_notifications.clone();
+    let mcp_client = client.serve(client_io).await.unwrap();
+    let peer = mcp_client.peer().clone();
+    let tool_name = peer.list_tools(None).await.unwrap().tools[0]
+        .name
+        .to_string();
+
+    let params = CallToolRequestParams::new(tool_name).with_arguments(
+        serde_json::json!({ "message": "take your time", "task_id": "slow-1" })
+            .as_object()
+            .cloned()
+            .unwrap(),
+    );
+    let response = peer.call_tool_once(params).await.unwrap();
+
+    let CallToolResponse::Task(created) = response else {
+        panic!("a call that outran the grace period is a task: {response:?}");
+    };
+    assert_eq!(
+        created.task.task_id, "slow-1",
+        "the A2A task id is the MCP task id"
+    );
+    assert!(
+        created.task.poll_interval_ms.is_some(),
+        "a task handed back says how often to ask about it"
+    );
+
+    // The id answers immediately, before the agent has replied.
+    let pending = peer.get_task(GetTaskParams::new("slow-1")).await.unwrap();
+    assert_eq!(pending.task.status(), rmcp::model::TaskStatus::Working);
+
+    // And the call keeps running: the task settles with its result.
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let got = peer.get_task(GetTaskParams::new("slow-1")).await.unwrap();
+            if got.task.status() != rmcp::model::TaskStatus::Working {
+                return got;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the detached call finishes");
+
+    assert_eq!(settled.task.status(), rmcp::model::TaskStatus::Completed);
+    let TaskPayload::Completed { result } = &settled.task.payload else {
+        panic!(
+            "a completed task carries its result: {:?}",
+            settled.task.payload
+        );
+    };
+    let result: CallToolResult = serde_json::from_value(serde_json::Value::Object(result.clone()))
+        .expect("the payload is the tool result");
+    let text = result
+        .content
+        .iter()
+        .find_map(|c| c.as_text().map(|t| t.text.clone()))
+        .expect("tool result has text content");
+    assert!(text.contains("took a while"), "got: {text}");
+
+    // The client was told, not left to discover it by polling.
+    let states: Vec<rmcp::model::TaskStatus> = notifications
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|n| n.task.status())
+        .collect();
+    assert!(
+        states.contains(&rmcp::model::TaskStatus::Completed),
+        "expected a notifications/tasks for the finish, got {states:?}"
+    );
+
+    drop(mcp_client);
+    let _ = bridge_task.await;
+}
+
+/// A client that did not declare the extension has nowhere to put a task id,
+/// so its call blocks to the end however long the agent takes. This is the
+/// path every client took before the extension, and the one korps'
+/// `mcp-client` still takes.
+#[tokio::test]
+async fn a_client_without_the_extension_still_gets_a_blocking_call() {
+    let bridge = AgentToMcpBridge::with_handler(
+        SlowHandler {
+            delay: std::time::Duration::from_millis(300),
+        },
+        slow_agent_card("slowskill"),
+    )
+    .with_task_grace_period(std::time::Duration::from_millis(50));
+
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let bridge_task = tokio::spawn(async move {
+        let running = bridge.serve(server_io).await?;
+        running.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    let mcp_client = TestClientHandler::default().serve(client_io).await.unwrap();
+    let peer = mcp_client.peer().clone();
+    let tool_name = peer.list_tools(None).await.unwrap().tools[0]
+        .name
+        .to_string();
+
+    let result = peer
+        .call_tool(
+            CallToolRequestParams::new(tool_name).with_arguments(
+                serde_json::json!({ "message": "take your time" })
+                    .as_object()
+                    .cloned()
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+
+    let text = result
+        .content
+        .iter()
+        .find_map(|c| c.as_text().map(|t| t.text.clone()))
+        .expect("tool result has text content");
+    assert!(text.contains("took a while"), "got: {text}");
+
+    drop(mcp_client);
+    let _ = bridge_task.await;
+}
+
+/// A task that stopped to ask something stays a task: the bridge does not
+/// elicit on its own behalf, `tasks/get` carries the question, and the answer
+/// arrives as `tasks/update` — which is the next message on the A2A task.
+#[tokio::test]
+async fn an_input_required_task_is_answered_by_tasks_update() {
+    let agent_card = AgentCard::builder()
+        .name("Asking Agent".to_string())
+        .description("Stops to ask".to_string())
+        .url("http://nonroutable.invalid".to_string())
+        .version("1.0.0".to_string())
+        .capabilities(AgentCapabilities::default())
+        .default_input_modes(vec!["text".to_string()])
+        .default_output_modes(vec!["text".to_string()])
+        .skills(vec![AgentSkill::new(
+            "askskill".to_string(),
+            "Ask Skill".to_string(),
+            "A skill that stops to ask".to_string(),
+            vec![],
+        )])
+        .build();
+    let bridge = AgentToMcpBridge::with_handler_and_streaming(
+        MockStreamingHandler,
+        MockStreamingHandler,
+        agent_card,
+    );
+
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let bridge_task = tokio::spawn(async move {
+        let running = bridge.serve(server_io).await?;
+        running.waiting().await?;
+        anyhow::Ok(())
+    });
+
+    // Elicitation is declared too: a task-mode call must still not use it,
+    // which is what `TaskWatchingClient::create_elicitation` panics on.
+    let client = TaskWatchingClient {
+        info: ClientInfo::new(
+            ClientCapabilities::builder()
+                .enable_tasks()
+                .enable_elicitation()
+                .build(),
+            Implementation::new("tasks-client", "1.0.0"),
+        ),
+        ..Default::default()
+    };
+    let mcp_client = client.serve(client_io).await.unwrap();
+    let peer = mcp_client.peer().clone();
+    let tool_name = peer.list_tools(None).await.unwrap().tools[0]
+        .name
+        .to_string();
+
+    let params = CallToolRequestParams::new(tool_name).with_arguments(
+        serde_json::json!({ "message": "start", "task_id": "ask-1" })
+            .as_object()
+            .cloned()
+            .unwrap(),
+    );
+    let response = peer.call_tool_once(params).await.unwrap();
+    let CallToolResponse::Task(_) = response else {
+        panic!("a call that stopped to ask is a task: {response:?}");
+    };
+
+    let asking = peer.get_task(GetTaskParams::new("ask-1")).await.unwrap();
+    assert_eq!(asking.task.status(), rmcp::model::TaskStatus::InputRequired);
+    let TaskPayload::InputRequired { input_requests } = &asking.task.payload else {
+        panic!(
+            "a task waiting on input carries the question: {:?}",
+            asking.task.payload
+        );
+    };
+    assert!(
+        input_requests.contains_key("input"),
+        "the question is keyed 'input': {input_requests:?}"
+    );
+
+    let mut answers = InputResponses::new();
+    answers.insert(
+        "input".to_string(),
+        serde_json::json!({
+            "action": "accept",
+            "content": { "answer": "sampled response: 42" },
+        }),
+    );
+    peer.update_task(UpdateTaskParams::new("ask-1", answers))
+        .await
+        .expect("tasks/update is acknowledged");
+
+    let settled = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let got = peer.get_task(GetTaskParams::new("ask-1")).await.unwrap();
+            if got.task.status() == rmcp::model::TaskStatus::Completed {
+                return got;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the answer finishes the task");
+
+    let TaskPayload::Completed { result } = &settled.task.payload else {
+        panic!(
+            "a completed task carries its result: {:?}",
+            settled.task.payload
+        );
+    };
+    let result: CallToolResult = serde_json::from_value(serde_json::Value::Object(result.clone()))
+        .expect("the payload is the tool result");
+    let text = result
+        .content
+        .iter()
+        .find_map(|c| c.as_text().map(|t| t.text.clone()))
+        .expect("tool result has text content");
+    assert!(text.contains("Final result with 42"), "got: {text}");
+
+    drop(mcp_client);
+    let _ = bridge_task.await;
+}

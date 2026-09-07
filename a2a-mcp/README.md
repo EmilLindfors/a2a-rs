@@ -121,6 +121,59 @@ Tool names are `{namespace}_{skill id}`, where the namespace is the agent's
 does not start with a letter. Gemini caps a function name at 64 characters;
 a long name is shortened with `AgentToMcpBridge::with_namespace`.
 
+## A long call is a task
+
+A client that declares the `io.modelcontextprotocol/tasks` extension
+(SEP-2663) does not block on a slow agent. `AgentToMcpBridge` answers
+`tools/call` with the result when the agent is quick, and with a task id when
+it is not — the A2A task id, so `tasks/get`, `tasks/update` and `tasks/cancel`
+all name the same task on both sides.
+
+- The switch is a grace period, `DEFAULT_TASK_GRACE` (5 seconds), set with
+  `with_task_grace_period` or turned off with `without_task_results`. SEP-2663
+  has no per-call opt-in, so when to stop blocking is the server's policy.
+- Past the grace the call keeps running detached. Each change is a
+  `notifications/tasks` carrying the same `DetailedTask` `tasks/get` would
+  return, and a failure after the response marks the task failed rather than
+  leaving it reading `Working`.
+- A task that stops to ask something stays `InputRequired`; the bridge does
+  not raise an elicitation of its own. `tasks/update` carries the answer,
+  which becomes the next A2A message on that task, and driving resumes.
+- A client that did not declare the extension blocks to the end as before,
+  elicitation and cancel-on-disconnect included.
+
+## A question asked mid-call
+
+A server has two ways to ask the A2A side something. The `input_required`
+result shape pauses the task and the next message answers it. The other is
+`create_elicitation` on the client while `tools/call` is still open, and
+nothing in that request names the call it belongs to — MCP 2026-07-28 has no
+related-task metadata on a server-to-client request.
+
+`ElicitationRouter` routes it by what can be proved: the calls the bridge has
+open. With one open the question is that call's, so the A2A task pauses with
+it and the next message answers; the call stays open across that and finishes
+with the answer. With two open the question is unknowable, and the router
+refuses it with an error naming the count rather than pause the wrong task.
+
+The router is separate from the bridge for the same reason `ProgressDispatcher`
+is: the bridge is built *from* a peer, so it cannot be the handler that peer
+was served with.
+
+```rust
+let router = ElicitationRouter::new();
+let client = ProgressClientHandler::new(dispatcher)
+    .with_elicitations(router.clone())
+    .serve(transport)
+    .await?;
+let bridge = McpToA2ABridge::new(client.peer().clone(), handler)
+    .await?
+    .with_elicitation_router(router);
+```
+
+A consumer that serves the bridge itself as the client handler needs none of
+that; the bridge has its own router.
+
 ## Development Status
 
 See the workspace [TODO.md](../TODO.md) for open and deferred work.

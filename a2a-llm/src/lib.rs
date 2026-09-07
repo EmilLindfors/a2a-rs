@@ -11,18 +11,24 @@
 //! and [`ToolResult`] are the tool-calling vocabulary shared with the MCP
 //! bridge, which is why they live in their own crate rather than inside an
 //! agent framework.
+//!
+//! A message's content is [`MessageContent`]: a string, or [`ContentPart`]s
+//! when it carries bytes a string cannot — an image, a PDF, a recording. Each
+//! provider renders those into the shape its API takes; see [`content`].
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod content;
 pub mod gemini;
 pub mod openai;
 pub mod provider;
 pub mod schema;
 pub mod tool_call;
 
+pub use content::{ContentPart, MessageContent};
 pub use provider::{
     LlmConfigError, LlmSettings, PROVIDER_ENV_VARS, ReasoningPlan, SUPPORTED_PROVIDERS,
     SelectedLlm, provider_from_env, provider_from_settings,
@@ -501,11 +507,18 @@ pub struct ToolCall {
 }
 
 /// A single message in a chat conversation.
+///
+/// `content` is [`MessageContent`]: a string, or an ordered list of
+/// [`ContentPart`]s when the message carries something a string cannot. The
+/// constructors below take either — `ChatMessage::user("hi")` and
+/// `ChatMessage::user(vec![ContentPart::text("what is this"),
+/// ContentPart::blob("image/png", bytes)])` are both calls to the same
+/// function.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: MessageRole,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub content: Option<String>,
+    pub content: Option<MessageContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -515,7 +528,7 @@ pub struct ChatMessage {
 }
 
 impl ChatMessage {
-    pub fn system(content: impl Into<String>) -> Self {
+    pub fn system(content: impl Into<MessageContent>) -> Self {
         Self {
             role: MessageRole::System,
             content: Some(content.into()),
@@ -525,7 +538,7 @@ impl ChatMessage {
         }
     }
 
-    pub fn user(content: impl Into<String>) -> Self {
+    pub fn user(content: impl Into<MessageContent>) -> Self {
         Self {
             role: MessageRole::User,
             content: Some(content.into()),
@@ -535,7 +548,7 @@ impl ChatMessage {
         }
     }
 
-    pub fn assistant(content: impl Into<String>) -> Self {
+    pub fn assistant(content: impl Into<MessageContent>) -> Self {
         Self {
             role: MessageRole::Assistant,
             content: Some(content.into()),
@@ -545,6 +558,23 @@ impl ChatMessage {
         }
     }
 
+    /// The message's content when it is text and nothing else — the read
+    /// `content.as_deref()` used to be, before content could be parts.
+    ///
+    /// `None` for a message carrying parts, including a parts list holding
+    /// only text: a caller reading this wants the whole message or nothing,
+    /// which is what makes the media case visible rather than silently
+    /// half-read. [`MessageContent::to_text`] is the read that ignores what it
+    /// cannot render.
+    pub fn text(&self) -> Option<&str> {
+        self.content.as_ref().and_then(MessageContent::as_text)
+    }
+
+    /// A tool's answer. Text only, and deliberately: neither provider has a
+    /// wire form for bytes in a tool message — OpenAI takes a string there and
+    /// Gemini takes a JSON `functionResponse` — so a parts list here would be
+    /// a promise no provider keeps. A tool that produced bytes hands them to
+    /// the next user message.
     pub fn tool_result(
         tool_call_id: impl Into<String>,
         name: impl Into<String>,
@@ -552,7 +582,7 @@ impl ChatMessage {
     ) -> Self {
         Self {
             role: MessageRole::Tool,
-            content: Some(content.into()),
+            content: Some(MessageContent::Text(content.into())),
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
             name: Some(name.into()),
