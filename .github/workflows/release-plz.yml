@@ -77,7 +77,7 @@ jobs:
       # separate install step.
       - name: Run release-plz (release)
         id: release-plz
-        uses: release-plz/action@v0.5.131
+        uses: release-plz/action@v0.5.132
         with:
           command: release
         env:
@@ -131,7 +131,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run release-plz (release-pr)
-        uses: release-plz/action@v0.5.131
+        uses: release-plz/action@v0.5.132
         with:
           command: release-pr
         env:
