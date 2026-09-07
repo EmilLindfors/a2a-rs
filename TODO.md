@@ -33,8 +33,9 @@ mapping is protocol-native rather than invented here: ADK `Session` is A2A's
 `context_id`, ADK's event log is `task_history`, ADK `Session.state` is the
 per-context scratchpad, and `MemoryService` is the deferred retrieval tier.
 
-What is left on this side of the seam — the handler-side remainder is in korps'
-`TODO.md` §3, and the retention item below has its other half in korps' §2.
+What is left on this side of the seam. The handler-side remainder is in korps'
+`TODO.md` §2. The retention item below waits on a timer korps does not track
+yet.
 
 - [x] **A turn asks who owns a context once.** Done 2026-08-25: `SqlxTaskStorage`
       keeps the settled claim for a few seconds (`SqlxStorageBuilder::claim_cache`,
@@ -81,148 +82,23 @@ What is left on this side of the seam — the handler-side remainder is in korps
 
 ## 2. Shared with korps
 
-Work whose two halves land on opposite sides of the seam. Also listed in korps'
-`TODO.md` §2; whoever picks one up should check the other copy.
+Work whose two halves land on opposite sides of the seam. korps' copies are in
+its `TODO.md` §3, §5 and §7; whoever picks one up should check the other copy.
+Every half korps owed from before 2026-09-05 shipped there (`CeilingWatch`, a
+skill with no `keywords`, the `axum` and `reqwest` deletions, `Remembered`, a
+Gemini agent without a model); see its `CHANGELOG.md`.
 
-- [x] **`ContextLengthExceeded` throws away the numbers the provider gave.**
-      The upstream half landed 2026-08-31, as specified: a struct variant
-      `{ detail, prompt_tokens: Option<u32>, context_window: Option<u32> }`,
-      read from the raw body — llama.cpp's JSON fields first, then the two
-      prose shapes the fixtures pin (OpenAI's window, Gemini's count), nothing
-      speculative. What it did not predict: `classify_api_error` taking the
-      raw body meant it had to take over the `{label} ({status}): {body}`
-      formatting too, which deleted the same format string from all four call
-      sites — the numbers must be read before the JSON is flattened, so the
-      flattening moved inside. korps' half (the `CeilingWatch` report naming
-      the window, `DriftWatch` sampling refusals) lands with the 0.3.0
-      release; its `TODO.md` §2 tracks it.
-      The original item, for the reasoning:
-      It carries a `String` — the formatted error body — so the two facts a
-      caller most wants are readable only by re-parsing prose it was handed as
-      an opaque message. llama.cpp returns them as *fields*
-      (`"n_ctx":32768,"n_prompt_tokens":40089`) and OpenAI's prose names the
-      window; both are discarded. korps' half is already written against this:
-      its new `CeilingWatch` reports the estimated size of the refused request,
-      because that is all it can know, and tells the operator to set
-      `max_input_tokens` below it — which is a bound, not an answer. Measured
-      against llama.cpp at `n_ctx = 32768`, a request the estimator put at 51483
-      tokens was 40089 by the server's count, so the advice leaves everything
-      from 33k to 51k still failing. Wants optional `window` and `prompt_tokens`
-      on the variant, parsed where the provider gives them structurally and left
-      `None` otherwise. **Breaking** — it is a tuple variant today — so it wants
-      a release boundary rather than a slot in the marker fix.
-      korps' `TODO.md` §2 has the other half, plus a second use for the same
-      fields: `DriftWatch` only ever samples *successful* requests, since it
-      reconciles against `usage.prompt_tokens`, so the requests where the
-      estimate being wrong actually costs something contribute nothing to it.
-- [ ] **A skill with no keywords serves an undecodable card.** The `a2a-rs` half
-      landed on 2026-08-21: `SimpleAgentInfo::add_skill` and
-      `add_comprehensive_skill` now require `tags`, because the spec marks the
-      field REQUIRED and ProtoJSON drops an empty list, which makes the official
-      client refuse the whole card. korps' `core/server.rs` still passes `None`
-      when a skill's `[[skills]] keywords` is empty — a config `korps validate`
-      accepts and no conformant client can talk to. Two halves: take the
-      signature change (it does not compile otherwise), and decide whether an
-      empty `keywords` is a config error or gets a default.
-- [x] **`a2a-web-client`'s `axum-components` feature did not turn off.** Done
-      2026-08-25. `components/mod.rs` declared `pub mod streaming;` ungated
-      while the axum it imports was behind the flag, so `default-features =
-      false` failed to compile instead of dropping the module — the flag was
-      advertised as optional and was not. Gated now; `axum` also moves 0.7 → 0.8
-      (**breaking**), which was the reason anyone wanted the flag: this crate
-      was the workspace's last 0.7, and `create_sse_stream` returning an `Sse`
-      pushed that version onto every dependent. The dead `async-stream` dep went
-      too. A `--no-default-features` CI job is what would have caught it and now
-      does. See `CHANGELOG.md` and `NOTES.md`.
-      - korps' half stands until this is released: it builds against published
-        `a2a-web-client` 0.6.1, so its inlined SSE serializer and the `axum7`
-        dev-dep alias stay for now. Both are deletions when the release lands —
-        korps' `TODO.md` §2 tracks them, and this is one of the changes the
-        release item in that repo's §1 covers.
-- [ ] **Reasoning for non-OpenRouter providers — korps' half is left.** The
-      `a2a-llm` half landed on 2026-08-24: `[llm] reasoning` now reaches
-      OpenAI's `reasoning_effort` and Gemini's `generationConfig.thinkingConfig`,
-      by the send-it-and-recover shape rather than a model-name table. See
-      `CHANGELOG.md`; `NOTES.md` has why the endpoint is asked instead of a list
-      consulted, and why the refusal is only remembered after the retry works.
-      What is left is korps':
-      - `korps doctor` reports `ReasoningPlan::unsupported()`, which now answers
-        only for a token budget on OpenAI. The new `ReasoningPlan::Attempted`
-        (`attempting()`) is the state a report should say "sent, and the model
-        has the last word" about, and nothing says it yet.
-      - Whether a refusal *happened* is only in the provider's `warn!` log.
-        `Arc<dyn LlmProvider>` erases the concrete provider, so a report has no
-        way to read it back after a run; giving it one means a channel that does
-        not exist today.
-      - `[llm] reasoning` on an `openai` provider with the default
-        `gpt-4o-mini` now costs one wasted round trip on the first call of the
-        process. Nothing is wrong with it, but a `doctor` line saying so would
-        save the question.
-- [ ] **An overwritten fact has nowhere to surface — korps' half is left.** The
-      `a2a-rs` half landed on 2026-08-25 (§1): `remember` now returns
-      `Remembered`, so `Replaced { previous }` carries the value that used to be
-      lost. Two halves on korps' side: `AutoStorage` in `core/server.rs`'s
-      builder delegates `remember` and must take the new return type (it does not
-      compile otherwise), and `handlers/memory.rs` builds the `remember` tool
-      result — which is the "somewhere to surface it" this item was waiting for.
-      Whether the model is the right audience or the user is, is the open part:
-      an agent told it overwrote something may just apologise, where a caller
-      would want to know.
-- [ ] **Gemini has no default model now — korps' half is left.** The `a2a-llm`
-      half landed on 2026-08-25: `GEMINI_DEFAULT_MODEL` was `gemini-1.5-pro`,
-      absent from Google's current models page and from the deprecation
-      schedule both, so nothing had been announced either way and every config
-      naming `provider = "gemini"` without a `model` ran on it regardless.
-      Resolved by **removing the default** rather than moving it — a default
-      model is a one-entry table of a vendor's product line and goes stale
-      invisibly, where a missing one is an error at startup. `model` is now
-      required for Gemini, from the config or `GEMINI_MODEL`. See
-      `CHANGELOG.md` (**breaking**); `NOTES.md` has why this is the same
-      conclusion the `reasoning` work reached from the other end.
-      - korps' half is a config decision this cannot make for it: a `[llm]`
-        block with `provider = "gemini"` and no `model` is a startup error now,
-        so `korps validate` should catch it before a run does — the same shape
-        as the empty-`keywords` question above. Whether korps supplies its own
-        default instead is its call; nothing here stops it.
-      - Like the `axum` item, korps only feels this when the release lands; it
-        builds against published `a2a-llm` today.
+- [ ] **A reasoning refusal is only in the provider's log.** `[llm] reasoning`
+      is sent and read back off the endpoint's 400 since 2026-08-24, and the
+      answer is remembered on the provider (`refused()`, crate-private).
+      `Arc<dyn LlmProvider>` erases the concrete provider, so korps' `doctor`
+      cannot say after a run that the parameter was dropped. Giving it a way
+      means a method on the trait, which does not exist today. The first call
+      of a process on a provider that refuses costs one wasted round trip, and
+      nothing says so either.
 
-- [ ] **Findings from korps' live runs, 2026-09-02** — four things seen from
-      the consuming side, none of which korps could fix here. Recorded so they
-      are decided rather than rediscovered.
-      * [x] **`Finish` arrives twice from OpenRouter.** Done 2026-09-03, both
-        halves: the stream emits a reason once (a repeat of the same reason is
-        dropped, a different one still comes through), *and* `Finish`'s doc
-        says it is a fact, not a terminator. `a2a-llm/tests/wire_test.rs`
-        pins it over a socket; checked against the unfixed stream first.
-      * [x] **Reasoning text is the model's to give.** Done 2026-09-03: the
-        line is on `Reasoning` and `LlmResponse::reasoning`, naming
-        `TokenUsage::reasoning_tokens` as the reliable signal. `NOTES.md` has
-        the one-in-nine measurement so it is not re-run.
-      * [x] **`reqwest` 0.12 here, 0.13 under `rmcp`.** Done 2026-09-03
-        (**breaking**): the workspace is on 0.13, `oauth2`/`openidconnect`
-        go through a twenty-line `AsyncHttpClient` over it instead of their
-        own reqwest-0.12 feature, and the lock holds one reqwest. See
-        `CHANGELOG.md`; `NOTES.md` has the trust-store trade (platform store
-        and `SSL_CERT_FILE` in, webpki floor out — an image needs
-        `ca-certificates`). korps' second `reqwest` under `mcp-client` is a
-        deletion when this releases; the `aws-lc-sys` item in §5 is the same
-        TLS knot from the other end and is unchanged by this.
-      * [x] **`a2a-mcp`'s bridge names tools after the agent's address** — and
-        the name it made was not a function name. An agent's `greet` skill
-        served over the bridge arrived at a client as `127_0_0_1_8081_greet`,
-        and Gemini refuses a request carrying a function name that starts
-        with a digit, so a korps agent with that server connected could not
-        use *any* tool. Fixed the same day, additively: `create_tool_name`
-        puts `agent_` in front when the sanitized address does not start
-        with a letter, and the bridge answers a call by matching the names
-        it generated (`resolve_skill`) instead of `parse_tool_name`, which
-        split at the last underscore and cut `my_skill` to `skill`. The
-        prefix is the agent's name since 2026-09-04 (**breaking**); see
-        `CHANGELOG.md`.
-
-The four below are the protocol half of a fleet building a strata project
-end to end (korps' `TODO.md` §8, strata's `TODO.md` § *Agents build a
+The five below are the protocol half of a fleet building a strata project
+end to end (korps' `TODO.md` §7, strata's `TODO.md` § *Agents build a
 project end to end*), set 2026-09-05.
 
 - [ ] **MCP tasks across the bridge.** rmcp 3.2 (in since 2026-09-05)
@@ -236,7 +112,7 @@ project end to end*), set 2026-09-05.
       materialise a task at all. `agent_to_mcp` answers the reverse for a
       reading client since the bump (`tasks/get` inlines the result); it
       does not yet *return* a task from `call_tool` for an agent that takes
-      long. korps consumes this in its §8.
+      long. korps consumes this in its §7.
 - [ ] **An in-flight elicitation becomes `InputRequired` too.** The
       `input_required` result shape pauses a task since 2026-09-06 (see
       `NOTES.md`). The other way a server asks, `create_elicitation` on the
@@ -260,6 +136,16 @@ project end to end*), set 2026-09-05.
       that drops what each provider rejects, with a refused-schema fixture
       like the reasoning one, so a server does not have to know which model
       is on the other end.
+- [ ] **`a2a-llm` has no message parts, so bytes never reach a model.**
+      `ChatMessage::content` is `Option<String>`. korps feeds text parts,
+      data parts and file *names* to the model since 2026-08-27 and withholds
+      the bytes, naming what it withheld, because there is no content array
+      to map a `FilePart` into. OpenAI and Gemini both take a parts array in
+      place of the string. A content enum of text and typed bytes with a MIME
+      type, rendered per provider, with the `String` constructors kept so a
+      text-only caller does not change. korps' §3 has the consumer half; its
+      §7 *Handoffs carry files* rides on this and on *File parts survive the
+      bridge* above.
 
 ---
 
