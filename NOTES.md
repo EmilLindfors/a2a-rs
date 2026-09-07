@@ -794,6 +794,42 @@ a 400 names one field per response, and a schema can carry many. The
 `format` list is the one table here, kept because the API documents it and a
 wrong value is a refusal rather than a stale default.
 
+**A grace period, not an always-a-task rule.** (2026-09-07) SEP-2663 has no
+per-call opt-in and no `tasks/result`, so a server that declares the tasks
+extension decides for itself when a call stops blocking. Answering every call
+with a task id would cost a second round trip on every quick tool, and every
+client would have to grow a poll loop to use the bridge at all. So
+`AgentToMcpBridge` waits `DEFAULT_TASK_GRACE` and answers with whichever comes
+first, the result or the deadline. Five seconds is under every MCP client
+timeout seen so far and over an ordinary agent turn.
+
+A call that *finished* inside the grace without settling is a task too. An
+agent that stopped to ask something has no result to return yet, and the
+answer comes back through `tasks/update`.
+
+**Only a task-mode call is spawned.** (2026-09-07) The blocking path still
+awaits the call inside the request, because `TaskCancelGuard` cancels the A2A
+task when the request future is dropped, and that only works while the call
+*is* the request. A client that did not declare the extension therefore keeps
+cancel-on-disconnect. A task-mode call gives it up deliberately: the task
+outlives the request by design, and `tasks/cancel` is how it is stopped.
+
+`Drive` is what the two paths differ by — `InRequest` with the peer, the
+progress token and whether the client can be elicited, or `AsTask` with the
+peer. It is owned rather than borrowed from the `RequestContext` so the call
+can be spawned. Everything else is one `call_skill`, which used to hold a
+verbatim copy of the message loop per code path, and a copy is where a feature
+lands on one path and not the other.
+
+**A detached call has to write down what happened to it.** (2026-09-07) Two
+holes, both from nobody waiting on the return value. The task id is handed to
+the client before the agent has replied, so `tasks/get` had nothing to answer
+with until the first reply — the cache is seeded with a `Submitted` task at
+the moment the promise is made. And a failure after the response reached only
+the spawned task's `Result`, leaving the task reading `Working` for as long as
+the client cared to poll; it is written to the cache as `Failed` with its
+reason instead.
+
 **A message has one content channel, and it holds bytes.** (2026-09-07)
 `ChatMessage::content` was `Option<String>`, so a caller holding a file could
 send only its name. korps did exactly that, and a model asked to summarize an

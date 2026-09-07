@@ -93,23 +93,17 @@ The three below are the protocol half of a fleet building a strata project
 end to end (korps' `TODO.md` §7, strata's `TODO.md` § *Agents build a
 project end to end*), set 2026-09-05.
 
-- [ ] **A slow agent behind `agent_to_mcp` is still one blocking call.**
-      The client half shipped 2026-09-07: `McpToA2ABridge` watches a task
-      the server makes of a tool call and the outcome is the call's (see
-      `CHANGELOG.md`). The server half is left. `call_tool` on
-      `AgentToMcpBridge` drives the A2A task to its end inside the request,
-      so a client with a deadline times out on an agent that takes long,
-      even though the bridge already declares the extension and answers
-      `tasks/get` from its cache. Wanted: when the client declared the
-      extension and the A2A task has not settled after a grace period,
-      answer with `CreateTaskResult` (the A2A task id as the MCP task id)
-      and keep driving the task in the background, updating the cache;
-      `tasks/update` becomes the next message on the A2A task, and
-      `InputRequired` stays a task state instead of an elicitation the
-      bridge raises itself. Also `notifications/tasks` on each change, which
-      rmcp has no helper for (`send_notification` by hand). rmcp 3.2's
-      tasks are SEP-2663: no per-call opt-in and no `tasks/result`, so the
-      grace period is the bridge's policy, not the client's.
+- [ ] **Nothing in the fleet asks the bridge for a task yet.**
+      Both halves of the tasks extension are in: the client half shipped
+      2026-09-07 (`McpToA2ABridge` watches a task a server makes of a tool
+      call) and the server half the same day (`AgentToMcpBridge` answers
+      `tools/call` with a task id past a grace period, drives it detached,
+      and takes the answer through `tasks/update`). See `CHANGELOG.md`;
+      `NOTES.md` has why the switch is a grace period and why only a
+      task-mode call is spawned. What is left is korps': its `mcp-client`
+      does not declare `ClientCapabilities::enable_tasks()`, so every call
+      it makes still blocks and neither half is exercised by a fleet. Its
+      §3 has that half.
 - [ ] **An in-flight elicitation becomes `InputRequired` too.** The
       `input_required` result shape pauses a task since 2026-09-06 (see
       `NOTES.md`). The other way a server asks, `create_elicitation` on the

@@ -222,6 +222,13 @@ pub struct AgentToMcpBridge {
     namespace: String,
     /// Cache of tasks processed by this bridge (useful for in-process backends)
     tasks_cache: Arc<Mutex<HashMap<String, Task>>>,
+    /// The skill each task in flight belongs to, so `tasks/update` can send
+    /// the next message on it. Dropped when the task settles.
+    task_skills: Arc<Mutex<HashMap<String, String>>>,
+    /// How long a `tools/call` blocks before answering with a task id, for a
+    /// client that declared the tasks extension. `None` never makes a task,
+    /// so every call blocks to the end.
+    task_grace: Option<std::time::Duration>,
     /// Optional custom name for the MCP server
     mcp_server_name: Option<String>,
     /// Optional custom version for the MCP server
@@ -368,6 +375,8 @@ impl AgentToMcpBridge {
             schemas: Arc::new(schemas),
             namespace,
             tasks_cache: Arc::new(Mutex::new(HashMap::new())),
+            task_skills: Arc::new(Mutex::new(HashMap::new())),
+            task_grace: Some(DEFAULT_TASK_GRACE),
             mcp_server_name: None,
             mcp_server_version: None,
         }
@@ -377,6 +386,27 @@ impl AgentToMcpBridge {
     pub fn with_mcp_metadata(mut self, name: Option<String>, version: Option<String>) -> Self {
         self.mcp_server_name = name;
         self.mcp_server_version = version;
+        self
+    }
+
+    /// How long a `tools/call` waits before answering with a task id instead
+    /// of a result. Defaults to [`DEFAULT_TASK_GRACE`].
+    ///
+    /// Only a client that declared the `io.modelcontextprotocol/tasks`
+    /// extension is answered this way; every other client blocks to the end
+    /// whatever this says.
+    pub fn with_task_grace_period(mut self, grace: std::time::Duration) -> Self {
+        self.task_grace = Some(grace);
+        self
+    }
+
+    /// Never answer a `tools/call` with a task: every call blocks until the
+    /// agent is done, as it did before the tasks extension.
+    ///
+    /// For a deployment whose agents are all quick, where a task id is one
+    /// more round trip for nothing.
+    pub fn without_task_results(mut self) -> Self {
+        self.task_grace = None;
         self
     }
 
@@ -422,6 +452,133 @@ impl Drop for TaskCancelGuard {
             tokio::spawn(async move {
                 let _ = backend.cancel_task(&id).await;
             });
+        }
+    }
+}
+
+/// How often the polling fallback asks the agent for a task's state, and the
+/// interval a task handed back to an MCP client is told to poll at.
+const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// How long a `tools/call` waits for the agent before answering with a task
+/// id instead of a result, for a client that declared the tasks extension.
+///
+/// SEP-2663 has no per-call opt-in and no `tasks/result`, so when to stop
+/// blocking is the server's policy. Five seconds is under every MCP client
+/// timeout seen so far and over the length of an ordinary agent turn, so a
+/// tool that answers promptly still answers in the call.
+pub const DEFAULT_TASK_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Where a call in flight reports, and what it does when the agent asks a
+/// question.
+///
+/// The difference is whether the `tools/call` that started it is still open.
+/// It is not a property of the bridge: the same tool, on the same bridge, is
+/// a blocking call for a client that did not declare the tasks extension and
+/// a task for one that did.
+#[derive(Clone)]
+enum Drive {
+    /// The request is open and this call is its answer. Progress goes on the
+    /// request's token, and `InputRequired` is elicited from the client's
+    /// user before the call returns.
+    InRequest {
+        peer: rmcp::service::Peer<RoleServer>,
+        progress: Option<ProgressToken>,
+        /// Whether the client declared elicitation. Read from the request
+        /// rather than the handshake, which the discover lifecycle does not
+        /// fill.
+        can_elicit: bool,
+    },
+    /// The request has been answered with a task id and the call is still
+    /// running. Every change is a `notifications/tasks`, and `InputRequired`
+    /// parks the task for `tasks/update` to answer.
+    AsTask {
+        peer: rmcp::service::Peer<RoleServer>,
+    },
+}
+
+impl Drive {
+    /// A call whose length nobody can predict has no measurable progress, so
+    /// the state stands in for one.
+    fn progress_for(state: &buffa::enumeration::EnumValue<a2a_rs::domain::TaskState>) -> f64 {
+        use a2a_rs::domain::TaskState;
+        use buffa::enumeration::EnumValue::Known;
+        match state {
+            Known(TaskState::Submitted) => 10.0,
+            Known(TaskState::Working) => 50.0,
+            Known(TaskState::InputRequired) => 75.0,
+            Known(
+                TaskState::Completed
+                | TaskState::Failed
+                | TaskState::Rejected
+                | TaskState::Canceled,
+            ) => 100.0,
+            _ => 30.0,
+        }
+    }
+
+    /// The task moved. Reported on the request's progress token, and never
+    /// backwards — `floor` is the highest reported so far, because a stream
+    /// that revisits `Working` after `InputRequired` would otherwise walk a
+    /// progress bar back.
+    async fn progress(&self, task: &Task, floor: &mut f64) {
+        let Self::InRequest {
+            peer,
+            progress: Some(token),
+            ..
+        } = self
+        else {
+            return;
+        };
+        *floor = floor.max(Self::progress_for(&task.status.state));
+        let mut param = ProgressNotificationParam::new(token.clone(), *floor).with_total(100.0);
+        if let Some(message) = AgentToMcpBridge::status_text(task) {
+            param = param.with_message(message);
+        }
+        let _ = peer.notify_progress(param).await;
+    }
+
+    /// A poll went round. Only a request in flight has anywhere to put that;
+    /// a client holding a task is told about changes, not about attempts.
+    async fn polled(&self, attempt: u32) {
+        let Self::InRequest {
+            peer,
+            progress: Some(token),
+            ..
+        } = self
+        else {
+            return;
+        };
+        let param =
+            ProgressNotificationParam::new(token.clone(), (f64::from(attempt) * 5.0).min(95.0))
+                .with_total(100.0)
+                .with_message(format!("Polling task status (attempt {attempt})"));
+        let _ = peer.notify_progress(param).await;
+    }
+
+    /// The task changed, announced to a client holding it as a task.
+    ///
+    /// rmcp has no `notify_*` helper for `notifications/tasks`, so the
+    /// notification is built and sent by hand. The body is the same
+    /// `DetailedTask` `tasks/get` would return at this moment, which is what
+    /// the extension specifies.
+    async fn task_changed(&self, task: &Task) {
+        let Self::AsTask { peer } = self else {
+            return;
+        };
+        let detailed = match AgentToMcpBridge::convert_to_mcp_task(task) {
+            Ok(detailed) => detailed,
+            Err(e) => {
+                debug!("Task {} could not be described to the client: {e}", task.id);
+                return;
+            }
+        };
+        let notification = TaskStatusNotification::new(TaskStatusNotificationParams::new(detailed));
+        if let Err(e) = peer
+            .send_notification(ServerNotification::TaskStatusNotification(notification))
+            .await
+        {
+            debug!("notifications/tasks for {} was not delivered: {e}", task.id);
         }
     }
 }
@@ -485,6 +642,38 @@ impl AgentToMcpBridge {
             message: question,
             requested_schema,
         }
+    }
+
+    /// The text a `tasks/update` carries, out of the responses to the input
+    /// requests `tasks/get` surfaced.
+    ///
+    /// One question is asked at a time — the `input` key of
+    /// [`Self::convert_to_mcp_task`] — so the first response is the answer,
+    /// whatever the client keyed it under. An elicitation result answers with
+    /// `{action, content}`; a client that sends the bare string it would have
+    /// typed is taken at its word rather than refused, since the A2A task
+    /// receives text either way.
+    ///
+    /// `None` is a refusal: the elicitation was declined or cancelled, or the
+    /// responses carry nothing.
+    fn answer_from(responses: &InputResponses) -> Option<String> {
+        let value = responses
+            .get("input")
+            .or_else(|| responses.values().next())?;
+        if let Some(text) = value.as_str() {
+            return Some(text.to_string());
+        }
+        let object = value.as_object()?;
+        match object.get("action").and_then(serde_json::Value::as_str) {
+            Some("accept") | None => {}
+            Some(_) => return None,
+        }
+        let content = object.get("content")?;
+        content
+            .get("answer")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .or_else(|| Some(content.to_string()))
     }
 
     /// The A2A task as the tasks extension's `DetailedTask`: the state
@@ -553,24 +742,23 @@ impl AgentToMcpBridge {
     /// and is now the only fallback. Sampling — asking the client's *model*
     /// to answer on the user's behalf — is deprecated by SEP-2577 with no
     /// replacement, and it was the wrong party to ask.
-    async fn ask_for_input(&self, task: &Task, ctx: &RequestContext<RoleServer>) -> Option<String> {
-        // Under the discover lifecycle (2026-07-28) the client's
-        // capabilities ride on each request, not on the handshake; this
-        // reads either.
-        let can_ask = ctx
-            .client_capabilities()
-            .is_some_and(|caps| caps.elicitation.is_some());
-        if !can_ask {
+    async fn ask_for_input(&self, task: &Task, drive: &Drive) -> Option<String> {
+        let Drive::InRequest {
+            peer,
+            can_elicit: true,
+            ..
+        } = drive
+        else {
             debug!(
-                "Task {} requires input and the client does not support elicitation",
+                "Task {} requires input and there is nobody this call can ask",
                 task.id
             );
             return None;
-        }
+        };
 
         let params = Self::elicitation_for(task);
 
-        let result = match ctx.peer.create_elicitation(params).await {
+        let result = match peer.create_elicitation(params).await {
             Ok(result) => result,
             Err(e) => {
                 debug!("Elicitation for task {} failed: {e}", task.id);
@@ -596,13 +784,16 @@ impl AgentToMcpBridge {
     /// notifications, and elicitation. `parts` is the request as the agent
     /// receives it: one text part for an untyped skill, one data part holding
     /// the typed arguments for a skill with an input schema.
+    ///
+    /// `drive` says who is listening and what to do with a question; it is
+    /// owned rather than borrowed from the request so this can be spawned and
+    /// outlive the `tools/call` that started it.
     async fn call_skill(
         &self,
         skill_id: &str,
         task_id: &str,
         parts: Vec<Part>,
-        progress_token: Option<ProgressToken>,
-        ctx: &RequestContext<RoleServer>,
+        drive: Drive,
     ) -> Result<CallToolResult> {
         debug!(
             "Calling A2A skill '{}' with {} part(s)",
@@ -625,10 +816,7 @@ impl AgentToMcpBridge {
             .map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
 
         debug!("A2A agent returned task: {}", task.id);
-        self.tasks_cache
-            .lock()
-            .await
-            .insert(task.id.clone(), task.clone());
+        self.record(&task, &drive).await;
 
         let mut cancel_guard = TaskCancelGuard {
             backend: self.backend.clone(),
@@ -652,80 +840,15 @@ impl AgentToMcpBridge {
                         a2a_rs::StreamItem::Task(t) => {
                             debug!("Stream initial task for {}: {:?}", t.id, t.status.state);
                             task = t;
-                            self.tasks_cache
-                                .lock()
-                                .await
-                                .insert(task.id.clone(), task.clone());
+                            self.record(&task, &drive).await;
+                            drive.progress(&task, &mut last_progress).await;
 
-                            // Send progress notification if token is provided
-                            if let Some(ref token) = progress_token {
-                                let progress_val = match task.status.state {
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Submitted,
-                                    ) => 10.0,
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Working,
-                                    ) => 50.0,
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::InputRequired,
-                                    ) => 75.0,
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Completed,
-                                    ) => 100.0,
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Failed,
-                                    )
-                                    | buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Rejected
-                                        | a2a_rs::domain::TaskState::Canceled,
-                                    ) => 100.0,
-                                    _ => 30.0,
-                                };
-                                last_progress = last_progress.max(progress_val);
-
-                                let message_str = task.status.message.as_option().map(|msg| {
-                                    msg.parts
-                                        .iter()
-                                        .filter_map(|part: &Part| part.get_text().map(String::from))
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                });
-
-                                let mut progress_param =
-                                    ProgressNotificationParam::new(token.clone(), last_progress)
-                                        .with_total(100.0);
-                                if let Some(message) = message_str {
-                                    progress_param = progress_param.with_message(message);
-                                }
-                                let _ = ctx.peer.notify_progress(progress_param).await;
-                            }
-
-                            // Handle InputRequired
-                            if task.status.state == a2a_rs::domain::TaskState::InputRequired {
-                                let Some(response_text) = self.ask_for_input(&task, ctx).await
-                                else {
-                                    debug!(
-                                        "No input obtainable for task {}; suspending it and returning to the caller",
-                                        task.id
-                                    );
-                                    break;
-                                };
-
-                                let reply_msg = Message::builder()
-                                    .role(Role::User)
-                                    .parts(vec![Part::text(response_text)])
-                                    .message_id(uuid::Uuid::new_v4().to_string())
-                                    .build();
-
-                                task = self
-                                    .backend
-                                    .invoke(task_id, &reply_msg, Some(skill_id))
-                                    .await
-                                    .map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
-                                self.tasks_cache
-                                    .lock()
-                                    .await
-                                    .insert(task.id.clone(), task.clone());
+                            if task.status.state == a2a_rs::domain::TaskState::InputRequired
+                                && !self
+                                    .answer_input_required(&mut task, task_id, skill_id, &drive)
+                                    .await?
+                            {
+                                break;
                             }
 
                             if TaskResultConverter::is_task_final(&task) {
@@ -737,82 +860,16 @@ impl AgentToMcpBridge {
                                 "Stream status update for {}: {:?}",
                                 task.id, event.status.state
                             );
-
-                            // Send progress notification if token is provided
-                            if let Some(ref token) = progress_token {
-                                let progress_val = match event.status.state {
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Submitted,
-                                    ) => 10.0,
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Working,
-                                    ) => 50.0,
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::InputRequired,
-                                    ) => 75.0,
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Completed,
-                                    ) => 100.0,
-                                    buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Failed,
-                                    )
-                                    | buffa::enumeration::EnumValue::Known(
-                                        a2a_rs::domain::TaskState::Rejected
-                                        | a2a_rs::domain::TaskState::Canceled,
-                                    ) => 100.0,
-                                    _ => 30.0,
-                                };
-                                last_progress = last_progress.max(progress_val);
-
-                                let message_str = event.status.message.as_option().map(|msg| {
-                                    msg.parts
-                                        .iter()
-                                        .filter_map(|part: &Part| part.get_text().map(String::from))
-                                        .collect::<Vec<_>>()
-                                        .join("\n")
-                                });
-
-                                let mut progress_param =
-                                    ProgressNotificationParam::new(token.clone(), last_progress)
-                                        .with_total(100.0);
-                                if let Some(message) = message_str {
-                                    progress_param = progress_param.with_message(message);
-                                }
-                                let _ = ctx.peer.notify_progress(progress_param).await;
-                            }
-
                             task.status = ::buffa::MessageField::some(event.status.clone());
-                            self.tasks_cache
-                                .lock()
-                                .await
-                                .insert(task.id.clone(), task.clone());
+                            self.record(&task, &drive).await;
+                            drive.progress(&task, &mut last_progress).await;
 
-                            // Handle InputRequired
-                            if task.status.state == a2a_rs::domain::TaskState::InputRequired {
-                                let Some(response_text) = self.ask_for_input(&task, ctx).await
-                                else {
-                                    debug!(
-                                        "No input obtainable for task {}; suspending it and returning to the caller",
-                                        task.id
-                                    );
-                                    break;
-                                };
-
-                                let reply_msg = Message::builder()
-                                    .role(Role::User)
-                                    .parts(vec![Part::text(response_text)])
-                                    .message_id(uuid::Uuid::new_v4().to_string())
-                                    .build();
-
-                                task = self
-                                    .backend
-                                    .invoke(task_id, &reply_msg, Some(skill_id))
-                                    .await
-                                    .map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
-                                self.tasks_cache
-                                    .lock()
-                                    .await
-                                    .insert(task.id.clone(), task.clone());
+                            if task.status.state == a2a_rs::domain::TaskState::InputRequired
+                                && !self
+                                    .answer_input_required(&mut task, task_id, skill_id, &drive)
+                                    .await?
+                            {
+                                break;
                             }
 
                             if TaskResultConverter::is_task_final(&task) {
@@ -843,10 +900,7 @@ impl AgentToMcpBridge {
                             } else {
                                 task.artifacts.push(event.artifact);
                             }
-                            self.tasks_cache
-                                .lock()
-                                .await
-                                .insert(task.id.clone(), task.clone());
+                            self.record(&task, &drive).await;
                         }
                     }
                 }
@@ -858,25 +912,13 @@ impl AgentToMcpBridge {
                 let mut last_state = task.status.state;
                 let mut poll_count = 0;
                 loop {
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(POLL_INTERVAL).await;
                     poll_count += 1;
-
-                    if let Some(ref token) = progress_token {
-                        let progress_param = ProgressNotificationParam::new(
-                            token.clone(),
-                            (poll_count as f64 * 5.0).min(95.0),
-                        )
-                        .with_total(100.0)
-                        .with_message(format!("Polling task status (attempt {})", poll_count));
-                        let _ = ctx.peer.notify_progress(progress_param).await;
-                    }
+                    drive.polled(poll_count).await;
 
                     if let Ok(Some(updated_task)) = self.backend.get_task(&task.id).await {
                         task = updated_task;
-                        self.tasks_cache
-                            .lock()
-                            .await
-                            .insert(task.id.clone(), task.clone());
+                        self.record(&task, &drive).await;
 
                         if task.status.state != last_state {
                             debug!(
@@ -886,30 +928,12 @@ impl AgentToMcpBridge {
                             last_state = task.status.state;
                         }
 
-                        if task.status.state == a2a_rs::domain::TaskState::InputRequired {
-                            let Some(response_text) = self.ask_for_input(&task, ctx).await else {
-                                debug!(
-                                    "No input obtainable for task {}; suspending it and returning to the caller",
-                                    task.id
-                                );
-                                break;
-                            };
-
-                            let reply_msg = Message::builder()
-                                .role(Role::User)
-                                .parts(vec![Part::text(response_text)])
-                                .message_id(uuid::Uuid::new_v4().to_string())
-                                .build();
-
-                            task = self
-                                .backend
-                                .invoke(task_id, &reply_msg, Some(skill_id))
-                                .await
-                                .map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
-                            self.tasks_cache
-                                .lock()
-                                .await
-                                .insert(task.id.clone(), task.clone());
+                        if task.status.state == a2a_rs::domain::TaskState::InputRequired
+                            && !self
+                                .answer_input_required(&mut task, task_id, skill_id, &drive)
+                                .await?
+                        {
+                            break;
                         }
 
                         if TaskResultConverter::is_task_final(&task) {
@@ -927,10 +951,7 @@ impl AgentToMcpBridge {
             }
         }
 
-        self.tasks_cache
-            .lock()
-            .await
-            .insert(task.id.clone(), task.clone());
+        self.record(&task, &drive).await;
 
         // Defuse the cancel guard as the task has successfully completed/finished in this request
         cancel_guard.task_id = None;
@@ -948,6 +969,240 @@ impl AgentToMcpBridge {
         );
 
         Ok(result)
+    }
+
+    /// A task that stopped to ask something: answered where there is somebody
+    /// to ask, parked where there is not.
+    ///
+    /// `true` when the answer went back to the agent and `task` now holds
+    /// what it said next, so the caller keeps driving. `false` when the
+    /// question stands — the client has no elicitation capability, the user
+    /// declined, or the call is a task, where `InputRequired` is a state the
+    /// client answers with `tasks/update` rather than a question the bridge
+    /// raises on its own.
+    async fn answer_input_required(
+        &self,
+        task: &mut Task,
+        task_id: &str,
+        skill_id: &str,
+        drive: &Drive,
+    ) -> Result<bool> {
+        let Some(response_text) = self.ask_for_input(task, drive).await else {
+            debug!(
+                "No input obtainable for task {}; leaving it for the caller",
+                task.id
+            );
+            return Ok(false);
+        };
+
+        let reply_msg = Message::builder()
+            .role(Role::User)
+            .parts(vec![Part::text(response_text)])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .build();
+
+        *task = self
+            .backend
+            .invoke(task_id, &reply_msg, Some(skill_id))
+            .await
+            .map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
+        self.record(task, drive).await;
+        Ok(true)
+    }
+
+    /// The drive for a call the request is waiting on.
+    ///
+    /// Under the discover lifecycle (2026-07-28) the client's capabilities
+    /// ride on each request rather than the handshake; `client_capabilities`
+    /// reads either.
+    fn in_request(ctx: &RequestContext<RoleServer>) -> Drive {
+        Drive::InRequest {
+            peer: ctx.peer.clone(),
+            progress: ctx.meta.get_progress_token(),
+            can_elicit: ctx
+                .client_capabilities()
+                .is_some_and(|caps| caps.elicitation.is_some()),
+        }
+    }
+
+    /// Run the call, and answer either with its result or with the task it
+    /// became.
+    ///
+    /// A client that did not declare the tasks extension has nowhere to put a
+    /// task id, so its call blocks to the end as it always did — including
+    /// the cancel-on-drop, which only works while the call is the request.
+    ///
+    /// A client that did gets whichever comes first: the result, or the grace
+    /// period. On the grace period the call keeps running detached, the cache
+    /// keeps up with it, and `notifications/tasks` says so. A call that
+    /// *finished* inside the grace without settling — an agent that stopped
+    /// to ask something — is a task too, because the answer comes through
+    /// `tasks/update` and there is no result to return yet.
+    async fn dispatch(
+        &self,
+        skill_id: String,
+        task_id: String,
+        parts: Vec<Part>,
+        ctx: &RequestContext<RoleServer>,
+    ) -> std::result::Result<CallToolResponse, McpError> {
+        let grace = match (self.task_grace, ctx.client_capabilities()) {
+            (Some(grace), Some(caps)) if caps.supports_tasks() => grace,
+            _ => {
+                return match self
+                    .call_skill(&skill_id, &task_id, parts, Self::in_request(ctx))
+                    .await
+                {
+                    Ok(result) => Ok(result.into()),
+                    Err(e) => Err(e.to_mcp_error()),
+                };
+            }
+        };
+
+        // Which skill this task belongs to, so `tasks/update` can send the
+        // next message on it without the client naming the skill again.
+        self.task_skills
+            .lock()
+            .await
+            .insert(task_id.clone(), skill_id.clone());
+
+        // `tasks/get` has to answer for this id from the moment the client is
+        // told it, and the agent has not replied yet — a slow agent is the
+        // whole reason this path exists. The seed is replaced by the agent's
+        // own task on the first reply.
+        self.tasks_cache
+            .lock()
+            .await
+            .entry(task_id.clone())
+            .or_insert_with(|| {
+                Task::builder()
+                    .id(task_id.clone())
+                    .context_id(skill_id.clone())
+                    .status(a2a_rs::domain::TaskStatus::new(
+                        a2a_rs::domain::TaskState::Submitted,
+                        None,
+                    ))
+                    .build()
+            });
+
+        // Not aborted on timeout: dropping a `JoinHandle` detaches the task,
+        // which is the whole point — the call outlives the request.
+        let mut handle = self.spawn_driver(skill_id.clone(), task_id.clone(), parts, &ctx.peer);
+
+        match tokio::time::timeout(grace, &mut handle).await {
+            Ok(Ok(Ok(result))) if self.has_settled(&task_id).await => Ok(result.into()),
+            Ok(Ok(Ok(_))) => {
+                debug!("Task {task_id} stopped short of an answer; handing it to the client");
+                Ok(self.as_task(&task_id).await.into())
+            }
+            Ok(Ok(Err(e))) => Err(e.to_mcp_error()),
+            Ok(Err(join)) => {
+                self.task_skills.lock().await.remove(&task_id);
+                Err(McpError::internal_error(
+                    format!("The call to skill '{skill_id}' did not finish: {join}"),
+                    None,
+                ))
+            }
+            Err(_elapsed) => {
+                info!("Skill '{skill_id}' is still running after the grace period; task {task_id}");
+                Ok(self.as_task(&task_id).await.into())
+            }
+        }
+    }
+
+    /// Drive a call in the background, as a task the client polls.
+    ///
+    /// Used both for the call that outran its grace period and for the answer
+    /// a `tasks/update` carries; `call_skill` starts by sending its parts, so
+    /// resuming a parked task is the same code as starting one.
+    fn spawn_driver(
+        &self,
+        skill_id: String,
+        task_id: String,
+        parts: Vec<Part>,
+        peer: &rmcp::service::Peer<RoleServer>,
+    ) -> tokio::task::JoinHandle<Result<CallToolResult>> {
+        let driver = self.clone();
+        let drive = Drive::AsTask { peer: peer.clone() };
+        tokio::spawn(async move {
+            let outcome = driver
+                .call_skill(&skill_id, &task_id, parts, drive.clone())
+                .await;
+            if let Err(ref e) = outcome {
+                // Nobody is waiting on this call's return value, so a failure
+                // that only came back here would leave the task reading
+                // `Working` for as long as the client cared to poll it.
+                error!("Task {task_id} failed after it left the request: {e}");
+                driver.fail_task(&task_id, &e.to_string(), &drive).await;
+            }
+            // The skill is only wanted while the task can still take another
+            // message. A settled task cannot, and neither can a failed one.
+            if outcome.is_err() || driver.has_settled(&task_id).await {
+                driver.task_skills.lock().await.remove(&task_id);
+            }
+            outcome
+        })
+    }
+
+    /// Mark a task failed in the cache, with the reason, so a client polling
+    /// it is told rather than left waiting.
+    async fn fail_task(&self, task_id: &str, reason: &str, drive: &Drive) {
+        let mut task = match self.tasks_cache.lock().await.get(task_id).cloned() {
+            Some(task) => task,
+            None => return,
+        };
+        if TaskResultConverter::is_task_final(&task) {
+            return;
+        }
+        let message = Message::builder()
+            .role(Role::Agent)
+            .parts(vec![Part::text(reason.to_string())])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .build();
+        task.status = ::buffa::MessageField::some(a2a_rs::domain::TaskStatus::new(
+            a2a_rs::domain::TaskState::Failed,
+            Some(message),
+        ));
+        self.record(&task, drive).await;
+    }
+
+    /// Whether the cached task has reached a state nothing follows.
+    async fn has_settled(&self, task_id: &str) -> bool {
+        self.tasks_cache
+            .lock()
+            .await
+            .get(task_id)
+            .is_some_and(TaskResultConverter::is_task_final)
+    }
+
+    /// The task handle a `tools/call` is answered with: the A2A task id as
+    /// the MCP task id, its state as the cache last saw it, and the interval
+    /// the bridge itself polls at as the one to poll it at.
+    async fn as_task(&self, task_id: &str) -> CreateTaskResult {
+        let cached = self.tasks_cache.lock().await.get(task_id).cloned();
+        let now = chrono::Utc::now().to_rfc3339();
+        let (status, message) = match &cached {
+            Some(task) => (
+                Self::map_task_state(&task.status.state),
+                Self::status_text(task),
+            ),
+            None => (rmcp::model::TaskStatus::Working, None),
+        };
+        let mut task = rmcp::model::Task::new(task_id.to_string(), status, now.clone(), now)
+            .with_poll_interval_ms(u64::try_from(POLL_INTERVAL.as_millis()).unwrap_or(u64::MAX));
+        if let Some(message) = message {
+            task = task.with_status_message(message);
+        }
+        CreateTaskResult::new(task)
+    }
+
+    /// The task as it now stands: cached, so `tasks/get` answers from it, and
+    /// announced to a client that is holding it as a task.
+    async fn record(&self, task: &Task, drive: &Drive) {
+        self.tasks_cache
+            .lock()
+            .await
+            .insert(task.id.clone(), task.clone());
+        drive.task_changed(task).await;
     }
 }
 
@@ -1110,16 +1365,7 @@ impl ServerHandler for AgentToMcpBridge {
                 vec![Part::text(message_text)]
             };
 
-            let progress_token = ctx.meta.get_progress_token();
-
-            // Call the A2A agent skill
-            match self
-                .call_skill(&skill_id, &task_id, parts, progress_token, &ctx)
-                .await
-            {
-                Ok(result) => Ok(result.into()),
-                Err(e) => Err(e.to_mcp_error()),
-            }
+            self.dispatch(skill_id, task_id, parts, &ctx).await
         }
     }
 
@@ -1208,14 +1454,12 @@ impl ServerHandler for AgentToMcpBridge {
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
             // Call the A2A agent skill
-            let progress_token = ctx.meta.get_progress_token();
             let tool_result = match self
                 .call_skill(
                     &skill_id,
                     &task_id,
                     vec![Part::text(message_text.clone())],
-                    progress_token,
-                    &ctx,
+                    Self::in_request(&ctx),
                 )
                 .await
             {
@@ -1437,6 +1681,77 @@ impl ServerHandler for AgentToMcpBridge {
             })?;
 
             Ok(GetTaskResult::new(Self::convert_to_mcp_task(&a2a_task)?))
+        }
+    }
+
+    /// `tasks/update` of the tasks extension: the client's answer to a task
+    /// that stopped to ask something.
+    ///
+    /// The answer becomes the next A2A message on that task, which is what
+    /// `InputRequired` is waiting for, and driving resumes in the background
+    /// — so this acknowledges immediately, as the extension requires, and the
+    /// result arrives through `tasks/get` or `notifications/tasks`.
+    ///
+    /// A declined or cancelled answer cancels the A2A task. The agent asked a
+    /// question it cannot continue without, so leaving the task parked would
+    /// leave it parked forever.
+    fn update_task(
+        &self,
+        request: UpdateTaskParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = std::result::Result<(), McpError>> + Send + '_ {
+        async move {
+            info!("MCP client updating task: {}", request.task_id);
+
+            let skill_id = self
+                .task_skills
+                .lock()
+                .await
+                .get(&request.task_id)
+                .cloned()
+                .ok_or_else(|| {
+                    McpError::invalid_params(
+                        format!("Task {} is not waiting for input", request.task_id),
+                        None,
+                    )
+                })?;
+
+            match Self::answer_from(&request.input_responses) {
+                Some(answer) => {
+                    self.spawn_driver(
+                        skill_id,
+                        request.task_id.clone(),
+                        vec![Part::text(answer)],
+                        &context.peer,
+                    );
+                }
+                None => {
+                    debug!(
+                        "The answer to task {} declines; cancelling it",
+                        request.task_id
+                    );
+                    let cancelled =
+                        self.backend
+                            .cancel_task(&request.task_id)
+                            .await
+                            .map_err(|e| {
+                                McpError::internal_error(
+                                    format!("Failed to cancel A2A task {}: {}", request.task_id, e),
+                                    None,
+                                )
+                            })?;
+                    self.task_skills.lock().await.remove(&request.task_id);
+                    self.record(
+                        &cancelled,
+                        &Drive::AsTask {
+                            peer: context.peer.clone(),
+                        },
+                    )
+                    .await;
+                }
+            }
+
+            Ok(())
         }
     }
 
