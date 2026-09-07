@@ -13,3 +13,9 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    ignore:
+      # The MSRV job pins `dtolnay/rust-toolchain@1.96`, which is a Rust
+      # version, not an action version. Dependabot reads it as one and bumps
+      # it to a tag that does not exist. It moves with `rust-version` in
+      # `Cargo.toml`, by hand.
+      - dependency-name: dtolnay/rust-toolchain
