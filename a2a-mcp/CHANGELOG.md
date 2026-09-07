@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.10.1...a2a-mcp-v0.10.2) - 2026-09-07
+
+### Added
+
+- *(a2a-mcp)* A question a server asks mid-call reaches the A2A side
+- *(a2a-mcp)* A slow agent behind the bridge is a task, not a blocked call
+
 ## [0.10.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.10.0...a2a-mcp-v0.10.1) - 2026-09-07
 
 ### Added
