@@ -554,10 +554,12 @@ impl AgentToMcpBridge {
     /// to answer on the user's behalf — is deprecated by SEP-2577 with no
     /// replacement, and it was the wrong party to ask.
     async fn ask_for_input(&self, task: &Task, ctx: &RequestContext<RoleServer>) -> Option<String> {
+        // Under the discover lifecycle (2026-07-28) the client's
+        // capabilities ride on each request, not on the handshake; this
+        // reads either.
         let can_ask = ctx
-            .peer
-            .peer_info()
-            .is_some_and(|info| info.capabilities.elicitation.is_some());
+            .client_capabilities()
+            .is_some_and(|caps| caps.elicitation.is_some());
         if !can_ask {
             debug!(
                 "Task {} requires input and the client does not support elicitation",
