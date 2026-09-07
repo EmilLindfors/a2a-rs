@@ -1,6 +1,6 @@
 use super::{
     Env, LlmError, LlmProvider, LlmRequest, LlmResponse, MessageRole, Reasoning, ReasoningSupport,
-    describe_transport_error, refuses_reasoning,
+    ToolDefinition, describe_transport_error, refuses_reasoning, schema,
 };
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
@@ -326,6 +326,39 @@ impl GeminiProvider {
         }
     }
 
+    /// The tools as Gemini declares them, each schema rewritten into the
+    /// OpenAPI subset the API takes (see [`schema::for_gemini`]).
+    ///
+    /// A keyword with no Gemini spelling is dropped and logged here, once per
+    /// request, rather than refused by the endpoint with a 400 naming a field
+    /// the tool's author never wrote. Debug rather than warn: the rewrite is
+    /// deterministic and costs no round trip, so it is a fact about the tool,
+    /// not an event.
+    fn function_declarations(&self, tools: Vec<ToolDefinition>) -> Vec<GeminiTool> {
+        let function_declarations = tools
+            .into_iter()
+            .map(|t| {
+                let sanitized = schema::for_gemini(&t.parameters);
+                if !sanitized.dropped.is_empty() {
+                    debug!(
+                        model = %self.config.model,
+                        tool = %t.name,
+                        dropped = ?sanitized.dropped,
+                        "dropped JSON Schema keywords Gemini function declarations do not take"
+                    );
+                }
+                GeminiFunctionDeclaration {
+                    name: t.name,
+                    description: t.description,
+                    parameters: sanitized.schema,
+                }
+            })
+            .collect();
+        vec![GeminiTool {
+            function_declarations,
+        }]
+    }
+
     async fn post(
         &self,
         url: &str,
@@ -465,18 +498,7 @@ impl LlmProvider for GeminiProvider {
             thinking_config,
         };
 
-        let tools = request.tools.map(|tools| {
-            vec![GeminiTool {
-                function_declarations: tools
-                    .into_iter()
-                    .map(|t| GeminiFunctionDeclaration {
-                        name: t.name,
-                        description: t.description,
-                        parameters: t.parameters,
-                    })
-                    .collect(),
-            }]
-        });
+        let tools = request.tools.map(|tools| self.function_declarations(tools));
 
         let api_request = GeminiGenerateContentRequest {
             system_instruction,
@@ -694,18 +716,7 @@ impl LlmProvider for GeminiProvider {
             thinking_config,
         };
 
-        let tools = request.tools.map(|tools| {
-            vec![GeminiTool {
-                function_declarations: tools
-                    .into_iter()
-                    .map(|t| GeminiFunctionDeclaration {
-                        name: t.name,
-                        description: t.description,
-                        parameters: t.parameters,
-                    })
-                    .collect(),
-            }]
-        });
+        let tools = request.tools.map(|tools| self.function_declarations(tools));
 
         let api_request = GeminiGenerateContentRequest {
             system_instruction,

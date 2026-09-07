@@ -143,3 +143,64 @@ async fn a_gemini_candidate_with_nothing_in_it_is_still_an_error() {
         "{err}"
     );
 }
+
+/// Gemini's `parameters` is an OpenAPI `Schema`, not JSON Schema, and the API
+/// refuses a keyword it does not know with the same 400 it gives an unknown
+/// `thinkingConfig` field. Seen 2026-09-05 from strata's generated schemas
+/// reaching Gemini through korps: they passed only after `const` and `format`
+/// were stripped at the source. The provider strips them now, so what reaches
+/// the socket is the schema Gemini takes, whatever the tool's author wrote.
+#[tokio::test]
+async fn a_tool_schema_reaches_gemini_in_the_subset_it_takes() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1beta/models/test-model:generateContent"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"candidates":[{"content":{"parts":[{"text":"ok"}],"role":"model"},"finishReason":"STOP"}]}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let tool = a2a_llm::ToolDefinition::new(
+        "write_file",
+        "Write a file",
+        serde_json::json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+                "kind": { "type": "string", "const": "sql" },
+                "path": { "type": "string", "format": "uri" },
+                "retries": { "type": "integer", "format": "uint32", "default": 0 },
+                "tags": { "type": ["array", "null"], "items": { "type": "string" }, "minItems": 1 },
+            },
+            "required": ["kind", "path"],
+        }),
+    );
+
+    gemini(&server)
+        .chat_completion(LlmRequest::new(vec![ChatMessage::user("hi")]).tools(vec![tool]))
+        .await
+        .expect("the call succeeds");
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("requests are recorded");
+    let body: serde_json::Value =
+        serde_json::from_slice(&requests[0].body).expect("the body is JSON");
+    assert_eq!(
+        body["tools"][0]["functionDeclarations"][0]["parameters"],
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string", "enum": ["sql"] },
+                "path": { "type": "string" },
+                "retries": { "type": "integer", "default": 0 },
+                "tags": { "type": "array", "nullable": true, "items": { "type": "string" }, "minItems": 1 },
+            },
+            "required": ["kind", "path"],
+        })
+    );
+}

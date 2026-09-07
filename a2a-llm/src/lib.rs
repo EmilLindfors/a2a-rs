@@ -20,6 +20,7 @@ use serde_json::Value;
 pub mod gemini;
 pub mod openai;
 pub mod provider;
+pub mod schema;
 pub mod tool_call;
 
 pub use provider::{
