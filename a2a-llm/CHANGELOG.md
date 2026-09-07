@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.7.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.6.0...a2a-llm-v0.7.0) - 2026-09-07
+
+### Added
+
+- *(a2a-llm)* A message carries bytes, not a description of them
+- *(a2a-llm)* A tool schema reaches Gemini in the subset it takes
+
 ## [0.6.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.5.1...a2a-llm-v0.6.0) - 2026-09-04
 
 ### Added
