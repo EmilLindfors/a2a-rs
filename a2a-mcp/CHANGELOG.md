@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.10.0...a2a-mcp-v0.10.1) - 2026-09-07
+
+### Added
+
+- *(a2a-mcp)* A tool call the server made a task of is one A2A task
+- *(a2a-mcp)* File parts survive the bridge
+- *(a2a-mcp)* A server's question pauses the task, and the next message answers it
+
 ## [0.10.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.9.0...a2a-mcp-v0.10.0) - 2026-09-05
 
 ### Added
