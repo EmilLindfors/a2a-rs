@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.10.2...a2a-mcp-v0.11.0) - 2026-09-23
+
+### Fixed
+
+- *(a2a-rs)* Connectrpc 0.9.1 and buffa 0.9.2, past RUSTSEC-2026-0304
+
 ## [0.10.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.10.1...a2a-mcp-v0.10.2) - 2026-09-07
 
 ### Added
