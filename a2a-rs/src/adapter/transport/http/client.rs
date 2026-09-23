@@ -95,7 +95,7 @@ impl HttpClient {
     /// rather than panicking. See [`try_new`](Self::try_new).
     pub fn try_with_auth(base_url: String, auth_token: String) -> Result<Self, A2AError> {
         let (transport, config) = Self::transport_for(&base_url)?;
-        let config = config.default_header("authorization", format!("Bearer {}", auth_token));
+        let config = config.with_default_header("authorization", format!("Bearer {}", auth_token));
         Ok(Self {
             base_url,
             client: crate::adapter::error::http_client()?,
@@ -133,8 +133,8 @@ impl HttpClient {
             connectrpc::client::HttpClient::plaintext()
         };
 
-        let config =
-            connectrpc::client::ClientConfig::new(uri).default_timeout(Duration::from_secs(30));
+        let config = connectrpc::client::ClientConfig::new(uri)
+            .with_default_timeout(Duration::from_secs(30));
         Ok((transport, config))
     }
 
@@ -145,7 +145,7 @@ impl HttpClient {
             .connect_client
             .config()
             .clone()
-            .default_timeout(Duration::from_secs(timeout));
+            .with_default_timeout(Duration::from_secs(timeout));
         self
     }
 
@@ -485,10 +485,10 @@ impl Transport for HttpClient {
 
         // A Connect streaming call answers HTTP 200 before the handler has
         // run, so a server that refuses the subscription outright says so in
-        // the END_STREAM envelope — which the client library parks in
-        // `ServerStream::error()` behind an ordinary `Ok(None)`. Read it
-        // there, once, or a refusal is indistinguishable from a task that
-        // settled with nothing to say.
+        // the END_STREAM envelope. `ServerStream::message()` returns that
+        // error as an `Err`, and every `Err` from it is terminal: it replays
+        // the same error on each later call. So an `Err` is yielded once and
+        // ends the stream, or a refusal would repeat forever.
         let mapped = futures::stream::unfold((stream, false), |(mut s, ended)| async move {
             if ended {
                 return None;
@@ -508,11 +508,8 @@ impl Transport for HttpClient {
                         ))
                     }
                 }
-                Ok(None) => {
-                    let trailing = s.error().cloned()?;
-                    Some((Err(map_connect_err(trailing)), (s, true)))
-                }
-                Err(e) => Some((Err(map_connect_err(e)), (s, false))),
+                Ok(None) => None,
+                Err(e) => Some((Err(map_connect_err(e)), (s, true))),
             }
         });
 

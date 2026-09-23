@@ -5,4 +5,4 @@
 #![allow(non_upper_case_globals)]
 #![allow(unused_imports)]
 
-include!(concat!(env!("OUT_DIR"), "/a2a.rs"));
+include!(concat!(env!("OUT_DIR"), "/lf.a2a.v1.mod.rs"));

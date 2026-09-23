@@ -13,16 +13,11 @@ use super::message::{Artifact, Message};
 // Re-export generated types
 pub use crate::domain::generated::{Task, TaskPushNotificationConfig, TaskState, TaskStatus};
 
+// The generated code supplies the CamelCase aliases (`Submitted`, `Working`,
+// ..., `Unspecified`). `Unknown` is this crate's older name for the unspecified
+// state and stays for callers that use it.
 #[allow(non_upper_case_globals)]
 impl TaskState {
-    pub const Submitted: Self = Self::TASK_STATE_SUBMITTED;
-    pub const Working: Self = Self::TASK_STATE_WORKING;
-    pub const InputRequired: Self = Self::TASK_STATE_INPUT_REQUIRED;
-    pub const Completed: Self = Self::TASK_STATE_COMPLETED;
-    pub const Canceled: Self = Self::TASK_STATE_CANCELED;
-    pub const Failed: Self = Self::TASK_STATE_FAILED;
-    pub const Rejected: Self = Self::TASK_STATE_REJECTED;
-    pub const AuthRequired: Self = Self::TASK_STATE_AUTH_REQUIRED;
     pub const Unknown: Self = Self::TASK_STATE_UNSPECIFIED;
 
     pub fn is_terminal(&self) -> bool {

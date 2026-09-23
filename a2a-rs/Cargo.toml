@@ -54,11 +54,11 @@ openidconnect = { version = "4.0", optional = true, default-features = false }
 # Logging - optional
 tracing = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, optional = true }
-connectrpc = { version = "0.3.2", features = ["tls", "axum"] }
+connectrpc = { version = "0.9.1", features = ["tls", "axum"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 webpki-roots = "0.26"
-buffa = { version = "0.3.0", features = ["json"] }
-buffa-types = { version = "0.3.0", features = ["json"] }
+buffa = { version = "0.9.2", features = ["json"] }
+buffa-types = { version = "0.9.2", features = ["json"] }
 http = "1.0"
 http-body = "1.0.1"
 prost = "0.14.3"
@@ -80,6 +80,9 @@ tokio = { workspace = true, features = ["test-util"] }
 # A SQLite file that outlives one `SqlxTaskStorage` and not the test, which is
 # how "does this survive a restart" is asked without an in-memory database.
 tempfile = "3"
+# The request buffer a hand-built `connectrpc::ServiceRequest` borrows, for the
+# tests that call the ConnectRPC adapter without a socket.
+bytes = "1"
 
 [features]
 default = ["server", "tracing"]
@@ -142,6 +145,9 @@ harness = false
 required-features = ["full"]
 
 [build-dependencies]
-connectrpc-build = "0.3.2"
+connectrpc-build = "0.9.0"
+# The field-representation knobs `build.rs` sets; connectrpc-build re-exports
+# `CodeGenConfig` but not the enums its fields take.
+buffa-codegen = "0.9.2"
 prost-build = "0.14.3"
 protoc-bin-vendored = "3.2.0"

@@ -20,13 +20,12 @@ use crate::{
         A2AError, AgentCard, SendCompletion, Task, TaskArtifactUpdateEvent, TaskId,
         TaskPushNotificationConfig, TaskStatusUpdateEvent,
         generated::{
-            A2aService, CancelTaskRequestView, DeleteTaskPushNotificationConfigRequestView,
-            GetExtendedAgentCardRequestView, GetTaskPushNotificationConfigRequestView,
-            GetTaskRequestView, ListTaskPushNotificationConfigsRequestView,
-            ListTaskPushNotificationConfigsResponse, ListTasksRequest, ListTasksRequestView,
-            ListTasksResponse, SendMessageRequestView, SendMessageResponse, StreamResponse,
-            SubscribeToTaskRequestView, TaskArtifactUpdateEvent as GenTaskArtifactUpdateEvent,
-            TaskPushNotificationConfigView, TaskState,
+            A2aService, CancelTaskRequest, DeleteTaskPushNotificationConfigRequest,
+            GetExtendedAgentCardRequest, GetTaskPushNotificationConfigRequest, GetTaskRequest,
+            ListTaskPushNotificationConfigsRequest, ListTaskPushNotificationConfigsResponse,
+            ListTasksRequest, ListTasksResponse, SendMessageRequest, SendMessageResponse,
+            StreamResponse, SubscribeToTaskRequest,
+            TaskArtifactUpdateEvent as GenTaskArtifactUpdateEvent, TaskState,
             TaskStatusUpdateEvent as GenTaskStatusUpdateEvent, send_message_response,
             stream_response,
         },
@@ -146,12 +145,12 @@ impl ConnectRpcAdapter {
 /// The principal comes from the HTTP request extensions, where the auth
 /// middleware ([`with_auth`](crate::adapter::auth::with_auth)) put it after
 /// authenticating the request — `connectrpc` moves `parts.extensions` onto its
-/// `Context` verbatim. An unauthenticated server has nothing there and the
+/// `RequestContext` verbatim. An unauthenticated server has nothing there and the
 /// context names no caller.
-fn request_context(ctx: &::connectrpc::Context, context_id: &str) -> RequestContext {
+fn request_context(ctx: &::connectrpc::RequestContext, context_id: &str) -> RequestContext {
     RequestContext::anonymous()
         .with_context(context_id)
-        .with_principal(ctx.extensions.get::<AuthPrincipal>().cloned())
+        .with_principal(ctx.extensions().get::<AuthPrincipal>().cloned())
 }
 
 /// Map a domain error onto the wire. See `connect_wire` for why the A2A code
@@ -220,12 +219,17 @@ pub(super) fn map_update_event(evt: UpdateEvent) -> StreamResponse {
     }
 }
 
+// The methods return concrete bodies (`Task`, a boxed stream) where the
+// generated trait asks for `impl Encodable<_>`. That refinement is the shape
+// connectrpc documents for implementors, and it allows the lint in its own
+// crates for the same reason.
+#[allow(refining_impl_trait)]
 impl A2aService for ConnectRpcAdapter {
     async fn send_message(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<SendMessageRequestView<'static>>,
-    ) -> Result<(SendMessageResponse, ::connectrpc::Context), ::connectrpc::ConnectError> {
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, SendMessageRequest>,
+    ) -> ::connectrpc::ServiceResult<SendMessageResponse> {
         let req = request.to_owned_message();
         let message = req.message.into_option().ok_or_else(|| {
             ::connectrpc::ConnectError::new(
@@ -248,26 +252,15 @@ impl A2aService for ConnectRpcAdapter {
             ..Default::default()
         };
 
-        Ok((response, ctx))
+        ::connectrpc::Response::ok(response)
     }
 
     #[allow(clippy::result_large_err)]
     async fn send_streaming_message(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<SendMessageRequestView<'static>>,
-    ) -> Result<
-        (
-            ::std::pin::Pin<
-                Box<
-                    dyn ::futures::Stream<Item = Result<StreamResponse, ::connectrpc::ConnectError>>
-                        + Send,
-                >,
-            >,
-            ::connectrpc::Context,
-        ),
-        ::connectrpc::ConnectError,
-    > {
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, SendMessageRequest>,
+    ) -> ::connectrpc::ServiceResult<::connectrpc::ServiceStream<StreamResponse>> {
         let req = request.to_owned_message();
         let message = req.message.into_option().ok_or_else(|| {
             ::connectrpc::ConnectError::new(
@@ -278,7 +271,7 @@ impl A2aService for ConnectRpcAdapter {
         let config = req.configuration.into_option();
 
         let request_ctx = request_context(&ctx, &message.context_id);
-        let stamp_ids = resume::wants_event_ids(&ctx.headers);
+        let stamp_ids = resume::wants_event_ids(ctx.headers());
 
         // `completion` is deliberately dropped here rather than passed along:
         // on a streaming call the stream itself is the wait, so blocking the
@@ -304,14 +297,14 @@ impl A2aService for ConnectRpcAdapter {
         let chained_stream = futures::stream::once(async { Ok(initial_response) })
             .chain(wire_stream(update_stream, stamp_ids));
 
-        Ok((Box::pin(chained_stream), ctx))
+        ::connectrpc::Response::stream_ok(chained_stream)
     }
 
     async fn get_task(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<GetTaskRequestView<'static>>,
-    ) -> Result<(Task, ::connectrpc::Context), ::connectrpc::ConnectError> {
+        _ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, GetTaskRequest>,
+    ) -> ::connectrpc::ServiceResult<Task> {
         let req = request.to_owned_message();
         let history_length = req.history_length.map(|l| l as u32);
         let id: TaskId = req.id.parse().map_err(map_err)?;
@@ -320,14 +313,14 @@ impl A2aService for ConnectRpcAdapter {
             .get(&id, history_length)
             .await
             .map_err(map_err)?;
-        Ok((task, ctx))
+        ::connectrpc::Response::ok(task)
     }
 
     async fn list_tasks(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<ListTasksRequestView<'static>>,
-    ) -> Result<(ListTasksResponse, ::connectrpc::Context), ::connectrpc::ConnectError> {
+        _ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, ListTasksRequest>,
+    ) -> ::connectrpc::ServiceResult<ListTasksResponse> {
         let req = request.to_owned_message();
         let params = list_request_to_params(req);
 
@@ -341,40 +334,29 @@ impl A2aService for ConnectRpcAdapter {
             ..Default::default()
         };
 
-        Ok((response, ctx))
+        ::connectrpc::Response::ok(response)
     }
 
     async fn cancel_task(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<CancelTaskRequestView<'static>>,
-    ) -> Result<(Task, ::connectrpc::Context), ::connectrpc::ConnectError> {
+        _ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, CancelTaskRequest>,
+    ) -> ::connectrpc::ServiceResult<Task> {
         let req = request.to_owned_message();
         let id: TaskId = req.id.parse().map_err(map_err)?;
         let task = self.service.cancel(&id).await.map_err(map_err)?;
-        Ok((task, ctx))
+        ::connectrpc::Response::ok(task)
     }
 
     #[allow(clippy::result_large_err)]
     async fn subscribe_to_task(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<SubscribeToTaskRequestView<'static>>,
-    ) -> Result<
-        (
-            ::std::pin::Pin<
-                Box<
-                    dyn ::futures::Stream<Item = Result<StreamResponse, ::connectrpc::ConnectError>>
-                        + Send,
-                >,
-            >,
-            ::connectrpc::Context,
-        ),
-        ::connectrpc::ConnectError,
-    > {
+        ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, SubscribeToTaskRequest>,
+    ) -> ::connectrpc::ServiceResult<::connectrpc::ServiceStream<StreamResponse>> {
         let req = request.to_owned_message();
-        let from_event_id = resume::parse_last_event_id(&ctx.headers);
-        let stamp_ids = resume::wants_event_ids(&ctx.headers);
+        let from_event_id = resume::parse_last_event_id(ctx.headers());
+        let stamp_ids = resume::wants_event_ids(ctx.headers());
 
         let (initial_task, update_stream) = self
             .service
@@ -393,33 +375,31 @@ impl A2aService for ConnectRpcAdapter {
             };
             let chained_stream =
                 futures::stream::once(async { Ok(initial_response) }).chain(mapped_stream);
-            Ok((Box::pin(chained_stream), ctx))
+            ::connectrpc::Response::stream_ok(chained_stream)
         } else {
-            Ok((Box::pin(mapped_stream), ctx))
+            ::connectrpc::Response::stream_ok(mapped_stream)
         }
     }
 
     async fn create_task_push_notification_config(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<TaskPushNotificationConfigView<'static>>,
-    ) -> Result<(TaskPushNotificationConfig, ::connectrpc::Context), ::connectrpc::ConnectError>
-    {
+        _ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, TaskPushNotificationConfig>,
+    ) -> ::connectrpc::ServiceResult<TaskPushNotificationConfig> {
         let config = request.to_owned_message();
         let created_config = self
             .service
             .set_push_config(&config)
             .await
             .map_err(map_err)?;
-        Ok((created_config, ctx))
+        ::connectrpc::Response::ok(created_config)
     }
 
     async fn get_task_push_notification_config(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<GetTaskPushNotificationConfigRequestView<'static>>,
-    ) -> Result<(TaskPushNotificationConfig, ::connectrpc::Context), ::connectrpc::ConnectError>
-    {
+        _ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, GetTaskPushNotificationConfigRequest>,
+    ) -> ::connectrpc::ServiceResult<TaskPushNotificationConfig> {
         let req = request.to_owned_message();
         let params = crate::domain::GetTaskPushNotificationConfigParams {
             id: req.task_id,
@@ -431,20 +411,14 @@ impl A2aService for ConnectRpcAdapter {
             .get_push_config(&params)
             .await
             .map_err(map_err)?;
-        Ok((config, ctx))
+        ::connectrpc::Response::ok(config)
     }
 
     async fn list_task_push_notification_configs(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<ListTaskPushNotificationConfigsRequestView<'static>>,
-    ) -> Result<
-        (
-            ListTaskPushNotificationConfigsResponse,
-            ::connectrpc::Context,
-        ),
-        ::connectrpc::ConnectError,
-    > {
+        _ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, ListTaskPushNotificationConfigsRequest>,
+    ) -> ::connectrpc::ServiceResult<ListTaskPushNotificationConfigsResponse> {
         let req = request.to_owned_message();
         let params = crate::domain::ListTaskPushNotificationConfigsParams {
             id: req.task_id,
@@ -459,30 +433,24 @@ impl A2aService for ConnectRpcAdapter {
             configs,
             ..Default::default()
         };
-        Ok((response, ctx))
+        ::connectrpc::Response::ok(response)
     }
 
     async fn get_extended_agent_card(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<GetExtendedAgentCardRequestView<'static>>,
-    ) -> Result<(AgentCard, ::connectrpc::Context), ::connectrpc::ConnectError> {
+        _ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, GetExtendedAgentCardRequest>,
+    ) -> ::connectrpc::ServiceResult<AgentCard> {
         let _req = request.to_owned_message();
         let card = self.service.extended_agent_card().await.map_err(map_err)?;
-        Ok((card, ctx))
+        ::connectrpc::Response::ok(card)
     }
 
     async fn delete_task_push_notification_config(
         &self,
-        ctx: ::connectrpc::Context,
-        request: ::buffa::view::OwnedView<DeleteTaskPushNotificationConfigRequestView<'static>>,
-    ) -> Result<
-        (
-            ::buffa_types::google::protobuf::Empty,
-            ::connectrpc::Context,
-        ),
-        ::connectrpc::ConnectError,
-    > {
+        _ctx: ::connectrpc::RequestContext,
+        request: ::connectrpc::ServiceRequest<'_, DeleteTaskPushNotificationConfigRequest>,
+    ) -> ::connectrpc::ServiceResult<::buffa_types::google::protobuf::Empty> {
         let req = request.to_owned_message();
         let params = crate::domain::DeleteTaskPushNotificationConfigParams {
             id: req.task_id,
@@ -493,7 +461,7 @@ impl A2aService for ConnectRpcAdapter {
             .delete_push_config(&params)
             .await
             .map_err(map_err)?;
-        Ok((::buffa_types::google::protobuf::Empty::default(), ctx))
+        ::connectrpc::Response::ok(::buffa_types::google::protobuf::Empty::default())
     }
 }
 
@@ -651,7 +619,7 @@ mod tests {
     use super::*;
 
     /// The one line that carries the caller on this transport. `connectrpc`
-    /// moves the HTTP request's extensions onto its `Context`, and the auth
+    /// moves the HTTP request's extensions onto its `RequestContext`, and the auth
     /// middleware is what put an `AuthPrincipal` there; if this stops reading it
     /// the agent goes back to seeing every caller as the same anonymous nobody,
     /// which compiles and passes every other test.
@@ -659,7 +627,8 @@ mod tests {
     fn the_request_context_carries_the_principal_from_the_extensions() {
         let mut extensions = ::http::Extensions::new();
         extensions.insert(AuthPrincipal::new("alice".to_string(), "jwt".to_string()));
-        let ctx = ::connectrpc::Context::new(::http::HeaderMap::new()).with_extensions(extensions);
+        let ctx =
+            ::connectrpc::RequestContext::new(::http::HeaderMap::new()).with_extensions(extensions);
 
         let request_ctx = request_context(&ctx, "ctx-1");
 
@@ -671,7 +640,7 @@ mod tests {
     /// context rather than an empty one.
     #[test]
     fn an_unauthenticated_call_names_nobody() {
-        let ctx = ::connectrpc::Context::new(::http::HeaderMap::new());
+        let ctx = ::connectrpc::RequestContext::new(::http::HeaderMap::new());
 
         let request_ctx = request_context(&ctx, "");
 

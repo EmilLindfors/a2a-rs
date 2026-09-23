@@ -16,9 +16,9 @@ rmcp = { version = "3.2", features = ["server", "client", "macros", "transport-i
 # A2A core library
 a2a-rs = { path = "../a2a-rs", version = "0.9", features = ["http-client", "http-server", "client", "server"], default-features = false }
 a2a-llm = { path = "../a2a-llm", version = "0.7" }
-connectrpc = { version = "0.3.2" }
-buffa = { version = "0.3.0", features = ["json"] }
-buffa-types = { version = "0.3.0", features = ["json"] }
+connectrpc = { version = "0.9.1" }
+buffa = { version = "0.9.2", features = ["json"] }
+buffa-types = { version = "0.9.2", features = ["json"] }
 
 # Async runtime and utilities
 tokio = { workspace = true, features = ["full"] }
