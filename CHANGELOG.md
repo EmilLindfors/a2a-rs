@@ -163,6 +163,12 @@ they were written with. Released sections below are untouched.
 
 ### Changed
 
+- **BREAKING — `connectrpc` 0.3 to 0.9.1 and `buffa` 0.3 to 0.9 (`a2a-rs`, `a2a-mcp`, `a2a-web-client`, `a2a-ap2`)**: closes RUSTSEC-2026-0304, where a finished client-streaming or bidi call kept reading a stalled request body. The generated message types keep their field types, JSON and meaning, so code that builds and reads them compiles unchanged. A consumer that names `buffa` or `connectrpc` types itself needs those crates at 0.9.
+  - The generated `A2aService` trait takes a `connectrpc::RequestContext` and a `connectrpc::ServiceRequest<'_, FooRequest>`, and returns a `connectrpc::ServiceResult`. An implementation of its own, or a test calling `ConnectRpcAdapter` directly, follows that shape.
+  - The `#[doc(hidden)]` `__buffa_cached_size` field is gone from every generated message. The generated enums gain an `Unspecified` alias beside `TaskState::Unknown`.
+  - `HttpClient::subscribe_to_task` ends its stream after any error. `connectrpc` 0.9 treats every stream error as terminal and repeats it on each later read.
+  - The protobuf encoder writes fields in field-number order, so encoded bytes differ from 0.3's. A decoder reads either order to the same value.
+
 - **BREAKING — a machine with no CA bundle is an error, not a panic (`a2a-rs`, `a2a-llm`, `a2acli`)**: reqwest 0.13 (below) fails to *build* a client where there is nothing to verify against, and `reqwest::Client::new()` unwraps that. Every client in the workspace now comes through a fallible builder, and the failure is reported where a deployment fault belongs: `OpenAiProvider::new` and `GeminiProvider::new` return `Result<Self, LlmError>`; `provider_from_env` / `provider_from_settings` report it as `LlmConfigError::Unusable` naming the provider; `JsonRpcClient` gains `try_new` / `try_with_auth`, which negotiation, `auto_connect` and the CLI use; `HttpClient`'s existing `try_` pair and `fetch_agent_card_with` cover their own; `HttpPushNotificationSender::try_new` is what `SqlxStorageBuilder` builds with. The infallible `new` constructors that remain (`JsonRpcClient::new`, `HttpClient::new`, `HttpPushNotificationSender::new`, and `InMemoryTaskStorage::new` through the last) keep the crate's existing `# Panics` contract and say so.
   - Verified with `a2acli card` against an HTTPS host with `SSL_CERT_FILE=/dev/null`: an error naming the missing roots and exit 1, where the same binary panicked before.
 

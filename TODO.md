@@ -274,17 +274,10 @@ Real work, unscheduled. Each reshapes a surface and warrants its own pass.
       Its `client-tls` now takes `hyper-rustls` with `default-features =
       false` (so hyper-rustls no longer drags aws-lc-rs in), but its `rustls`
       dependency still has default features, and rustls' default is
-      `aws_lc_rs` — so the provider is still on. Getting there is not a bump:
-      0.9 wants `buffa` 0.9 (we generate against 0.3, and
-      `domain/generated.rs` is checked in, not built), the generated code's
-      `__buffa` shim is gone, and `connectrpc::Context` — which the server
-      adapter uses at 23 sites — no longer exists. A trial bump produced 143
-      errors before the generated domain was touched. That is a regeneration
-      of the domain plus a rewrite of the server adapter: its own pass, and
-      the release after this one at the earliest.
-      A feature-only "ring-only" fix is **blocked by `connectrpc 0.3.3`**: it
-      exposes no TLS feature flags and depends on `hyper-rustls`/`tokio-rustls`
-      with their default `aws-lc-rs` provider, so no combination of our flags
+      `aws_lc_rs` — so the provider is still on. The workspace is on
+      `connectrpc` 0.9.1 since 2026-09-23, so what remains is that `rustls`
+      default. It is still the blocker for a feature-only "ring-only" fix:
+      `connectrpc` exposes no provider feature, so no combination of our flags
       removes `aws-lc-sys`. (`sqlx` offers `tls-rustls-ring` and `reqwest`
       offers `rustls-tls-*-no-provider`, but fixing only those leaves connectrpc
       still pulling `aws-lc-rs`.) A `[patch.crates-io]` swaps the *source*, not

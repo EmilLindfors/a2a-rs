@@ -3,11 +3,8 @@ use crate::domain::error::A2AError;
 // Re-export the generated types so downstream code gets them from `domain::core::message`
 pub use crate::domain::generated::{Artifact, Message, Part, Role, part};
 
-#[allow(non_upper_case_globals)]
-impl Role {
-    pub const User: Self = Self::ROLE_USER;
-    pub const Agent: Self = Self::ROLE_AGENT;
-}
+// `Role::User` and `Role::Agent` are generated aliases for `ROLE_USER` and
+// `ROLE_AGENT`.
 
 impl Part {
     /// Create a text part

@@ -98,6 +98,20 @@ at the one moment both URLs are known and logs a warning naming both. The
 direct-client fallback is still only for a card that cannot be fetched or
 negotiated at all.
 
+**The generated message types are pinned to buffa 0.3's field shapes.**
+(2026-09-23)
+
+The generated types are `a2a-rs`'s public domain types, and `buffa` 0.9 changed
+two defaults under them. A singular message field became
+`MessageField<T, Inline<T>>` instead of `MessageField<T>`, and a map field
+became a `HashMap` with the `foldhash` hasher. Taking the defaults would have
+broken every consumer that builds a `Task` or an `AgentCard` in a way the
+protocol does not see. So `build.rs` sets `pointer_fields` to `Box` and
+`map_fields` to `std::collections::HashMap` for every field. That costs one
+allocation per set submessage, which is what 0.3 did. `buffa_config` replaces
+connectrpc-build's defaults wholesale, so `build.rs` turns `generate_json` back
+on itself.
+
 **The A2A error code rides ConnectRPC as a detail, not as the Connect code.**
 (2026-09-02)
 
@@ -467,7 +481,9 @@ The principal itself rides in the HTTP request extensions between the middleware
 and the transport adapter, because that is the only channel `connectrpc` gives a
 tower layer (it moves `parts.extensions` onto its `Context` verbatim). Note the
 name collides with `rmcp::service::RequestContext`; `a2a-mcp` aliases one of the
-two wherever both are in scope.
+two wherever both are in scope. Since `connectrpc` 0.9 (2026-09-23) its
+`Context` is `connectrpc::RequestContext` too, so the ConnectRPC adapter names
+that one by its full path.
 
 **The state bag is a row per key, and its scope lives in the key.** (2026-08-17)
 
@@ -1201,6 +1217,13 @@ not start doing so for eight lines. It takes
 `&dyn Error` rather than `&reqwest::Error` so the SSE stream's
 `EventStreamError` wrapper is covered by the same rule — a wrapper is exactly
 where a cause chain gets lost.
+
+**A ConnectRPC stream error is the end of the stream.** (2026-09-23)
+From `connectrpc` 0.9, `ServerStream::message()` returns every terminal
+outcome as an `Err`: a refusal in the END_STREAM envelope, a decode failure, a
+dropped connection. It then returns the same `Err` on every later call. A loop
+that yields an error and polls again never ends. `HttpClient::subscribe_to_task`
+yields one error and stops, and `connectrpc_error_test` fails if it repeats.
 
 ---
 

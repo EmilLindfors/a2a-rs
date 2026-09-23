@@ -19,7 +19,9 @@ use futures::StreamExt;
 use a2a_rs::adapter::{
     ConnectRpcAdapter, HttpClient, HttpServer, InMemoryTaskStorage, SimpleAgentInfo,
 };
-use a2a_rs::domain::generated::{A2aService, StreamResponse, SubscribeToTaskRequest};
+use a2a_rs::domain::generated::{
+    A2aService, StreamResponse, SubscribeToTaskRequest, SubscribeToTaskRequestView,
+};
 use a2a_rs::domain::{Message, SendCompletion, TaskState, TaskStatus, TaskStatusUpdateEvent};
 use a2a_rs::port::AsyncStreamingHandler;
 use a2a_rs::{StreamItem, Transport};
@@ -44,6 +46,28 @@ fn adapter(handler: &TestBusinessHandler) -> ConnectRpcAdapter {
     let agent_info = SimpleAgentInfo::new("resume".to_string(), "http://localhost".to_string());
     ConnectRpcAdapter::with_handler(handler.clone(), agent_info)
         .with_streaming_handler(handler.clone())
+}
+
+/// Call `SubscribeToTask` on the adapter directly, with `headers` as the
+/// request metadata, and return the response stream.
+async fn subscribe(
+    adapter: &ConnectRpcAdapter,
+    request: &SubscribeToTaskRequest,
+    headers: http::HeaderMap,
+) -> connectrpc::ServiceStream<StreamResponse> {
+    use buffa::Message as _;
+    use buffa::view::MessageView as _;
+
+    let body = bytes::Bytes::from(request.encode_to_vec());
+    let view = SubscribeToTaskRequestView::decode_view(&body).unwrap();
+    adapter
+        .subscribe_to_task(
+            connectrpc::RequestContext::new(headers),
+            connectrpc::ServiceRequest::from_parts(&view, &body),
+        )
+        .await
+        .unwrap()
+        .body
 }
 
 /// Put a task on the wire and broadcast `Working` then `Completed` into its
@@ -104,13 +128,7 @@ async fn a_client_that_does_not_ask_gets_unstamped_events() {
     let mut headers = http::HeaderMap::new();
     headers.insert("last-event-id", http::HeaderValue::from_static("0"));
 
-    let (mut stream, _) = adapter
-        .subscribe_to_task(
-            connectrpc::Context::new(headers),
-            buffa::view::OwnedView::from_owned(&request).unwrap(),
-        )
-        .await
-        .unwrap();
+    let mut stream = subscribe(&adapter, &request, headers).await;
 
     let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await
@@ -144,13 +162,7 @@ async fn a_client_that_asks_gets_an_id_on_every_update() {
     headers.insert("last-event-id", http::HeaderValue::from_static("0"));
     headers.insert("a2a-rs-event-ids", http::HeaderValue::from_static("1"));
 
-    let (mut stream, _) = adapter
-        .subscribe_to_task(
-            connectrpc::Context::new(headers),
-            buffa::view::OwnedView::from_owned(&request).unwrap(),
-        )
-        .await
-        .unwrap();
+    let mut stream = subscribe(&adapter, &request, headers).await;
 
     let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
         .await

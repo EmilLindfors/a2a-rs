@@ -15,8 +15,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 a2a-rs = { path = "../a2a-rs", version = "0.9" }
-buffa = { version = "0.3.0", features = ["json"] }
-buffa-types = { version = "0.3.0", features = ["json"] }
+buffa = { version = "0.9.2", features = ["json"] }
+buffa-types = { version = "0.9.2", features = ["json"] }
 
 [package.metadata.docs.rs]
 all-features = true
