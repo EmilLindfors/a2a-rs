@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.7.3...a2a-web-client-v0.8.0) - 2026-09-23
+
+### Fixed
+
+- *(a2a-rs)* Connectrpc 0.9.1 and buffa 0.9.2, past RUSTSEC-2026-0304
+
 ## [0.7.3](https://github.com/EmilLindfors/a2a-rs/compare/a2a-web-client-v0.7.2...a2a-web-client-v0.7.3) - 2026-09-03
 
 ### Documentation
