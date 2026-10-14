@@ -430,6 +430,20 @@ impl Task {
         self.artifacts.push(artifact);
     }
 
+    /// Keep `artifact` in place of the one with the same `artifact_id`, or
+    /// after the others when there is none. The rule every
+    /// [`AsyncTaskArtifacts`](crate::port::AsyncTaskArtifacts) store applies.
+    pub fn put_artifact(&mut self, artifact: Artifact) {
+        match self
+            .artifacts
+            .iter_mut()
+            .find(|kept| kept.artifact_id == artifact.artifact_id)
+        {
+            Some(kept) => *kept = artifact,
+            None => self.artifacts.push(artifact),
+        }
+    }
+
     /// Validate a task (useful after building with builder)
     #[cfg_attr(feature = "tracing", instrument(skip(self), fields(
         task.id = %self.id,

@@ -19,13 +19,13 @@ use crate::adapter::business::push_notification::HttpPushNotificationSender;
 #[cfg(not(feature = "http-client"))]
 use crate::adapter::business::push_notification::NoopPushNotificationSender;
 use crate::domain::{
-    A2AError, ContextId, ContextState, Conversation, Digest, Message, ReadRefresh, Remembered,
-    RetentionPolicy, Seq, SequencedMessage, StateKey, StateScope, Swept, Task, TaskId,
+    A2AError, Artifact, ContextId, ContextState, Conversation, Digest, Message, ReadRefresh,
+    Remembered, RetentionPolicy, Seq, SequencedMessage, StateKey, StateScope, Swept, Task, TaskId,
     TaskPushNotificationConfig, TaskState, TaskStateExt, VersionedTask,
 };
 use crate::port::{
     AsyncContextStateStore, AsyncConversationStore, AsyncNotificationManager, AsyncPushNotifier,
-    AsyncRetention, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
+    AsyncRetention, AsyncTaskArtifacts, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
     context_state::scope_key,
 };
 
@@ -590,6 +590,23 @@ impl AsyncTaskLifecycle for InMemoryTaskStorage {
         // Persistence only: the orchestration layer announces the cancellation
         // to streaming subscribers (see `TaskStatusBroadcast`).
         Ok(updated_task)
+    }
+}
+
+#[async_trait]
+impl AsyncTaskArtifacts for InMemoryTaskStorage {
+    async fn put_artifact(&self, id: &TaskId, artifact: Artifact) -> Result<(), A2AError> {
+        let task_id = id.as_str();
+        let mut tasks_guard = self.tasks.lock().await;
+        let task = tasks_guard
+            .get_mut(task_id)
+            .ok_or_else(|| A2AError::TaskNotFound(task_id.to_string()))?;
+        task.put_artifact(artifact);
+        let context_id = task.context_id.clone();
+        self.bump_version(task_id).await;
+        drop(tasks_guard);
+        self.touch_context(&context_id).await;
+        Ok(())
     }
 }
 

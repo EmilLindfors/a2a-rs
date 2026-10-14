@@ -52,5 +52,6 @@ pub use streaming_handler::{
     AsyncStreamingHandler, SeqEvent, Subscriber as StreamingSubscriber, UpdateEvent,
 };
 pub use task_manager::{
-    AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery, AsyncTaskVersioning,
+    AsyncTaskArtifacts, AsyncTaskLifecycle, AsyncTaskLifecycleExt, AsyncTaskQuery,
+    AsyncTaskVersioning,
 };

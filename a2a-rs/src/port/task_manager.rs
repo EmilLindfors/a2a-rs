@@ -5,8 +5,8 @@ use async_trait::async_trait;
 use crate::{
     Message,
     domain::{
-        A2AError, ContextId, ListTasksParams, ListTasksResult, Task, TaskId, TaskIdParams,
-        TaskQueryParams, TaskState, VersionedTask,
+        A2AError, Artifact, ContextId, ListTasksParams, ListTasksResult, Task, TaskId,
+        TaskIdParams, TaskQueryParams, TaskState, VersionedTask,
     },
 };
 
@@ -105,6 +105,26 @@ pub trait AsyncTaskVersioning: Send + Sync {
         state: TaskState,
         message: Option<Message>,
     ) -> Result<VersionedTask, A2AError>;
+}
+
+/// Keeping what a task produced on the task.
+///
+/// Streaming hands an artifact to whoever is listening, and nothing else keeps
+/// it. A store that implements this lets the handler write each artifact once
+/// it is finished, so `GetTask` and `ListTasks` with `includeArtifacts` return
+/// it to a client that was not listening. A separate capability from
+/// [`AsyncTaskLifecycle`] (hex rule 2), so a store that keeps no artifacts is
+/// not made to claim it does.
+///
+/// A write is a mutation, so it bumps the version [`AsyncTaskVersioning`]
+/// reads.
+#[async_trait]
+pub trait AsyncTaskArtifacts: Send + Sync {
+    /// Keep `artifact` on the task, in place of the one with the same
+    /// `artifact_id` if there is one, and after the others if not.
+    ///
+    /// Whole artifacts only: the store does not join streamed chunks.
+    async fn put_artifact(&self, id: &TaskId, artifact: Artifact) -> Result<(), A2AError>;
 }
 
 /// Validation conveniences over [`AsyncTaskLifecycle`].

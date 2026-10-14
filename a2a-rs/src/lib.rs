@@ -103,9 +103,10 @@ pub use domain::{
 // Port traits for better separation of concerns
 pub use port::{
     AsyncMessageHandler, AsyncNotificationManager, AsyncNotificationManagerExt, AsyncPushNotifier,
-    AsyncRetention, AsyncStreamingHandler, AsyncTaskLifecycle, AsyncTaskLifecycleExt,
-    AsyncTaskQuery, AsyncTaskVersioning, CallContext, CallInterceptor, CallSide, NoopPushNotifier,
-    RequestContext, SeqEvent, StreamEvent, StreamItem, StreamingSubscriber, Transport, UpdateEvent,
+    AsyncRetention, AsyncStreamingHandler, AsyncTaskArtifacts, AsyncTaskLifecycle,
+    AsyncTaskLifecycleExt, AsyncTaskQuery, AsyncTaskVersioning, CallContext, CallInterceptor,
+    CallSide, NoopPushNotifier, RequestContext, SeqEvent, StreamEvent, StreamItem,
+    StreamingSubscriber, Transport, UpdateEvent,
 };
 
 #[cfg(feature = "http-client")]

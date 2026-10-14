@@ -35,15 +35,15 @@ use crate::adapter::business::push_notification::NoopPushNotificationSender;
 
 #[cfg(feature = "sqlx-storage")]
 use crate::domain::{
-    A2AError, ContextId, ContextState, Conversation, Digest, Message, ReadRefresh, Remembered,
-    RetentionPolicy, Seq, SequencedMessage, StateKey, StateScope, Swept, Task, TaskId,
+    A2AError, Artifact, ContextId, ContextState, Conversation, Digest, Message, ReadRefresh,
+    Remembered, RetentionPolicy, Seq, SequencedMessage, StateKey, StateScope, Swept, Task, TaskId,
     TaskPushNotificationConfig, TaskState, TaskStateExt, TaskStatus, VersionedTask,
 };
 #[cfg(feature = "sqlx-storage")]
 use crate::port::{
     AsyncContextStateStore, AsyncConversationStore, AsyncEventLog, AsyncNotificationManager,
-    AsyncPushNotifier, AsyncRetention, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning,
-    Replay, SeqEvent, UpdateEvent, context_state::scope_key,
+    AsyncPushNotifier, AsyncRetention, AsyncTaskArtifacts, AsyncTaskLifecycle, AsyncTaskQuery,
+    AsyncTaskVersioning, Replay, SeqEvent, UpdateEvent, context_state::scope_key,
 };
 
 #[cfg(feature = "sqlx-storage")]
@@ -1194,6 +1194,7 @@ impl AsyncTaskLifecycle for SqlxTaskStorage {
         };
 
         let mut task = Self::row_to_task(&row)?;
+        task.artifacts = self.load_artifacts(task_id).await?;
 
         // Load history
         if history_length.is_some() || history_length.is_none() {
@@ -1340,6 +1341,57 @@ impl AsyncTaskVersioning for SqlxTaskStorage {
 
 #[cfg(feature = "sqlx-storage")]
 #[async_trait]
+impl AsyncTaskArtifacts for SqlxTaskStorage {
+    async fn put_artifact(&self, id: &TaskId, artifact: Artifact) -> Result<(), A2AError> {
+        let task_id = id.as_str();
+        let sql = self.sql("UPDATE tasks SET version = version + 1 WHERE id = ?");
+        let bumped = sqlx::query(&sql)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to bump task version: {e}")))?;
+        if bumped.rows_affected() == 0 {
+            return Err(A2AError::TaskNotFound(task_id.to_string()));
+        }
+        let body = serde_json::to_string(&artifact)
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to serialize artifact: {e}")))?;
+        sqlx::query(self.dialect.upsert_task_artifact())
+            .bind(task_id)
+            .bind(&artifact.artifact_id)
+            .bind(body)
+            .bind(task_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to write artifact: {e}")))?;
+        Ok(())
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+impl SqlxTaskStorage {
+    /// A task's artifacts, in the order they were first written.
+    async fn load_artifacts(&self, task_id: &str) -> Result<Vec<Artifact>, A2AError> {
+        let sql =
+            self.sql("SELECT body FROM task_artifacts WHERE task_id = ? ORDER BY seq, artifact_id");
+        let rows = sqlx::query(&sql)
+            .bind(task_id)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|e| A2AError::DatabaseError(format!("Failed to load artifacts: {e}")))?;
+        rows.iter()
+            .map(|row| {
+                let body: String = row
+                    .try_get("body")
+                    .map_err(|e| A2AError::DatabaseError(format!("Failed to get artifact: {e}")))?;
+                serde_json::from_str(&body)
+                    .map_err(|e| A2AError::DatabaseError(format!("Failed to parse artifact: {e}")))
+            })
+            .collect()
+    }
+}
+
+#[cfg(feature = "sqlx-storage")]
+#[async_trait]
 impl AsyncTaskQuery for SqlxTaskStorage {
     async fn list(
         &self,
@@ -1473,10 +1525,10 @@ impl AsyncTaskQuery for SqlxTaskStorage {
                 task.history.clear();
             }
 
-            // Remove artifacts if not requested
-            if !params.include_artifacts.unwrap_or(false) {
-                task.artifacts.clear();
-            }
+            task.artifacts = match params.include_artifacts.unwrap_or(false) {
+                true => self.load_artifacts(&task.id).await?,
+                false => Vec::new(),
+            };
         }
 
         // Generate next page token
@@ -2225,8 +2277,8 @@ impl SqlxTaskStorage {
     /// all, since half its rows are keyed by principal rather than by context.
     /// The per-table counts in [`Swept`] need the statements anyway.
     ///
-    /// Order follows the references: push configs, history and stream events
-    /// name a task, so they go before `tasks`.
+    /// Order follows the references: push configs, history, stream events and
+    /// artifacts name a task, so they go before `tasks`.
     async fn delete_context(&self, context_id: &str) -> Result<Swept, A2AError> {
         let mut tx = self.pool.begin().await.map_err(|e| {
             A2AError::DatabaseError(format!("Failed to open a sweep transaction: {e}"))
@@ -2285,6 +2337,15 @@ impl SqlxTaskStorage {
             .execute(&mut *tx)
             .await
             .map_err(|e| fail("stream events", e))?;
+
+        let sql = self.sql(
+            "DELETE FROM task_artifacts WHERE task_id IN (SELECT id FROM tasks WHERE context_id = ?)",
+        );
+        sqlx::query(&sql)
+            .bind(context_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| fail("artifacts", e))?;
 
         let sql = self.sql("DELETE FROM tasks WHERE context_id = ?");
         let tasks = sqlx::query(&sql)

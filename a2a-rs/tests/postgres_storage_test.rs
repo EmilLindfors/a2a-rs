@@ -406,3 +406,50 @@ async fn remembered_values_round_trip_through_both_scopes() {
             .expect("and report that it was already gone")
     );
 }
+
+/// The artifact upsert in the PostgreSQL dialect: a new artifact goes after
+/// the others, a known id is replaced in its place, and `list` reads them
+/// when asked.
+#[tokio::test]
+async fn an_artifact_is_upserted_in_its_place() {
+    use a2a_rs::domain::Artifact;
+    use a2a_rs::port::AsyncTaskArtifacts;
+    let storage = storage_or_skip!();
+    let (id, context) = (tid(), ctx());
+    storage.create(&id, &context).await.unwrap();
+    let said = |artifact_id: &str, text: &str| Artifact {
+        artifact_id: artifact_id.to_string(),
+        parts: vec![Part::text(text.to_string())],
+        ..Default::default()
+    };
+
+    storage.put_artifact(&id, said("a", "one")).await.unwrap();
+    storage.put_artifact(&id, said("b", "two")).await.unwrap();
+    storage.put_artifact(&id, said("a", "uno")).await.unwrap();
+
+    let kept = |task: &a2a_rs::domain::Task| -> Vec<(String, String)> {
+        task.artifacts
+            .iter()
+            .map(|a| {
+                (
+                    a.artifact_id.clone(),
+                    a.parts[0].get_text().unwrap_or_default().to_string(),
+                )
+            })
+            .collect()
+    };
+    let expected = vec![
+        ("a".to_string(), "uno".to_string()),
+        ("b".to_string(), "two".to_string()),
+    ];
+    assert_eq!(kept(&storage.get(&id, None).await.unwrap()), expected);
+    let listed = storage
+        .list(&ListTasksParams {
+            context_id: Some(context.as_str().to_string()),
+            include_artifacts: Some(true),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(kept(&listed.tasks[0]), expected);
+}
