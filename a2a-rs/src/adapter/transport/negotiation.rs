@@ -338,6 +338,7 @@ pub async fn connect_with(
 /// address that decides which server answers. Paths are the card's business
 /// (an interface on a sub-path is normal); an unparseable URL is reported as a
 /// mismatch, since it cannot be the same server as a parseable one.
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 fn same_origin(a: &str, b: &str) -> bool {
     match (reqwest::Url::parse(a), reqwest::Url::parse(b)) {
         (Ok(a), Ok(b)) => {
@@ -458,6 +459,7 @@ mod tests {
     /// The origin is what decides which server answers; the path is the
     /// card's to choose and a port left implicit is the same port.
     #[test]
+    #[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
     fn same_origin_compares_scheme_host_and_port_only() {
         assert!(same_origin(
             "http://127.0.0.1:8081",
