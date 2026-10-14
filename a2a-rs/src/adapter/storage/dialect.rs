@@ -179,6 +179,26 @@ impl Dialect {
         }
     }
 
+    /// Keep an artifact on its task: a new one after the others, a known one
+    /// in its place. The `WHERE` makes the `SELECT` end before `ON CONFLICT`,
+    /// which SQLite needs to parse the upsert.
+    pub(super) fn upsert_task_artifact(self) -> &'static str {
+        match self {
+            Self::Sqlite => {
+                "INSERT INTO task_artifacts (task_id, artifact_id, seq, body) \
+                 SELECT ?, ?, COALESCE(MAX(seq), 0) + 1, ? FROM task_artifacts \
+                 WHERE task_id = ? \
+                 ON CONFLICT (task_id, artifact_id) DO UPDATE SET body = excluded.body"
+            }
+            Self::Postgres => {
+                "INSERT INTO task_artifacts (task_id, artifact_id, seq, body) \
+                 SELECT $1, $2, COALESCE(MAX(seq), 0) + 1, $3 FROM task_artifacts \
+                 WHERE task_id = $4 \
+                 ON CONFLICT (task_id, artifact_id) DO UPDATE SET body = excluded.body"
+            }
+        }
+    }
+
     /// Does `contexts` still carry the unused `state` column?
     ///
     /// Migration 005 created it for a state bag that was never written; 006
@@ -320,7 +340,7 @@ impl Dialect {
     }
 
     /// The base migrations, in order.
-    pub(super) fn migrations(self) -> [Migration; 7] {
+    pub(super) fn migrations(self) -> [Migration; 8] {
         match self {
             Self::Sqlite => [
                 Migration {
@@ -358,6 +378,11 @@ impl Dialect {
                     sql: include_str!("../../../migrations/sqlite/007_task_events.sql"),
                     tolerates_existing_column: false,
                 },
+                Migration {
+                    name: "008_task_artifacts",
+                    sql: include_str!("../../../migrations/sqlite/008_task_artifacts.sql"),
+                    tolerates_existing_column: false,
+                },
             ],
             Self::Postgres => [
                 Migration {
@@ -393,6 +418,11 @@ impl Dialect {
                 Migration {
                     name: "007_task_events",
                     sql: include_str!("../../../migrations/postgres/007_task_events.sql"),
+                    tolerates_existing_column: false,
+                },
+                Migration {
+                    name: "008_task_artifacts",
+                    sql: include_str!("../../../migrations/postgres/008_task_artifacts.sql"),
                     tolerates_existing_column: false,
                 },
             ],

@@ -14,8 +14,8 @@
 //! added here has to hold for both, which is the property the `Any`-driver work
 //! was for and the one nothing was checking.
 
-use a2a_rs::domain::{Message, TaskState};
-use a2a_rs::port::AsyncTaskLifecycle;
+use a2a_rs::domain::{A2AError, ListTasksParams, Message, TaskState};
+use a2a_rs::port::{AsyncTaskArtifacts, AsyncTaskLifecycle, AsyncTaskQuery, AsyncTaskVersioning};
 
 fn tid(s: &str) -> a2a_rs::domain::TaskId {
     s.parse().unwrap()
@@ -120,6 +120,85 @@ async fn a_canceled_task_says_why(storage: &impl AsyncTaskLifecycle, label: &str
     );
 }
 
+/// A text artifact with one part.
+fn said(id: &str, text: &str) -> a2a_rs::domain::Artifact {
+    a2a_rs::domain::Artifact {
+        artifact_id: id.to_string(),
+        name: id.to_string(),
+        parts: vec![a2a_rs::domain::Part::text(text.to_string())],
+        ..Default::default()
+    }
+}
+
+/// The ids and first text of a task's artifacts, in order.
+fn artifacts_of(task: &a2a_rs::domain::Task) -> Vec<(String, String)> {
+    task.artifacts
+        .iter()
+        .map(|artifact| {
+            let text = artifact
+                .parts
+                .iter()
+                .find_map(|part| part.get_text())
+                .unwrap_or_default();
+            (artifact.artifact_id.clone(), text.to_string())
+        })
+        .collect()
+}
+
+/// A kept artifact is read back by `get`, and by `list` when it asks for
+/// artifacts. One with a known id replaces the old one in its place, and each
+/// write bumps the version. Nothing wrote an artifact before, so a client that
+/// was not listening to the stream never saw one.
+async fn a_kept_artifact_is_read_back<S>(storage: &S, label: &str)
+where
+    S: AsyncTaskLifecycle + AsyncTaskArtifacts + AsyncTaskQuery + AsyncTaskVersioning,
+{
+    let id = tid("kept-artifacts");
+    storage.create(&id, &cid("kept-ctx")).await.unwrap();
+    let created = storage.version(&id).await.unwrap();
+
+    storage.put_artifact(&id, said("a", "one")).await.unwrap();
+    storage.put_artifact(&id, said("b", "two")).await.unwrap();
+    storage.put_artifact(&id, said("a", "uno")).await.unwrap();
+
+    let expected = vec![
+        ("a".to_string(), "uno".to_string()),
+        ("b".to_string(), "two".to_string()),
+    ];
+    let task = storage.get(&id, None).await.unwrap();
+    assert_eq!(artifacts_of(&task), expected, "[{label}] get");
+    assert_eq!(
+        storage.version(&id).await.unwrap(),
+        created + 3,
+        "[{label}] version"
+    );
+
+    let listed = |include| ListTasksParams {
+        context_id: Some("kept-ctx".to_string()),
+        include_artifacts: Some(include),
+        ..Default::default()
+    };
+    let with = storage.list(&listed(true)).await.unwrap();
+    assert_eq!(
+        artifacts_of(&with.tasks[0]),
+        expected,
+        "[{label}] list with"
+    );
+    let without = storage.list(&listed(false)).await.unwrap();
+    assert!(
+        without.tasks[0].artifacts.is_empty(),
+        "[{label}] list without"
+    );
+
+    let missing = storage
+        .put_artifact(&tid("no-such-task"), said("a", "one"))
+        .await;
+    assert!(
+        matches!(missing, Err(A2AError::TaskNotFound(_))),
+        "[{label}] an unknown task: {missing:?}"
+    );
+}
+
 /// Every backend runs every assertion above. A backend added later gets one
 /// call here and inherits the lot.
 macro_rules! parity_suite {
@@ -130,6 +209,7 @@ macro_rules! parity_suite {
             a_completed_task_keeps_its_message(&storage, $label).await;
             a_status_with_no_message_clears_the_last(&storage, $label).await;
             a_canceled_task_says_why(&storage, $label).await;
+            a_kept_artifact_is_read_back(&storage, $label).await;
         }
     };
 }

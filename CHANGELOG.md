@@ -13,6 +13,8 @@ they were written with. Released sections below are untouched.
 
 ### Added
 
+- **A task keeps its artifacts (`a2a-rs`)**: the `AsyncTaskArtifacts` port writes a finished artifact to its task, replacing one with the same `artifact_id`. `InMemoryTaskStorage` and `SqlxTaskStorage` implement it, so `GetTask` and `ListTasks` with `includeArtifacts` return what a task streamed. The SQL store keeps one row per artifact in `task_artifacts` (migration 008), so a write is one upsert.
+
 - **A question a server asks mid-call reaches the A2A side (`a2a-mcp`)**: `create_elicitation` on the client while `tools/call` is still open pauses the A2A task with the question; the next message on that task answers it, and the call — held open the whole time — finishes with that answer. Until now nothing implemented the handler, so a server that asked this way failed the call.
   - Nothing in the request names the call it belongs to (MCP 2026-07-28 has no related-task metadata on a server-to-client request), so `ElicitationRouter` routes by the calls the bridge has open: one open is unambiguous, two or more is refused with an error naming the count rather than pausing the wrong task.
   - The router is separate from the bridge because the bridge is built from a peer and so cannot be the handler that peer was served with — the same reason `ProgressDispatcher` is separate. `ProgressClientHandler::with_elicitations` takes one, `McpToA2ABridge::with_elicitation_router` takes the same one, and a consumer that serves the bridge as its own client handler needs neither.
