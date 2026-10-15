@@ -12,6 +12,10 @@
 //! bridge, which is why they live in their own crate rather than inside an
 //! agent framework.
 //!
+//! [`decision`] is the second port: [`DecisionModel`] asks a decision model
+//! typed questions (yes-or-no, choice, score) and gets probabilities back
+//! instead of text.
+//!
 //! A message's content is [`MessageContent`]: a string, or [`ContentPart`]s
 //! when it carries bytes a string cannot — an image, a PDF, a recording. Each
 //! provider renders those into the shape its API takes; see [`content`].
@@ -22,6 +26,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub mod content;
+pub mod decision;
 pub mod gemini;
 pub mod openai;
 pub mod provider;
@@ -29,6 +34,11 @@ pub mod schema;
 pub mod tool_call;
 
 pub use content::{ContentPart, MessageContent};
+pub use decision::{
+    DECISION_PROVIDERS, Decision, DecisionConfigError, DecisionError, DecisionModel,
+    DecisionProvider, DecisionSettings, Question, Questions, SelectedDecision,
+    decision_from_settings,
+};
 pub use provider::{
     LlmConfigError, LlmSettings, PROVIDER_ENV_VARS, ReasoningPlan, SUPPORTED_PROVIDERS,
     SelectedLlm, provider_from_env, provider_from_settings,

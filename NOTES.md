@@ -680,6 +680,15 @@ a task sees `None` for exactly the clients that can do both.
 
 ## Hazards that will recur
 
+**OpenRouter's reference says a `noul` needs `criteria`, and Jev does not.**
+(2026-10-15) The Decisions API's OpenAPI marks `criteria` with `true` and
+`false` keys as required. Jev 1.13 on OpenRouter answers a noul with only
+`instructions`, and with both. So `Question::Noul` keeps `criteria`
+optional. A host that enforces the reference refuses with a 400, and
+`DecisionError::Refused` carries its words. A `score` answer's
+`probabilities` and `legend` are maps keyed by the level index as a string,
+as seen from the same host.
+
 **A default that names somebody else's product goes stale silently.**
 (2026-08-25) `GEMINI_DEFAULT_MODEL` was `gemini-1.5-pro`. By the time anyone
 looked, Google had stopped listing that model on its current models page — and
