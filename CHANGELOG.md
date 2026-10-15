@@ -168,6 +168,7 @@ they were written with. Released sections below are untouched.
 
 ### Changed
 
+- **A guarded server's public card is public (`a2a-rs`)**: `HttpServer` serves `/.well-known/agent-card.json`, `/agent-card` and `/skills` outside its authenticator, as it serves the open router. The card names the security scheme a client signs in with, so behind that scheme it told nobody how to get in, and a fleet's liveness probe read a guarded agent as down. What only a signed-in caller may read belongs on the extended card, which is an RPC and stays behind the authenticator.
 - **BREAKING — `connectrpc` 0.3 to 0.9.1 and `buffa` 0.3 to 0.9 (`a2a-rs`, `a2a-mcp`, `a2a-web-client`, `a2a-ap2`)**: closes RUSTSEC-2026-0304, where a finished client-streaming or bidi call kept reading a stalled request body. The generated message types keep their field types, JSON and meaning, so code that builds and reads them compiles unchanged. A consumer that names `buffa` or `connectrpc` types itself needs those crates at 0.9.
   - The generated `A2aService` trait takes a `connectrpc::RequestContext` and a `connectrpc::ServiceRequest<'_, FooRequest>`, and returns a `connectrpc::ServiceResult`. An implementation of its own, or a test calling `ConnectRpcAdapter` directly, follows that shape.
   - The `#[doc(hidden)]` `__buffa_cached_size` field is gone from every generated message. The generated enums gain an `Unspecified` alias beside `TaskState::Unknown`.

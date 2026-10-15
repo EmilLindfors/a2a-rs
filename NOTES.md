@@ -50,6 +50,16 @@ be acting correctly; if not, the state is wrong no matter how it is documented.
 
 ## Choices that had a real alternative
 
+**The public card is outside the authenticator.** (2026-10-15)
+`HttpServer` merges the card and skill routes after the auth layer, as it
+merges the open router. A2A has two cards: the public one at the
+well-known path, and the extended one a signed-in caller asks for by RPC.
+The public card names the security schemes, so a client that cannot read
+it cannot learn how to sign in. korps-fleet probes an agent's liveness by
+its card, and read every agent behind `[server.auth]` as down while it
+served. A server that wants its skills hidden puts them on the extended
+card.
+
 **The CI here does not build korps.** (2026-08-25) A downstream canary existed
 from 2026-08-18: it checked both repos out as siblings and wrote a
 `[patch.crates-io]` so korps built against the PR's source. It is gone, and the
