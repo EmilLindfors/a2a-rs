@@ -28,7 +28,7 @@ pub mod server;
 // Re-export client error types
 #[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
 pub use client::HttpClientError;
-#[cfg(any(feature = "http-client", feature = "jsonrpc-client", feature = "auth"))]
+#[cfg(any(feature = "http-client", feature = "jsonrpc-client"))]
 pub(crate) use client::http_client;
 
 // Re-export server error types

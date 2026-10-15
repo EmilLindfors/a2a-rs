@@ -57,6 +57,22 @@ jobs:
       - name: Check every crate with its default features off
         run: cargo check --workspace --no-default-features --locked
 
+      # `--workspace` unifies features: the other crates turn on a2a-rs's
+      # `http-client`, so the step above never builds a2a-rs with `client`
+      # alone — and `client` alone did not compile (#104). Each a2a-rs feature
+      # gets its own build, warnings included, since a gate that is too wide
+      # shows up as dead code before it shows up as an error.
+      - name: Check a2a-rs with each feature on its own
+        env:
+          RUSTFLAGS: -D warnings
+        run: |
+          for feature in client http-client jsonrpc-client server http-server \
+                         jsonrpc-server tracing auth sqlx-storage sqlite postgres; do
+            echo "::group::a2a-rs --features $feature"
+            cargo check -p a2a-rs --lib --no-default-features --features "$feature" --locked
+            echo "::endgroup::"
+          done
+
   msrv:
     name: MSRV (1.96)
     runs-on: ubuntu-latest
