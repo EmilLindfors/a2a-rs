@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-rs"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "arbitrary",
  "async-trait",
@@ -126,7 +126,7 @@ dependencies = [
 
 [[package]]
 name = "a2acli"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "a2a-rs",
  "anyhow",
