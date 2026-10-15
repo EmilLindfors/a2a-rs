@@ -139,17 +139,7 @@ where
         // Register the ConnectRPC service
         let connect_router = processor.register(connectrpc::Router::new());
 
-        let mut app = Router::new()
-            // v1.0.0 well-known URI endpoint (RFC 8615)
-            .route("/.well-known/agent-card.json", get(handle_agent_card))
-            // Backward compatibility routes
-            .route("/agent-card", get(handle_agent_card))
-            .route("/skills", get(handle_skills))
-            .route("/skills/{id}", get(handle_skill_by_id))
-            .fallback_service(connect_router.into_axum_service())
-            .with_state(ServerState {
-                agent_info: agent_info.clone(),
-            });
+        let mut app = Router::new().fallback_service(connect_router.into_axum_service());
 
         // Apply authentication if provided
         if let Some(auth) = &self.authenticator {
@@ -160,9 +150,25 @@ where
             app = with_auth(app, (*auth_clone).clone());
         }
 
-        // Merged after the auth middleware is applied, which is what keeps
-        // these routes outside it: an axum layer wraps the routes present when
-        // it is added, and these are added afterwards on purpose.
+        // The public card and its skills are merged after the auth middleware
+        // is applied, which keeps them outside it: an axum layer wraps the
+        // routes present when it is added. The card names the security
+        // scheme a client signs in with, so a card behind that scheme tells
+        // nobody how to get in. What only a signed-in caller may read goes on
+        // the extended card, which is an RPC and stays behind the middleware.
+        let card = Router::new()
+            // v1.0.0 well-known URI endpoint (RFC 8615)
+            .route("/.well-known/agent-card.json", get(handle_agent_card))
+            // Backward compatibility routes
+            .route("/agent-card", get(handle_agent_card))
+            .route("/skills", get(handle_skills))
+            .route("/skills/{id}", get(handle_skill_by_id))
+            .with_state(ServerState {
+                agent_info: agent_info.clone(),
+            });
+        app = app.merge(card);
+
+        // Merged after the auth middleware for the same reason.
         if let Some(open) = &self.open_router {
             app = app.merge(open.clone());
         }
