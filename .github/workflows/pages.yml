@@ -1,0 +1,49 @@
+name: Pages
+
+# Publishes `site/` — the project's landing page — to GitHub Pages. The site is
+# one static page with no build step, so this uploads the directory as it is.
+#
+# Needs Pages enabled once, with "GitHub Actions" as the source (repository
+# Settings → Pages). Until then the deploy step fails with a 404.
+on:
+  push:
+    branches: [ "master" ]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time, and a newer push waits rather than cancelling one that
+# is already publishing.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  # Force Node 20-pinned JavaScript actions onto Node 24 (silences the
+  # deprecation annotation until the actions update).
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  deploy:
+    name: Deploy site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
