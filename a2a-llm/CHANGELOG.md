@@ -1,6 +1,13 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.7.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.7.0...a2a-llm-v0.7.1) - 2026-10-15
+
+### Added
+
+- *(a2a-llm)* Derive the schema of the decision that answers a set of questions
+- *(a2a-llm)* Ask a decision model typed questions and get probabilities back
+
 ## [0.7.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.6.0...a2a-llm-v0.7.0) - 2026-09-07
 
 ### Added

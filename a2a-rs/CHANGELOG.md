@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.10.1...a2a-rs-v0.10.2) - 2026-10-15
+
+### Fixed
+
+- *(a2a-rs)* The client feature builds on its own
+
 ## [0.10.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.10.0...a2a-rs-v0.10.1) - 2026-10-14
 
 ### Added
