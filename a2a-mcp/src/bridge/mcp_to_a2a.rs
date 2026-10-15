@@ -105,6 +105,19 @@ impl Drop for RequestCancelGuard {
     }
 }
 
+/// What a client handler here sends in `initialize`: rmcp's defaults, asking
+/// for the newest revision that still has that handshake.
+///
+/// rmcp 3.5 moved `ProtocolVersion::LATEST`, and with it the default, to
+/// 2026-07-28, which has no `initialize`. An rmcp server answers such a
+/// request with its own newest legacy version, but a server that honours it
+/// puts the session on 2026-07-28, where `resources/subscribe` is gone. A peer
+/// opened with `serve()` stays on the legacy revisions it had on rmcp 3.2;
+/// 2026-07-28 is reached through the discover lifecycle, which ignores this.
+fn initialize_config() -> ClientConfig {
+    ClientConfig::default().with_protocol_version(ProtocolVersion::LATEST_WITH_INITIALIZE)
+}
+
 /// Client handler that dispatches progress notifications to a
 /// `ProgressDispatcher`, and optionally routes elicitations to a bridge.
 #[derive(Clone, Default)]
@@ -135,10 +148,13 @@ impl ProgressClientHandler {
     /// Elicitation is declared only when there is a router to answer with:
     /// rmcp will not deliver an elicitation to a client that did not declare
     /// the capability, and declaring one this handler would refuse is worse
-    /// than not declaring it. Everything else is rmcp's default, including
-    /// the implementation identity.
-    pub fn client_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    /// than not declaring it. The protocol version is pinned to
+    /// [`ProtocolVersion::LATEST_WITH_INITIALIZE`], so a peer opened with
+    /// `serve()` lands on a revision that has an `initialize` handshake.
+    /// Everything else is rmcp's default, including the implementation
+    /// identity.
+    pub fn client_info(&self) -> ClientConfig {
+        let mut info = initialize_config();
         if self.elicitations.is_some() {
             info.capabilities = ClientCapabilities::builder().enable_elicitation().build();
         }
@@ -147,7 +163,7 @@ impl ProgressClientHandler {
 }
 
 impl rmcp::ClientHandler for ProgressClientHandler {
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> ClientConfig {
         self.client_info()
     }
 
@@ -1479,8 +1495,8 @@ impl<H: AsyncMessageHandler + Clone + Send + Sync + 'static> rmcp::ClientHandler
     /// served with, which the construction order rarely allows; a consumer
     /// serving some other handler declares it there. See
     /// [`ProgressClientHandler::client_info`].
-    fn get_info(&self) -> ClientInfo {
-        let mut info = ClientInfo::default();
+    fn get_info(&self) -> ClientConfig {
+        let mut info = initialize_config();
         info.capabilities = ClientCapabilities::builder().enable_elicitation().build();
         info
     }

@@ -200,8 +200,8 @@ impl TestMcpServer {
 #[async_trait]
 #[allow(clippy::manual_async_fn)]
 impl ServerHandler for TestMcpServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
@@ -922,9 +922,9 @@ async fn test_mcp_to_a2a_progress_streaming() {
 /// through the discover lifecycle.
 async fn current_client(
     transport: tokio::io::DuplexStream,
-) -> rmcp::service::RunningService<rmcp::RoleClient, ClientInfo> {
+) -> rmcp::service::RunningService<rmcp::RoleClient, ClientConfig> {
     use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
-    let info = ClientInfo::new(
+    let info = ClientConfig::new(
         ClientCapabilities::default(),
         Implementation::new("test-client", "1.0.0"),
     )
@@ -944,9 +944,9 @@ async fn current_client(
 /// server may answer a tool call with a task.
 async fn tasks_client(
     transport: tokio::io::DuplexStream,
-) -> rmcp::service::RunningService<rmcp::RoleClient, ClientInfo> {
+) -> rmcp::service::RunningService<rmcp::RoleClient, ClientConfig> {
     use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
-    let info = ClientInfo::new(
+    let info = ClientConfig::new(
         ClientCapabilities::builder().enable_tasks().build(),
         Implementation::new("test-client", "1.0.0"),
     )
@@ -1304,6 +1304,63 @@ async fn a_question_with_two_calls_open_is_refused_rather_than_guessed() {
             "the server is told why, got: {said}"
         );
     }
+
+    drop(mcp_client);
+    let _ = server_task.await;
+}
+
+/// Records the protocol version a client asks for in `initialize`, then
+/// negotiates as rmcp's default handler would.
+#[derive(Clone, Default)]
+struct VersionRecordingServer {
+    requested: Arc<Mutex<Option<ProtocolVersion>>>,
+}
+
+#[allow(clippy::manual_async_fn)]
+impl ServerHandler for VersionRecordingServer {
+    fn get_info(&self) -> ServerConfig {
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
+    }
+
+    fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl std::future::Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
+        async move {
+            *self.requested.lock().unwrap() = Some(request.protocol_version.clone());
+            context.peer.set_peer_info(request.clone());
+            self.negotiate_initialize(&request)
+        }
+    }
+}
+
+/// rmcp 3.5 defaults a client to 2026-07-28, which has no `initialize`; a
+/// server that honoured that would leave `resources/subscribe` behind. The
+/// handler `serve()` is called with asks for the newest legacy revision.
+#[tokio::test]
+async fn serve_asks_for_a_revision_with_an_initialize_handshake() {
+    let (server_io, client_io) = tokio::io::duplex(4096);
+    let server = VersionRecordingServer::default();
+    let requested = server.requested.clone();
+    let server_task = tokio::spawn(async move {
+        let running = server.serve(server_io).await.unwrap();
+        running.waiting().await.unwrap();
+    });
+
+    let mcp_client = ProgressClientHandler::new(ProgressDispatcher::new())
+        .serve(client_io)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        requested.lock().unwrap().clone(),
+        Some(ProtocolVersion::LATEST_WITH_INITIALIZE)
+    );
+    assert_eq!(
+        mcp_client.peer().peer_info().unwrap().protocol_version,
+        ProtocolVersion::LATEST_WITH_INITIALIZE
+    );
 
     drop(mcp_client);
     let _ = server_task.await;
