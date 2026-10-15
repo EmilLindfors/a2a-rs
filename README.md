@@ -1,5 +1,6 @@
 # a2a-rs
 
+[![Website](https://img.shields.io/badge/website-a2a--rs-c4471c)](https://emillindfors.github.io/a2a-rs/)
 [![Crates.io](https://img.shields.io/crates/v/a2a-rs.svg)](https://crates.io/crates/a2a-rs)
 [![Documentation](https://docs.rs/a2a-rs/badge.svg)](https://docs.rs/a2a-rs)
 [![CI](https://github.com/EmilLindfors/a2a-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/EmilLindfors/a2a-rs/actions/workflows/rust.yml)
