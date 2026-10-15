@@ -624,6 +624,12 @@ opens its peer with `serve()` gets that error where it expected a question.
 The test client for the pause path opens with discover; korps' connector
 opened with `serve()` and `LATEST` on 2026-09-05 and has to follow, and
 when it does, its `resources/subscribe` stops working on the same day.
+Amended 2026-10-15: rmcp 3.5 moved `LATEST`, and the default client config,
+to 2026-07-28. It added `LATEST_WITH_INITIALIZE` for 2025-11-25. A default
+`initialize` now asks for a revision that has no handshake. An rmcp server
+falls back to its newest legacy version, but a server that honours the
+request puts the session on 2026-07-28. The bridge's client handlers pin
+`LATEST_WITH_INITIALIZE`, so `serve()` still lands on a legacy revision.
 
 **A paused tool call is task state in the bridge, and the task's next
 message is the answer.** (2026-09-06) rmcp's `call_tool` drives

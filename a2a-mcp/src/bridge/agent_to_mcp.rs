@@ -382,7 +382,8 @@ impl AgentToMcpBridge {
         }
     }
 
-    /// Set custom MCP server metadata (name and version) to be advertised in `ServerInfo`.
+    /// Set custom MCP server metadata (name and version) to be advertised as
+    /// the `serverInfo` implementation identity.
     pub fn with_mcp_metadata(mut self, name: Option<String>, version: Option<String>) -> Self {
         self.mcp_server_name = name;
         self.mcp_server_version = version;
@@ -1209,7 +1210,7 @@ impl AgentToMcpBridge {
 #[async_trait]
 #[allow(clippy::manual_async_fn)]
 impl ServerHandler for AgentToMcpBridge {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         let server_name = self
             .mcp_server_name
             .as_deref()
@@ -1283,7 +1284,7 @@ impl ServerHandler for AgentToMcpBridge {
                 .build()
         };
 
-        ServerInfo::new(caps)
+        ServerConfig::new(caps)
             .with_server_info(implementation)
             .with_instructions(instructions)
     }

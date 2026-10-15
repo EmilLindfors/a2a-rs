@@ -467,8 +467,8 @@ struct TestClientHandler {
 
 #[allow(clippy::manual_async_fn)]
 impl ClientHandler for TestClientHandler {
-    fn get_info(&self) -> ClientInfo {
-        ClientInfo::new(
+    fn get_info(&self) -> ClientConfig {
+        ClientConfig::new(
             ClientCapabilities::builder().enable_elicitation().build(),
             Implementation::new("test-client", "1.0.0"),
         )
@@ -1254,7 +1254,7 @@ async fn a_bridged_task_is_readable_through_tasks_get() {
     });
     // The client has to declare the tasks extension, or `tasks/get` is
     // refused as a missing client capability.
-    let client_info = ClientInfo::new(
+    let client_info = ClientConfig::new(
         ClientCapabilities::builder().enable_tasks().build(),
         Implementation::new("tasks-client", "1.0.0"),
     );
@@ -1336,13 +1336,13 @@ impl AsyncMessageHandler for SlowHandler {
 /// A client that collects what the server said about its tasks.
 #[derive(Clone, Default)]
 struct TaskWatchingClient {
-    info: ClientInfo,
+    info: ClientConfig,
     task_notifications: Arc<Mutex<Vec<TaskStatusNotificationParams>>>,
 }
 
 #[allow(clippy::manual_async_fn)]
 impl ClientHandler for TaskWatchingClient {
-    fn get_info(&self) -> ClientInfo {
+    fn get_info(&self) -> ClientConfig {
         self.info.clone()
     }
 
@@ -1407,7 +1407,7 @@ async fn a_slow_agent_becomes_a_task_the_client_can_poll() {
     });
 
     let client = TaskWatchingClient {
-        info: ClientInfo::new(
+        info: ClientConfig::new(
             ClientCapabilities::builder()
                 .enable_tasks()
                 .enable_elicitation()
@@ -1578,7 +1578,7 @@ async fn an_input_required_task_is_answered_by_tasks_update() {
     // Elicitation is declared too: a task-mode call must still not use it,
     // which is what `TaskWatchingClient::create_elicitation` panics on.
     let client = TaskWatchingClient {
-        info: ClientInfo::new(
+        info: ClientConfig::new(
             ClientCapabilities::builder()
                 .enable_tasks()
                 .enable_elicitation()
