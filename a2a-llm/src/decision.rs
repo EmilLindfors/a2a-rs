@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use crate::{Env, describe_transport_error};
 
@@ -260,6 +260,97 @@ impl Decision {
         }
         Ok(())
     }
+}
+
+/// The JSON Schema of the [`Decision`] that answers `questions`.
+///
+/// Derived from the questions rather than written beside them, so the
+/// options a `choice` may return and the range a `score` spans are the ones
+/// the question offers. A host that serves decisions as typed tools, such as
+/// an MCP server, declares this as the tool's output schema.
+pub fn answer_schema(questions: &Questions) -> Value {
+    let probabilities = |keys: Vec<String>| {
+        let properties: serde_json::Map<String, Value> = keys
+            .into_iter()
+            .map(|key| (key, json!({"type": "number", "minimum": 0, "maximum": 1})))
+            .collect();
+        json!({"type": "object", "properties": properties})
+    };
+    let confidence = json!({"type": "number", "minimum": 0, "maximum": 1});
+    let answers: serde_json::Map<String, Value> = questions
+        .iter()
+        .map(|(name, question)| {
+            let schema = match question {
+                Question::Noul { instructions, .. } => json!({
+                    "type": "object",
+                    "description": format!("Probability of yes: {instructions}"),
+                    "required": ["type", "noul"],
+                    "properties": {
+                        "type": {"const": "noul"},
+                        "noul": {"type": "number", "minimum": 0, "maximum": 1},
+                    },
+                }),
+                Question::Choice {
+                    instructions,
+                    criteria,
+                } => json!({
+                    "type": "object",
+                    "description": instructions,
+                    "required": ["type", "choice"],
+                    "properties": {
+                        "type": {"const": "choice"},
+                        "choice": {"enum": criteria.keys().collect::<Vec<_>>()},
+                        "confidence": confidence,
+                        "probabilities": probabilities(criteria.keys().cloned().collect()),
+                    },
+                }),
+                Question::Score {
+                    instructions,
+                    criteria,
+                } => json!({
+                    "type": "object",
+                    "description": format!(
+                        "{instructions}. Levels, lowest first: {}",
+                        criteria.join("; ")
+                    ),
+                    "required": ["type", "score"],
+                    "properties": {
+                        "type": {"const": "score"},
+                        "score": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": criteria.len().saturating_sub(1),
+                        },
+                        "confidence": confidence,
+                        "probabilities": probabilities(
+                            (0..criteria.len()).map(|i| i.to_string()).collect()
+                        ),
+                    },
+                }),
+            };
+            (name.clone(), schema)
+        })
+        .collect();
+    json!({
+        "type": "object",
+        "required": ["model", "answers"],
+        "properties": {
+            "model": {"type": "string"},
+            "answers": {
+                "type": "object",
+                "required": questions.keys().collect::<Vec<_>>(),
+                "properties": answers,
+            },
+            "usage": {
+                "type": "object",
+                "properties": {
+                    "input_tokens": {"type": "integer"},
+                    "output_tokens": {"type": "integer"},
+                    "cost": {"type": "number"},
+                },
+            },
+        },
+    })
 }
 
 /// Why a decision could not be had.
@@ -607,7 +698,6 @@ impl DecisionModel for HttpDecisionModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn questions(value: Value) -> Questions {
         serde_json::from_value(value).expect("questions parse")
@@ -708,6 +798,48 @@ mod tests {
                 .to_string()
                 .contains("\"sales\"")
         );
+    }
+
+    /// Every key a serialized decision carries is one the schema declares,
+    /// with the choice among its options and the score inside its range.
+    #[test]
+    fn the_answer_schema_describes_the_decision_that_answers() {
+        let mut asked = triage();
+        asked.insert(
+            "urgency".into(),
+            Question::Score {
+                instructions: "how soon".into(),
+                criteria: vec!["week".into(), "today".into(), "now".into()],
+            },
+        );
+        let schema = answer_schema(&asked);
+        let answers = &schema["properties"]["answers"];
+        assert_eq!(answers["required"], json!(["refund", "team", "urgency"]));
+        assert_eq!(
+            answers["properties"]["team"]["properties"]["choice"]["enum"],
+            json!(["billing", "technical"])
+        );
+        assert_eq!(
+            answers["properties"]["urgency"]["properties"]["score"]["maximum"],
+            json!(2)
+        );
+
+        let decision = decision(json!({
+            "refund": {"type": "noul", "noul": 0.9},
+            "team": {"type": "choice", "choice": "billing", "confidence": 0.8,
+                     "probabilities": {"billing": 0.9, "technical": 0.1}},
+            "urgency": {"type": "score", "score": 1.2, "probabilities": {"1": 0.8, "2": 0.2}},
+        }));
+        let value = serde_json::to_value(&decision).unwrap();
+        for (name, answer) in value["answers"].as_object().unwrap() {
+            let declared = &answers["properties"][name]["properties"];
+            for key in answer.as_object().unwrap().keys() {
+                assert!(
+                    declared.get(key).is_some(),
+                    "`{name}.{key}` is not in the schema"
+                );
+            }
+        }
     }
 
     fn settings(provider: &str, url: Option<&str>) -> DecisionSettings {

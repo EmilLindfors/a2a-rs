@@ -36,7 +36,7 @@ pub mod tool_call;
 pub use content::{ContentPart, MessageContent};
 pub use decision::{
     DECISION_PROVIDERS, Decision, DecisionConfigError, DecisionError, DecisionModel,
-    DecisionProvider, DecisionSettings, Question, Questions, SelectedDecision,
+    DecisionProvider, DecisionSettings, Question, Questions, SelectedDecision, answer_schema,
     decision_from_settings,
 };
 pub use provider::{

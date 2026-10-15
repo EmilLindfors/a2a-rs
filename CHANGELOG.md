@@ -14,6 +14,7 @@ they were written with. Released sections below are untouched.
 ### Added
 
 - **Decision models (`a2a-llm`)**: the `decision` module asks a decision model typed questions (`noul`, `choice`, `score`) about a state and returns probabilities instead of text. `HttpDecisionModel` speaks the System One format shared by OpenRouter's Decisions API, Perplexity and Mapika's `decider`, and `decision_from_settings` builds one with no I/O. A reply that drops, mistypes or invents an answer is an error.
+  - `answer_schema` derives the JSON Schema of the decision that answers a set of questions, with each choice's options and each score's range. A host serving decisions as typed tools declares it as the output schema.
 
 - **A task keeps its artifacts (`a2a-rs`)**: the `AsyncTaskArtifacts` port writes a finished artifact to its task, replacing one with the same `artifact_id`. `InMemoryTaskStorage` and `SqlxTaskStorage` implement it, so `GetTask` and `ListTasks` with `includeArtifacts` return what a task streamed. The SQL store keeps one row per artifact in `task_artifacts` (migration 008), so a write is one upsert.
 
