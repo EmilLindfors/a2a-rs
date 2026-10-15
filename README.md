@@ -5,15 +5,23 @@
 [![CI](https://github.com/EmilLindfors/a2a-rs/actions/workflows/rust.yml/badge.svg)](https://github.com/EmilLindfors/a2a-rs/actions/workflows/rust.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A Rust implementation of the [Agent2Agent (A2A) protocol](https://a2a-protocol.org/)
-v1.0.0: the types, a client, a server, and the storage behind it, plus bridges
-to MCP, LLM providers and the Agent Payments Protocol.
+An MIT-licensed Rust framework for building multi-agent systems on the
+[Agent2Agent (A2A) protocol](https://a2a-protocol.org/).
 
-It speaks the spec's JSON-RPC 2.0 and HTTP+JSON bindings, so it interoperates
-with the other A2A SDKs, and adds ConnectRPC as the default between two a2a-rs
-peers. The core is hexagonal: storage, streaming, push delivery and
-authentication are ports, and every adapter behind them can be swapped without
-touching the agent's own logic.
+- **Up to spec with A2A 1.0:** the types, a client, a server, and the storage
+  behind them.
+- **The latest MCP:** a bridge in both directions on MCP 2026-07-28, and
+  2025-11-25 for peers that still initialize.
+- **Three transports:** the spec's JSON-RPC 2.0 and HTTP+JSON bindings for
+  interop with the other A2A SDKs, and ConnectRPC as the default between two
+  a2a-rs peers.
+- **LLM providers and agent payments:** OpenAI-compatible endpoints, Gemini,
+  decision models, and the Agent Payments Protocol (AP2).
+
+The core is hexagonal: storage, streaming, push delivery and authentication are
+ports, and every adapter behind them can be swapped without touching the
+agent's own logic. Every crate is MIT licensed, so you can build a product or
+your own agent platform on top.
 
 Project site: <https://emillindfors.github.io/a2a-rs/>
 
@@ -23,18 +31,13 @@ Project site: <https://emillindfors.github.io/a2a-rs/>
 |---|---|---|
 | [![a2a-rs](https://img.shields.io/crates/v/a2a-rs.svg?label=a2a-rs)](https://crates.io/crates/a2a-rs) | [a2a-rs](./a2a-rs/) | The protocol: domain types, ports, transports (ConnectRPC, JSON-RPC 2.0, HTTP+JSON), auth, in-memory and SQLx storage |
 | [![a2acli](https://img.shields.io/crates/v/a2acli.svg?label=a2acli)](https://crates.io/crates/a2acli) | [a2a-cli](./a2a-cli/) | Command-line client: `card`, `send`, `get`, `list`, `cancel`, `stream` |
-| [![a2a-mcp](https://img.shields.io/crates/v/a2a-mcp.svg?label=a2a-mcp)](https://crates.io/crates/a2a-mcp) | [a2a-mcp](./a2a-mcp/) | A2A ↔ MCP bridge in both directions, built on `rmcp` |
+| [![a2a-mcp](https://img.shields.io/crates/v/a2a-mcp.svg?label=a2a-mcp)](https://crates.io/crates/a2a-mcp) | [a2a-mcp](./a2a-mcp/) | A2A ↔ MCP bridge in both directions on MCP 2026-07-28 and 2025-11-25, built on `rmcp` |
 | [![a2a-llm](https://img.shields.io/crates/v/a2a-llm.svg?label=a2a-llm)](https://crates.io/crates/a2a-llm) | [a2a-llm](./a2a-llm/) | Provider-neutral chat completions (OpenAI-compatible, Gemini) and decision models |
 | [![a2a-ap2](https://img.shields.io/crates/v/a2a-ap2.svg?label=a2a-ap2)](https://crates.io/crates/a2a-ap2) | [a2a-ap2](./a2a-ap2/) | Agent Payments Protocol (AP2) types and A2A extension helpers |
 | [![a2a-web-client](https://img.shields.io/crates/v/a2a-web-client.svg?label=a2a-web-client)](https://crates.io/crates/a2a-web-client) | [a2a-client](./a2a-client/) | Building blocks for web frontends to A2A agents (SSE with polling fallback, view models, Axum components) |
 
 Two directories are named differently from the crate they hold; the crate name
 is what goes in a `[dependencies]` table.
-
-The declarative agent platform is **not** here. It lives in
-[korps](https://github.com/EmilLindfors/korps): `korps` runs one agent from a
-TOML file, `korps-fleet` deploys and supervises many. This repo is the protocol
-those are built on, and nothing in it depends on them.
 
 ## Quick start
 
@@ -50,9 +53,8 @@ a2acli list --state input-required
 ```
 
 `a2acli` negotiates the transport from the agent card (ConnectRPC first, JSON-RPC
-as the interop fallback), so it talks to agents written with other SDKs too. If
-you want an agent to point it at without writing one, `cargo install korps` and
-`korps new "Weather Agent" && korps run --config weather-agent.toml`.
+as the interop fallback), so it talks to agents written with other SDKs too. For
+an agent to point it at, run the quick start below.
 
 ### Build an agent
 
@@ -215,10 +217,9 @@ Transports decode a request and hand it to `TaskService`, which talks only to
 ports. The agent implements `AsyncMessageHandler` (or a `Responder`); everything
 else has an adapter in-tree that can be replaced.
 
-Those ports are also what korps builds on — `AsyncMessageHandler`,
-`AsyncTaskLifecycle`, `AsyncStreamingHandler`, `AsyncConversationStore`,
-`AsyncContextStateStore`, `Authenticator` — so a change to any of them is a
-breaking change downstream even when nothing in this repo fails.
+The ports are the surface a platform built on a2a-rs depends on, so a change
+to any of them is a breaking change downstream, even when nothing in this repo
+fails.
 
 ## Development
 

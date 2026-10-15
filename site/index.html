@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>a2a-rs — the Agent2Agent protocol in Rust</title>
-<meta name="description" content="A Rust implementation of the Agent2Agent (A2A) protocol v1.0: types, client, server and storage, with bridges to MCP, LLM providers and agent payments.">
-<meta property="og:title" content="a2a-rs — the Agent2Agent protocol in Rust">
-<meta property="og:description" content="Types, client, server and storage for A2A v1.0. Interoperable over JSON-RPC 2.0 and HTTP+JSON, ConnectRPC by default.">
+<title>a2a-rs — build multi-agent systems in Rust</title>
+<meta name="description" content="An MIT-licensed Rust framework for multi-agent systems: the Agent2Agent (A2A) protocol v1.0 end to end, MCP 2026-07-28 in both directions, and ConnectRPC, JSON-RPC 2.0 and HTTP+JSON transports.">
+<meta property="og:title" content="a2a-rs — build multi-agent systems in Rust">
+<meta property="og:description" content="A2A 1.0, MCP 2026-07-28, three transports, MIT licensed.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://emillindfors.github.io/a2a-rs/">
 <meta name="color-scheme" content="light dark">
@@ -83,8 +83,8 @@
 
   /* Hero */
   .hero { padding: 88px 0 72px; }
-  .hero .wrap { display: grid; grid-template-columns: 1.1fr .9fr; gap: 56px; align-items: center; }
-  @media (max-width: 900px) { .hero .wrap { grid-template-columns: 1fr; } }
+  .hero-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 56px; align-items: center; }
+  @media (max-width: 900px) { .hero-grid { grid-template-columns: 1fr; } }
   .eyebrow {
     display: inline-block; font-size: 13px; font-weight: 600; letter-spacing: .02em;
     color: var(--accent); background: var(--accent-soft);
@@ -117,6 +117,22 @@
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.primary:hover { filter: brightness(1.08); }
   .btn svg { width: 18px; height: 18px; }
+
+  /* At-a-glance facts under the hero */
+  .facts {
+    list-style: none; margin: 64px 0 0; padding: 0;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  }
+  .facts li { padding: 20px 22px; border-left: 1px solid var(--border); }
+  .facts li:first-child { border-left: 0; }
+  .facts strong { display: block; font-size: 22px; letter-spacing: -.01em; color: var(--accent); }
+  .facts span { display: block; font-size: 14px; color: var(--muted); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .facts { grid-template-columns: 1fr 1fr; }
+    .facts li:nth-child(3) { border-left: 0; }
+    .facts li:nth-child(n+3) { border-top: 1px solid var(--border); }
+  }
 
   /* Hero diagram */
   .diagram { width: 100%; height: auto; }
@@ -252,14 +268,16 @@
 </nav>
 
 <header class="hero" id="top">
-  <div class="wrap">
+  <div class="wrap hero-grid">
     <div>
-      <span class="eyebrow">A2A protocol v1.0 · MIT licensed</span>
-      <h1>Agents that talk to agents, <em>in Rust.</em></h1>
+      <span class="eyebrow">Open source · MIT licensed</span>
+      <h1>Build multi-agent systems <em>in Rust.</em></h1>
       <p class="lede">
-        a2a-rs implements the Agent2Agent protocol end to end: the types, a client,
-        a server, and the storage behind it. It interoperates with the other A2A
-        SDKs, and comes with bridges to MCP, LLM providers and agent payments.
+        a2a-rs is a framework for agents that work together. Write an agent as
+        one trait, serve it over the transport its peers speak, and reach MCP
+        tools and LLMs through the same ports. It implements the Agent2Agent
+        protocol end to end, and the MIT license means you can build your
+        product on it.
       </p>
       <div class="install">
         <span class="prompt">$</span>
@@ -311,55 +329,66 @@
       <path class="wire dim" d="M100 268 V216"/>
     </svg>
   </div>
+  <div class="wrap">
+    <ul class="facts" aria-label="At a glance">
+      <li><strong>A2A 1.0</strong><span>The current spec, wire-compatible</span></li>
+      <li><strong>MCP 2026-07-28</strong><span>The latest revision, both directions</span></li>
+      <li><strong>3 transports</strong><span>ConnectRPC, JSON-RPC 2.0, HTTP+JSON</span></li>
+      <li><strong>MIT</strong><span>Use it, ship it, sell it</span></li>
+    </ul>
+  </div>
 </header>
 
 <section class="alt" id="features">
   <div class="wrap">
-    <h2>What you get</h2>
+    <h2>Everything between your agents</h2>
     <p class="section-lede">
-      The whole protocol surface, with the parts that are infrastructure behind
-      ports so you can replace them.
+      The protocol, the bridges, and the plumbing a multi-agent system needs,
+      with every piece of infrastructure behind a port you can replace.
     </p>
     <div class="grid">
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 12l2 2 4-4"/><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg></div>
-        <h3>A2A v1.0, wire-compatible</h3>
+        <h3>Up to spec with A2A 1.0</h3>
         <p>Messages, tasks, artifacts, push notifications, extended agent cards
-          and card signatures, every task state. Divergences from the spec are
-          few, opt-in, and documented.</p>
+          and card signatures, and every task state. The few divergences are
+          opt-in, backward-compatible, and documented.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6M15 2v6"/><path d="M6 8h12v4a6 6 0 01-12 0z"/><path d="M12 18v4"/></svg></div>
+        <h3>The latest MCP</h3>
+        <p>MCP 2026-07-28, and 2025-11-25 for peers that still initialize.
+          Expose an agent as MCP tools, or hand an agent an MCP server's tools.
+          A slow call becomes an MCP task; a question asked mid-call reaches
+          the agent.</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10M7 7l3-3M7 7l3 3"/><path d="M17 17H7m10 0l-3-3m3 3l-3 3"/></svg></div>
-        <h3>Interoperable</h3>
-        <p>Spec JSON-RPC 2.0 and HTTP+JSON bindings, crossed in both directions
-          against the official A2A Rust SDK. ConnectRPC is the default between
-          two a2a-rs peers.</p>
+        <h3>Three transports, one agent</h3>
+        <p>Serve ConnectRPC, JSON-RPC 2.0 and HTTP+JSON from the same agent.
+          Clients negotiate from the agent card, and the spec bindings are
+          crossed against the official A2A Rust SDK in both directions.</p>
       </div>
       <div class="card">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h4l3-8 4 16 3-8h4"/></svg></div>
-        <h3>Streaming that resumes</h3>
-        <p>Task and artifact updates over SSE. A dropped a2a-rs stream resumes
-          gap-free from <code>Last-Event-ID</code>; spec clients get the
-          standard reconnect.</p>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M7.3 11l9.4-5M7.3 13l9.4 5"/></svg></div>
+        <h3>Made for many agents</h3>
+        <p>Agent cards to discover what a peer can do, contexts that carry a
+          conversation across tasks, <code>input-required</code> hand-offs,
+          streams that resume without gaps, and push webhooks.</p>
       </div>
       <div class="card">
         <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg></div>
-        <h3>Storage you choose</h3>
-        <p>In-memory for tests, SQLite or PostgreSQL through SQLx for real
-          deployments. Enable both and the backend is picked from the URL at
-          runtime.</p>
+        <h3>Production plumbing</h3>
+        <p>SQLite or PostgreSQL storage, JWT, OAuth2 and OpenID Connect auth,
+          retries and tracing. Each sits behind its own feature flag, so you
+          compile only what you use.</p>
       </div>
       <div class="card">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg></div>
-        <h3>Authentication built in</h3>
-        <p>Bearer tokens, API keys, JWT, OAuth2 and OpenID Connect. A guarded
-          server still serves its public card to anyone, as the spec intends.</p>
-      </div>
-      <div class="card">
-        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h6"/></svg></div>
-        <h3>Compile only what you use</h3>
-        <p>Client, server, each transport, auth and each storage backend sit
-          behind their own feature flag, and CI builds every flag on its own.</p>
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18M5 7h14"/><path d="M5 7l-3 7a3 3 0 006 0zM19 7l-3 7a3 3 0 006 0z"/></svg></div>
+        <h3>MIT, yours to build on</h3>
+        <p>Every crate here is MIT licensed: embed it in a commercial product,
+          fork it, or build your own agent platform on top. No adapter is
+          load-bearing, so nothing locks you in.</p>
       </div>
     </div>
   </div>
@@ -515,9 +544,10 @@ a2a-rs = { version = "0.10", features = ["http-server", "http-client"] }
       </div>
       <div class="card crate">
         <div class="head"><h3>a2a-mcp</h3><img src="https://img.shields.io/crates/v/a2a-mcp.svg?label=" alt="latest a2a-mcp version" loading="lazy"></div>
-        <p>A2A ↔ MCP in both directions: expose an agent as MCP tools, or route
-          an agent's tool calls to an MCP server. A slow call becomes an MCP
-          task; a mid-call question reaches the A2A side.</p>
+        <p>A2A ↔ MCP in both directions, on MCP 2026-07-28 and 2025-11-25:
+          expose an agent as MCP tools, or route an agent's tool calls to an
+          MCP server. A slow call becomes an MCP task; a mid-call question
+          reaches the A2A side.</p>
         <div class="links"><a href="https://docs.rs/a2a-mcp">docs.rs</a><a href="https://crates.io/crates/a2a-mcp">crates.io</a><a href="https://github.com/EmilLindfors/a2a-rs/tree/master/a2a-mcp">source</a></div>
       </div>
       <div class="card crate">
@@ -611,15 +641,17 @@ a2a-rs = { version = "0.10", features = ["http-server", "http-client"] }
   <div class="wrap">
     <div class="callout">
       <div>
-        <h2>Rather not write the agent in Rust?</h2>
+        <h2>Building a multi-agent system? Start here.</h2>
         <p>
-          <a href="https://github.com/EmilLindfors/korps">korps</a> is the
-          declarative platform built on a2a-rs: <code>korps</code> runs an agent
-          from a TOML file, and <code>korps-fleet</code> deploys and supervises
-          many, with delegation and skill-based discovery.
+          a2a-rs is MIT licensed and published on crates.io, so it's free to use
+          in commercial products and to build your own platform on.
+          Issues and pull requests are welcome.
         </p>
       </div>
-      <a class="btn" href="https://github.com/EmilLindfors/korps">korps on GitHub →</a>
+      <div class="cta" style="margin-top: 0">
+        <a class="btn primary" href="#start">Get started</a>
+        <a class="btn" href="https://github.com/EmilLindfors/a2a-rs">Star on GitHub</a>
+      </div>
     </div>
   </div>
 </section>
