@@ -119,6 +119,11 @@ path = "examples/http_client_server.rs"
 required-features = ["http-server", "http-client"]
 
 [[example]]
+name = "quickstart"
+path = "examples/quickstart.rs"
+required-features = ["http-server", "http-client"]
+
+[[example]]
 name = "jsonrpc_server"
 path = "examples/jsonrpc_server.rs"
 required-features = ["jsonrpc-server"]

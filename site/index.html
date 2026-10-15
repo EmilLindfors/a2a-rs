@@ -1,0 +1,761 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>a2a-rs — build multi-agent systems in Rust</title>
+<meta name="description" content="An MIT-licensed Rust framework for multi-agent systems: the Agent2Agent (A2A) protocol v1.0 end to end, MCP 2026-07-28 in both directions, and ConnectRPC, JSON-RPC 2.0 and HTTP+JSON transports.">
+<meta property="og:title" content="a2a-rs — build multi-agent systems in Rust">
+<meta property="og:description" content="A2A 1.0, MCP 2026-07-28, three transports, MIT licensed.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://emillindfors.github.io/a2a-rs/">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #fbfaf8;
+    --bg-alt: #f3f0eb;
+    --surface: #ffffff;
+    --border: #e4dfd7;
+    --text: #1d1b19;
+    --muted: #5f5952;
+    --accent: #c4471c;
+    --accent-soft: #fbe9e1;
+    --code-bg: #1f1d1b;
+    --code-text: #ece6de;
+    --tok-kw: #f0936b;
+    --tok-str: #b5d48a;
+    --tok-com: #8a8279;
+    --tok-ty: #8fc1e3;
+    --tok-mac: #e6c07b;
+    --radius: 10px;
+    --mono: ui-monospace, "SF Mono", "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141312;
+      --bg-alt: #1b1a18;
+      --surface: #201e1c;
+      --border: #34302c;
+      --text: #ece6de;
+      --muted: #a39b91;
+      --accent: #f07a4a;
+      --accent-soft: #3a241b;
+      --code-bg: #0f0e0d;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 16px/1.6 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code { font-family: var(--mono); font-size: .9em; }
+  :not(pre) > code {
+    background: var(--bg-alt);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: .05em .35em;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* Nav */
+  nav {
+    position: sticky; top: 0; z-index: 10;
+    background: color-mix(in srgb, var(--bg) 88%, transparent);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--border);
+  }
+  nav .wrap { display: flex; align-items: center; gap: 28px; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; color: var(--text); font-size: 18px; }
+  .brand:hover { text-decoration: none; }
+  .brand svg { width: 26px; height: 26px; }
+  nav ul { display: flex; gap: 22px; list-style: none; margin: 0 0 0 auto; padding: 0; }
+  nav ul a { color: var(--muted); font-size: 15px; }
+  nav ul a:hover { color: var(--text); text-decoration: none; }
+  @media (max-width: 720px) { nav ul li.opt { display: none; } }
+
+  /* Hero */
+  .hero { padding: 88px 0 72px; }
+  .hero-grid { display: grid; grid-template-columns: 1.1fr .9fr; gap: 56px; align-items: center; }
+  @media (max-width: 900px) { .hero-grid { grid-template-columns: 1fr; } }
+  .eyebrow {
+    display: inline-block; font-size: 13px; font-weight: 600; letter-spacing: .02em;
+    color: var(--accent); background: var(--accent-soft);
+    padding: 4px 10px; border-radius: 999px; margin-bottom: 20px;
+  }
+  h1 { font-size: clamp(36px, 5.2vw, 56px); line-height: 1.08; letter-spacing: -.025em; margin: 0 0 20px; }
+  h1 em { font-style: normal; color: var(--accent); }
+  .lede { font-size: 19px; color: var(--muted); margin: 0 0 32px; max-width: 34em; }
+  .install {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--code-bg); color: var(--code-text);
+    border-radius: var(--radius); padding: 12px 12px 12px 18px;
+    font-family: var(--mono); font-size: 15px; max-width: 460px;
+  }
+  .install .prompt { color: var(--tok-com); user-select: none; }
+  .install code { flex: 1; font-size: 15px; }
+  .copy {
+    font: 600 12px var(--sans); color: var(--code-text);
+    background: #ffffff14; border: 1px solid #ffffff22; border-radius: 6px;
+    padding: 5px 10px; cursor: pointer;
+  }
+  .copy:hover { background: #ffffff26; }
+  .cta { display: flex; gap: 12px; margin-top: 20px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 10px 18px; border-radius: 8px; font-weight: 600; font-size: 15px;
+    border: 1px solid var(--border); color: var(--text); background: var(--surface);
+  }
+  .btn:hover { text-decoration: none; border-color: var(--muted); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { filter: brightness(1.08); }
+  .btn svg { width: 18px; height: 18px; }
+
+  /* At-a-glance facts under the hero */
+  .facts {
+    list-style: none; margin: 64px 0 0; padding: 0;
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface);
+  }
+  .facts li { padding: 20px 22px; border-left: 1px solid var(--border); }
+  .facts li:first-child { border-left: 0; }
+  .facts strong { display: block; font-size: 22px; letter-spacing: -.01em; color: var(--accent); }
+  .facts span { display: block; font-size: 14px; color: var(--muted); margin-top: 2px; }
+  @media (max-width: 760px) {
+    .facts { grid-template-columns: 1fr 1fr; }
+    .facts li:nth-child(3) { border-left: 0; }
+    .facts li:nth-child(n+3) { border-top: 1px solid var(--border); }
+  }
+
+  /* Hero diagram */
+  .diagram { width: 100%; height: auto; }
+  .diagram .box { fill: var(--surface); stroke: var(--border); stroke-width: 1.5; }
+  .diagram .box.you { stroke: var(--accent); stroke-width: 2; }
+  .diagram .label { fill: var(--text); font: 600 14px var(--sans); }
+  .diagram .sub { fill: var(--muted); font: 12px var(--mono); }
+  .diagram .wire { stroke: var(--accent); stroke-width: 2; fill: none; }
+  .diagram .wire.dim { stroke: var(--muted); stroke-dasharray: 4 4; }
+  .diagram .tag { fill: var(--accent); font: 600 11px var(--mono); }
+  .diagram .tag.dim { fill: var(--muted); }
+  .diagram .pulse { fill: var(--accent); }
+  @media (prefers-reduced-motion: reduce) { .diagram .pulse { display: none; } }
+
+  /* Sections */
+  section { padding: 80px 0; }
+  section.alt { background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+  h2 { font-size: 32px; letter-spacing: -.02em; line-height: 1.2; margin: 0 0 12px; }
+  .section-lede { color: var(--muted); font-size: 18px; margin: 0 0 40px; max-width: 42em; }
+  h3 { font-size: 17px; margin: 0 0 6px; }
+
+  /* Feature grid */
+  .grid { display: grid; gap: 20px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px;
+  }
+  .card p { margin: 0; color: var(--muted); font-size: 15px; }
+  .card .icon {
+    width: 36px; height: 36px; border-radius: 8px; margin-bottom: 14px;
+    display: grid; place-items: center; background: var(--accent-soft); color: var(--accent);
+  }
+  .card .icon svg { width: 20px; height: 20px; }
+
+  /* Code tabs */
+  .tabs { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--code-bg); }
+  .tablist { display: flex; gap: 2px; padding: 8px 8px 0; background: color-mix(in srgb, var(--code-bg) 80%, #000); overflow-x: auto; }
+  .tablist button {
+    font: 600 13px var(--sans); color: var(--tok-com);
+    background: none; border: 0; padding: 9px 14px; border-radius: 6px 6px 0 0; cursor: pointer; white-space: nowrap;
+  }
+  .tablist button[aria-selected="true"] { color: var(--code-text); background: var(--code-bg); }
+  .tablist .file { margin-left: auto; align-self: center; padding: 0 8px; font: 12px var(--mono); color: var(--tok-com); white-space: nowrap; }
+  pre {
+    margin: 0; padding: 22px 24px; overflow-x: auto;
+    color: var(--code-text); font: 13.5px/1.65 var(--mono); tab-size: 4;
+  }
+  pre code { font-size: inherit; }
+  .js .tabpanel[hidden] { display: none; }
+  .no-js-label { display: block; color: var(--tok-com); font: 600 12px var(--sans); padding: 14px 24px 0; }
+  .js .no-js-label { display: none; }
+  .tok-kw { color: var(--tok-kw); }
+  .tok-str { color: var(--tok-str); }
+  .tok-com { color: var(--tok-com); font-style: italic; }
+  .tok-ty { color: var(--tok-ty); }
+  .tok-mac { color: var(--tok-mac); }
+  .code-note { color: var(--muted); font-size: 15px; margin: 16px 0 0; }
+
+  /* Crates */
+  .crate { display: flex; flex-direction: column; }
+  .crate .head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+  .crate h3 { font-family: var(--mono); font-size: 16px; margin: 0; }
+  .crate .head img { height: 20px; }
+  .crate p { flex: 1; }
+  .crate .links { display: flex; gap: 16px; margin-top: 16px; font-size: 14px; font-weight: 600; }
+
+  /* Protocol table */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; }
+  @media (max-width: 860px) { .two { grid-template-columns: 1fr; } }
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); font-weight: 600; }
+  td code { white-space: nowrap; }
+  .yes { color: #3f9142; font-weight: 700; }
+  .no { color: var(--muted); }
+  @media (prefers-color-scheme: dark) { .yes { color: #7cc47f; } }
+  ul.ticks { list-style: none; padding: 0; margin: 0; }
+  ul.ticks li { padding: 10px 0 10px 30px; position: relative; border-bottom: 1px solid var(--border); }
+  ul.ticks li::before {
+    content: ""; position: absolute; left: 4px; top: 17px; width: 12px; height: 7px;
+    border-left: 2px solid var(--accent); border-bottom: 2px solid var(--accent); transform: rotate(-45deg);
+  }
+  ul.ticks li span { display: block; color: var(--muted); font-size: 14px; }
+
+  /* Architecture */
+  .layers { display: grid; gap: 10px; }
+  .layer {
+    display: grid; grid-template-columns: 140px 1fr; gap: 20px; align-items: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px 20px;
+  }
+  @media (max-width: 640px) { .layer { grid-template-columns: 1fr; gap: 8px; } }
+  .layer .name { font-weight: 700; font-size: 14px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .layer.focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .layer.focus .name { color: var(--accent); }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font: 13px var(--mono); padding: 4px 10px; border-radius: 6px; background: var(--bg-alt); border: 1px solid var(--border); }
+  .chip.you { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .arrow { text-align: center; color: var(--muted); font-size: 14px; line-height: 1; }
+
+  /* Callout */
+  .callout {
+    display: grid; grid-template-columns: 1fr auto; gap: 32px; align-items: center;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 36px 40px;
+  }
+  @media (max-width: 760px) { .callout { grid-template-columns: 1fr; } }
+  .callout h2 { font-size: 26px; }
+  .callout p { color: var(--muted); margin: 0; }
+
+  footer { padding: 40px 0 56px; color: var(--muted); font-size: 14px; border-top: 1px solid var(--border); }
+  footer .wrap { display: flex; gap: 24px; flex-wrap: wrap; justify-content: space-between; }
+  footer ul { display: flex; gap: 20px; list-style: none; margin: 0; padding: 0; }
+  footer a { color: var(--muted); }
+</style>
+</head>
+<body>
+<script>document.documentElement.classList.add("js")</script>
+
+<nav>
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="a2a-rs home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="#c4471c"/><circle cx="10" cy="16" r="4.5" fill="#fff"/><circle cx="22" cy="16" r="4.5" fill="none" stroke="#fff" stroke-width="2.5"/><path d="M14.5 16h3" stroke="#fff" stroke-width="2.5" stroke-linecap="round"/></svg>
+      a2a-rs
+    </a>
+    <ul>
+      <li class="opt"><a href="#features">Features</a></li>
+      <li class="opt"><a href="#start">Quick start</a></li>
+      <li class="opt"><a href="#crates">Crates</a></li>
+      <li class="opt"><a href="#protocol">Protocol</a></li>
+      <li><a href="https://docs.rs/a2a-rs">Docs</a></li>
+      <li><a href="https://github.com/EmilLindfors/a2a-rs">GitHub</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="hero" id="top">
+  <div class="wrap hero-grid">
+    <div>
+      <span class="eyebrow">Open source · MIT licensed</span>
+      <h1>Build multi-agent systems <em>in Rust.</em></h1>
+      <p class="lede">
+        a2a-rs is a framework for agents that work together. Write an agent as
+        one trait, serve it over the transport its peers speak, and reach MCP
+        tools and LLMs through the same ports. It implements the Agent2Agent
+        protocol end to end, and the MIT license means you can build your
+        product on it.
+      </p>
+      <div class="install">
+        <span class="prompt">$</span>
+        <code id="install-cmd">cargo add a2a-rs</code>
+        <button class="copy" data-copy="install-cmd" type="button">Copy</button>
+      </div>
+      <div class="cta">
+        <a class="btn primary" href="#start">Get started</a>
+        <a class="btn" href="https://github.com/EmilLindfors/a2a-rs">
+          <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+          Source
+        </a>
+        <a class="btn" href="https://docs.rs/a2a-rs">API docs</a>
+      </div>
+    </div>
+
+    <svg class="diagram" viewBox="0 0 440 340" role="img" aria-labelledby="diagram-title">
+      <title id="diagram-title">Your agent, built on a2a-rs, talks to other A2A agents over ConnectRPC, JSON-RPC 2.0 or HTTP+JSON, and reaches MCP tools and LLM providers through bridge crates.</title>
+      <!-- MCP and LLM, above -->
+      <rect class="box" x="20" y="16" width="160" height="58" rx="10"/>
+      <text class="label" x="36" y="42">MCP servers</text>
+      <text class="sub" x="36" y="61">a2a-mcp</text>
+      <rect class="box" x="260" y="16" width="160" height="58" rx="10"/>
+      <text class="label" x="276" y="42">LLM providers</text>
+      <text class="sub" x="276" y="61">a2a-llm</text>
+      <path class="wire dim" d="M100 74 V130"/>
+      <path class="wire dim" d="M340 74 V100 H160 V130"/>
+      <!-- Your agent -->
+      <rect class="box you" x="20" y="130" width="200" height="86" rx="12"/>
+      <text class="label" x="38" y="160">Your agent</text>
+      <text class="sub" x="38" y="182">impl Responder</text>
+      <text class="sub" x="38" y="201">a2a-rs</text>
+      <!-- Other agents -->
+      <rect class="box" x="300" y="118" width="120" height="50" rx="10"/>
+      <text class="label" x="316" y="148">A2A agent</text>
+      <rect class="box" x="300" y="180" width="120" height="50" rx="10"/>
+      <text class="label" x="316" y="210">A2A agent</text>
+      <path class="wire" id="w1" d="M220 160 H260 V143 H300"/>
+      <path class="wire" id="w2" d="M220 186 H260 V205 H300"/>
+      <text class="tag" x="232" y="248">ConnectRPC</text>
+      <text class="tag" x="232" y="264">JSON-RPC 2.0</text>
+      <text class="tag" x="232" y="280">HTTP+JSON</text>
+      <circle class="pulse" r="4"><animateMotion dur="2.4s" repeatCount="indefinite"><mpath href="#w1"/></animateMotion></circle>
+      <circle class="pulse" r="4"><animateMotion dur="2.4s" begin="1.2s" repeatCount="indefinite" keyPoints="1;0" keyTimes="0;1" calcMode="linear"><mpath href="#w2"/></animateMotion></circle>
+      <!-- CLI -->
+      <rect class="box" x="20" y="268" width="160" height="56" rx="10"/>
+      <text class="label" x="36" y="293">a2acli</text>
+      <text class="sub" x="36" y="311">card · send · stream</text>
+      <path class="wire dim" d="M100 268 V216"/>
+    </svg>
+  </div>
+  <div class="wrap">
+    <ul class="facts" aria-label="At a glance">
+      <li><strong>A2A 1.0</strong><span>The current spec, wire-compatible</span></li>
+      <li><strong>MCP 2026-07-28</strong><span>The latest revision, both directions</span></li>
+      <li><strong>3 transports</strong><span>ConnectRPC, JSON-RPC 2.0, HTTP+JSON</span></li>
+      <li><strong>MIT</strong><span>Use it, ship it, sell it</span></li>
+    </ul>
+  </div>
+</header>
+
+<section class="alt" id="features">
+  <div class="wrap">
+    <h2>Everything between your agents</h2>
+    <p class="section-lede">
+      The protocol, the bridges, and the plumbing a multi-agent system needs,
+      with every piece of infrastructure behind a port you can replace.
+    </p>
+    <div class="grid">
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 12l2 2 4-4"/><path d="M12 3l8 4v5c0 5-3.5 8-8 9-4.5-1-8-4-8-9V7z"/></svg></div>
+        <h3>Up to spec with A2A 1.0</h3>
+        <p>Messages, tasks, artifacts, push notifications, extended agent cards
+          and card signatures, and every task state. The few divergences are
+          opt-in, backward-compatible, and documented.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6M15 2v6"/><path d="M6 8h12v4a6 6 0 01-12 0z"/><path d="M12 18v4"/></svg></div>
+        <h3>The latest MCP</h3>
+        <p>MCP 2026-07-28, and 2025-11-25 for peers that still initialize.
+          Expose an agent as MCP tools, or hand an agent an MCP server's tools.
+          A slow call becomes an MCP task; a question asked mid-call reaches
+          the agent.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 7h10M7 7l3-3M7 7l3 3"/><path d="M17 17H7m10 0l-3-3m3 3l-3 3"/></svg></div>
+        <h3>Three transports, one agent</h3>
+        <p>Serve ConnectRPC, JSON-RPC 2.0 and HTTP+JSON from the same agent.
+          Clients negotiate from the agent card, and the spec bindings are
+          crossed against the official A2A Rust SDK in both directions.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="12" r="2.5"/><circle cx="19" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M7.3 11l9.4-5M7.3 13l9.4 5"/></svg></div>
+        <h3>Made for many agents</h3>
+        <p>Agent cards to discover what a peer can do, contexts that carry a
+          conversation across tasks, <code>input-required</code> hand-offs,
+          streams that resume without gaps, and push webhooks.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg></div>
+        <h3>Production plumbing</h3>
+        <p>SQLite or PostgreSQL storage, JWT, OAuth2 and OpenID Connect auth,
+          retries and tracing. Each sits behind its own feature flag, so you
+          compile only what you use.</p>
+      </div>
+      <div class="card">
+        <div class="icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18M5 7h14"/><path d="M5 7l-3 7a3 3 0 006 0zM19 7l-3 7a3 3 0 006 0z"/></svg></div>
+        <h3>MIT, yours to build on</h3>
+        <p>Every crate here is MIT licensed: embed it in a commercial product,
+          fork it, or build your own agent platform on top. No adapter is
+          load-bearing, so nothing locks you in.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <h2>An agent is one trait</h2>
+    <p class="section-lede">
+      Implement <code>Responder</code>: given the message and the task, return a
+      reply and the state the task ends in. <code>ResponderMessageHandler</code>
+      creates the task, keeps its history, and announces every transition to
+      stream subscribers and push webhooks.
+    </p>
+
+    <div class="tabs" data-tabs>
+      <div class="tablist" role="tablist" aria-label="Quick start code">
+        <button role="tab" aria-selected="true" aria-controls="tab-agent" id="t-agent">Agent</button>
+        <button role="tab" aria-selected="false" aria-controls="tab-server" id="t-server" tabindex="-1">Server</button>
+        <button role="tab" aria-selected="false" aria-controls="tab-client" id="t-client" tabindex="-1">Client</button>
+        <button role="tab" aria-selected="false" aria-controls="tab-cli" id="t-cli" tabindex="-1">CLI</button>
+        <button role="tab" aria-selected="false" aria-controls="tab-toml" id="t-toml" tabindex="-1">Cargo.toml</button>
+        <span class="file">examples/quickstart.rs</span>
+      </div>
+
+      <div class="tabpanel" role="tabpanel" id="tab-agent" aria-labelledby="t-agent">
+        <span class="no-js-label">Agent</span>
+<pre><code data-lang="rust">use a2a_rs::adapter::business::Responder;
+use a2a_rs::domain::{A2AError, Message, Part, Role, Task, TaskState};
+
+/// Reply with the message in capitals, and finish the task.
+struct Shout;
+
+#[async_trait::async_trait]
+impl Responder for Shout {
+    async fn respond(
+        &amp;self,
+        message: &amp;Message,
+        task: &amp;Task,
+    ) -&gt; Result&lt;(Message, TaskState), A2AError&gt; {
+        let text: Vec&lt;&amp;str&gt; = message.parts.iter().filter_map(|p| p.get_text()).collect();
+        let reply = Message::builder()
+            .role(Role::Agent)
+            .parts(vec![Part::text(text.join(" ").to_uppercase())])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .task_id(task.id.clone())
+            .context_id(message.context_id.clone())
+            .build();
+        Ok((reply, TaskState::Completed))
+    }
+}</code></pre>
+      </div>
+
+      <div class="tabpanel" role="tabpanel" id="tab-server" aria-labelledby="t-server" hidden>
+        <span class="no-js-label">Server</span>
+<pre><code data-lang="rust">use a2a_rs::adapter::business::ResponderMessageHandler;
+use a2a_rs::adapter::{
+    ConnectRpcAdapter, HttpServer, InMemoryStreamingHandler, InMemoryTaskStorage,
+    SimpleAgentInfo,
+};
+
+// Storage, streaming and push delivery are ports; these are the in-memory adapters.
+let storage = InMemoryTaskStorage::new();
+let streaming = InMemoryStreamingHandler::new();
+let handler = ResponderMessageHandler::new(
+    storage.clone(),
+    streaming.clone(),
+    storage.push_notifier(),
+    Shout,
+);
+
+let card = SimpleAgentInfo::new("shout".to_string(), "http://127.0.0.1:8080".to_string())
+    .with_description("Repeats what you say, louder".to_string())
+    .with_streaming();
+let processor = ConnectRpcAdapter::new(handler, storage.clone(), storage, card.clone())
+    .with_streaming_handler(streaming);
+
+HttpServer::new(processor, card, "127.0.0.1:8080".to_string())
+    .start()
+    .await?;</code></pre>
+      </div>
+
+      <div class="tabpanel" role="tabpanel" id="tab-client" aria-labelledby="t-client" hidden>
+        <span class="no-js-label">Client</span>
+<pre><code data-lang="rust">use a2a_rs::{HttpClient, Message, Transport};
+use a2a_rs::domain::SendCompletion;
+
+let client = HttpClient::new("http://127.0.0.1:8080".to_string());
+let message = Message::user_text("hello, agent".to_string(), uuid::Uuid::new_v4().to_string());
+
+// `WhenSettled` is the A2A default: the server answers once the task has
+// finished, so the reply is already in `task.history`.
+let task = client
+    .send_task_message(None, &amp;message, None, None, SendCompletion::WhenSettled)
+    .await?;
+
+println!("task {} is {:?}", task.id, task.status.state);
+// task 7725e89c-… is TASK_STATE_COMPLETED</code></pre>
+      </div>
+
+      <div class="tabpanel" role="tabpanel" id="tab-cli" aria-labelledby="t-cli" hidden>
+        <span class="no-js-label">CLI</span>
+<pre><code data-lang="sh">cargo install a2acli
+
+export A2A_URL=http://127.0.0.1:8080
+a2acli card                           # what can this agent do?
+a2acli send "hello, agent"            # send, and wait for the reply
+a2acli list --state input-required    # tasks waiting on you
+a2acli stream t1 --resilient          # follow a task, reconnecting on drop</code></pre>
+      </div>
+
+      <div class="tabpanel" role="tabpanel" id="tab-toml" aria-labelledby="t-toml" hidden>
+        <span class="no-js-label">Cargo.toml</span>
+<pre><code data-lang="toml">[dependencies]
+a2a-rs = { version = "0.10", features = ["http-server", "http-client"] }
+
+# Or pick other features:
+#   jsonrpc-server / jsonrpc-client   the spec's JSON-RPC 2.0 and HTTP+JSON bindings
+#   auth                              JWT, OAuth2, OpenID Connect
+#   sqlite / postgres                 SQLx task storage
+#   full                              all of the above</code></pre>
+      </div>
+    </div>
+    <p class="code-note">
+      All of it runs as one program:
+      <code>cargo run -p a2a-rs --example quickstart --features http-server,http-client</code>.
+      An agent that acknowledges now and finishes later implements
+      <code>AsyncMessageHandler</code> instead.
+    </p>
+  </div>
+</section>
+
+<section class="alt" id="crates">
+  <div class="wrap">
+    <h2>The workspace</h2>
+    <p class="section-lede">
+      The protocol crate stands alone; the others extend it. Each is published
+      to crates.io and released independently.
+    </p>
+    <div class="grid">
+      <div class="card crate">
+        <div class="head"><h3>a2a-rs</h3><img src="https://img.shields.io/crates/v/a2a-rs.svg?label=" alt="latest a2a-rs version" loading="lazy"></div>
+        <p>The protocol: domain types, ports, the ConnectRPC, JSON-RPC 2.0 and
+          HTTP+JSON transports, auth, and in-memory and SQLx storage.</p>
+        <div class="links"><a href="https://docs.rs/a2a-rs">docs.rs</a><a href="https://crates.io/crates/a2a-rs">crates.io</a><a href="https://github.com/EmilLindfors/a2a-rs/tree/master/a2a-rs">source</a></div>
+      </div>
+      <div class="card crate">
+        <div class="head"><h3>a2acli</h3><img src="https://img.shields.io/crates/v/a2acli.svg?label=" alt="latest a2acli version" loading="lazy"></div>
+        <p>A command-line client that negotiates its transport from the agent
+          card. Prebuilt for Linux, macOS and Windows; doubles as a cross-SDK
+          interop harness.</p>
+        <div class="links"><a href="https://github.com/EmilLindfors/a2a-rs/tree/master/a2a-cli">readme</a><a href="https://crates.io/crates/a2acli">crates.io</a><a href="https://github.com/EmilLindfors/a2a-rs/releases">binaries</a></div>
+      </div>
+      <div class="card crate">
+        <div class="head"><h3>a2a-mcp</h3><img src="https://img.shields.io/crates/v/a2a-mcp.svg?label=" alt="latest a2a-mcp version" loading="lazy"></div>
+        <p>A2A ↔ MCP in both directions, on MCP 2026-07-28 and 2025-11-25:
+          expose an agent as MCP tools, or route an agent's tool calls to an
+          MCP server. A slow call becomes an MCP task; a mid-call question
+          reaches the A2A side.</p>
+        <div class="links"><a href="https://docs.rs/a2a-mcp">docs.rs</a><a href="https://crates.io/crates/a2a-mcp">crates.io</a><a href="https://github.com/EmilLindfors/a2a-rs/tree/master/a2a-mcp">source</a></div>
+      </div>
+      <div class="card crate">
+        <div class="head"><h3>a2a-llm</h3><img src="https://img.shields.io/crates/v/a2a-llm.svg?label=" alt="latest a2a-llm version" loading="lazy"></div>
+        <p>Provider-neutral chat completions for OpenAI-compatible endpoints and
+          Gemini, and decision models that answer typed questions with
+          probabilities instead of text.</p>
+        <div class="links"><a href="https://docs.rs/a2a-llm">docs.rs</a><a href="https://crates.io/crates/a2a-llm">crates.io</a><a href="https://github.com/EmilLindfors/a2a-rs/tree/master/a2a-llm">source</a></div>
+      </div>
+      <div class="card crate">
+        <div class="head"><h3>a2a-ap2</h3><img src="https://img.shields.io/crates/v/a2a-ap2.svg?label=" alt="latest a2a-ap2 version" loading="lazy"></div>
+        <p>The Agent Payments Protocol: typed, validated mandates, payment
+          requests and receipts, and helpers to carry them in A2A messages and
+          agent cards.</p>
+        <div class="links"><a href="https://docs.rs/a2a-ap2">docs.rs</a><a href="https://crates.io/crates/a2a-ap2">crates.io</a><a href="https://github.com/EmilLindfors/a2a-rs/tree/master/a2a-ap2">source</a></div>
+      </div>
+      <div class="card crate">
+        <div class="head"><h3>a2a-web-client</h3><img src="https://img.shields.io/crates/v/a2a-web-client.svg?label=" alt="latest a2a-web-client version" loading="lazy"></div>
+        <p>Building blocks for web frontends to A2A agents: a client with SSE
+          streaming and polling fallback, view models, and optional Axum
+          components.</p>
+        <div class="links"><a href="https://docs.rs/a2a-web-client">docs.rs</a><a href="https://crates.io/crates/a2a-web-client">crates.io</a><a href="https://github.com/EmilLindfors/a2a-rs/tree/master/a2a-client">source</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="protocol">
+  <div class="wrap">
+    <h2>Protocol coverage</h2>
+    <p class="section-lede">
+      The A2A v1.0 surface, and how it reaches the wire. The full list of
+      divergences is in the
+      <a href="https://github.com/EmilLindfors/a2a-rs/tree/master/a2a-rs#spec-compliance">spec compliance notes</a>.
+    </p>
+    <div class="two">
+      <div>
+        <h3>Operations</h3>
+        <ul class="ticks">
+          <li><code>SendMessage</code> · <code>SendStreamingMessage</code><span>Blocking until the task settles, or returning immediately</span></li>
+          <li><code>GetTask</code> · <code>ListTasks</code><span>Filtered by state and context, and paged</span></li>
+          <li><code>CancelTask</code> · <code>SubscribeToTask</code><span>With gap-free resume between a2a-rs peers</span></li>
+          <li>Push notification configs<span>Create, get, list and delete, with webhook delivery and retries</span></li>
+          <li><code>GetExtendedAgentCard</code><span>Plus agent card signatures</span></li>
+          <li>Security schemes<span>HTTP bearer, API key, OAuth2, OpenID Connect, mTLS</span></li>
+        </ul>
+      </div>
+      <div>
+        <h3>Transports</h3>
+        <table>
+          <thead><tr><th>Binding</th><th>Server</th><th>Client</th></tr></thead>
+          <tbody>
+            <tr><td>JSON-RPC 2.0 <span class="no">(spec)</span></td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>HTTP+JSON <span class="no">(spec)</span></td><td class="yes">✓</td><td class="no">—</td></tr>
+            <tr><td>ConnectRPC <span class="no">(a2a-rs default)</span></td><td class="yes">✓</td><td class="yes">✓</td></tr>
+            <tr><td>gRPC <span class="no">(spec)</span></td><td class="no">—</td><td class="no">—</td></tr>
+          </tbody>
+        </table>
+        <p class="code-note">
+          Clients negotiate from the agent card's supported interfaces:
+          ConnectRPC when the agent offers it, JSON-RPC otherwise. Crossed
+          against the official A2A Rust SDK's CLI and server over JSON-RPC and
+          HTTP+JSON.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="alt" id="architecture">
+  <div class="wrap">
+    <h2>Hexagonal, so the edges are yours</h2>
+    <p class="section-lede">
+      Transports decode a request and hand it to <code>TaskService</code>, which
+      only talks to ports. You implement the message handler; everything else
+      has an in-tree adapter you can keep or replace.
+    </p>
+    <div class="layers">
+      <div class="layer"><div class="name">Transports</div><div class="chips"><span class="chip">ConnectRPC</span><span class="chip">JSON-RPC 2.0</span><span class="chip">HTTP+JSON</span><span class="chip">auth guard</span><span class="chip">SSE</span></div></div>
+      <div class="arrow" aria-hidden="true">↓</div>
+      <div class="layer"><div class="name">Application</div><div class="chips"><span class="chip">TaskService</span></div></div>
+      <div class="arrow" aria-hidden="true">↓</div>
+      <div class="layer focus"><div class="name">Ports</div><div class="chips"><span class="chip you">AsyncMessageHandler</span><span class="chip">AsyncTaskLifecycle</span><span class="chip">AsyncTaskQuery</span><span class="chip">AsyncStreamingHandler</span><span class="chip">AsyncEventLog</span><span class="chip">AsyncNotificationManager</span><span class="chip">AsyncPushNotifier</span><span class="chip">AsyncConversationStore</span><span class="chip">AsyncContextStateStore</span><span class="chip">Authenticator</span></div></div>
+      <div class="arrow" aria-hidden="true">↓</div>
+      <div class="layer"><div class="name">Adapters</div><div class="chips"><span class="chip">in-memory</span><span class="chip">SQLite</span><span class="chip">PostgreSQL</span><span class="chip">streaming fan-out</span><span class="chip">webhook sender</span><span class="chip">JWT</span><span class="chip">OAuth2</span><span class="chip">OIDC</span></div></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="callout">
+      <div>
+        <h2>Building a multi-agent system? Start here.</h2>
+        <p>
+          a2a-rs is MIT licensed and published on crates.io, so it's free to use
+          in commercial products and to build your own platform on.
+          Issues and pull requests are welcome.
+        </p>
+      </div>
+      <div class="cta" style="margin-top: 0">
+        <a class="btn primary" href="#start">Get started</a>
+        <a class="btn" href="https://github.com/EmilLindfors/a2a-rs">Star on GitHub</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span>a2a-rs · MIT licensed · an implementation of the <a href="https://a2a-protocol.org/">A2A protocol</a></span>
+    <ul>
+      <li><a href="https://github.com/EmilLindfors/a2a-rs">GitHub</a></li>
+      <li><a href="https://docs.rs/a2a-rs">docs.rs</a></li>
+      <li><a href="https://crates.io/crates/a2a-rs">crates.io</a></li>
+      <li><a href="https://github.com/EmilLindfors/a2a-rs/blob/master/CHANGELOG.md">Changelog</a></li>
+    </ul>
+  </div>
+</footer>
+
+<script>
+  // Copy buttons.
+  document.querySelectorAll("[data-copy]").forEach(function (button) {
+    button.addEventListener("click", function () {
+      var text = document.getElementById(button.dataset.copy).textContent;
+      navigator.clipboard.writeText(text).then(function () {
+        button.textContent = "Copied";
+        setTimeout(function () { button.textContent = "Copy"; }, 1500);
+      });
+    });
+  });
+
+  // Tabs, with arrow-key navigation. Without JS every panel shows, labelled.
+  document.querySelectorAll("[data-tabs]").forEach(function (root) {
+    var tabs = Array.prototype.slice.call(root.querySelectorAll('[role="tab"]'));
+    function select(tab) {
+      tabs.forEach(function (t) {
+        var on = t === tab;
+        t.setAttribute("aria-selected", on);
+        t.tabIndex = on ? 0 : -1;
+        document.getElementById(t.getAttribute("aria-controls")).hidden = !on;
+      });
+    }
+    tabs.forEach(function (tab, i) {
+      tab.addEventListener("click", function () { select(tab); });
+      tab.addEventListener("keydown", function (e) {
+        var step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+        if (!step) return;
+        var next = tabs[(i + step + tabs.length) % tabs.length];
+        select(next);
+        next.focus();
+      });
+    });
+  });
+
+  // A small highlighter: comments, strings, keywords, types and macros. It
+  // works on text and rebuilds the markup, so the source stays plain HTML.
+  (function () {
+    var rules = {
+      rust: [
+        ["com", /\/\/[^\n]*/y],
+        ["str", /"(?:[^"\\]|\\.)*"/y],
+        ["kw", /\b(?:use|let|struct|impl|for|async|await|fn|pub|mod|self|Self|match|if|else|return|mut|move|where|dyn|crate|super|as|in|enum|trait|type|const|static|ref)\b/y],
+        ["mac", /\b[a-z_]+!/y],
+        ["mac", /#\[[^\]]*\]/y],
+        ["ty", /\b[A-Z][A-Za-z0-9_]*\b/y]
+      ],
+      toml: [
+        ["com", /#[^\n]*/y],
+        ["str", /"(?:[^"\\]|\\.)*"/y],
+        ["kw", /^\[[^\]\n]+\]/my]
+      ],
+      sh: [
+        ["com", /#[^\n]*/y],
+        ["str", /"(?:[^"\\]|\\.)*"/y],
+        ["kw", /\b(?:cargo|export|a2acli)\b/y]
+      ]
+    };
+    function esc(s) {
+      return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    document.querySelectorAll("code[data-lang]").forEach(function (el) {
+      var lang = rules[el.dataset.lang];
+      if (!lang) return;
+      var src = el.textContent, out = "", plain = "", i = 0;
+      outer: while (i < src.length) {
+        for (var r = 0; r < lang.length; r++) {
+          var re = lang[r][1];
+          re.lastIndex = i;
+          var m = re.exec(src);
+          if (m && m[0].length) {
+            out += esc(plain) + '<span class="tok-' + lang[r][0] + '">' + esc(m[0]) + "</span>";
+            plain = "";
+            i += m[0].length;
+            continue outer;
+          }
+        }
+        // Step over a whole identifier so a keyword inside one never matches.
+        var word = /[A-Za-z0-9_]+/y;
+        word.lastIndex = i;
+        var w = word.exec(src);
+        var take = w ? w[0].length : 1;
+        plain += src.slice(i, i + take);
+        i += take;
+      }
+      el.innerHTML = out + esc(plain);
+    });
+  })();
+</script>
+</body>
+</html>
