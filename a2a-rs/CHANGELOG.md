@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.3](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.10.2...a2a-rs-v0.10.3) - 2026-10-15
+
+### Fixed
+
+- *(a2a-rs)* A guarded server's public card is read without signing in
+
 ## [0.10.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.10.1...a2a-rs-v0.10.2) - 2026-10-15
 
 ### Fixed

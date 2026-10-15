@@ -61,7 +61,7 @@ dependencies = [
 
 [[package]]
 name = "a2a-rs"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "arbitrary",
  "async-trait",
