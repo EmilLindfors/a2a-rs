@@ -14,6 +14,13 @@
 //! difference, so a tool source does not have to know which model is on the
 //! other end.
 //!
+//! OpenAI's API takes the schema as it is, and some models behind it then fill
+//! every property it lists, optional or not. An optional `enum` then gets one
+//! of its members, because nothing else fits: an argument nobody asked for.
+//! [`optional_as_nullable`] gives each optional property `null` as a way to
+//! say "none", and [`drop_added_nulls`] takes that `null` back out of the call,
+//! so the tool receives what a model that omitted the property would send.
+//!
 //! The rewrite is by translation where a translation exists and by dropping
 //! where none does: `type: ["string", "null"]` is `nullable: true`, a
 //! `const` string is a one-member `enum`, a local `$ref` is inlined, and a
@@ -332,6 +339,158 @@ fn resolve_local_ref<'a>(root: &'a Value, reference: &str) -> Option<&'a Value> 
     root.pointer(reference.strip_prefix('#')?)
 }
 
+/// `schema` with every optional property also accepting `null`.
+///
+/// A property is optional when its object does not list it in `required`.
+/// One that already accepts `null` is left as it is. The rewrite descends
+/// through `properties` and `items`, which is where [`drop_added_nulls`]
+/// looks, and nowhere else: a `$ref` or an `anyOf` branch keeps its schema.
+pub fn optional_as_nullable(schema: &Value) -> Value {
+    let Value::Object(object) = schema else {
+        return schema.clone();
+    };
+    let mut out = object.clone();
+    if let Some(Value::Object(properties)) = object.get("properties") {
+        let required = required_of(object);
+        let properties = properties
+            .iter()
+            .map(|(name, property)| {
+                let property = optional_as_nullable(property);
+                let property = if required.contains(&name.as_str()) || accepts_null(&property) {
+                    property
+                } else {
+                    with_null(property)
+                };
+                (name.clone(), property)
+            })
+            .collect();
+        out.insert("properties".into(), Value::Object(properties));
+    }
+    if let Some(items) = object.get("items") {
+        out.insert("items".into(), optional_as_nullable(items));
+    }
+    Value::Object(out)
+}
+
+/// `arguments` without the `null`s [`optional_as_nullable`] let in.
+///
+/// `schema` is the tool's own schema, before the rewrite. A `null` is removed
+/// where that schema made its property optional and did not accept `null`,
+/// so the call reads as one that left the property out. Arguments that are
+/// not a JSON object, or that hold no such `null`, come back unchanged.
+pub fn drop_added_nulls(schema: &Value, arguments: &str) -> String {
+    let Ok(mut value) = serde_json::from_str::<Value>(arguments) else {
+        return arguments.to_string();
+    };
+    if strip(schema, &mut value) {
+        value.to_string()
+    } else {
+        arguments.to_string()
+    }
+}
+
+/// Remove the added `null`s from `value` in place, and say whether any were.
+fn strip(schema: &Value, value: &mut Value) -> bool {
+    let Value::Object(object) = schema else {
+        return false;
+    };
+    let mut changed = false;
+    match value {
+        Value::Object(fields) => {
+            let Some(Value::Object(properties)) = object.get("properties") else {
+                return false;
+            };
+            let required = required_of(object);
+            fields.retain(|name, field| {
+                let added = field.is_null()
+                    && !required.contains(&name.as_str())
+                    && properties.get(name).is_some_and(|p| !accepts_null(p));
+                changed |= added;
+                !added
+            });
+            for (name, field) in fields.iter_mut() {
+                if let Some(property) = properties.get(name) {
+                    changed |= strip(property, field);
+                }
+            }
+        }
+        Value::Array(elements) => {
+            if let Some(items) = object.get("items") {
+                for element in elements {
+                    changed |= strip(items, element);
+                }
+            }
+        }
+        _ => {}
+    }
+    changed
+}
+
+fn required_of(object: &Map<String, Value>) -> Vec<&str> {
+    object
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default()
+}
+
+/// Whether `schema` admits `null` as it stands.
+fn accepts_null(schema: &Value) -> bool {
+    let Value::Object(object) = schema else {
+        // `true` admits anything, and `false` nothing worth a rewrite.
+        return true;
+    };
+    if object.get("nullable") == Some(&Value::Bool(true)) {
+        return true;
+    }
+    if let Some(members) = object.get("enum").and_then(Value::as_array) {
+        return members.contains(&Value::Null);
+    }
+    if let Some(branches) = ["anyOf", "oneOf"]
+        .iter()
+        .find_map(|k| object.get(*k).and_then(Value::as_array))
+    {
+        return branches.iter().any(accepts_null);
+    }
+    match object.get("type") {
+        Some(Value::String(name)) => name == "null",
+        Some(Value::Array(names)) => names.iter().any(|n| n == "null"),
+        // No `type`: `{}` admits anything, and a `$ref`, `allOf` or `const`
+        // is taken not to.
+        _ => !["$ref", "allOf", "const"]
+            .iter()
+            .any(|k| object.contains_key(*k)),
+    }
+}
+
+/// `schema`, also admitting `null`.
+fn with_null(schema: Value) -> Value {
+    let Value::Object(mut object) = schema else {
+        return schema;
+    };
+    let typed = matches!(object.get("type"), Some(Value::String(_) | Value::Array(_)));
+    if !typed || object.contains_key("const") {
+        // A combinator, a `$ref` or a `const` has no `type` of its own to
+        // extend, so `null` goes beside it.
+        return serde_json::json!({ "anyOf": [Value::Object(object), { "type": "null" }] });
+    }
+    match object.get_mut("type") {
+        Some(Value::String(name)) => {
+            let name = std::mem::take(name);
+            object.insert(
+                "type".into(),
+                Value::Array(vec![name.into(), "null".into()]),
+            );
+        }
+        Some(Value::Array(names)) => names.push("null".into()),
+        _ => {}
+    }
+    if let Some(Value::Array(members)) = object.get_mut("enum") {
+        members.push(Value::Null);
+    }
+    Value::Object(object)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,5 +742,100 @@ mod tests {
                 "/properties/pair/items",
             ]
         );
+    }
+
+    /// The case that made this: strata's `time_grain` is an optional enum,
+    /// and a model that fills every property picks a grain the question
+    /// never asked for.
+    #[test]
+    fn an_optional_enum_takes_null_and_a_required_one_does_not() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "metrics": { "type": "array", "items": { "type": "string", "enum": ["avg"] } },
+                "time_grain": { "type": "string", "enum": ["day", "week"] },
+                "time_range": { "type": "string" },
+                "limit": { "type": ["integer", "null"] }
+            },
+            "required": ["metrics"]
+        });
+        let sent = optional_as_nullable(&schema);
+        let properties = &sent["properties"];
+        assert_eq!(properties["metrics"], schema["properties"]["metrics"]);
+        assert_eq!(properties["time_grain"]["type"], json!(["string", "null"]));
+        assert_eq!(
+            properties["time_grain"]["enum"],
+            json!(["day", "week", null])
+        );
+        assert_eq!(properties["time_range"]["type"], json!(["string", "null"]));
+        assert_eq!(
+            properties["limit"], schema["properties"]["limit"],
+            "already nullable"
+        );
+        assert_eq!(sent["required"], schema["required"]);
+    }
+
+    /// What the tool receives is what a model that omitted the property
+    /// would have sent. A `null` the tool's own schema admits is the model's
+    /// to send, and stays.
+    #[test]
+    fn the_added_null_is_taken_back_out_and_an_admitted_one_stays() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "metrics": { "type": "array" },
+                "time_grain": { "type": "string", "enum": ["day", "week"] },
+                "limit": { "type": ["integer", "null"] },
+                "order_by": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "key": { "type": "string" },
+                            "direction": { "type": "string" }
+                        },
+                        "required": ["key"]
+                    }
+                }
+            },
+            "required": ["metrics"]
+        });
+        let called = r#"{"metrics":["avg"],"time_grain":null,"limit":null,"order_by":[{"key":"avg","direction":null}]}"#;
+        let received: Value = serde_json::from_str(&drop_added_nulls(&schema, called)).unwrap();
+        assert_eq!(
+            received,
+            json!({ "metrics": ["avg"], "limit": null, "order_by": [{ "key": "avg" }] })
+        );
+        // Nothing to take out: the text the model wrote goes through as it is.
+        let plain = r#"{"metrics": ["avg"]}"#;
+        assert_eq!(drop_added_nulls(&schema, plain), plain);
+        assert_eq!(drop_added_nulls(&schema, "not json"), "not json");
+    }
+
+    /// A property whose schema is a `$ref` or a combinator gets `null` as a
+    /// branch beside it, since it has no `type` of its own to extend.
+    #[test]
+    fn a_ref_or_a_combinator_gets_null_beside_it() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "unit": { "$ref": "#/$defs/Unit" },
+                "either": { "anyOf": [{ "type": "string" }, { "type": "integer" }] },
+                "maybe": { "anyOf": [{ "type": "string" }, { "type": "null" }] },
+                "anything": {}
+            }
+        });
+        let sent = optional_as_nullable(&schema);
+        let properties = &sent["properties"];
+        assert_eq!(
+            properties["unit"],
+            json!({ "anyOf": [{ "$ref": "#/$defs/Unit" }, { "type": "null" }] })
+        );
+        assert_eq!(
+            properties["either"],
+            json!({ "anyOf": [schema["properties"]["either"], { "type": "null" }] })
+        );
+        assert_eq!(properties["maybe"], schema["properties"]["maybe"]);
+        assert_eq!(properties["anything"], json!({}));
     }
 }
