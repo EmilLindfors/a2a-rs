@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.4](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.10.3...a2a-rs-v0.10.4) - 2026-10-18
+
+### Documentation
+
+- *(a2a-rs)* A quickstart example, the copy of the README's code that CI compiles
+
+### Other
+
+- Merge pull request #114 from EmilLindfors/docs/readme-and-site
+
 ## [0.10.3](https://github.com/EmilLindfors/a2a-rs/compare/a2a-rs-v0.10.2...a2a-rs-v0.10.3) - 2026-10-15
 
 ### Fixed
