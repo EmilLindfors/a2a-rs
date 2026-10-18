@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.7.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.7.1...a2a-llm-v0.7.2) - 2026-10-18
+
+### Fixed
+
+- A model can leave an optional tool argument out on the OpenAI path
+
 ## [0.7.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.7.0...a2a-llm-v0.7.1) - 2026-10-15
 
 ### Added
