@@ -284,3 +284,96 @@ async fn a_file_reaches_openai_as_bytes_on_the_streaming_path() {
         "body: {body}"
     );
 }
+
+/// strata's query tool, cut down: `time_grain` is optional, and an enum.
+fn query_tool() -> a2a_llm::ToolDefinition {
+    a2a_llm::ToolDefinition::new(
+        "query",
+        "Query a view",
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "metrics": { "type": "array", "items": { "type": "string" } },
+                "time_grain": { "type": "string", "enum": ["day", "week"] },
+            },
+            "required": ["metrics"],
+        }),
+    )
+}
+
+/// A model that fills every property it is shown cannot leave an optional
+/// enum out, and picks a member. Measured on `openai/gpt-6-luna` through
+/// OpenRouter on 2026-10-17: four calls of four set `time_grain` when told to
+/// leave it out, and four of four sent `null` once the schema allowed it. So
+/// the request offers `null`, and the call the tool gets has none.
+#[tokio::test]
+async fn an_optional_property_can_be_left_out_by_a_model_that_fills_every_one() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"choices":[{"message":{"role":"assistant","content":null,"tool_calls":[
+                {"id":"c1","type":"function","function":{"name":"query",
+                 "arguments":"{\"metrics\":[\"avg\"],\"time_grain\":null}"}}]},
+               "finish_reason":"tool_calls"}]}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+
+    let response = openai(&server)
+        .chat_completion(LlmRequest::new(vec![ChatMessage::user("hi")]).tools(vec![query_tool()]))
+        .await
+        .expect("the call succeeds");
+
+    let requests = server.received_requests().await.expect("recorded");
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("JSON");
+    assert_eq!(
+        body["tools"][0]["function"]["parameters"]["properties"]["time_grain"],
+        serde_json::json!({ "type": ["string", "null"], "enum": ["day", "week", null] })
+    );
+    let calls = response.tool_calls.expect("a call");
+    assert_eq!(calls[0].arguments, r#"{"metrics":["avg"]}"#);
+}
+
+/// The same on the streaming path, where the arguments arrive in pieces and
+/// the call is whole only at the end.
+#[tokio::test]
+async fn an_optional_property_left_out_on_the_streaming_path_reaches_the_tool_left_out() {
+    let server = MockServer::start().await;
+    let body = concat!(
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c1\",",
+        "\"type\":\"function\",\"function\":{\"name\":\"query\",\"arguments\":\"{\\\"metrics\\\":[\\\"avg\\\"],\"}}]}}]}\n\n",
+        "data: {\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,",
+        "\"function\":{\"arguments\":\"\\\"time_grain\\\":null}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+        "data: [DONE]\n\n",
+    );
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(body, "text/event-stream"))
+        .mount(&server)
+        .await;
+
+    let stream = openai(&server)
+        .chat_completion_stream(
+            LlmRequest::new(vec![ChatMessage::user("hi")]).tools(vec![query_tool()]),
+        )
+        .await
+        .expect("the stream opens");
+    let events: Vec<LlmStreamEvent> = stream.map(|e| e.expect("no event fails")).collect().await;
+
+    let requests = server.received_requests().await.expect("recorded");
+    let sent: serde_json::Value = serde_json::from_slice(&requests[0].body).expect("JSON");
+    assert_eq!(
+        sent["tools"][0]["function"]["parameters"]["properties"]["time_grain"]["enum"],
+        serde_json::json!(["day", "week", null])
+    );
+    let call = events
+        .iter()
+        .find_map(|e| match e {
+            LlmStreamEvent::ToolCall(call) => Some(call),
+            _ => None,
+        })
+        .expect("the call is emitted whole");
+    assert_eq!(call.arguments, r#"{"metrics":["avg"]}"#);
+}

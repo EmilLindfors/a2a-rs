@@ -4,6 +4,7 @@ use super::{
     content::{data_url, encode_base64},
     describe_transport_error, refuses_reasoning,
 };
+use crate::schema;
 use async_trait::async_trait;
 use eventsource_stream::Eventsource;
 use futures::{StreamExt, stream::BoxStream};
@@ -497,6 +498,47 @@ impl From<MessageContent> for OpenAiContent {
 /// One neutral message as this API's. Shared by the completion and streaming
 /// paths, which had a verbatim copy each — and a mapping that only half the
 /// requests use is a mapping that drifts.
+/// The tools as the API takes them, each optional property able to say
+/// `null` (see [`schema::optional_as_nullable`]).
+fn wire_tools(tools: Vec<super::ToolDefinition>) -> Vec<OpenAiTool> {
+    tools
+        .into_iter()
+        .map(|t| OpenAiTool {
+            tool_type: "function".to_string(),
+            function: OpenAiFunction {
+                parameters: schema::optional_as_nullable(&t.parameters),
+                name: t.name,
+                description: t.description,
+            },
+        })
+        .collect()
+}
+
+/// Each tool's own schema, by name, kept so a call is read against the
+/// schema the tool wrote rather than the one the API was sent.
+struct ToolSchemas(std::collections::HashMap<String, serde_json::Value>);
+
+impl ToolSchemas {
+    fn of(tools: Option<&[super::ToolDefinition]>) -> Self {
+        Self(
+            tools
+                .unwrap_or_default()
+                .iter()
+                .map(|t| (t.name.clone(), t.parameters.clone()))
+                .collect(),
+        )
+    }
+
+    /// `arguments` as the tool should receive them: without a `null` that
+    /// only [`wire_tools`] allowed.
+    fn received(&self, name: &str, arguments: String) -> String {
+        match self.0.get(name) {
+            Some(schema) => schema::drop_added_nulls(schema, &arguments),
+            None => arguments,
+        }
+    }
+}
+
 fn wire_message(msg: ChatMessage) -> OpenAiChatMessage {
     OpenAiChatMessage {
         role: match msg.role {
@@ -758,19 +800,8 @@ impl LlmProvider for OpenAiProvider {
 
         let messages = request.messages.into_iter().map(wire_message).collect();
 
-        let tools = request.tools.map(|tools| {
-            tools
-                .into_iter()
-                .map(|t| OpenAiTool {
-                    tool_type: "function".to_string(),
-                    function: OpenAiFunction {
-                        name: t.name,
-                        description: t.description,
-                        parameters: t.parameters,
-                    },
-                })
-                .collect()
-        });
+        let schemas = ToolSchemas::of(request.tools.as_deref());
+        let tools = request.tools.map(wire_tools);
 
         let api_request = OpenAiChatRequest {
             model: self.config.model.clone(),
@@ -816,9 +847,9 @@ impl LlmProvider for OpenAiProvider {
             calls
                 .into_iter()
                 .map(|c| super::ToolCall {
+                    arguments: schemas.received(&c.function.name, c.function.arguments),
                     id: c.id,
                     name: c.function.name,
-                    arguments: c.function.arguments,
                 })
                 .collect()
         });
@@ -863,19 +894,8 @@ impl LlmProvider for OpenAiProvider {
         let messages: Vec<OpenAiChatMessage> =
             request.messages.into_iter().map(wire_message).collect();
 
-        let tools = request.tools.map(|tools| {
-            tools
-                .into_iter()
-                .map(|t| OpenAiTool {
-                    tool_type: "function".to_string(),
-                    function: OpenAiFunction {
-                        name: t.name,
-                        description: t.description,
-                        parameters: t.parameters,
-                    },
-                })
-                .collect()
-        });
+        let schemas = ToolSchemas::of(request.tools.as_deref());
+        let tools = request.tools.map(wire_tools);
 
         let api_request = OpenAiChatRequest {
             model: self.config.model.clone(),
@@ -929,7 +949,8 @@ impl LlmProvider for OpenAiProvider {
                     let mut indices: Vec<u32> = pending_tools.keys().copied().collect();
                     indices.sort_unstable();
                     for idx in indices {
-                        if let Some(tool_call) = pending_tools.remove(&idx) {
+                        if let Some(mut tool_call) = pending_tools.remove(&idx) {
+                            tool_call.arguments = schemas.received(&tool_call.name, tool_call.arguments);
                             yield super::LlmStreamEvent::ToolCall(tool_call);
                         }
                     }
