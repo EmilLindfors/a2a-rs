@@ -125,7 +125,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn preserves_submillisecond_delays() {
         let p = RetryPolicy {
