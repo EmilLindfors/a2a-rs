@@ -1,0 +1,26 @@
+name: Fork retry precision verification
+
+on:
+  push:
+    branches:
+      - fix/retry-backoff-submillisecond
+
+permissions:
+  contents: read
+
+jobs:
+  retry-precision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: Focused retry regression
+        run: cargo test -p a2a-rs --lib --no-default-features --locked domain::retry::tests::preserves_submillisecond_delays -- --exact --nocapture
+      - name: Retry module regressions
+        run: cargo test -p a2a-rs --lib --no-default-features --locked domain::retry::tests -- --nocapture
