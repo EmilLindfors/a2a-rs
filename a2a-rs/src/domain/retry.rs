@@ -125,6 +125,29 @@ mod tests {
         }
     }
 
+
+    #[test]
+    fn preserves_submillisecond_delays() {
+        let p = RetryPolicy {
+            base_delay: Duration::from_micros(750),
+            max_delay: Duration::from_micros(3000),
+            max_retries: 10,
+            jitter_ms: 0,
+        };
+        assert_eq!(p.backoff(1, 0), Duration::from_micros(750));
+        assert_eq!(p.backoff(2, 0), Duration::from_micros(1500));
+        assert_eq!(p.backoff(3, 0), Duration::from_micros(3000));
+        assert_eq!(p.backoff(10, 0), Duration::from_micros(3000));
+
+        let smaller_cap = RetryPolicy {
+            base_delay: Duration::from_micros(400),
+            max_delay: Duration::from_micros(900),
+            ..p
+        };
+        assert_eq!(smaller_cap.backoff(2, 0), Duration::from_micros(800));
+        assert_eq!(smaller_cap.backoff(3, 0), Duration::from_micros(900));
+    }
+
     #[test]
     fn jitter_varies_across_seeds() {
         let p = policy(200);
