@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.11.1...a2a-mcp-v0.11.2) - 2026-10-19
+
+### Added
+
+- *(a2a-mcp)* A conversation over the bridge is a handle the model carries
+
 ## [0.11.1](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.11.0...a2a-mcp-v0.11.1) - 2026-10-15
 
 ### Fixed
