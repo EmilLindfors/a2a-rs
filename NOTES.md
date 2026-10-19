@@ -582,6 +582,22 @@ different thing on the wire, and not one every agent accepts. The flag is
 it. The port's parameter is still called `session_id`; it maps to `context_id`
 in every transport and renaming it is a wider change than the CLI's.
 
+**A conversation over MCP is a handle the answer names.** (2026-10-19) MCP
+2026-07-28 removed sessions (SEP-2567), and rmcp serves a request of that
+version statelessly, so a bridge built per session is built per request. A
+client such as Claude Code could not go on in a conversation, since each call
+was a new one. A job an agent filed in its context was lost to the next call. Before that, the bridge sent the skill's id as the context, so every
+client's calls of a skill shared one. The choice was between a conversation
+per authenticated caller, which merges a person's unrelated work into one
+history, and a handle the model carries. Every tool takes an optional
+`context_id`, and every answer ends with a text naming its context. It is in
+the text, not `structuredContent`, because a model reads the content, and
+`structuredContent` is the skill's declared result. This is the shape of
+OpenAI's Codex MCP server, whose answer names a `threadId` the next call
+passes. The bridge passes on what the client names and checks nothing. The
+server behind it decides what a named context reaches, since a context that
+holds a conversation is an authorization boundary.
+
 **A skill's schema rides on the card as an extension, because the skill has no
 field for it.** (2026-09-04) `AgentSkill` in the proto is id, name, description,
 tags, examples, modes and security requirements. There is no `metadata` bag,

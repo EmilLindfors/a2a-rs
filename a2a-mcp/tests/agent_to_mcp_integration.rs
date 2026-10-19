@@ -293,6 +293,123 @@ async fn test_in_process_backend_dispatches_to_handler() {
     let _ = bridge_task.await;
 }
 
+/// Records the context each call reached the agent in, and answers in it,
+/// or in one of its own when the call named none, as an A2A server does.
+#[derive(Clone)]
+struct ContextHandler {
+    seen: Arc<Mutex<Vec<Option<String>>>>,
+}
+
+#[async_trait]
+impl AsyncMessageHandler for ContextHandler {
+    async fn process_message(
+        &self,
+        task_id: &str,
+        message: &Message,
+        ctx: &a2a_rs::port::RequestContext,
+    ) -> Result<Task, A2AError> {
+        let named = ctx.context_id().map(str::to_string);
+        self.seen.lock().unwrap().push(named.clone());
+        let agent_msg = Message::builder()
+            .role(Role::Agent)
+            .parts(vec![Part::text("noted".to_string())])
+            .message_id(uuid::Uuid::new_v4().to_string())
+            .build();
+        Ok(Task::builder()
+            .id(task_id.to_string())
+            .context_id(named.unwrap_or_else(|| uuid::Uuid::new_v4().to_string()))
+            .status(TaskStatus::new(TaskState::Completed, None))
+            .history(vec![message.clone(), agent_msg])
+            .build())
+    }
+}
+
+/// A conversation is a handle the model carries, as a client of the
+/// 2026-07-28 specification has no session to keep it in. A call that
+/// names no context starts a conversation, and its answer says which; a
+/// call that names it goes on in it.
+#[tokio::test]
+async fn an_answer_names_its_conversation_and_a_call_continues_it() {
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let handler = ContextHandler { seen: seen.clone() };
+    let agent_card = AgentCard::builder()
+        .name("Notes".to_string())
+        .description("Takes notes".to_string())
+        .url("http://nonroutable.invalid".to_string())
+        .version("1.0.0".to_string())
+        .capabilities(AgentCapabilities::default())
+        .default_input_modes(vec!["text".to_string()])
+        .default_output_modes(vec!["text".to_string()])
+        .skills(vec![AgentSkill::new(
+            "note".to_string(),
+            "Note".to_string(),
+            "Takes a note".to_string(),
+            vec![],
+        )])
+        .build();
+    let bridge = AgentToMcpBridge::with_handler(handler, agent_card);
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let bridge_task = tokio::spawn(async move {
+        let running = bridge.serve(server_io).await?;
+        running.waiting().await?;
+        anyhow::Ok(())
+    });
+    let mcp_client = ().serve(client_io).await.unwrap();
+    let peer = mcp_client.peer().clone();
+
+    let tools = peer.list_tools(None).await.unwrap().tools;
+    let tool = tools[0].name.to_string();
+    assert_eq!(
+        tools[0].input_schema["properties"]["context_id"]["type"],
+        "string"
+    );
+
+    let call = |arguments: serde_json::Value| {
+        CallToolRequestParams::new(tool.clone())
+            .with_arguments(arguments.as_object().cloned().unwrap())
+    };
+    let first = peer
+        .call_tool(call(serde_json::json!({ "message": "one" })))
+        .await
+        .unwrap();
+    let last = first
+        .content
+        .last()
+        .and_then(|c| c.as_text())
+        .map(|t| t.text.clone())
+        .expect("the answer ends in text");
+    let context = last
+        .split("`context_id`: '")
+        .nth(1)
+        .and_then(|rest| rest.split('\'').next())
+        .unwrap_or_else(|| panic!("the answer names no context: {last}"))
+        .to_string();
+
+    peer.call_tool(call(
+        serde_json::json!({ "message": "two", "context_id": context }),
+    ))
+    .await
+    .unwrap();
+    peer.call_tool(call(serde_json::json!({ "message": "three" })))
+        .await
+        .unwrap();
+
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen[0], None,
+        "a first call names no context, not the skill's"
+    );
+    assert_eq!(
+        seen[1].as_deref(),
+        Some(context.as_str()),
+        "it goes on in it"
+    );
+    assert_eq!(seen[2], None, "a call that names none starts another");
+
+    drop(mcp_client);
+    let _ = bridge_task.await;
+}
+
 /// An MCP client that declares elicitation and answers the agent's question
 /// the way a person at the client would.
 /// Answers a typed query with a data part, and remembers what it was asked.
@@ -407,6 +524,10 @@ async fn a_typed_skill_round_trips_through_the_bridge() {
         query.input_schema["properties"]["task_id"]["type"],
         "string"
     );
+    assert_eq!(
+        query.input_schema["properties"]["context_id"]["type"],
+        "string"
+    );
     assert!(query.input_schema["properties"].get("message").is_none());
     assert!(query.output_schema.is_some());
     assert_eq!(
@@ -421,10 +542,14 @@ async fn a_typed_skill_round_trips_through_the_bridge() {
     assert!(chat.output_schema.is_none());
 
     let params = CallToolRequestParams::new("strata_query").with_arguments(
-        serde_json::json!({ "view": "harvest", "year": 2025 })
-            .as_object()
-            .cloned()
-            .unwrap(),
+        serde_json::json!({
+            "view": "harvest",
+            "year": 2025,
+            "context_id": "6f7c0d0e-2a51-4c55-9d8e-1f2a3b4c5d6e",
+        })
+        .as_object()
+        .cloned()
+        .unwrap(),
     );
     let result = peer.call_tool(params).await.unwrap();
     assert!(!result.is_error.unwrap_or(false));
@@ -441,6 +566,10 @@ async fn a_typed_skill_round_trips_through_the_bridge() {
             assert!(
                 value.get("task_id").is_none(),
                 "task_id is the bridge's, not the agent's"
+            );
+            assert!(
+                value.get("context_id").is_none(),
+                "context_id is the bridge's, not the agent's"
             );
         }
         other => panic!("expected a data part, got {other:?}"),
@@ -1083,7 +1212,7 @@ async fn test_list_prompts_and_get_prompt() {
         .unwrap();
     let get_params = GetPromptRequestParams::new(prompt_name.clone()).with_arguments(args);
     let get_res = peer.get_prompt(get_params).await.unwrap();
-    assert_eq!(get_res.messages.len(), 2);
+    assert_eq!(get_res.messages.len(), 3, "the answer, then its context");
     assert_eq!(get_res.messages[0].role, rmcp::model::Role::User);
     if let ContentBlock::Text(text) = &get_res.messages[0].content {
         assert_eq!(text.text, "hello prompts");
@@ -1094,6 +1223,11 @@ async fn test_list_prompts_and_get_prompt() {
     assert_eq!(get_res.messages[1].role, rmcp::model::Role::Assistant);
     if let ContentBlock::Text(text) = &get_res.messages[1].content {
         assert!(text.text.contains("in-process: hello prompts"));
+    } else {
+        panic!("expected text content");
+    }
+    if let ContentBlock::Text(text) = &get_res.messages[2].content {
+        assert!(text.text.contains("`context_id`: 'ctx-1'"), "{}", text.text);
     } else {
         panic!("expected text content");
     }

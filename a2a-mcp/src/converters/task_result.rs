@@ -18,6 +18,11 @@ impl TaskResultConverter {
     /// text; it is not validated against the schema here, which is the
     /// caller's to decide. Without one, a data part is text like everything
     /// else, as before.
+    ///
+    /// The last text names the task's context, the conversation a next call
+    /// goes on in when it passes that `context_id`, and for a suspended task
+    /// the `task_id` that answers it too. A model reads ids out of the answer
+    /// it was given; there is no session to keep them in.
     pub fn task_to_result(
         task: &Task,
         output_schema: Option<&serde_json::Value>,
@@ -101,11 +106,21 @@ impl TaskResultConverter {
             if let Some(question) = question {
                 content.extend(MessageConverter::message_to_content(question)?);
             }
-            let prompt = format!(
-                "\n\n[Task suspended awaiting input. To continue, please call this tool again with `task_id`: '{}' and provide the requested information in the `message` parameter.]",
-                task.id
-            );
+            let prompt = match Self::context(task) {
+                Some(context) => format!(
+                    "\n\n[Task suspended awaiting input. To continue, please call this tool again with `task_id`: '{}' and `context_id`: '{}', and provide the requested information in the `message` parameter.]",
+                    task.id, context
+                ),
+                None => format!(
+                    "\n\n[Task suspended awaiting input. To continue, please call this tool again with `task_id`: '{}' and provide the requested information in the `message` parameter.]",
+                    task.id
+                ),
+            };
             content.push(ContentBlock::text(prompt));
+        } else if let Some(context) = Self::context(task) {
+            content.push(ContentBlock::text(format!(
+                "[To continue this conversation, call this tool again with `context_id`: '{context}'.]"
+            )));
         }
 
         // Determine if the task completed successfully
@@ -131,6 +146,11 @@ impl TaskResultConverter {
             result.structured_content = Self::single_data_value(task, agent_message);
         }
         Ok(result)
+    }
+
+    /// The conversation `task` is in, if the agent named one.
+    fn context(task: &Task) -> Option<&str> {
+        Some(task.context_id.as_str()).filter(|id| !id.is_empty())
     }
 
     /// The one data part of `message`, or of the task's one artifact when the
@@ -337,8 +357,15 @@ mod tests {
         );
         assert_eq!(
             typed.content.len(),
-            2,
-            "the text and the data are still content"
+            3,
+            "the text and the data are still content, and the context is named"
+        );
+        assert!(
+            typed.content[2]
+                .as_text()
+                .is_some_and(|t| t.text.contains("`context_id`: 'ctx-3'")),
+            "{:?}",
+            typed.content[2]
         );
 
         // Without a declared schema the data is text like everything else.
