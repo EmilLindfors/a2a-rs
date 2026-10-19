@@ -50,8 +50,9 @@ impl RetryPolicy {
     /// Compute the delay before `attempt` (1-based), folding `seed` into the
     /// jitter. Pure: identical `(attempt, seed)` always yields the same delay.
     pub fn backoff(&self, attempt: u32, seed: u64) -> Duration {
-        // Keep nanosecond precision: converting to whole milliseconds turns
-        // a sub-millisecond backoff into an immediate retry.
+        // A sub-millisecond base delay must not round down to zero: that
+        // turns the first retry into an immediate retry. Keep the delay in
+        // nanoseconds so the backoff never collapses to 0.
         let shift = attempt.saturating_sub(1).min(127);
         let factor = 1u128 << shift;
         let grown_ns = self
@@ -59,10 +60,7 @@ impl RetryPolicy {
             .as_nanos()
             .saturating_mul(factor)
             .min(self.max_delay.as_nanos());
-        let grown = Duration::new(
-            (grown_ns / 1_000_000_000) as u64,
-            (grown_ns % 1_000_000_000) as u32,
-        );
+        let grown = Duration::from_nanos_u128(grown_ns);
 
         let jitter = if self.jitter_ms == 0 {
             0
