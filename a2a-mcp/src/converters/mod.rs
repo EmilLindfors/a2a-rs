@@ -7,6 +7,7 @@ pub mod task_result;
 
 pub use message::MessageConverter;
 pub use skill_tool::{
-    SKILL_SCHEMA_EXTENSION_URI, SkillSchema, SkillSchemas, SkillToolConverter, TASK_ID_PROPERTY,
+    CONTEXT_ID_PROPERTY, SKILL_SCHEMA_EXTENSION_URI, SkillSchema, SkillSchemas, SkillToolConverter,
+    TASK_ID_PROPERTY,
 };
 pub use task_result::TaskResultConverter;

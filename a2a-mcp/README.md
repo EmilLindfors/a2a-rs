@@ -104,12 +104,13 @@ Every field of a skill's entry is optional. `annotations` uses `a2a-llm`'s
 What the bridges do with it:
 
 - `AgentToMcpBridge` serves a skill with an `inputSchema` as a tool whose
-  input schema is that schema, with an optional `task_id` string property
-  added unless the schema declares one. A suspended task is continued by
-  calling again with the `task_id` from the result. The `outputSchema`,
-  `title` and `annotations` go on the tool as they are.
+  input schema is that schema, with optional `task_id` and `context_id`
+  string properties added unless the schema declares them. A suspended task
+  is continued by calling again with the `task_id` from the result. The
+  `outputSchema`, `title` and `annotations` go on the tool as they are.
 - A call to a typed tool reaches the agent as one data part holding the
-  arguments, without `task_id`. An untyped skill still gets a text part.
+  arguments, without `task_id` or `context_id`. An untyped skill still gets
+  a text part.
 - With an `outputSchema`, a single data part in the agent's final message
   (or in its single artifact) becomes the tool result's `structuredContent`
   beside the text. The value is not validated against the schema.
@@ -120,6 +121,20 @@ Tool names are `{namespace}_{skill id}`, where the namespace is the agent's
 `name` lowercased and reduced to `[a-z0-9_]`, prefixed with `agent_` when it
 does not start with a letter. Gemini caps a function name at 64 characters;
 a long name is shortened with `AgentToMcpBridge::with_namespace`.
+
+## A conversation is a handle
+
+MCP 2026-07-28 has no session, so a conversation is carried by the client.
+Every answer ends with a text naming the A2A context it was in:
+
+```text
+[To continue this conversation, call this tool again with `context_id`: '…'.]
+```
+
+A call that passes that `context_id` goes on in the conversation, with the
+history and state the agent keeps for it. A call without one starts a new
+conversation. The bridge checks nothing about a named context; the agent
+behind it decides what one reaches.
 
 ## A long call is a task
 

@@ -31,6 +31,21 @@ pub const SKILL_SCHEMA_EXTENSION_URI: &str = "https://github.com/EmilLindfors/a2
 /// suspended task can be continued, unless the schema already declares one.
 pub const TASK_ID_PROPERTY: &str = "task_id";
 
+/// The property `skill_to_tool` adds to every skill's input schema so a call
+/// goes on in the conversation an earlier answer named, unless the schema
+/// already declares one. It is the A2A context: the 2026-07-28 specification
+/// has no session to keep a conversation in, so the model carries it.
+pub const CONTEXT_ID_PROPERTY: &str = "context_id";
+
+/// What the model is told `task_id` is.
+const TASK_ID_DESCRIPTION: &str =
+    "Optional. The ID of an existing task to continue. Omit when starting a new task.";
+
+/// What the model is told `context_id` is.
+const CONTEXT_ID_DESCRIPTION: &str = "Optional. The context_id an earlier answer from this tool \
+                                      returned, to continue that conversation. Omit to start a \
+                                      new conversation.";
+
 /// What an MCP tool carries that an A2A skill has no field for.
 ///
 /// Every field optional: a skill with an input schema and nothing else is a
@@ -202,7 +217,7 @@ impl SkillToolConverter {
         let full_description = description_parts.join("");
 
         let input_schema = match schema.and_then(|s| s.input_schema.as_ref()) {
-            Some(typed) => Self::with_task_id(typed.clone()),
+            Some(typed) => Self::with_ids(typed.clone()),
             None => Self::message_schema(),
         };
         let input_schema = match input_schema {
@@ -287,28 +302,33 @@ impl SkillToolConverter {
                 },
                 TASK_ID_PROPERTY: {
                     "type": "string",
-                    "description": "Optional. The ID of an existing task to continue. Omit when starting a new task."
+                    "description": TASK_ID_DESCRIPTION
+                },
+                CONTEXT_ID_PROPERTY: {
+                    "type": "string",
+                    "description": CONTEXT_ID_DESCRIPTION
                 }
             },
             "required": ["message"]
         })
     }
 
-    /// `schema` with an optional `task_id` string property, unless it has one.
-    fn with_task_id(mut schema: Value) -> Value {
+    /// `schema` with optional `task_id` and `context_id` string properties,
+    /// each unless it has one.
+    fn with_ids(mut schema: Value) -> Value {
         if let Some(properties) = schema.as_object_mut().and_then(|obj| {
             obj.entry("properties")
                 .or_insert_with(|| json!({}))
                 .as_object_mut()
-        }) && !properties.contains_key(TASK_ID_PROPERTY)
-        {
-            properties.insert(
-                TASK_ID_PROPERTY.to_string(),
-                json!({
-                    "type": "string",
-                    "description": "Optional. The ID of an existing task to continue. Omit when starting a new task."
-                }),
-            );
+        }) {
+            for (name, description) in [
+                (TASK_ID_PROPERTY, TASK_ID_DESCRIPTION),
+                (CONTEXT_ID_PROPERTY, CONTEXT_ID_DESCRIPTION),
+            ] {
+                properties
+                    .entry(name)
+                    .or_insert_with(|| json!({"type": "string", "description": description}));
+            }
         }
         schema
     }

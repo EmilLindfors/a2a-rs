@@ -168,6 +168,10 @@ they were written with. Released sections below are untouched.
 
 ### Changed
 
+- **A conversation over the bridge is a handle the model carries (`a2a-mcp`)**: every tool `AgentToMcpBridge` serves takes an optional `context_id`. Every answer ends with a text naming its context: `[To continue this conversation, call this tool again with `context_id`: '…'.]`. A call with it goes on in that context, and a call without it starts a new one. MCP 2026-07-28 has no session to keep a conversation in.
+  - A call that names no context no longer goes on in a context named after the skill, which every client's calls of that skill shared. The agent names a new one.
+  - A suspended task's answer names both its `task_id` and its `context_id`. The answer to a question asked mid-call, by elicitation or `tasks/update`, goes on in the task's own context.
+  - An answer has one more content block, and a prompt from `get_prompt` one more message.
 - **A guarded server's public card is public (`a2a-rs`)**: `HttpServer` serves `/.well-known/agent-card.json`, `/agent-card` and `/skills` outside its authenticator, as it serves the open router. The card names the security scheme a client signs in with, so behind that scheme it told nobody how to get in, and a fleet's liveness probe read a guarded agent as down. What only a signed-in caller may read belongs on the extended card, which is an RPC and stays behind the authenticator.
 - **BREAKING — `connectrpc` 0.3 to 0.9.1 and `buffa` 0.3 to 0.9 (`a2a-rs`, `a2a-mcp`, `a2a-web-client`, `a2a-ap2`)**: closes RUSTSEC-2026-0304, where a finished client-streaming or bidi call kept reading a stalled request body. The generated message types keep their field types, JSON and meaning, so code that builds and reads them compiles unchanged. A consumer that names `buffa` or `connectrpc` types itself needs those crates at 0.9.
   - The generated `A2aService` trait takes a `connectrpc::RequestContext` and a `connectrpc::ServiceRequest<'_, FooRequest>`, and returns a `connectrpc::ServiceResult`. An implementation of its own, or a test calling `ConnectRpcAdapter` directly, follows that shape.

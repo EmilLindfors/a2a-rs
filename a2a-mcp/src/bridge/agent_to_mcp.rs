@@ -1,7 +1,10 @@
 //! Bridge that exposes A2A agents as MCP tools
 
 use crate::{
-    converters::{SkillSchemas, SkillToolConverter, TASK_ID_PROPERTY, TaskResultConverter},
+    converters::{
+        CONTEXT_ID_PROPERTY, SkillSchemas, SkillToolConverter, TASK_ID_PROPERTY,
+        TaskResultConverter,
+    },
     error::{A2aMcpError, Result},
 };
 use a2a_rs::{
@@ -613,6 +616,19 @@ impl AgentToMcpBridge {
         }
     }
 
+    /// The conversation `task` is in, if the agent named one.
+    fn context_of(task: &Task) -> Option<&str> {
+        Some(task.context_id.as_str()).filter(|id| !id.is_empty())
+    }
+
+    /// The id a client named in an argument: a string with something in it.
+    fn named(value: Option<&serde_json::Value>) -> Option<String> {
+        value
+            .and_then(|v| v.as_str())
+            .filter(|id| !id.is_empty())
+            .map(str::to_string)
+    }
+
     /// The text of a task's status message, if it has one with any.
     fn status_text(task: &a2a_rs::domain::Task) -> Option<String> {
         task.status
@@ -786,6 +802,9 @@ impl AgentToMcpBridge {
     /// receives it: one text part for an untyped skill, one data part holding
     /// the typed arguments for a skill with an input schema.
     ///
+    /// `context_id` is the conversation the call goes on in, `None` for a
+    /// new one, which the agent names.
+    ///
     /// `drive` says who is listening and what to do with a question; it is
     /// owned rather than borrowed from the request so this can be spawned and
     /// outlive the `tools/call` that started it.
@@ -793,6 +812,7 @@ impl AgentToMcpBridge {
         &self,
         skill_id: &str,
         task_id: &str,
+        context_id: Option<&str>,
         parts: Vec<Part>,
         drive: Drive,
     ) -> Result<CallToolResult> {
@@ -812,7 +832,7 @@ impl AgentToMcpBridge {
         // Dispatch to the configured backend (HTTP or in-process).
         let mut task = self
             .backend
-            .invoke(task_id, &message, Some(skill_id))
+            .invoke(task_id, &message, context_id)
             .await
             .map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
 
@@ -846,7 +866,7 @@ impl AgentToMcpBridge {
 
                             if task.status.state == a2a_rs::domain::TaskState::InputRequired
                                 && !self
-                                    .answer_input_required(&mut task, task_id, skill_id, &drive)
+                                    .answer_input_required(&mut task, task_id, &drive)
                                     .await?
                             {
                                 break;
@@ -867,7 +887,7 @@ impl AgentToMcpBridge {
 
                             if task.status.state == a2a_rs::domain::TaskState::InputRequired
                                 && !self
-                                    .answer_input_required(&mut task, task_id, skill_id, &drive)
+                                    .answer_input_required(&mut task, task_id, &drive)
                                     .await?
                             {
                                 break;
@@ -931,7 +951,7 @@ impl AgentToMcpBridge {
 
                         if task.status.state == a2a_rs::domain::TaskState::InputRequired
                             && !self
-                                .answer_input_required(&mut task, task_id, skill_id, &drive)
+                                .answer_input_required(&mut task, task_id, &drive)
                                 .await?
                         {
                             break;
@@ -985,7 +1005,6 @@ impl AgentToMcpBridge {
         &self,
         task: &mut Task,
         task_id: &str,
-        skill_id: &str,
         drive: &Drive,
     ) -> Result<bool> {
         let Some(response_text) = self.ask_for_input(task, drive).await else {
@@ -1004,7 +1023,7 @@ impl AgentToMcpBridge {
 
         *task = self
             .backend
-            .invoke(task_id, &reply_msg, Some(skill_id))
+            .invoke(task_id, &reply_msg, Self::context_of(task))
             .await
             .map_err(|e| A2aMcpError::AgentCommunication(e.to_string()))?;
         self.record(task, drive).await;
@@ -1043,6 +1062,7 @@ impl AgentToMcpBridge {
         &self,
         skill_id: String,
         task_id: String,
+        context_id: Option<String>,
         parts: Vec<Part>,
         ctx: &RequestContext<RoleServer>,
     ) -> std::result::Result<CallToolResponse, McpError> {
@@ -1050,7 +1070,13 @@ impl AgentToMcpBridge {
             (Some(grace), Some(caps)) if caps.supports_tasks() => grace,
             _ => {
                 return match self
-                    .call_skill(&skill_id, &task_id, parts, Self::in_request(ctx))
+                    .call_skill(
+                        &skill_id,
+                        &task_id,
+                        context_id.as_deref(),
+                        parts,
+                        Self::in_request(ctx),
+                    )
                     .await
                 {
                     Ok(result) => Ok(result.into()),
@@ -1077,7 +1103,7 @@ impl AgentToMcpBridge {
             .or_insert_with(|| {
                 Task::builder()
                     .id(task_id.clone())
-                    .context_id(skill_id.clone())
+                    .context_id(context_id.clone().unwrap_or_default())
                     .status(a2a_rs::domain::TaskStatus::new(
                         a2a_rs::domain::TaskState::Submitted,
                         None,
@@ -1087,7 +1113,13 @@ impl AgentToMcpBridge {
 
         // Not aborted on timeout: dropping a `JoinHandle` detaches the task,
         // which is the whole point — the call outlives the request.
-        let mut handle = self.spawn_driver(skill_id.clone(), task_id.clone(), parts, &ctx.peer);
+        let mut handle = self.spawn_driver(
+            skill_id.clone(),
+            task_id.clone(),
+            context_id,
+            parts,
+            &ctx.peer,
+        );
 
         match tokio::time::timeout(grace, &mut handle).await {
             Ok(Ok(Ok(result))) if self.has_settled(&task_id).await => Ok(result.into()),
@@ -1119,6 +1151,7 @@ impl AgentToMcpBridge {
         &self,
         skill_id: String,
         task_id: String,
+        context_id: Option<String>,
         parts: Vec<Part>,
         peer: &rmcp::service::Peer<RoleServer>,
     ) -> tokio::task::JoinHandle<Result<CallToolResult>> {
@@ -1126,7 +1159,13 @@ impl AgentToMcpBridge {
         let drive = Drive::AsTask { peer: peer.clone() };
         tokio::spawn(async move {
             let outcome = driver
-                .call_skill(&skill_id, &task_id, parts, drive.clone())
+                .call_skill(
+                    &skill_id,
+                    &task_id,
+                    context_id.as_deref(),
+                    parts,
+                    drive.clone(),
+                )
                 .await;
             if let Err(ref e) = outcome {
                 // Nobody is waiting on this call's return value, so a failure
@@ -1335,6 +1374,7 @@ impl ServerHandler for AgentToMcpBridge {
                 .remove(TASK_ID_PROPERTY)
                 .and_then(|v| v.as_str().map(str::to_string))
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let context_id = Self::named(arguments.remove(CONTEXT_ID_PROPERTY).as_ref());
 
             // A typed skill gets its arguments as they came, in one data part;
             // an untyped one gets the `message` string as text.
@@ -1366,7 +1406,8 @@ impl ServerHandler for AgentToMcpBridge {
                 vec![Part::text(message_text)]
             };
 
-            self.dispatch(skill_id, task_id, parts, &ctx).await
+            self.dispatch(skill_id, task_id, context_id, parts, &ctx)
+                .await
         }
     }
 
@@ -1453,12 +1494,19 @@ impl ServerHandler for AgentToMcpBridge {
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let context_id = Self::named(
+                request
+                    .arguments
+                    .as_ref()
+                    .and_then(|args| args.get(CONTEXT_ID_PROPERTY)),
+            );
 
             // Call the A2A agent skill
             let tool_result = match self
                 .call_skill(
                     &skill_id,
                     &task_id,
+                    context_id.as_deref(),
                     vec![Part::text(message_text.clone())],
                     Self::in_request(&ctx),
                 )
@@ -1719,9 +1767,19 @@ impl ServerHandler for AgentToMcpBridge {
 
             match Self::answer_from(&request.input_responses) {
                 Some(answer) => {
+                    // The answer goes on in the conversation the question
+                    // was asked in.
+                    let context_id = self
+                        .tasks_cache
+                        .lock()
+                        .await
+                        .get(&request.task_id)
+                        .and_then(Self::context_of)
+                        .map(str::to_string);
                     self.spawn_driver(
                         skill_id,
                         request.task_id.clone(),
+                        context_id,
                         vec![Part::text(answer)],
                         &context.peer,
                     );
