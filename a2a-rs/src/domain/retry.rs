@@ -50,13 +50,17 @@ impl RetryPolicy {
     /// Compute the delay before `attempt` (1-based), folding `seed` into the
     /// jitter. Pure: identical `(attempt, seed)` always yields the same delay.
     pub fn backoff(&self, attempt: u32, seed: u64) -> Duration {
-        let base_ms = self.base_delay.as_millis() as u64;
-        let max_ms = self.max_delay.as_millis() as u64;
-
-        // Exponential growth: base * 2^(attempt-1), saturating, then capped.
-        let shift = attempt.saturating_sub(1).min(63);
-        let factor = 1u64.checked_shl(shift).unwrap_or(u64::MAX);
-        let grown = base_ms.saturating_mul(factor).min(max_ms);
+        // A sub-millisecond base delay must not round down to zero: that
+        // turns the first retry into an immediate retry. Keep the delay in
+        // nanoseconds so the backoff never collapses to 0.
+        let shift = attempt.saturating_sub(1).min(127);
+        let factor = 1u128 << shift;
+        let grown_ns = self
+            .base_delay
+            .as_nanos()
+            .saturating_mul(factor)
+            .min(self.max_delay.as_nanos());
+        let grown = Duration::from_nanos_u128(grown_ns);
 
         let jitter = if self.jitter_ms == 0 {
             0
@@ -64,7 +68,9 @@ impl RetryPolicy {
             mix(seed) % self.jitter_ms
         };
 
-        Duration::from_millis(grown.saturating_add(jitter).min(max_ms))
+        grown
+            .saturating_add(Duration::from_millis(jitter))
+            .min(self.max_delay)
     }
 }
 
@@ -123,6 +129,28 @@ mod tests {
             // deterministic
             assert_eq!(p.backoff(1, seed), p.backoff(1, seed));
         }
+    }
+
+    #[test]
+    fn preserves_submillisecond_delays() {
+        let p = RetryPolicy {
+            base_delay: Duration::from_micros(750),
+            max_delay: Duration::from_micros(3000),
+            max_retries: 10,
+            jitter_ms: 0,
+        };
+        assert_eq!(p.backoff(1, 0), Duration::from_micros(750));
+        assert_eq!(p.backoff(2, 0), Duration::from_micros(1500));
+        assert_eq!(p.backoff(3, 0), Duration::from_micros(3000));
+        assert_eq!(p.backoff(10, 0), Duration::from_micros(3000));
+
+        let smaller_cap = RetryPolicy {
+            base_delay: Duration::from_micros(400),
+            max_delay: Duration::from_micros(900),
+            ..p
+        };
+        assert_eq!(smaller_cap.backoff(2, 0), Duration::from_micros(800));
+        assert_eq!(smaller_cap.backoff(3, 0), Duration::from_micros(900));
     }
 
     #[test]
