@@ -24,12 +24,14 @@
 
 use std::sync::Arc;
 
+use futures::stream::BoxStream;
+
 use super::{
-    Env, LlmProvider, Reasoning,
+    Env, LlmError, LlmProvider, LlmRequest, LlmResponse, LlmStreamEvent, Reasoning,
     gemini::{GEMINI_BASE_URL, GeminiConfig, GeminiProvider},
     openai::{
-        OPENAI_BASE_URL, OPENROUTER_DEFAULT_MODEL, OpenAiConfig, OpenAiProvider, ReasoningDialect,
-        reasoning_effort,
+        OPENAI_BASE_URL, OPENROUTER_DEFAULT_MODEL, OPENROUTER_DEFAULT_THINKING_MODEL, OpenAiConfig,
+        OpenAiProvider, ProviderRouting, ReasoningDialect, reasoning_effort,
     },
 };
 
@@ -71,6 +73,14 @@ pub struct LlmSettings {
     /// this crate has no way to recognize — a proxy in front of OpenAI, or a
     /// self-hosted vLLM that does support it.
     pub stream_usage: Option<bool>,
+    /// The model a request that thinks is sent to: one whose reasoning, its
+    /// own or the configured default, is an effort or a budget. The rest go
+    /// to [`model`](Self::model). Both share every other setting. `None`
+    /// sends every request to `model`.
+    pub thinking_model: Option<String>,
+    /// Which of OpenRouter's providers serve the models. OpenRouter's alone:
+    /// another provider refuses it.
+    pub routing: Option<ProviderRouting>,
 }
 
 impl std::fmt::Debug for LlmSettings {
@@ -87,6 +97,8 @@ impl std::fmt::Debug for LlmSettings {
             .field("x_title", &self.x_title)
             .field("reasoning", &self.reasoning)
             .field("stream_usage", &self.stream_usage)
+            .field("thinking_model", &self.thinking_model)
+            .field("routing", &self.routing)
             .finish()
     }
 }
@@ -131,7 +143,7 @@ fn stream_usage_for(settings: &LlmSettings, base_url: &str) -> bool {
 ///
 /// Raised before any request is made, so a host can refuse to start instead of
 /// failing on the first message. Errors from calling a provider are
-/// [`LlmError`](super::LlmError).
+/// [`LlmError`].
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum LlmConfigError {
     /// A provider is named and its settings cannot be read: a missing key, a
@@ -281,6 +293,11 @@ pub struct SelectedLlm {
     /// What will be asked of the model's thinking on requests that don't ask
     /// for their own, and whether this provider can ask it at all.
     pub reasoning: ReasoningPlan,
+    /// The model a request that thinks goes to, when it is not
+    /// [`model`](Self::model).
+    pub thinking_model: Option<String>,
+    /// Which of OpenRouter's providers serve the models, if any are named.
+    pub routing: Option<ProviderRouting>,
 }
 
 impl std::fmt::Debug for SelectedLlm {
@@ -291,6 +308,8 @@ impl std::fmt::Debug for SelectedLlm {
             .field("model", &self.model)
             .field("selected_by", &self.selected_by)
             .field("reasoning", &self.reasoning)
+            .field("thinking_model", &self.thinking_model)
+            .field("routing", &self.routing)
             .finish_non_exhaustive()
     }
 }
@@ -329,15 +348,36 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
     if env.get(openrouter_key).is_some() {
         let config = OpenAiConfig::openrouter_from_lookup(env)
             .map_err(|detail| LlmConfigError::unusable("openrouter", openrouter_key, detail))?;
-        return Ok(Some(SelectedLlm {
-            kind: "openrouter",
-            model: config.model.clone(),
-            selected_by: openrouter_key,
-            reasoning: ReasoningPlan::carried(config.reasoning),
-            provider: Arc::new(
-                OpenAiProvider::new(config)
-                    .map_err(unusable_client("openrouter", openrouter_key))?,
-            ),
+        let selected = |config: OpenAiConfig| -> Result<SelectedLlm, LlmConfigError> {
+            Ok(SelectedLlm {
+                kind: "openrouter",
+                model: config.model.clone(),
+                selected_by: openrouter_key,
+                reasoning: ReasoningPlan::carried(config.reasoning),
+                thinking_model: None,
+                routing: config.routing.clone(),
+                provider: Arc::new(
+                    OpenAiProvider::new(config)
+                        .map_err(unusable_client("openrouter", openrouter_key))?,
+                ),
+            })
+        };
+        let default = config.reasoning;
+        let thinking = thinking_model_of(
+            &LlmSettings {
+                provider: "openrouter".to_string(),
+                ..Default::default()
+            },
+            env,
+        )
+        .map(|model| OpenAiConfig {
+            model,
+            ..config.clone()
+        });
+        let plain = selected(config)?;
+        return Ok(Some(match thinking {
+            Some(thinking) => split(plain, selected(thinking)?, default),
+            None => plain,
         }));
     }
 
@@ -349,6 +389,8 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
             model: config.model.clone(),
             selected_by: gemini_key,
             reasoning: ReasoningPlan::Unset,
+            thinking_model: None,
+            routing: None,
             provider: Arc::new(
                 GeminiProvider::new(config).map_err(unusable_client("gemini", gemini_key))?,
             ),
@@ -362,6 +404,8 @@ fn select_from_env(env: Env<'_>) -> Result<Option<SelectedLlm>, LlmConfigError> 
             model: config.model.clone(),
             selected_by: var,
             reasoning: ReasoningPlan::Unset,
+            thinking_model: None,
+            routing: None,
             provider: Arc::new(
                 OpenAiProvider::new(config).map_err(unusable_client("openai", var))?,
             ),
@@ -401,17 +445,130 @@ fn build_from_settings(
     settings: &LlmSettings,
     env: Env<'_>,
 ) -> Result<SelectedLlm, LlmConfigError> {
-    /// Config first, then the environment. An empty or whitespace-only
-    /// configured value counts as absent.
-    fn or_env(configured: &Option<String>, env: Env<'_>, keys: &[&str]) -> Option<String> {
-        configured
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .or_else(|| keys.iter().find_map(|key| env.get(key)))
+    if settings.routing.is_some() && settings.provider != "openrouter" {
+        return Err(LlmConfigError::unusable(
+            SUPPORTED_PROVIDERS
+                .into_iter()
+                .find(|p| *p == settings.provider)
+                .unwrap_or("openai"),
+            SELECTED_BY_CONFIG,
+            "`routing` names OpenRouter's providers, and this provider is not OpenRouter",
+        ));
+    }
+    let plain = build_one(settings, env)?;
+    let Some(thinking_model) = thinking_model_of(settings, env) else {
+        return Ok(plain);
+    };
+    // On the provider the model is on, so the default thinking model is
+    // pinned with the default model.
+    let thinking = build_one(
+        &LlmSettings {
+            model: Some(thinking_model),
+            thinking_model: None,
+            routing: plain.routing.clone(),
+            ..settings.clone()
+        },
+        env,
+    )?;
+    let default = plain.reasoning.sent();
+    Ok(split(plain, thinking, default))
+}
+
+/// Two models for one agent: a request that thinks goes to `thinking`, the
+/// rest to `plain`. A request's own reasoning decides, then the configured
+/// default. A cheap model can answer without thinking at a tenth of the
+/// price, and a turn that asks for thinking gets a model that does it well.
+struct ByReasoning {
+    plain: Arc<dyn LlmProvider>,
+    thinking: Arc<dyn LlmProvider>,
+    default: Option<Reasoning>,
+}
+
+impl ByReasoning {
+    fn for_request(&self, request: &LlmRequest) -> &dyn LlmProvider {
+        match request.reasoning.or(self.default) {
+            Some(Reasoning::Effort(_)) => self.thinking.as_ref(),
+            Some(Reasoning::Budget(tokens)) if tokens > 0 => self.thinking.as_ref(),
+            _ => self.plain.as_ref(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for ByReasoning {
+    async fn chat_completion(&self, request: LlmRequest) -> Result<LlmResponse, LlmError> {
+        self.for_request(&request).chat_completion(request).await
     }
 
+    async fn chat_completion_stream(
+        &self,
+        request: LlmRequest,
+    ) -> Result<BoxStream<'static, Result<LlmStreamEvent, LlmError>>, LlmError> {
+        self.for_request(&request)
+            .chat_completion_stream(request)
+            .await
+    }
+
+    /// Refused if either model refused: the reasoning asked of it is not
+    /// being delivered.
+    fn reasoning_refused(&self) -> Option<bool> {
+        match (
+            self.plain.reasoning_refused(),
+            self.thinking.reasoning_refused(),
+        ) {
+            (None, None) => None,
+            (plain, thinking) => Some(plain.unwrap_or(false) || thinking.unwrap_or(false)),
+        }
+    }
+}
+
+/// Config first, then the environment. An empty or whitespace-only
+/// configured value counts as absent.
+fn or_env(configured: &Option<String>, env: Env<'_>, keys: &[&str]) -> Option<String> {
+    configured
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .or_else(|| keys.iter().find_map(|key| env.get(key)))
+}
+
+/// The thinking model `settings` name, or OpenRouter's default when they
+/// name no model at all: the default model comes with its thinking model.
+fn thinking_model_of(settings: &LlmSettings, env: Env<'_>) -> Option<String> {
+    if settings.provider != "openrouter" {
+        return or_env(&settings.thinking_model, env, &[]);
+    }
+    or_env(
+        &settings.thinking_model,
+        env,
+        &["OPENROUTER_THINKING_MODEL"],
+    )
+    .or_else(|| {
+        or_env(&settings.model, env, &["OPENROUTER_MODEL"])
+            .is_none()
+            .then(|| OPENROUTER_DEFAULT_THINKING_MODEL.to_string())
+    })
+}
+
+/// `plain`, with requests that think sent to `thinking` instead.
+fn split(plain: SelectedLlm, thinking: SelectedLlm, default: Option<Reasoning>) -> SelectedLlm {
+    if thinking.model == plain.model {
+        return plain;
+    }
+    SelectedLlm {
+        provider: Arc::new(ByReasoning {
+            plain: plain.provider,
+            thinking: thinking.provider,
+            default,
+        }),
+        thinking_model: Some(thinking.model),
+        ..plain
+    }
+}
+
+/// One provider from `settings`, ignoring `thinking_model`.
+fn build_one(settings: &LlmSettings, env: Env<'_>) -> Result<SelectedLlm, LlmConfigError> {
     match settings.provider.as_str() {
         "openrouter" => {
             let api_key =
@@ -422,10 +579,12 @@ fn build_from_settings(
                         "no `api_key` in the config and OPENROUTER_API_KEY is not set",
                     )
                 })?;
-            let model = or_env(&settings.model, env, &["OPENROUTER_MODEL"])
-                .unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_string());
+            let named = or_env(&settings.model, env, &["OPENROUTER_MODEL"]);
+            let defaulted = named.is_none();
+            let model = named.unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_string());
             let mut config = OpenAiConfig {
                 reasoning: settings.reasoning,
+                routing: settings.routing.clone(),
                 ..OpenAiConfig::openrouter(
                     api_key,
                     model.clone(),
@@ -439,11 +598,16 @@ fn build_from_settings(
             if let Some(stream_usage) = settings.stream_usage {
                 config.stream_usage = stream_usage;
             }
+            if defaulted {
+                config = config.with_default_model_settings();
+            }
             Ok(SelectedLlm {
                 kind: "openrouter",
                 model,
                 selected_by: SELECTED_BY_CONFIG,
-                reasoning: ReasoningPlan::carried(settings.reasoning),
+                reasoning: ReasoningPlan::carried(config.reasoning),
+                thinking_model: None,
+                routing: config.routing.clone(),
                 provider: Arc::new(
                     OpenAiProvider::new(config)
                         .map_err(unusable_client("openrouter", SELECTED_BY_CONFIG))?,
@@ -474,6 +638,7 @@ fn build_from_settings(
                 extra_headers: Vec::new(),
                 reasoning_dialect: ReasoningDialect::OpenAi,
                 reasoning: settings.reasoning,
+                routing: None,
             };
             // A token budget has no `reasoning_effort` to go in, so that one is
             // answered here; a level is the model's to accept or refuse.
@@ -489,6 +654,8 @@ fn build_from_settings(
                 model,
                 selected_by: SELECTED_BY_CONFIG,
                 reasoning: plan,
+                thinking_model: None,
+                routing: None,
                 provider: Arc::new(
                     OpenAiProvider::new(config)
                         .map_err(unusable_client("openai", SELECTED_BY_CONFIG))?,
@@ -533,6 +700,8 @@ fn build_from_settings(
                 // Every `Reasoning` has a `thinkingConfig` spelling, so nothing
                 // is dropped here — the model decides.
                 reasoning: ReasoningPlan::attempted(settings.reasoning),
+                thinking_model: None,
+                routing: None,
                 provider: Arc::new(
                     GeminiProvider::new(config)
                         .map_err(unusable_client("gemini", SELECTED_BY_CONFIG))?,
@@ -661,6 +830,97 @@ mod tests {
         .expect("a base URL is enough for a local server");
         assert_eq!(selected.kind, "openai");
         assert_eq!(selected.selected_by, "OPENAI_API_BASE_URL");
+    }
+
+    /// The default is a cheap model that answers without thinking and a
+    /// model for a request that thinks, at one provider, from both entry
+    /// points.
+    #[test]
+    fn the_default_model_does_not_think_and_is_pinned_to_its_provider() {
+        let settings = LlmSettings {
+            provider: "openrouter".to_string(),
+            api_key: Some("key".to_string()),
+            ..Default::default()
+        };
+        let selected = build_from_settings(&settings, Env::new(&env_of(&[]))).expect("builds");
+        assert_eq!(selected.model, OPENROUTER_DEFAULT_MODEL);
+        assert_eq!(
+            selected.reasoning,
+            ReasoningPlan::carried(Some(Reasoning::Off))
+        );
+        assert_eq!(selected.routing, Some(ProviderRouting::prefer("openai")));
+        assert_eq!(
+            selected.thinking_model.as_deref(),
+            Some(OPENROUTER_DEFAULT_THINKING_MODEL)
+        );
+
+        let env = env_of(&[("OPENROUTER_API_KEY", "key")]);
+        let from_env = select_from_env(Env::new(&env))
+            .expect("builds")
+            .expect("selected");
+        assert_eq!(from_env.model, OPENROUTER_DEFAULT_MODEL);
+        assert_eq!(
+            from_env.reasoning,
+            ReasoningPlan::carried(Some(Reasoning::Off))
+        );
+        assert_eq!(from_env.routing, Some(ProviderRouting::prefer("openai")));
+        assert_eq!(
+            from_env.thinking_model.as_deref(),
+            Some(OPENROUTER_DEFAULT_THINKING_MODEL)
+        );
+
+        // A model somebody named is theirs: no routing or reasoning is made up
+        // for it.
+        let named = build_from_settings(
+            &LlmSettings {
+                model: Some("anthropic/claude-sonnet-4".to_string()),
+                ..settings
+            },
+            Env::new(&env_of(&[])),
+        )
+        .expect("builds");
+        assert_eq!(named.reasoning, ReasoningPlan::carried(None));
+        assert_eq!(named.routing, None);
+        assert_eq!(named.thinking_model, None);
+    }
+
+    /// Routing names OpenRouter's providers, which no other provider has.
+    #[test]
+    fn routing_is_refused_off_openrouter() {
+        let settings = LlmSettings {
+            provider: "openai".to_string(),
+            routing: Some(ProviderRouting::prefer("openai")),
+            ..Default::default()
+        };
+        let error = build_from_settings(&settings, Env::new(&env_of(&[])))
+            .expect_err("routing on OpenAI is refused");
+        assert!(error.to_string().contains("routing"), "{error}");
+    }
+
+    /// A thinking model is reported beside the model, and one that is the
+    /// model is no second model.
+    #[test]
+    fn a_thinking_model_is_reported_unless_it_is_the_model() {
+        let settings = LlmSettings {
+            provider: "openrouter".to_string(),
+            api_key: Some("key".to_string()),
+            model: Some("openai/gpt-6-luna".to_string()),
+            thinking_model: Some("openai/gpt-6.1-sol".to_string()),
+            ..Default::default()
+        };
+        let selected = build_from_settings(&settings, Env::new(&env_of(&[]))).expect("builds");
+        assert_eq!(selected.model, "openai/gpt-6-luna");
+        assert_eq!(
+            selected.thinking_model.as_deref(),
+            Some("openai/gpt-6.1-sol")
+        );
+
+        let same = LlmSettings {
+            thinking_model: Some("openai/gpt-6-luna".to_string()),
+            ..settings
+        };
+        let selected = build_from_settings(&same, Env::new(&env_of(&[]))).expect("builds");
+        assert_eq!(selected.thinking_model, None);
     }
 
     /// A config with no `api_key` reads the key from the environment. It used to

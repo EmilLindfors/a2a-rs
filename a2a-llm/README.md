@@ -95,6 +95,24 @@ generated nothing, so that costs a round trip and no tokens, and the answer is
 remembered for the life of the provider. `ReasoningPlan::Attempted` is what
 selection reports for that: sent, with the model getting the last word.
 
+## Two models, one cache
+
+`LlmSettings::thinking_model` names a second model. A request whose reasoning,
+its own or the configured default, is an effort or a budget goes to it. The
+rest go to `model`. So an agent runs a cheap model that answers without
+thinking, and a turn that asks for thinking gets a model that does it well.
+
+`LlmSettings::routing` is OpenRouter's `provider` object: the providers tried
+in order, and whether another may serve a request none of them can.
+OpenRouter serves a model from several providers, and each keeps its own
+prompt cache, so a request spread over them writes its prefix again on each.
+Another provider refuses `routing`.
+
+With no model named, OpenRouter runs `openai/gpt-6-luna` without thinking
+and `openai/gpt-6.1-sol` for a request that thinks, both preferring OpenAI's
+own endpoint. A model somebody named gets none of that filled in.
+`OPENROUTER_THINKING_MODEL` names the thinking model from the environment.
+
 A variable set to whitespace reads as unset — `.env` files leave those behind,
 and an empty `OPENROUTER_API_KEY` would otherwise select a provider that cannot
 authenticate.

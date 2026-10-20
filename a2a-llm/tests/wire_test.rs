@@ -18,6 +18,7 @@ fn openai(server: &MockServer) -> OpenAiProvider {
         reasoning_dialect: ReasoningDialect::OpenRouter,
         reasoning: None,
         stream_usage: true,
+        routing: None,
     })
     .expect("the HTTP client builds")
 }
@@ -376,4 +377,76 @@ async fn an_optional_property_left_out_on_the_streaming_path_reaches_the_tool_le
         })
         .expect("the call is emitted whole");
     assert_eq!(call.arguments, r#"{"metrics":["avg"]}"#);
+}
+
+/// A request that thinks goes to the thinking model and the rest to the
+/// model, each with the configured routing: a turn asks for thinking and
+/// gets a model that does it, and both stay on one provider's cache.
+#[tokio::test]
+async fn a_request_that_thinks_goes_to_the_thinking_model_on_the_pinned_provider() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            r#"{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}"#,
+            "application/json",
+        ))
+        .mount(&server)
+        .await;
+    let selected = a2a_llm::provider_from_settings(&a2a_llm::LlmSettings {
+        provider: "openrouter".to_string(),
+        api_key: Some("key".to_string()),
+        base_url: Some(format!("{}/v1", server.uri())),
+        model: Some("openai/gpt-6-luna".to_string()),
+        thinking_model: Some("openai/gpt-6.1-sol".to_string()),
+        reasoning: Some(a2a_llm::Reasoning::Off),
+        routing: Some(a2a_llm::ProviderRouting::prefer("openai")),
+        ..Default::default()
+    })
+    .expect("builds");
+
+    let ask = || LlmRequest::new(vec![ChatMessage::user("hi")]);
+    for request in [
+        ask(),
+        ask().reasoning(a2a_llm::Reasoning::Effort(a2a_llm::ReasoningEffort::High)),
+        ask().reasoning(a2a_llm::Reasoning::Off),
+        ask().reasoning(a2a_llm::Reasoning::Budget(2000)),
+    ] {
+        selected
+            .provider
+            .chat_completion(request)
+            .await
+            .expect("the call succeeds");
+    }
+
+    let requests = server.received_requests().await.expect("recorded");
+    let bodies: Vec<serde_json::Value> = requests
+        .iter()
+        .map(|r| serde_json::from_slice(&r.body).expect("JSON"))
+        .collect();
+    let models: Vec<&str> = bodies
+        .iter()
+        .map(|b| b["model"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        models,
+        [
+            "openai/gpt-6-luna",
+            "openai/gpt-6.1-sol",
+            "openai/gpt-6-luna",
+            "openai/gpt-6.1-sol"
+        ]
+    );
+    for body in &bodies {
+        assert_eq!(
+            body["provider"],
+            serde_json::json!({ "order": ["openai"], "allow_fallbacks": true }),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        bodies[0]["reasoning"],
+        serde_json::json!({ "enabled": false })
+    );
+    assert_eq!(bodies[1]["reasoning"]["effort"], "high");
 }

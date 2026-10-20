@@ -13,6 +13,12 @@ they were written with. Released sections below are untouched.
 
 ### Added
 
+- **A thinking model and OpenRouter provider routing (`a2a-llm`)**:
+  `LlmSettings::thinking_model` sends a request that thinks to a second
+  model and the rest to `model`. `LlmSettings::routing` is OpenRouter's
+  `provider` object, `ProviderRouting::prefer("openai")` for one provider
+  with fallback, so requests stay on one prompt cache. Another provider
+  refuses `routing`.
 - **Decision models (`a2a-llm`)**: the `decision` module asks a decision model typed questions (`noul`, `choice`, `score`) about a state and returns probabilities instead of text. `HttpDecisionModel` speaks the System One format shared by OpenRouter's Decisions API, Perplexity and Mapika's `decider`, and `decision_from_settings` builds one with no I/O. A reply that drops, mistypes or invents an answer is an error.
   - `answer_schema` derives the JSON Schema of the decision that answers a set of questions, with each choice's options and each score's range. A host serving decisions as typed tools declares it as the output schema.
 
@@ -168,6 +174,11 @@ they were written with. Released sections below are untouched.
 
 ### Changed
 
+- **OpenRouter's default model is `openai/gpt-6-luna` (`a2a-llm`)**: it
+  was `z-ai/glm-4.6`. A config or environment that names no model runs it
+  without thinking and sends a request that thinks to `openai/gpt-6.1-sol`,
+  both preferring OpenAI's own endpoint, unless it sets `reasoning`,
+  `thinking_model` or `routing` itself.
 - **A conversation over the bridge is a handle the model carries (`a2a-mcp`)**: every tool `AgentToMcpBridge` serves takes an optional `context_id`. Every answer ends with a text naming its context: `[To continue this conversation, call this tool again with `context_id`: '…'.]`. A call with it goes on in that context, and a call without it starts a new one. MCP 2026-07-28 has no session to keep a conversation in.
   - A call that names no context no longer goes on in a context named after the skill, which every client's calls of that skill shared. The agent names a new one.
   - A suspended task's answer names both its `task_id` and its `context_id`. The answer to a question asked mid-call, by elicitation or `tasks/update`, goes on in the task's own context.
