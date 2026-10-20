@@ -39,6 +39,7 @@ pub use decision::{
     DecisionProvider, DecisionSettings, Question, Questions, SelectedDecision, answer_schema,
     decision_from_settings,
 };
+pub use openai::ProviderRouting;
 pub use provider::{
     LlmConfigError, LlmSettings, PROVIDER_ENV_VARS, ReasoningPlan, SUPPORTED_PROVIDERS,
     SelectedLlm, provider_from_env, provider_from_settings,

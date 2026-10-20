@@ -122,6 +122,15 @@ project end to end*), set 2026-09-05.
         guards a context window stops guarding it. A blob's token cost is the
         provider's business (Gemini bills an image by tiles), so the estimate
         needs a per-media rule rather than a byte count.
+- [ ] **The bridge reports the caller's own question as progress.** korps
+      sets a task `Working` with the message the turn answers, as A2A
+      allows. `AgentToMcpBridge::status_text` joins a status message's text
+      whatever its role, so the first `notifications/progress` of every
+      call is the question the client just sent. korps's own relay skips a
+      status message from the user (its `tools.rs`, `relay`). Do the same
+      in `status_text`: progress and an elicitation's question are the
+      agent's. Done when a turn that starts `Working` with the user's
+      message sends no text in its first progress.
 
 ---
 

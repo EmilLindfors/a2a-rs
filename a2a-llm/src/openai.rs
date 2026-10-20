@@ -36,6 +36,39 @@ pub struct OpenAiConfig {
     /// fails the whole call. A non-streaming response reports usage either way,
     /// so this only gates the streaming path.
     pub stream_usage: bool,
+    /// Which of OpenRouter's providers serve the model: its `provider`
+    /// object, sent with every request. `None` sends nothing and leaves
+    /// OpenRouter to choose.
+    pub routing: Option<ProviderRouting>,
+}
+
+/// Which of OpenRouter's providers serve a request, in order.
+///
+/// OpenRouter spreads a model over every provider that serves it, and each
+/// keeps its own prompt cache. A request that lands on another provider
+/// writes its prefix again, which OpenAI bills at 1.25 times the input from
+/// GPT-5.6 on. OpenRouter's own sticky routing keeps one conversation on one
+/// provider once a request hits the cache, and stops when `order` is set. A
+/// fixed order keeps every conversation's shared prefix, the system prompt
+/// and the tools, on one cache. See
+/// <https://openrouter.ai/docs/guides/routing/provider-selection>.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProviderRouting {
+    /// OpenRouter's provider slugs, tried in this order: `openai`, `azure`.
+    pub order: Vec<String>,
+    /// Whether another provider serves a request none of `order` can, as
+    /// during an outage. Its cache is cold.
+    pub allow_fallbacks: bool,
+}
+
+impl ProviderRouting {
+    /// The model's own maker first, and anyone else only when it cannot.
+    pub fn prefer(provider: &str) -> Self {
+        Self {
+            order: vec![provider.to_string()],
+            allow_fallbacks: true,
+        }
+    }
 }
 
 /// Which reasoning parameter an OpenAI-compatible endpoint takes.
@@ -84,8 +117,18 @@ pub const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 pub const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 
 /// Model used when neither a config nor `OPENROUTER_MODEL` names one. Shared by
-/// both paths so they cannot default differently.
-pub const OPENROUTER_DEFAULT_MODEL: &str = "z-ai/glm-4.6";
+/// both paths so they cannot default differently. A cheap model that answers
+/// without thinking: the default comes with [`Reasoning::Off`] and
+/// [`OPENROUTER_DEFAULT_PROVIDER`] unless the config says otherwise.
+pub const OPENROUTER_DEFAULT_MODEL: &str = "openai/gpt-6-luna";
+
+/// The model a request that thinks goes to when no model is named:
+/// OpenAI's model for reasoning, beside [`OPENROUTER_DEFAULT_MODEL`].
+pub const OPENROUTER_DEFAULT_THINKING_MODEL: &str = "openai/gpt-6.1-sol";
+
+/// The provider the default model is pinned to: OpenAI's own endpoint, so
+/// every agent on the default shares one prompt cache.
+pub const OPENROUTER_DEFAULT_PROVIDER: &str = "openai";
 
 impl OpenAiConfig {
     pub fn from_env() -> Result<Self, String> {
@@ -113,6 +156,7 @@ impl OpenAiConfig {
             // This path defaults to a local server (Ollama), which is exactly
             // the population that varies on `stream_options`.
             stream_usage: false,
+            routing: None,
         }
     }
 
@@ -143,13 +187,24 @@ impl OpenAiConfig {
             reasoning_dialect: ReasoningDialect::OpenRouter,
             reasoning: None,
             stream_usage: true,
+            routing: None,
         }
+    }
+
+    /// Fill in what the default model comes with, when the model is the
+    /// default because nothing named one: no thinking, and its provider.
+    pub(crate) fn with_default_model_settings(mut self) -> Self {
+        self.reasoning.get_or_insert(Reasoning::Off);
+        self.routing
+            .get_or_insert_with(|| ProviderRouting::prefer(OPENROUTER_DEFAULT_PROVIDER));
+        self
     }
 
     /// Read OpenRouter config from the environment.
     ///
     /// `OPENROUTER_API_KEY` is required; the rest fall back to defaults:
-    /// `OPENROUTER_MODEL` (`z-ai/glm-4.6`), `OPENROUTER_API_BASE_URL`
+    /// `OPENROUTER_MODEL` ([`OPENROUTER_DEFAULT_MODEL`], not thinking and
+    /// pinned to its provider), `OPENROUTER_API_BASE_URL`
     /// ([`OPENROUTER_BASE_URL`]), plus optional `OPENROUTER_HTTP_REFERER` /
     /// `OPENROUTER_X_TITLE` attribution headers and `OPENROUTER_REASONING`
     /// (`off`, `low`, `medium`, `high`, or a token budget — see [`Reasoning`]).
@@ -165,9 +220,9 @@ impl OpenAiConfig {
             .get("OPENROUTER_API_KEY")
             .ok_or_else(|| "OPENROUTER_API_KEY environment variable is required".to_string())?;
 
-        let model = env
-            .get("OPENROUTER_MODEL")
-            .unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_string());
+        let named = env.get("OPENROUTER_MODEL");
+        let defaulted = named.is_none();
+        let model = named.unwrap_or_else(|| OPENROUTER_DEFAULT_MODEL.to_string());
         let reasoning = env
             .get("OPENROUTER_REASONING")
             .map(|value| {
@@ -177,7 +232,7 @@ impl OpenAiConfig {
             })
             .transpose()?;
 
-        Ok(Self {
+        let config = Self {
             reasoning,
             ..Self::openrouter(
                 api_key,
@@ -186,6 +241,10 @@ impl OpenAiConfig {
                 env.get("OPENROUTER_HTTP_REFERER"),
                 env.get("OPENROUTER_X_TITLE"),
             )
+        };
+        Ok(match defaulted {
+            true => config.with_default_model_settings(),
+            false => config,
         })
     }
 }
@@ -221,6 +280,9 @@ struct OpenAiChatRequest {
     /// OpenAI's reasoning control.
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_effort: Option<&'static str>,
+    /// OpenRouter's provider routing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    provider: Option<ProviderRouting>,
 }
 
 impl OpenAiChatRequest {
@@ -814,6 +876,7 @@ impl LlmProvider for OpenAiProvider {
             stream_options: None,
             reasoning: None,
             reasoning_effort: None,
+            provider: self.config.routing.clone(),
         }
         .with_reasoning(reasoning);
 
@@ -910,6 +973,7 @@ impl LlmProvider for OpenAiProvider {
             }),
             reasoning: None,
             reasoning_effort: None,
+            provider: self.config.routing.clone(),
         }
         .with_reasoning(reasoning);
 
@@ -1059,6 +1123,7 @@ mod tests {
             reasoning_dialect: dialect,
             reasoning,
             stream_usage: false,
+            routing: None,
         })
         .expect("the HTTP client builds")
     }
@@ -1086,6 +1151,7 @@ mod tests {
             stream_options: None,
             reasoning: None,
             reasoning_effort: None,
+            provider: None,
         }
         .with_reasoning(provider.reasoning_for(request));
 

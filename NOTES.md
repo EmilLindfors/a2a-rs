@@ -50,6 +50,26 @@ be acting correctly; if not, the state is wrong no matter how it is documented.
 
 ## Choices that had a real alternative
 
+**A pinned provider is a fixed order, not sticky routing.** (2026-10-20)
+OpenRouter serves `openai/gpt-6-luna` from eight endpoints: OpenAI's four
+tiers, Azure in three regions and Bedrock. Each keeps its own prompt
+cache, and from GPT-5.6 on OpenAI bills a cache write at 1.25 times the
+input. OpenRouter's sticky routing keeps one conversation on one provider,
+but only after a cache hit or with a `session_id`, and for 10 minutes. It
+is off once `provider.order` is set. A fixed order also keeps the prefix
+every conversation shares, the system prompt and the tools, on one cache.
+`ProviderRouting::prefer` allows fallbacks, so an outage costs a cold
+cache and not a failed turn. Nothing derives a provider from a model's
+name: OpenRouter's slug for a maker's endpoint is not always the maker's
+name.
+
+**Which model a request goes to is its reasoning.** (2026-10-20) A
+provider is bound to one model, and a request carries its own reasoning.
+`ByReasoning` holds two providers and sends a request whose reasoning is
+an effort or a budget to the thinking one. `Off` and none go to the plain
+one. A host chooses how hard a turn thinks already, so the model follows
+from that choice without a second knob per turn.
+
 **The public card is outside the authenticator.** (2026-10-15)
 `HttpServer` merges the card and skill routes after the auth layer, as it
 merges the open router. A2A has two cards: the public one at the
