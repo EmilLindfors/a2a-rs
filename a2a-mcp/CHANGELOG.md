@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.3](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.11.2...a2a-mcp-v0.11.3) - 2026-10-20
+
+### Other
+
+- Updated the following local packages: a2a-llm
+
 ## [0.11.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-mcp-v0.11.1...a2a-mcp-v0.11.2) - 2026-10-19
 
 ### Added

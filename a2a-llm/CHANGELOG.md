@@ -1,6 +1,12 @@
 # Changelog
 
 All notable changes to this project will be documented in this file.
+## [0.8.0](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.7.2...a2a-llm-v0.8.0) - 2026-10-20
+
+### Added
+
+- *(a2a-llm)* A thinking model, OpenRouter provider routing, and a pinned default
+
 ## [0.7.2](https://github.com/EmilLindfors/a2a-rs/compare/a2a-llm-v0.7.1...a2a-llm-v0.7.2) - 2026-10-18
 
 ### Fixed
